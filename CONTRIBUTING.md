@@ -2,7 +2,9 @@
 
 Open an issue describing the invariant, compatibility impact and failure/recovery behavior before a
 large change. Keep patches focused and include tests and documentation. Core protocol changes need
-a formal-model update or a written explanation of why the abstraction is unchanged.
+a formal-model update or a written explanation of why the abstraction is unchanged. Backend changes
+must pass shared lifecycle behavior plus real independent-process, contention, crash, binding,
+migration-equivalence and deterministic-projection tests.
 
 Run:
 

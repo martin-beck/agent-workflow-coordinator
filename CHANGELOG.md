@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.3.0 - 2026-09-08
+
+- Make embedded SQLite 3 WAL with `synchronous=FULL` the default authority for new projects.
+- Retain the Git/Markdown backend as explicit opt-in and preserve legacy projects without migration.
+- Add project-bound backend selection, strict relational constraints, exact-revision transactions,
+  append-only events and durable command results.
+- Add explicit, equivalence-checked Git-to-SQLite migration and SQLite-to-Git rollback export.
+- Keep GitHub observation and publication optional and downstream of committed local authority.
+- Add independent-process races, fault/negative tests and a storage/migration TLA+ refinement.
+
 ## v0.2.0 - 2026-09-08
 
 - Share one repository-common lock across every local state worktree.

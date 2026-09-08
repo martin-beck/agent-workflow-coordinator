@@ -44,6 +44,7 @@ jobs:
       - name: Validate examples
         run: |
           uv run python -m json.tool examples/project/.handoffctl.json >/dev/null
+          uv run python -m json.tool examples/project/coordinator.backend.json >/dev/null
           uv run python -m json.tool examples/project/runtime-config.example.json >/dev/null
           uv run python - <<'PY'
           import json
@@ -52,6 +53,11 @@ jobs:
           profile = json.loads(Path("examples/project/.handoffctl.json").read_text())
           schema = json.loads(Path("schema/project-config.schema.json").read_text())
           jsonschema.Draft202012Validator(schema, format_checker=jsonschema.FormatChecker()).validate(profile)
+          backend = json.loads(Path("examples/project/coordinator.backend.json").read_text())
+          backend_schema = json.loads(Path("schema/backend-config.schema.json").read_text())
+          jsonschema.Draft202012Validator(
+              backend_schema, format_checker=jsonschema.FormatChecker()
+          ).validate(backend)
           PY
       - name: Formal safety and liveness models
         run: formal/handoffctl/verify.sh

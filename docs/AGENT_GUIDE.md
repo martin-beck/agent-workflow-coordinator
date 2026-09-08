@@ -20,6 +20,11 @@ Never edit generated views, binding files, the vendor lock, or vendored runtime 
 failure means the wrong checkout, origin, product, runtime configuration, or current directory is in
 use. Stop and correct that environment; do not bypass the check.
 
+For SQLite projects, task Markdown is a projection: never use direct file edits as mutations. Use
+`handoffctl` commands, then regenerate a damaged or stale projection with `handoffctl reconcile`.
+For Git projects, the existing locked Markdown authority contract applies. Never copy a SQLite
+database or backend selector between projects.
+
 Do not store raw logs, prompts, transcripts, credentials, private paths, hostnames, or tokens in
 public task records. Store concise conclusions, immutable commit/run identifiers, limitations and
 the exact next action.

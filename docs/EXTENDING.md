@@ -30,12 +30,19 @@ An upstream change needs unit and multiprocess fault tests, compatibility fixtur
 profiles, documentation, and a version bump. Update TLA+ whenever the abstract transition, lock,
 binding, safety or liveness contract changes.
 
+Storage implementations conform to the `Backend` protocol in `sqlite_storage.py`: load one
+consistent task snapshot and durably append command evidence. Mutations must preserve the shared
+lifecycle functions, exact-revision semantics, permanent binding and deterministic projection.
+New embedded or server backends require schema migration, crash recovery, independent-process
+stress tests and a formal refinement; executable downstream backend plugins are not supported.
+
 ## Compatibility rules
 
 - Patch releases preserve CLI, record and profile schemas.
 - Minor releases may add backward-compatible commands or optional profile fields.
 - Major releases may intentionally migrate schemas and require a documented downstream procedure.
 - Vendor sync never changes the downstream profile or binding.
+- Vendor sync and upgrade never change `coordinator.backend.json` or create a SQLite database.
 - A consuming repository pins one exact tag and commit; ranges and floating branches are forbidden.
 - Bug-for-bug compatibility is not required for behavior documented as a defect, but the release
   notes and regression tests must name the correction.

@@ -23,4 +23,5 @@ run_model() {
 run_model HandoffctlBinding
 run_model HandoffctlLocks
 run_model HandoffctlRun
+run_model HandoffctlStorage
 run_model Handoffctl
