@@ -17,11 +17,16 @@ and does not depend on a package registry, network fetch, submodule, or upstream
 
 ## Safety properties
 
-- Every accepted mutation is serialized by one local POSIX `flock(2)`.
+- Every accepted mutation is serialized by one repository-common POSIX `flock(2)`, including
+  processes launched from different worktrees of the same local clone.
 - Exact task revisions reject stale concurrent writers.
 - One owner can hold one active task; a task, branch and worktree have one active owner.
 - Pre-commit failures restore task and generated-view files.
 - Lock, Git/GitHub and wrapped-command waits are bounded and classified.
+- Wrapped commands require runtime configuration before execution and fsync a privacy-safe result
+  journal before task recording or live reconciliation.
+- Keep UUID privacy checks active except in required identity and contract files.
+- Clean behind replicas fast-forward before writes; true divergence remains fail-closed.
 - A durable local commit is retained if later replication fails.
 - Initialization permanently binds an installation to one state repository and one product
   repository. Calls from another project fail before normal coordinator work.
@@ -43,7 +48,7 @@ signing, and a local filesystem with POSIX flock semantics.
    python /path/to/agent-workflow-coordinator/tools/vendor.py sync \
      --source /path/to/agent-workflow-coordinator \
      --target /path/to/project-state \
-     --version v0.1.4
+     --version v0.2.0
    ```
 
 3. From the state repository root, initialize exactly once:
@@ -59,7 +64,7 @@ signing, and a local filesystem with POSIX flock semantics.
    ```
 
 4. Create the ignored `.runtime/config.json`, task schema, initial tasks, and project development
-   policy as described in [Integration](docs/INTEGRATION.md).
+   policy as described in [Integration](docs/PROJECT_GUIDE.md).
 5. Verify the pin and project:
 
    ```sh

@@ -6,8 +6,9 @@ calls, commit/replication, project binding and CLI dispatch. `status_renderer.py
 presentation code and has no mutation authority.
 
 The state repository is the database. Task JSON front matter is authoritative; Markdown bodies hold
-concise evidence. Generated Markdown is a projection. The ignored runtime directory holds the local
-lock and machine configuration, never portable authority.
+concise evidence. Generated Markdown is a projection. Machine configuration and the command-result
+journal live in ignored `.runtime`; the shared lock lives below Git's common directory so linked
+worktrees serialize through one inode. None is portable authority.
 
 Project identity has two layers: a tracked profile for presentation/policy and a tracked binding for
 the permanent UUID and repository pair. Runtime paths must resolve to repositories matching that

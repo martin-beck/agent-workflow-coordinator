@@ -10,6 +10,8 @@
 - `release`: clear ownership and move to a non-active status.
 - `promote`: exact-revision `planned -> open` after dependencies complete.
 - `resume`: exact-revision `blocked -> open` after external resolution is confirmed.
+- `recover-expired`: exact-revision recovery of an in-progress task only after its UTC lease
+  deadline has passed.
 - `run`: execute a bounded command outside the lock, then record its classified result.
 - `reconcile`: refresh live observations and optionally commit/fast-forward-push them.
 - `render-status`: render/check the optional complete status view.
@@ -17,20 +19,33 @@
 
 ## Concurrency and timeouts
 
-Mutations take an exclusive lock. Snapshots and status checks take a shared lock. The default lock
-deadline is 10 seconds, internal Git/GitHub deadline 30 seconds, and wrapped command deadline 1800
-seconds. A timeout is evidence: inspect the holder/process/commit/ref before retrying.
+Mutations take an exclusive lock stored below Git's common directory, so all worktrees of one local
+clone serialize through the same file. Snapshots and status checks take a shared lock. The default
+lock deadline is 10 seconds, the internal Git/GitHub deadline is 30 seconds, and the wrapped command
+deadline is 1800 seconds. On timeout, inspect the holder, process, commit and ref before retrying.
 
-Commands run outside the coordinator lock so long work cannot block heartbeats. Before execution
-and again while recording the result, ownership and lease validity are checked. The recorded digest
-covers argv, not raw output, prompts or environment.
+Commands run outside the coordinator lock so long work cannot block heartbeats. Runtime
+configuration and the live claim are checked before execution. The privacy-safe
+task/owner/argv-digest/exit record is fsynced to `.runtime/command-results.jsonl` immediately after
+execution and before any fallible task, Git, GitHub or reconciliation work. The task update is
+committed before live reconciliation. The recorded digest covers argv, not output or environment.
 
 ## Durable failure semantics
 
-Before a commit, detected failure restores every touched task and generated view. After a successful
-local commit, later push failure does not roll it back. Inspect and reconcile that commit, then retry
-only replication. Never blindly repeat an external command after an interrupted `run`.
+Before a write, a configured main replica fetches `origin/main`. A clean behind checkout is
+fast-forwarded; a dirty behind checkout or true divergence fails with a classified error. After a
+successful command, inspect its journal and task record first; retry only reconciliation or
+replication. Never blindly repeat an external command after an interrupted `run`.
 
+A persistent dirty-behind or divergent result writes `.runtime/replica-blocked.json`.
+A periodic service should include a matching systemd condition so it stops retrying until an
+operator has inspected and manually reconciled the refs:
+
+```ini
+ConditionPathExists=!/absolute/state-checkout/.runtime/replica-blocked.json
+```
+
+A successful manual `reconcile --commit --push` clears the marker. `doctor` reports it as an error.
 ## Binding failures
 
 - Profile mismatch: profile and binding UUIDs differ.
