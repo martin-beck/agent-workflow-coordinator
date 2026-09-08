@@ -79,7 +79,7 @@ type Meta = dict[str, Any]
 type Task = tuple[Path, Meta, str]
 type State = dict[str, Any]
 
-COORDINATOR_VERSION = "0.3.2"
+COORDINATOR_VERSION = "0.3.3"
 DEFAULT_PROJECT_SETTINGS: Meta = {
     "schema_version": 1,
     "project_id": "00000000-0000-4000-8000-000000000000",
@@ -300,6 +300,7 @@ UUID_PRIVACY_EXEMPT = frozenset(
         Path("coordinator.binding.json"),
         Path("coordinator.backend.json"),
         Path("tests/test_handoffctl.py"),
+        Path("tests/test_sqlite_storage.py"),
         Path("tools/handoffctl.py"),
     }
 )

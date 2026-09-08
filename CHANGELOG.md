@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.3.3 - 2026-09-08
+
+- Allow the exact vendored SQLite coordinator test fixture to contain its required UUID.
+- Exercise full initialized-state validation after vendor synchronization.
+
 ## v0.3.2 - 2026-09-08
 
 - Keep the vendored runtime version consistent with project release metadata.
