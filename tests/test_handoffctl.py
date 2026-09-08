@@ -1005,7 +1005,11 @@ class HandoffTest(unittest.TestCase):
         large = self.root / "large.md"
         large.write_text("x" * 200001)
         sample_uuid = "33333333-3333-4333-8333-333333333333"
-        for relative in (Path("tools/handoffctl.py"), Path("tests/test_handoffctl.py")):
+        for relative in (
+            Path("tools/handoffctl.py"),
+            Path("tests/test_handoffctl.py"),
+            Path("tests/test_sqlite_storage.py"),
+        ):
             fixture = self.root / relative
             fixture.parent.mkdir(exist_ok=True)
             fixture.write_text(sample_uuid)
@@ -1016,6 +1020,7 @@ class HandoffTest(unittest.TestCase):
         self.assertIn("notes.md: session-like UUID", errors)
         self.assertNotIn("tools/handoffctl.py: session-like UUID", errors)
         self.assertNotIn("tests/test_handoffctl.py: session-like UUID", errors)
+        self.assertNotIn("tests/test_sqlite_storage.py: session-like UUID", errors)
         self.assertNotIn("coordinator.binding.json: session-like UUID", errors)
         self.assertIn("coordinator.binding.json: possible credential", errors)
 
