@@ -1,6 +1,10 @@
 # Changelog
 
 
+## v0.1.4 - 2026-09-08
+
+- Restrict coordinator commits to their explicit owned paths and preserve unrelated staged work.
+
 ## v0.1.3 - 2026-09-08
 
 - Refactor generated-view and privacy helpers to satisfy stricter downstream complexity gates.

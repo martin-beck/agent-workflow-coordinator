@@ -36,7 +36,7 @@ class VendorTest(unittest.TestCase):
         profile.write_text("project-profile-sentinel\n")
         binding.write_text("project-binding-sentinel\n")
         with patch("builtins.print") as output:
-            VENDOR.sync(ROOT, self.target, "v0.1.3", commit)
+            VENDOR.sync(ROOT, self.target, "v0.1.4", commit)
         output.assert_called_once()
         self.assertEqual("project-profile-sentinel\n", profile.read_text())
         self.assertEqual("project-binding-sentinel\n", binding.read_text())
@@ -63,25 +63,25 @@ class VendorTest(unittest.TestCase):
             VENDOR.verify(self.target)
 
     def test_release_identity_requires_clean_exact_tag(self) -> None:
-        with patch.object(VENDOR, "git_output", side_effect=["", "b" * 40, "v0.1.3"]):
-            self.assertEqual("b" * 40, VENDOR.release_identity(ROOT, "v0.1.3"))
+        with patch.object(VENDOR, "git_output", side_effect=["", "b" * 40, "v0.1.4"]):
+            self.assertEqual("b" * 40, VENDOR.release_identity(ROOT, "v0.1.4"))
         with (
             patch.object(VENDOR, "git_output", return_value="dirty"),
             self.assertRaisesRegex(RuntimeError, "must be clean"),
         ):
-            VENDOR.release_identity(ROOT, "v0.1.3")
+            VENDOR.release_identity(ROOT, "v0.1.4")
         with (
             patch.object(VENDOR, "git_output", side_effect=["", "b" * 40, "v0.2.0"]),
             self.assertRaisesRegex(RuntimeError, "not tagged"),
         ):
-            VENDOR.release_identity(ROOT, "v0.1.3")
+            VENDOR.release_identity(ROOT, "v0.1.4")
         with self.assertRaisesRegex(RuntimeError, "form vMAJOR"):
             VENDOR.release_identity(ROOT, "main")
 
     def test_verify_rejects_every_identity_and_manifest_boundary(self) -> None:
         commit = "d" * 40
         with patch("builtins.print"):
-            VENDOR.sync(ROOT, self.target, "v0.1.3", commit)
+            VENDOR.sync(ROOT, self.target, "v0.1.4", commit)
         original = json.loads((self.target / VENDOR.LOCK_NAME).read_text())
         variants = []
         value = json.loads(json.dumps(original))
@@ -111,7 +111,7 @@ class VendorTest(unittest.TestCase):
         core = self.target / "tools/handoffctl.py"
         core.write_text(
             core.read_text().replace(
-                'COORDINATOR_VERSION = "0.1.3"', 'COORDINATOR_VERSION = "9.9.9"'
+                'COORDINATOR_VERSION = "0.1.4"', 'COORDINATOR_VERSION = "9.9.9"'
             )
         )
         original["files"]["tools/handoffctl.py"]["sha256"] = VENDOR.sha256(core)
@@ -122,10 +122,10 @@ class VendorTest(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "regular file"):
             VENDOR.sha256(missing)
         with (
-            patch.object(VENDOR, "git_output", side_effect=["", "short", "v0.1.3"]),
+            patch.object(VENDOR, "git_output", side_effect=["", "short", "v0.1.4"]),
             self.assertRaisesRegex(RuntimeError, "full commit"),
         ):
-            VENDOR.release_identity(ROOT, "v0.1.3")
+            VENDOR.release_identity(ROOT, "v0.1.4")
 
     def test_atomic_copy_rejects_symlink_and_git_query_is_bounded(self) -> None:
         source = self.target / "source"
@@ -158,14 +158,14 @@ class VendorTest(unittest.TestCase):
                     "--target",
                     str(self.target),
                     "--version",
-                    "v0.1.3",
+                    "v0.1.4",
                 ],
             ),
             patch.object(VENDOR, "release_identity", return_value="c" * 40),
             patch.object(VENDOR, "sync") as sync,
         ):
             self.assertEqual(0, VENDOR.main())
-            sync.assert_called_once_with(ROOT, self.target, "v0.1.3", "c" * 40)
+            sync.assert_called_once_with(ROOT, self.target, "v0.1.4", "c" * 40)
 
 
 if __name__ == "__main__":
