@@ -1446,6 +1446,28 @@ def append_file_command_result(
         os.fsync(stream.fileno())
 
 
+def legacy_command_results() -> list[Meta]:
+    """Strictly load the privacy-safe Git-backend journal for migration."""
+    path = RUNTIME / "command-results.jsonl"
+    if not path.exists():
+        return []
+    required = {"at", "task", "owner", "argv_sha256", "returncode", "classification"}
+    records: list[Meta] = []
+    for number, line in enumerate(path.read_text().splitlines(), 1):
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError as error:
+            raise RuntimeError(f"invalid command journal line {number}") from error
+        if not isinstance(record, dict) or set(record) != required:
+            raise RuntimeError(f"invalid command journal line {number}")
+        if not re.fullmatch(r"[0-9a-f]{64}", str(record["argv_sha256"])):
+            raise RuntimeError(f"invalid command journal digest at line {number}")
+        if not isinstance(record["returncode"], int):
+            raise RuntimeError(f"invalid command journal return code at line {number}")
+        records.append(cast(Meta, record))
+    return records
+
+
 def append_command_result(
     task_id: str,
     owner: str,
@@ -1568,6 +1590,7 @@ def cmd_init(args: argparse.Namespace) -> None:
                 imported_at=now(),
                 source_backend="initial",
                 source_checkpoint="uncommitted-init",
+                command_results=legacy_command_results(),
             )
         atomic(BACKEND_CONFIG, json.dumps(selection, indent=2, sort_keys=True) + "\n")
         backend_selection()
@@ -1591,6 +1614,7 @@ def cmd_migrate(args: argparse.Namespace) -> None:
         with locked():
             sync_replica_before_write()
             tasks = git_tasks()
+            command_results = legacy_command_results()
             errors = validate(live=False)
             if errors:
                 raise RuntimeError("migration preflight failed:\n" + "\n".join(errors))
@@ -1604,6 +1628,7 @@ def cmd_migrate(args: argparse.Namespace) -> None:
                     imported_at=now(),
                     source_backend="git",
                     source_checkpoint=checkpoint,
+                    command_results=command_results,
                 )
                 imported = SQLiteBackend(DATABASE, binding, TASKS).load_tasks()
                 if [(m, b) for _, m, b in tasks] != [(m, b) for _, m, b in imported]:

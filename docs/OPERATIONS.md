@@ -36,16 +36,18 @@ Known network filesystem types fail closed because WAL shared memory is a same-h
 contract. `SQLITE_BUSY_TIMEOUT`, `SQLITE_CORRUPT`, `SQLITE_BINDING_MISMATCH` and
 `SQLITE_COMMITTED_EXPORT_FAILED` are stable operator classifications.
 
-Mutations take an exclusive lock stored below Git's common directory, so all worktrees of one local
-clone serialize through the same file. Snapshots and status checks take a shared lock. The default
-lock deadline is 10 seconds, the internal Git/GitHub deadline is 30 seconds, and the wrapped command
-deadline is 1800 seconds. On timeout, inspect the holder, process, commit and ref before retrying.
+Git-backend mutations and SQLite projection writes take an exclusive lock stored below Git's common
+directory, so all worktrees of one local clone serialize through the same file. Git snapshots and
+status checks take a shared lock. The default lock deadline is 10 seconds, the internal Git/GitHub
+deadline is 30 seconds, and the wrapped command deadline is 1800 seconds. On timeout, inspect the
+holder, process, commit and ref before retrying.
 
-Commands run outside the coordinator lock so long work cannot block heartbeats. Runtime
-configuration and the live claim are checked before execution. The privacy-safe
-task/owner/argv-digest/exit record is fsynced to `.runtime/command-results.jsonl` immediately after
-execution and before any fallible task, Git, GitHub or reconciliation work. The task update is
-committed before live reconciliation. The recorded digest covers argv, not output or environment.
+Commands run outside the coordinator lock so long work cannot block heartbeats. The live claim is
+checked before execution; Git-backed commands additionally require runtime configuration. The
+privacy-safe task/owner/argv-digest/exit record is committed to SQLite or fsynced to the Git
+backend's `.runtime/command-results.jsonl` immediately after execution and before any fallible task,
+Git, GitHub or reconciliation work. The task update is committed before live reconciliation. The
+recorded digest covers argv, not output or environment.
 
 ## Durable failure semantics
 
@@ -95,7 +97,8 @@ tools/handoffctl doctor
 
 The complete database is installed before the backend selector changes. An interruption before the
 selector switch leaves Git authoritative. Task IDs, revisions, dependency edges, claims, evidence
-bodies and source commit checkpoint are equivalence-checked. Until migration is accepted, original
+bodies, privacy-safe command results and source commit checkpoint are imported and checked. Until
+migration is accepted, original
 files remain usable; `migrate --to git` explicitly exports current SQLite state and switches
 authority back. Never edit the selector to perform migration.
 

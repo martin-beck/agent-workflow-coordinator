@@ -340,6 +340,20 @@ class SQLiteStorageTest(unittest.TestCase):
     def test_explicit_migration_round_trip_preserves_records_and_projections(self) -> None:
         self.configure_core()
         self.write_git_tasks([task("AR-0001"), task("AR-0002")])
+        CORE.RUNTIME.mkdir(exist_ok=True)
+        (CORE.RUNTIME / "command-results.jsonl").write_text(
+            json.dumps(
+                {
+                    "at": "2026-09-08T00:00:00+00:00",
+                    "task": "AR-0001",
+                    "owner": "worker",
+                    "argv_sha256": "a" * 64,
+                    "returncode": 0,
+                    "classification": "EXIT",
+                }
+            )
+            + "\n"
+        )
         completed = subprocess.CompletedProcess([], 0, "b" * 40 + "\n", "")
         with (
             patch.object(CORE, "sync_replica_before_write"),
@@ -349,6 +363,11 @@ class SQLiteStorageTest(unittest.TestCase):
             CORE.cmd_migrate(argparse.Namespace(to="sqlite"))
         self.assertEqual("sqlite", CORE.backend_selection()["backend"])
         self.assertEqual(["AR-0001", "AR-0002"], [item[1]["id"] for item in CORE.all_tasks()])
+        connection = sqlite3.connect(self.database)
+        self.assertEqual(
+            1, connection.execute("SELECT count(*) FROM command_results").fetchone()[0]
+        )
+        connection.close()
         self.assertEqual(
             CORE.render_current(CORE.all_tasks()), (self.root / "CURRENT.md").read_text()
         )
@@ -455,6 +474,18 @@ class SQLiteStorageTest(unittest.TestCase):
         )
         with self.assertRaisesRegex(RuntimeError, "storage backend"):
             CORE._assert_storage_binding(BINDING)
+
+    def test_migration_rejects_malformed_legacy_command_journal(self) -> None:
+        self.configure_core()
+        CORE.RUNTIME.mkdir(exist_ok=True)
+        journal = CORE.RUNTIME / "command-results.jsonl"
+        for value, message in (
+            ("not-json\n", "line 1"),
+            (json.dumps({"task": "AR-0001"}) + "\n", "line 1"),
+        ):
+            journal.write_text(value)
+            with self.assertRaisesRegex(RuntimeError, message):
+                CORE.legacy_command_results()
 
     def test_storage_binding_opens_bound_sqlite_database(self) -> None:
         self.configure_core(backend="sqlite")

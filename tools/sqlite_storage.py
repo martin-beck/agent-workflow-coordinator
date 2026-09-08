@@ -345,6 +345,7 @@ def create_database(
     imported_at: str,
     source_backend: str,
     source_checkpoint: str,
+    command_results: Sequence[Meta] = (),
 ) -> None:
     """Build a complete database beside its final target and install atomically."""
     require_local_filesystem(path)
@@ -407,6 +408,12 @@ def create_database(
                 """INSERT INTO migrations(source_backend, source_checkpoint, imported_at)
                    VALUES (?, ?, ?)""",
                 (source_backend, source_checkpoint, imported_at),
+            )
+            connection.executemany(
+                """INSERT INTO command_results
+                   (task_id, owner, argv_sha256, returncode, classification, recorded_at)
+                   VALUES (:task, :owner, :argv_sha256, :returncode, :classification, :at)""",
+                command_results,
             )
             connection.commit()
             connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
