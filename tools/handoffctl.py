@@ -1052,9 +1052,13 @@ def reconcile_sqlite(*, do_commit: bool, push: bool) -> bool:
         raise RuntimeError("SQLite publication requires --commit with --push")
     before: dict[Path, str | None] = {path: path.read_text() for path in TASKS.glob("AR-*.md")}
     before.update({path: path.read_text() if path.exists() else None for path in generated_paths()})
-    paths = export_sqlite_projections()
+    state: State | None = None
     if CONFIG.exists() and config().get("github_repository"):
         state = project_scan()
+        backend = SQLiteBackend(DATABASE, project_binding(), TASKS)
+        backend.update_observations({item["key"]: item for item in state["worktrees"]}, now())
+    paths = export_sqlite_projections()
+    if state is not None:
         project, worktrees = live_docs(state)
         atomic(ROOT / "PROJECT_STATE.md", project)
         atomic(ROOT / "WORKTREES.md", worktrees)

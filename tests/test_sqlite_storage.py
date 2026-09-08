@@ -551,14 +551,26 @@ class SQLiteStorageTest(unittest.TestCase):
 
     def test_reconcile_publication_is_optional_bounded_and_ordered(self) -> None:
         self.configure_core(backend="sqlite")
-        self.create()
+        tracked = task("AR-0001")
+        tracked[1]["worktree_key"] = "worker-1"
+        backend = self.create([tracked])
         CORE.RUNTIME.mkdir(exist_ok=True)
-        CORE.CONFIG.write_text("{}")
+        CORE.CONFIG.write_text('{"github_repository": "owner/product"}')
         state = {
             "remote_main": "a" * 40,
             "origin_main": "a" * 40,
             "primary_head": "b" * 40,
-            "worktrees": [],
+            "worktrees": [
+                {
+                    "key": "worker-1",
+                    "branch": "feature/test",
+                    "head": "c" * 40,
+                    "dirty": True,
+                    "paths": ["safe/path.py"],
+                    "behind": 0,
+                    "ahead": 1,
+                }
+            ],
             "prs": [],
             "runs": [],
         }
@@ -570,6 +582,12 @@ class SQLiteStorageTest(unittest.TestCase):
             self.assertTrue(CORE.reconcile(do_commit=True, push=True))
         commit.assert_called_once()
         push.assert_called_once()
+        observed = backend.load_tasks()[0][1]
+        self.assertEqual(observed["observed_branch"], "feature/test")
+        self.assertEqual(observed["observed_head"], "c" * 40)
+        self.assertTrue(observed["observed_dirty"])
+        self.assertEqual(observed["task_revision"], 2)
+        self.assertIn("feature/test", (self.tasks / tracked[0]).read_text())
         with self.assertRaisesRegex(RuntimeError, "requires --commit"):
             CORE.reconcile(do_commit=False, push=True)
 

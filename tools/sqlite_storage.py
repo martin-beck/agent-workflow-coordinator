@@ -260,6 +260,51 @@ class SQLiteBackend:
                 (task_id, meta["task_revision"], kind, at, note),
             )
 
+    def update_observations(self, observations: dict[str, Meta], at: str) -> None:
+        """Persist changed live worktree observations in one transaction."""
+        with self.transaction() as connection:
+            for _, meta, body in self._load(connection):
+                key = str(meta.get("worktree_key", ""))
+                if not key or key not in observations:
+                    continue
+                item = observations[key]
+                values = {
+                    "observed_branch": item["branch"],
+                    "observed_head": item["head"],
+                    "observed_dirty": item["dirty"],
+                }
+                if all(meta.get(name) == value for name, value in values.items()):
+                    continue
+                current = int(meta["task_revision"])
+                meta.update(values)
+                meta["task_revision"] = current + 1
+                meta["updated_at"] = at
+                cursor = connection.execute(
+                    """UPDATE tasks SET meta_json=?, body=?, revision=?, status=?, owner=?,
+                       claim_expires=?, branch=?, worktree_key=?, updated_at=?
+                       WHERE id=? AND revision=?""",
+                    (
+                        json.dumps(meta, sort_keys=True),
+                        body,
+                        meta["task_revision"],
+                        meta["status"],
+                        meta.get("owner", ""),
+                        meta.get("claim_expires", ""),
+                        meta.get("branch", ""),
+                        meta.get("worktree_key", ""),
+                        meta["updated_at"],
+                        meta["id"],
+                        current,
+                    ),
+                )
+                if cursor.rowcount != 1:
+                    raise RuntimeError("SQLITE_CONFLICT: observation update lost its fence")
+                connection.execute(
+                    """INSERT INTO events(task_id, revision, kind, recorded_at, note)
+                       VALUES (?, ?, 'reconcile', ?, ?)""",
+                    (meta["id"], meta["task_revision"], at, "Recorded live worktree state."),
+                )
+
     def append_command_result(
         self,
         task_id: str,
