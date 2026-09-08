@@ -1,6 +1,11 @@
 # Changelog
 
 
+## v0.1.3 - 2026-09-08
+
+- Refactor generated-view and privacy helpers to satisfy stricter downstream complexity gates.
+- Wrap the formal proof documentation for downstream Markdown policies.
+
 ## v0.1.2 - 2026-09-08
 
 - Keep UUID privacy checks active except for the exact identity and contract files that require UUIDs.
