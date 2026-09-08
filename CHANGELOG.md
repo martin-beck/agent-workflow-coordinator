@@ -1,5 +1,10 @@
 # Changelog
 
+
+## v0.1.2 - 2026-09-08
+
+- Keep UUID privacy checks active except for the exact identity and contract files that require UUIDs.
+- Continue scanning project identity files for credentials, paths, addresses, and private keys.
 ## v0.1.1 - 2026-09-08
 
 - Include the canonical contract test and tracked profile/binding schemas in every vendor pin.

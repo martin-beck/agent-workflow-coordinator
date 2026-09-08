@@ -43,7 +43,7 @@ signing, and a local filesystem with POSIX flock semantics.
    python /path/to/agent-workflow-coordinator/tools/vendor.py sync \
      --source /path/to/agent-workflow-coordinator \
      --target /path/to/project-state \
-     --version v0.1.1
+     --version v0.1.2
    ```
 
 3. From the state repository root, initialize exactly once:

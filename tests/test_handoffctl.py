@@ -976,8 +976,20 @@ class HandoffTest(unittest.TestCase):
         binary.write_bytes(b"\\xff")
         large = self.root / "large.md"
         large.write_text("x" * 200001)
+        sample_uuid = "33333333-3333-4333-8333-333333333333"
+        for relative in (Path("tools/handoffctl.py"), Path("tests/test_handoffctl.py")):
+            fixture = self.root / relative
+            fixture.parent.mkdir(exist_ok=True)
+            fixture.write_text(sample_uuid)
+        (self.root / "notes.md").write_text(sample_uuid)
+        CORE.BINDING.write_text(CORE.BINDING.read_text() + "\ntoken=leak\n")
         errors = "\n".join(CORE.privacy_errors())
         self.assertIn("exceeds 200 KiB", errors)
+        self.assertIn("notes.md: session-like UUID", errors)
+        self.assertNotIn("tools/handoffctl.py: session-like UUID", errors)
+        self.assertNotIn("tests/test_handoffctl.py: session-like UUID", errors)
+        self.assertNotIn("coordinator.binding.json: session-like UUID", errors)
+        self.assertIn("coordinator.binding.json: possible credential", errors)
 
     def test_validation_reports_all_basic_reference_and_claim_errors(self) -> None:
         path = self.make_task("AR-0001")

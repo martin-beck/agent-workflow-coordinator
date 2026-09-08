@@ -70,7 +70,7 @@ type Meta = dict[str, Any]
 type Task = tuple[Path, Meta, str]
 type State = dict[str, Any]
 
-COORDINATOR_VERSION = "0.1.1"
+COORDINATOR_VERSION = "0.1.2"
 DEFAULT_PROJECT_SETTINGS: Meta = {
     "schema_version": 1,
     "project_id": "00000000-0000-4000-8000-000000000000",
@@ -211,6 +211,15 @@ PRIVATE = (
         ),
         "session-like UUID",
     ),
+)
+
+UUID_PRIVACY_EXEMPT = frozenset(
+    {
+        Path(".handoffctl.json"),
+        Path("coordinator.binding.json"),
+        Path("tests/test_handoffctl.py"),
+        Path("tools/handoffctl.py"),
+    }
 )
 
 
@@ -532,8 +541,6 @@ def privacy_errors() -> list[str]:
         ):
             continue
         relative = path.relative_to(ROOT)
-        if relative in (Path(".handoffctl.json"), Path("coordinator.binding.json")):
-            continue
         if path.stat().st_size > 200000:
             errors.append(f"{relative}: state file exceeds 200 KiB")
         try:
@@ -541,6 +548,8 @@ def privacy_errors() -> list[str]:
         except UnicodeDecodeError:
             continue
         for regex, label in PRIVATE:
+            if label == "session-like UUID" and relative in UUID_PRIVACY_EXEMPT:
+                continue
             if regex.search(text):
                 errors.append(f"{relative}: {label}")
     return errors
