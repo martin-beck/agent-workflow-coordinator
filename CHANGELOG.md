@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.3.4 - 2026-09-08
+
+- Refactor Git and SQLite reconciliation below the downstream CCN 14 compatibility ceiling.
+- Enforce the pinned Lizard complexity gate in local development and CI.
+
 ## v0.3.3 - 2026-09-08
 
 - Allow the exact vendored SQLite coordinator test fixture to contain its required UUID.

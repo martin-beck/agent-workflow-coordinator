@@ -39,6 +39,7 @@ jobs:
           uv run ruff format --check tools tests
           uv run ruff check --no-fix tools tests
           uv run mypy tools tests
+          uv run lizard -l python --CCN 14 tools/handoffctl.py
       - name: Tests and branch coverage
         run: |
           uv run coverage run --branch -m unittest discover -s tests -p 'test_*.py'
