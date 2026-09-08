@@ -57,7 +57,7 @@ also requires a local filesystem with POSIX `flock(2)` semantics.
    python /path/to/agent-workflow-coordinator/tools/vendor.py sync \
      --source /path/to/agent-workflow-coordinator \
      --target /path/to/project-state \
-     --version v0.3.4
+     --version v0.3.5
    ```
 
 3. From the state repository root, initialize exactly once:
