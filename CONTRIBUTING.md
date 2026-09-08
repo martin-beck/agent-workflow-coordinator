@@ -23,8 +23,9 @@ The source-header check covers tracked Python and shell sources, TLA+ modules, a
 `tools/handoffctl` launcher. It intentionally excludes documentation, JSON schemas and examples,
 TLC configuration, TOML project metadata, YAML workflows, and lock files because those are
 documentation, data, or configuration rather than source code. A shebang may precede the header;
-the exact Huawei copyright and `SPDX-License-Identifier: MIT` lines must otherwise be first,
-adjacent, and unique.
+TLA+ modules keep their required MODULE declaration first and place the header immediately after it.
+The exact Huawei copyright and SPDX lines must form one adjacent pair at that required location;
+standalone matching lines elsewhere do not count as duplicate headers.
 
 Use signed commits with a matching `Signed-off-by` trailer. By contributing, you certify the
 Developer Certificate of Origin 1.1.

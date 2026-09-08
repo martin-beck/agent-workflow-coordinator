@@ -53,7 +53,7 @@ class SourceHeaderTests(unittest.TestCase):
             root = Path(directory)
             path = Path("Model.tla")
             (root / path).write_text(
-                f"\\* {checker.COPYRIGHT}\n\\* {checker.SPDX}\n---- MODULE Model ----\n",
+                f"---- MODULE Model ----\n\\* {checker.COPYRIGHT}\n\\* {checker.SPDX}\n",
                 encoding="utf-8",
             )
             self.assertEqual(checker.check_file(root, path), [])
@@ -63,13 +63,39 @@ class SourceHeaderTests(unittest.TestCase):
             root = Path(directory)
             path = Path("tool.py")
             (root / path).write_text(
-                f"# {checker.SPDX}\n# {checker.COPYRIGHT}\n# {checker.SPDX}\n",
+                f"# {checker.SPDX}\n# {checker.COPYRIGHT}\n# {checker.SPDX}\n"
+                f"# {checker.COPYRIGHT}\n# {checker.SPDX}\n",
                 encoding="utf-8",
             )
             issues = checker.check_file(root, path)
             self.assertEqual(len(issues), 2)
             self.assertIn("expected exact Huawei/MIT header", issues[0])
-            self.assertIn("exactly one canonical SPDX", issues[1])
+            self.assertIn("exactly one canonical Huawei/MIT header pair", issues[1])
+
+    def test_check_file_requires_tla_module_before_header(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = Path("Model.tla")
+            (root / path).write_text(
+                f"\\* {checker.COPYRIGHT}\n\\* {checker.SPDX}\n---- MODULE Model ----\n",
+                encoding="utf-8",
+            )
+            issues = checker.check_file(root, path)
+            self.assertEqual(len(issues), 1)
+            self.assertIn("at line 2", issues[0])
+
+    def test_check_file_counts_adjacent_header_pairs_only(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = Path("tool.py")
+            header = f"# {checker.COPYRIGHT}\n# {checker.SPDX}\n"
+            isolated = f"# {checker.COPYRIGHT}\nvalue = 1\n# {checker.SPDX}\n"
+            (root / path).write_text(header + "\n" + isolated, encoding="utf-8")
+            self.assertEqual(checker.check_file(root, path), [])
+            (root / path).write_text(header + "\n" + header, encoding="utf-8")
+            issues = checker.check_file(root, path)
+            self.assertEqual(len(issues), 1)
+            self.assertIn("exactly one canonical Huawei/MIT header pair", issues[0])
 
     def test_check_file_reports_non_utf8_and_rejects_unsupported_path(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
