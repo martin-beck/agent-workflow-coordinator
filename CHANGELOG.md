@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.3.1 - 2026-09-08
+
+- Enforce the exact Huawei 2026 copyright and SPDX MIT pair on every tracked first-party source.
+- Preserve executable shebangs and TLA+ MODULE prologues while checking headers locally and in CI.
+
 ## v0.3.0 - 2026-09-08
 
 - Make embedded SQLite 3 WAL with `synchronous=FULL` the default authority for new projects.
