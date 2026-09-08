@@ -5,7 +5,8 @@ runtime behavior. Preserve the offline vendoring boundary and permanent project 
 
 Every transition, lock, binding, vendor-format or recovery change requires focused negative-path
 tests. Update TLA+ when the abstract contract changes. Run formatting, lint, strict typing, full
-branch coverage, schema examples, vendor tests and all TLC models before publication.
+branch coverage, source-header verification, schema examples, vendor tests and all TLC models
+before publication.
 
 Do not add runtime dependencies, executable downstream plugins, network-required startup, floating
 versions, project secrets, machine paths, or private evidence. Commits must be signed and include a

@@ -120,6 +120,7 @@ with contract tests and, where applicable, formal model updates. See
 - `tools/sqlite_storage.py`: embedded WAL schema and transactional backend.
 - `tools/status_renderer.py`: deterministic optional portfolio renderer.
 - `tools/vendor.py`: tagged-release sync and offline digest verifier.
+- `tools/check_source_headers.py`: exact Huawei/MIT source-header verifier.
 - `formal/handoffctl/`: TLA+ specifications and pinned TLC runner.
 - `tests/`: fault, race, recovery, binding and vendor tests.
 - `schema/`: tracked configuration contracts.

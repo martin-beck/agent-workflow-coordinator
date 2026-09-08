@@ -1,3 +1,6 @@
+# Copyright (C) Huawei Technologies Co., Ltd. 2026. All rights reserved.
+# SPDX-License-Identifier: MIT
+
 """Tests for deterministic offline coordinator vendoring."""
 
 import importlib.util

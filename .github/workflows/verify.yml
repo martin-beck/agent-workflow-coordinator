@@ -32,6 +32,8 @@ jobs:
           enable-cache: true
           cache-dependency-glob: uv.lock
       - run: uv sync --locked --only-group quality
+      - name: Source license headers
+        run: uv run python tools/check_source_headers.py
       - name: Format lint and type
         run: |
           uv run ruff format --check tools tests
