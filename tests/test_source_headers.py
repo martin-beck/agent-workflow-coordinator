@@ -58,6 +58,20 @@ class SourceHeaderTests(unittest.TestCase):
             )
             self.assertEqual(checker.check_file(root, path), [])
 
+    def test_check_file_rejects_nonmatching_tla_module_prologue(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = Path("Model.tla")
+            for prologue in ("not a module declaration", "---- MODULE Other ----"):
+                with self.subTest(prologue=prologue):
+                    (root / path).write_text(
+                        f"{prologue}\n\\* {checker.COPYRIGHT}\n\\* {checker.SPDX}\n",
+                        encoding="utf-8",
+                    )
+                    issues = checker.check_file(root, path)
+                    self.assertEqual(len(issues), 1)
+                    self.assertIn("matching TLA+ MODULE declaration", issues[0])
+
     def test_check_file_reports_position_content_and_duplicates(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -81,8 +95,9 @@ class SourceHeaderTests(unittest.TestCase):
                 encoding="utf-8",
             )
             issues = checker.check_file(root, path)
-            self.assertEqual(len(issues), 1)
-            self.assertIn("at line 2", issues[0])
+            self.assertEqual(len(issues), 2)
+            self.assertIn("matching TLA+ MODULE declaration", issues[0])
+            self.assertIn("at line 2", issues[1])
 
     def test_check_file_counts_adjacent_header_pairs_only(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
