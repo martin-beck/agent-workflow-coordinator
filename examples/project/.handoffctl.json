@@ -1,0 +1,8 @@
+{
+  "commit_signoff": true,
+  "project_id": "00000000-0000-4000-8000-000000000000",
+  "project_name": "example-project",
+  "project_title": "Example Project",
+  "schema_version": 1,
+  "status_view": true
+}

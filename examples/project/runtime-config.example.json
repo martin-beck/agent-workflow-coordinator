@@ -1,0 +1,6 @@
+{
+  "github_repository": "OWNER/PRODUCT_REPOSITORY",
+  "product_worktree": "product-checkout-directory",
+  "projects_root": "/absolute/path/to/project-parent",
+  "push_enabled": false
+}
