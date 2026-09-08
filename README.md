@@ -57,7 +57,7 @@ also requires a local filesystem with POSIX `flock(2)` semantics.
    python /path/to/agent-workflow-coordinator/tools/vendor.py sync \
      --source /path/to/agent-workflow-coordinator \
      --target /path/to/project-state \
-     --version v0.3.3
+     --version v0.3.4
    ```
 
 3. From the state repository root, initialize exactly once:
@@ -102,6 +102,18 @@ tools/handoffctl release AR-0001 --owner worker-unique --status done \
 tools/handoffctl reconcile --commit --push
 tools/handoffctl doctor --live
 ```
+
+## Develop
+
+Install the pinned quality environment and run the downstream-compatible complexity gate locally:
+
+```sh
+uv sync --locked --only-group quality
+uv run lizard -l python --CCN 14 tools/handoffctl.py
+```
+
+CI runs the same CCN 14 budget with formatting, lint, strict typing, coverage, schemas, vendoring
+tests, source headers and the formal models.
 
 Run the tool from the bound state repository or configured product checkout. The complete
 human/agent loop and recovery rules are in [Operations](docs/OPERATIONS.md) and the compact
