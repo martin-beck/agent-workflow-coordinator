@@ -57,6 +57,8 @@ def configure_child(root_value: str) -> None:
     CORE.REPLICA_BLOCKED = CORE.RUNTIME / "replica-blocked.json"
     CORE.PROJECT_CONFIG = root / ".handoffctl.json"
     CORE.BINDING = root / "coordinator.binding.json"
+    CORE.BACKEND_CONFIG = root / "coordinator.backend.json"
+    CORE.DATABASE = CORE.RUNTIME / "coordinator.sqlite3"
 
 
 def racing_claim(root_value: str, start: Any, owner: str, outcomes: Any) -> None:
@@ -150,6 +152,8 @@ class HandoffTest(unittest.TestCase):
         CORE.REPLICA_BLOCKED = CORE.RUNTIME / "replica-blocked.json"
         CORE.PROJECT_CONFIG = root / ".handoffctl.json"
         CORE.BINDING = root / "coordinator.binding.json"
+        CORE.BACKEND_CONFIG = root / "coordinator.backend.json"
+        CORE.DATABASE = CORE.RUNTIME / "coordinator.sqlite3"
         CORE.TASKS.mkdir()
         (root / "plans").mkdir()
         CORE.PROJECT_CONFIG.write_text(

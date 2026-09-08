@@ -1,9 +1,10 @@
 # Agent Workflow Coordinator
 
 Agent Workflow Coordinator is a small, self-contained coordination database and CLI for people
-and autonomous coding agents sharing a Git project. Its `handoffctl` command serializes task
-claims and updates, fences stale revisions, maintains leases and generated views, records bounded
-commands without retaining sensitive output, and safely reconciles Git/GitHub state.
+and autonomous coding agents sharing a project. New projects use an embedded SQLite 3 database in
+WAL mode. Its `handoffctl` command transactionally serializes task claims and updates, fences stale
+revisions, maintains leases and generated views, records bounded commands without retaining
+sensitive output, and can optionally publish deterministic projections through Git/GitHub.
 
 The project is extracted from the coordinator used by
 [Agent Relay State](https://github.com/martin-beck/agent-relay-state) and
@@ -17,6 +18,11 @@ and does not depend on a package registry, network fetch, submodule, or upstream
 
 ## Safety properties
 
+- SQLite WAL is the default authority for new projects: foreign keys, database constraints,
+  `BEGIN IMMEDIATE`, exact-revision conditional updates, a 10-second busy deadline and
+  `synchronous=FULL` provide the local multi-process transaction boundary.
+- The existing Markdown/Git backend remains supported with `init --backend git`. Existing projects
+  without a backend selector remain Git-backed and are never silently migrated.
 - Every accepted mutation is serialized by one repository-common POSIX `flock(2)`, including
   processes launched from different worktrees of the same local clone.
 - Exact task revisions reject stale concurrent writers.
@@ -38,8 +44,11 @@ NFS locking, arbitrary command correctness, kernel/storage failure, or power los
 
 ## Adopt it in a project
 
-Prerequisites are Python 3.12+, Git, GitHub CLI for live views/replication, configured Git commit
-signing, and a local filesystem with POSIX flock semantics.
+Prerequisites for normal local SQLite coordination are Python 3.12+, Git, and a local filesystem
+supporting SQLite WAL locking/shared memory. No database daemon, separate `sqlite3` executable,
+Python package, GitHub account, GitHub CLI, or network access is required. GitHub CLI and configured
+Git signing are needed only when live GitHub views or Git publication are enabled. The Git backend
+also requires a local filesystem with POSIX `flock(2)` semantics.
 
 1. Check out an exact release tag.
 2. Vendor it into the state repository:
@@ -48,7 +57,7 @@ signing, and a local filesystem with POSIX flock semantics.
    python /path/to/agent-workflow-coordinator/tools/vendor.py sync \
      --source /path/to/agent-workflow-coordinator \
      --target /path/to/project-state \
-     --version v0.2.0
+     --version v0.3.0
    ```
 
 3. From the state repository root, initialize exactly once:
@@ -62,6 +71,10 @@ signing, and a local filesystem with POSIX flock semantics.
      --status-view \
      --commit-signoff
    ```
+
+   SQLite WAL is the default. Use `--backend git` for the existing Markdown/Git authority.
+   Existing initialized repositories missing `coordinator.backend.json` are treated as legacy Git
+   projects. They do not migrate during an upgrade.
 
 4. Create the ignored `.runtime/config.json`, task schema, initial tasks, and project development
    policy as described in [Integration](docs/PROJECT_GUIDE.md).
@@ -104,6 +117,7 @@ with contract tests and, where applicable, formal model updates. See
 ## Repository map
 
 - `tools/handoffctl.py`: canonical vendored runtime.
+- `tools/sqlite_storage.py`: embedded WAL schema and transactional backend.
 - `tools/status_renderer.py`: deterministic optional portfolio renderer.
 - `tools/vendor.py`: tagged-release sync and offline digest verifier.
 - `tools/check_source_headers.py`: exact Huawei/MIT source-header verifier.
