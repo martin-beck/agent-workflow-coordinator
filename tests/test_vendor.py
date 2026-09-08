@@ -36,7 +36,7 @@ class VendorTest(unittest.TestCase):
         profile.write_text("project-profile-sentinel\n")
         binding.write_text("project-binding-sentinel\n")
         with patch("builtins.print") as output:
-            VENDOR.sync(ROOT, self.target, "v0.1.4", commit)
+            VENDOR.sync(ROOT, self.target, "v0.2.0", commit)
         output.assert_called_once()
         self.assertEqual("project-profile-sentinel\n", profile.read_text())
         self.assertEqual("project-binding-sentinel\n", binding.read_text())
@@ -63,25 +63,25 @@ class VendorTest(unittest.TestCase):
             VENDOR.verify(self.target)
 
     def test_release_identity_requires_clean_exact_tag(self) -> None:
-        with patch.object(VENDOR, "git_output", side_effect=["", "b" * 40, "v0.1.4"]):
-            self.assertEqual("b" * 40, VENDOR.release_identity(ROOT, "v0.1.4"))
+        with patch.object(VENDOR, "git_output", side_effect=["", "b" * 40, "v0.2.0"]):
+            self.assertEqual("b" * 40, VENDOR.release_identity(ROOT, "v0.2.0"))
         with (
             patch.object(VENDOR, "git_output", return_value="dirty"),
             self.assertRaisesRegex(RuntimeError, "must be clean"),
         ):
-            VENDOR.release_identity(ROOT, "v0.1.4")
+            VENDOR.release_identity(ROOT, "v0.2.0")
         with (
-            patch.object(VENDOR, "git_output", side_effect=["", "b" * 40, "v0.2.0"]),
+            patch.object(VENDOR, "git_output", side_effect=["", "b" * 40, "v0.3.0"]),
             self.assertRaisesRegex(RuntimeError, "not tagged"),
         ):
-            VENDOR.release_identity(ROOT, "v0.1.4")
+            VENDOR.release_identity(ROOT, "v0.2.0")
         with self.assertRaisesRegex(RuntimeError, "form vMAJOR"):
             VENDOR.release_identity(ROOT, "main")
 
     def test_verify_rejects_every_identity_and_manifest_boundary(self) -> None:
         commit = "d" * 40
         with patch("builtins.print"):
-            VENDOR.sync(ROOT, self.target, "v0.1.4", commit)
+            VENDOR.sync(ROOT, self.target, "v0.2.0", commit)
         original = json.loads((self.target / VENDOR.LOCK_NAME).read_text())
         variants = []
         value = json.loads(json.dumps(original))
@@ -111,7 +111,7 @@ class VendorTest(unittest.TestCase):
         core = self.target / "tools/handoffctl.py"
         core.write_text(
             core.read_text().replace(
-                'COORDINATOR_VERSION = "0.1.4"', 'COORDINATOR_VERSION = "9.9.9"'
+                'COORDINATOR_VERSION = "0.2.0"', 'COORDINATOR_VERSION = "9.9.9"'
             )
         )
         original["files"]["tools/handoffctl.py"]["sha256"] = VENDOR.sha256(core)
@@ -122,10 +122,68 @@ class VendorTest(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "regular file"):
             VENDOR.sha256(missing)
         with (
-            patch.object(VENDOR, "git_output", side_effect=["", "short", "v0.1.4"]),
+            patch.object(VENDOR, "git_output", side_effect=["", "short", "v0.2.0"]),
             self.assertRaisesRegex(RuntimeError, "full commit"),
         ):
-            VENDOR.release_identity(ROOT, "v0.1.4")
+            VENDOR.release_identity(ROOT, "v0.2.0")
+
+    def test_install_failure_rolls_back_every_destination(self) -> None:
+        staged = self.target / "staged"
+        destination_root = self.target / "installed"
+        staged.mkdir()
+        destination_root.mkdir()
+        for name in ("one", "two"):
+            (staged / name).write_text(f"new-{name}\n")
+            (destination_root / name).write_text(f"old-{name}\n")
+        original_replace = Path.replace
+
+        def fail_second_install(path: Path, target: Path) -> Path:
+            if path == staged / "two":
+                raise OSError(5, "injected rename failure")
+            return original_replace(path, target)
+
+        with (
+            patch.object(Path, "replace", fail_second_install),
+            self.assertRaisesRegex(OSError, "injected rename"),
+        ):
+            VENDOR.install_staged_snapshot(staged, destination_root, ["one", "two"])
+        self.assertEqual("old-one\n", (destination_root / "one").read_text())
+        self.assertEqual("old-two\n", (destination_root / "two").read_text())
+
+        (staged / "link").write_text("new\n")
+        (destination_root / "link").symlink_to(destination_root / "one")
+        with self.assertRaisesRegex(RuntimeError, "symlink"):
+            VENDOR.install_staged_snapshot(staged, destination_root, ["link"])
+
+    def test_staging_failure_preserves_existing_vendor_snapshot(self) -> None:
+        with patch("builtins.print"):
+            VENDOR.sync(ROOT, self.target, "v0.2.0", "a" * 40)
+        before = {
+            destination: (self.target / destination).read_bytes()
+            for _, destination in VENDOR.SOURCE_FILES
+        }
+        before[VENDOR.LOCK_NAME] = (self.target / VENDOR.LOCK_NAME).read_bytes()
+        original = VENDOR.atomic_bytes
+        calls = 0
+
+        def fail_during_staging(path: Path, content: bytes, mode: int = 0o644) -> None:
+            nonlocal calls
+            calls += 1
+            if calls == 3:
+                raise OSError(28, "No space left on device")
+            original(path, content, mode)
+
+        with (
+            patch.object(VENDOR, "atomic_bytes", side_effect=fail_during_staging),
+            self.assertRaisesRegex(OSError, "No space left"),
+        ):
+            VENDOR.sync(ROOT, self.target, "v0.2.0", "b" * 40)
+        after = {
+            destination: (self.target / destination).read_bytes()
+            for _, destination in VENDOR.SOURCE_FILES
+        }
+        after[VENDOR.LOCK_NAME] = (self.target / VENDOR.LOCK_NAME).read_bytes()
+        self.assertEqual(before, after)
 
     def test_atomic_copy_rejects_symlink_and_git_query_is_bounded(self) -> None:
         source = self.target / "source"
@@ -158,14 +216,14 @@ class VendorTest(unittest.TestCase):
                     "--target",
                     str(self.target),
                     "--version",
-                    "v0.1.4",
+                    "v0.2.0",
                 ],
             ),
             patch.object(VENDOR, "release_identity", return_value="c" * 40),
             patch.object(VENDOR, "sync") as sync,
         ):
             self.assertEqual(0, VENDOR.main())
-            sync.assert_called_once_with(ROOT, self.target, "v0.1.4", "c" * 40)
+            sync.assert_called_once_with(ROOT, self.target, "v0.2.0", "c" * 40)
 
 
 if __name__ == "__main__":

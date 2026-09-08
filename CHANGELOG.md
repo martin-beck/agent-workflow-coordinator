@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.2.0 - 2026-09-08
+
+- Share one repository-common lock across every local state worktree.
+- Fast-forward clean behind replicas before writes and classify true divergence.
+- Retry bounded read-only GitHub observations and classify exhausted failures.
+- Preflight wrapped commands, fsync privacy-safe command outcomes before follow-up,
+  and distinguish recorded-command reconciliation failures.
+- Add the exact-revision `recover-expired` transition with a checked UTC deadline.
+- Stage complete vendor snapshots before transactional rename installation.
+- Extend TLC coverage to worktree lock identity, expired recovery, and durable
+  post-command evidence.
+
 
 ## v0.1.4 - 2026-09-08
 
@@ -12,7 +24,7 @@
 
 ## v0.1.2 - 2026-09-08
 
-- Keep UUID privacy checks active except for the exact identity and contract files that require UUIDs.
+- Keep UUID privacy checks active except in required identity and contract files.
 - Continue scanning project identity files for credentials, paths, addresses, and private keys.
 ## v0.1.1 - 2026-09-08
 

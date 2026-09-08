@@ -10,10 +10,10 @@ Keep these in the consuming state repository:
 - extra read-only reports derived from task data;
 - project-specific tests and CI integration.
 
-A downstream extension must not bypass `.runtime/state.lock`, alter task files during an unlocked
-read, mutate generated files directly, or monkeypatch a vendored module in production. Prefer a
-separate deterministic command that consumes snapshots when the existing optional status view is
-insufficient.
+A downstream extension must not bypass the repository-common coordinator lock, alter task files
+during a read, mutate generated files directly, or monkeypatch a vendored module in production.
+Prefer a separate deterministic command that consumes snapshots when the existing optional status
+view is insufficient.
 
 ## Upstream extensions
 
