@@ -556,7 +556,7 @@ class SQLiteStorageTest(unittest.TestCase):
         backend = self.create([tracked])
         CORE.RUNTIME.mkdir(exist_ok=True)
         CORE.CONFIG.write_text('{"github_repository": "owner/product"}')
-        state = {
+        state: dict[str, Any] = {
             "remote_main": "a" * 40,
             "origin_main": "a" * 40,
             "primary_head": "b" * 40,
@@ -588,6 +588,12 @@ class SQLiteStorageTest(unittest.TestCase):
         self.assertTrue(observed["observed_dirty"])
         self.assertEqual(observed["task_revision"], 2)
         self.assertIn("feature/test", (self.tasks / tracked[0]).read_text())
+        backend.update_observations(
+            {"worker-1": state["worktrees"][0]}, "2026-09-08T00:02:00+00:00"
+        )
+        self.assertEqual(
+            backend.load_tasks()[0][1]["task_revision"], 2, "identical scans must be idempotent"
+        )
         with self.assertRaisesRegex(RuntimeError, "requires --commit"):
             CORE.reconcile(do_commit=False, push=True)
 
