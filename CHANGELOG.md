@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.3.5 - 2026-09-09
+
+- Keep the non-CLI SQLite storage module non-executable and remove its misleading shebang.
+- Verify clean vendor snapshots preserve valid shebang and executable-mode combinations.
+
 ## v0.3.4 - 2026-09-08
 
 - Refactor Git and SQLite reconciliation below the downstream CCN 14 compatibility ceiling.
