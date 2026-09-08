@@ -18,6 +18,15 @@ SOURCE_FILES: tuple[tuple[str, str], ...] = (
     ("tools/handoffctl.py", "tools/handoffctl.py"),
     ("tools/status_renderer.py", "tools/status_renderer.py"),
     ("tools/vendor.py", "tools/handoffctl_vendor.py"),
+    ("tests/test_handoffctl.py", "tests/test_handoffctl.py"),
+    (
+        "schema/project-config.schema.json",
+        "schema/handoffctl-project-config.schema.json",
+    ),
+    (
+        "schema/project-binding.schema.json",
+        "schema/handoffctl-project-binding.schema.json",
+    ),
     ("formal/handoffctl/Handoffctl.tla", "formal/handoffctl/Handoffctl.tla"),
     ("formal/handoffctl/Handoffctl.cfg", "formal/handoffctl/Handoffctl.cfg"),
     ("formal/handoffctl/HandoffctlLocks.tla", "formal/handoffctl/HandoffctlLocks.tla"),

@@ -89,7 +89,7 @@ Use a clean checkout at an exact upstream release tag:
 python /path/to/agent-workflow-coordinator/tools/vendor.py sync \
   --source /path/to/agent-workflow-coordinator \
   --target /path/to/project-state \
-  --version v0.1.0
+  --version v0.1.1
 python tools/handoffctl_vendor.py verify --target .
 ```
 

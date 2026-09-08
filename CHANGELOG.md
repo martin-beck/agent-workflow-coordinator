@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.1.1 - 2026-09-08
+
+- Include the canonical contract test and tracked profile/binding schemas in every vendor pin.
+
 ## v0.1.0 - 2026-09-08
 
 - Extract the shared coordinator runtime, deterministic status renderer and formal models.
