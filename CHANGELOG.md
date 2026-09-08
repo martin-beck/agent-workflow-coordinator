@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.3.2 - 2026-09-08
+
+- Keep the vendored runtime version consistent with project release metadata.
+- Add a regression that prevents release metadata and runtime version drift.
+
 ## v0.3.1 - 2026-09-08
 
 - Enforce the exact Huawei 2026 copyright and SPDX MIT pair on every tracked first-party source.
