@@ -17,6 +17,7 @@ import tempfile
 import textwrap
 import time
 import uuid
+from collections import Counter
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any, cast
@@ -703,6 +704,28 @@ def privacy_errors() -> list[str]:
     return errors
 
 
+def introduced_content_errors(before: dict[Path, str | None]) -> list[str]:
+    """Reject newly introduced privacy or size findings in mutation-owned files."""
+    errors: list[str] = []
+    for path, previous in before.items():
+        if not path.exists():
+            continue
+        relative = path.relative_to(ROOT)
+        current = path.read_text()
+        previous_text = previous or ""
+        previous_size = len(previous_text.encode()) if previous is not None else 0
+        if path.stat().st_size > 200000 and previous_size <= 200000:
+            errors.append(f"{relative}: state file exceeds 200 KiB")
+        for regex, label in PRIVATE:
+            if not privacy_pattern_applies(relative, label):
+                continue
+            old_matches = Counter(match.group(0) for match in regex.finditer(previous_text))
+            new_matches = Counter(match.group(0) for match in regex.finditer(current))
+            if new_matches - old_matches:
+                errors.append(f"{relative}: newly introduced {label}")
+    return errors
+
+
 def field_errors(path: Path, meta: Meta) -> list[str]:
     errors = [f"{path.name}: missing {name}" for name in REQ if name not in meta]
     errors.extend(f"{path.name}: unknown field {name}" for name in set(meta) - FIELDS)
@@ -796,6 +819,46 @@ def claim_errors(
             errors.append(f"{task_id}: active {field} also used by {seen[value]}")
         elif value:
             seen[value] = task_id
+    return errors
+
+
+def mutation_global_errors(tasks: list[Task]) -> list[str]:
+    """Check global identities, dependency graph, and active-key uniqueness."""
+    errors: list[str] = []
+    ids: dict[str, Path] = {}
+    active: dict[str, dict[str, str]] = {
+        "owner": {},
+        "worktree_key": {},
+        "branch": {},
+    }
+    for path, meta, _ in tasks:
+        task_id = str(meta.get("id", ""))
+        if task_id in ids:
+            errors.append(f"duplicate {task_id}")
+        ids[task_id] = path
+        if meta.get("status") != "in_progress":
+            continue
+        for field, seen in active.items():
+            value = meta.get(field)
+            if value and value in seen:
+                errors.append(f"{task_id}: active {field} also used by {seen[value]}")
+            elif value:
+                seen[value] = task_id
+    errors.extend(graph_errors(tasks))
+    return errors
+
+
+def mutation_errors(path: Path, before: dict[Path, str | None]) -> list[str]:
+    """Validate a Git mutation without gating on unrelated repository findings."""
+    tasks = all_tasks()
+    selected = [meta for candidate, meta, _ in tasks if candidate == path]
+    if len(selected) != 1:
+        return [f"{path.name}: mutation target is not unique"]
+    errors = basic_task_errors(path, selected[0])
+    errors.extend(claim_errors(selected[0], {}, {}, {}))
+    errors.extend(mutation_global_errors(tasks))
+    errors.extend(generated_view_errors(tasks))
+    errors.extend(introduced_content_errors(before))
     return errors
 
 
@@ -1217,7 +1280,7 @@ def require_promotion_preflight(kind: str) -> None:
     """Reject a promotion before writes when its source checkout is ambiguous."""
     if kind not in ("promote", "resume"):
         return
-    errors = validate(live=False)
+    errors = generated_view_errors(all_tasks())
     if errors:
         raise RuntimeError("promotion preflight failed:\n" + "\n".join(errors))
     if dirty_state_paths():
@@ -1311,7 +1374,7 @@ def mutate(args: argparse.Namespace, kind: str) -> None:
             views = rendered_task_views(all_tasks())
             for target, content in views.items():
                 atomic(target, content)
-            errors = validate(live=False)
+            errors = mutation_errors(path, before)
             if errors:
                 raise RuntimeError("\n".join(errors))
             committed = commit(f"chore(state): {kind} {args.task}", [path, *views])

@@ -91,6 +91,12 @@ tools/handoffctl recover-expired AR-0001 --expected-revision REVISION \
 
 A future or malformed deadline and a stale revision are rejected before mutation.
 
+On the Git backend, recover expired claims one at a time even when several leases elapsed. An
+unrelated expired claim or pre-existing repository privacy/size finding does not block a valid
+lifecycle transition, but it remains a strict `doctor` error until remediated. A transition still
+fails and rolls back if its resulting target or global active keys are invalid, or if it introduces
+a new privacy/size finding in a file it writes.
+
 ## Extend safely
 
 Do not patch vendored files. Project-specific task fields and constraints belong in the downstream

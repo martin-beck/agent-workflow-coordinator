@@ -71,11 +71,19 @@ readers, a competing writer, and bounded lock-wait timeout. TLC checks:
 - atomic task/projection revision advancement and rollback;
 - rejection of invalid source, owner, dependency, and revision combinations;
 - timeout without state mutation when another process holds the lock;
+- acceptance of eligible recovery despite simultaneous expiries and an unrelated repository
+  finding;
 - deadlock freedom and eventual completion under weak process/lock fairness.
 
-Two processes are sufficient for pairwise lifecycle races; two tasks cover the
-one-active-task-per-actor invariant. The separate three-process lock model
-covers two readers plus one writer and two worktree identities resolving one repository-common lock.
+Two processes are sufficient for pairwise lifecycle races in the general model; its two tasks cover
+the one-active-task-per-actor invariant. `HandoffctlRecovery.tla` separately starts two tasks as
+simultaneously expired claims owned by two distinct actors while an unrelated repository finding
+persists. Without injected I/O failure or lock timeout, which the general transition and lock
+models cover, it proves every eligible held recovery is accepted and both distinct claims are
+eventually recovered.
+
+The separate three-process lock model covers two readers plus one writer and two worktree
+identities resolving one repository-common lock.
 `HandoffctlRun.tla` covers preflight rejection, external execution, durable journaling, task-record
 failure, and post-reconciliation success or failure. The binding model covers the configured
 project and one foreign caller, including rejection without mutation and fair progress. These are

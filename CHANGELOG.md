@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Keep Git-backed lifecycle transitions available when unrelated claims are expired or unrelated
+  tracked files already have privacy or size findings, while retaining strict target, graph,
+  generated-view, and active owner/branch/worktree validation.
+- Reject and roll back privacy or size findings newly introduced in mutation-owned files.
+- Prove two-actor simultaneous-expiry recovery admission in a focused TLC model.
 - Fence wrapped commands started from a product checkout to the active task's declared worktree
   and branch.
 

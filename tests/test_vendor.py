@@ -85,7 +85,7 @@ class VendorTest(unittest.TestCase):
             capture_output=True,
             text=True,
         )
-        self.assertEqual(doctor.returncode, 0, doctor.stderr)
+        self.assertEqual(doctor.returncode, 0, doctor.stdout + doctor.stderr)
         self.assertIn("privacy", doctor.stdout)
 
     def test_synced_snapshot_obeys_shebang_and_executable_mode_policy(self) -> None:

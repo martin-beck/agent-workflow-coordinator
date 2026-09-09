@@ -42,6 +42,14 @@ status checks take a shared lock. The default lock deadline is 10 seconds, the i
 deadline is 30 seconds, and the wrapped command deadline is 1800 seconds. On timeout, inspect the
 holder, process, commit and ref before retrying.
 
+Git-backed lifecycle commands do not use the strict whole-repository `doctor` result as their
+transaction predicate. They continue to reject an invalid resulting target, dependency graph,
+generated view, active owner/branch/worktree collision, or a privacy/size finding introduced in a
+file that the mutation writes. An unrelated expired claim or pre-existing privacy/size finding does
+not block `recover-expired`, `claim`, `heartbeat`, `release`, `promote`, or `resume`.
+Run `doctor` separately to see and remediate every outstanding repository finding; successful
+transition admission does not declare the whole repository healthy.
+
 Commands run outside the coordinator lock so long work cannot block heartbeats. The live claim is
 checked before execution; when invoked from the configured product checkout, the current Git
 worktree and branch must also match the task's declared `worktree_key` and `branch`. Invocations
