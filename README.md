@@ -36,6 +36,8 @@ and does not depend on a package registry, network fetch, submodule, or upstream
 - A durable local commit is retained if later replication fails.
 - Initialization permanently binds an installation to one state repository and one product
   repository. Calls from another project fail before normal coordinator work.
+- Wrapped commands started from a product checkout are fenced to the active task's declared
+  worktree and branch; state-repository invocations remain available for coordinator commands.
 - TLA+/TLC checks bounded transition, lock, safety, liveness, and project-binding abstractions.
 
 Read [the formal proof boundary](formal/handoffctl/README.md): these guarantees assume cooperating

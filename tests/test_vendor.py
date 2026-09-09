@@ -46,7 +46,7 @@ class VendorTest(unittest.TestCase):
                 capture_output=True,
             )
         with patch("builtins.print"):
-            VENDOR.sync(ROOT, self.target, "v0.3.5", "e" * 40)
+            VENDOR.sync(ROOT, self.target, "v0.3.6", "e" * 40)
         command = [
             sys.executable,
             str(self.target / "tools/handoffctl.py"),
@@ -90,7 +90,7 @@ class VendorTest(unittest.TestCase):
 
     def test_synced_snapshot_obeys_shebang_and_executable_mode_policy(self) -> None:
         with patch("builtins.print"):
-            VENDOR.sync(ROOT, self.target, "v0.3.5", "f" * 40)
+            VENDOR.sync(ROOT, self.target, "v0.3.6", "f" * 40)
 
         def mismatches() -> list[str]:
             invalid = []
@@ -139,7 +139,7 @@ class VendorTest(unittest.TestCase):
         binding.write_text("project-binding-sentinel\n")
         backend.write_text("backend-selection-sentinel\n")
         with patch("builtins.print") as output:
-            VENDOR.sync(ROOT, self.target, "v0.3.5", commit)
+            VENDOR.sync(ROOT, self.target, "v0.3.6", commit)
         output.assert_called_once()
         self.assertEqual("project-profile-sentinel\n", profile.read_text())
         self.assertEqual("project-binding-sentinel\n", binding.read_text())
@@ -167,25 +167,25 @@ class VendorTest(unittest.TestCase):
             VENDOR.verify(self.target)
 
     def test_release_identity_requires_clean_exact_tag(self) -> None:
-        with patch.object(VENDOR, "git_output", side_effect=["", "b" * 40, "v0.3.5"]):
-            self.assertEqual("b" * 40, VENDOR.release_identity(ROOT, "v0.3.5"))
+        with patch.object(VENDOR, "git_output", side_effect=["", "b" * 40, "v0.3.6"]):
+            self.assertEqual("b" * 40, VENDOR.release_identity(ROOT, "v0.3.6"))
         with (
             patch.object(VENDOR, "git_output", return_value="dirty"),
             self.assertRaisesRegex(RuntimeError, "must be clean"),
         ):
-            VENDOR.release_identity(ROOT, "v0.3.5")
+            VENDOR.release_identity(ROOT, "v0.3.6")
         with (
             patch.object(VENDOR, "git_output", side_effect=["", "b" * 40, "v0.4.0"]),
             self.assertRaisesRegex(RuntimeError, "not tagged"),
         ):
-            VENDOR.release_identity(ROOT, "v0.3.5")
+            VENDOR.release_identity(ROOT, "v0.3.6")
         with self.assertRaisesRegex(RuntimeError, "form vMAJOR"):
             VENDOR.release_identity(ROOT, "main")
 
     def test_verify_rejects_every_identity_and_manifest_boundary(self) -> None:
         commit = "d" * 40
         with patch("builtins.print"):
-            VENDOR.sync(ROOT, self.target, "v0.3.5", commit)
+            VENDOR.sync(ROOT, self.target, "v0.3.6", commit)
         original = json.loads((self.target / VENDOR.LOCK_NAME).read_text())
         variants = []
         value = json.loads(json.dumps(original))
@@ -215,7 +215,7 @@ class VendorTest(unittest.TestCase):
         core = self.target / "tools/handoffctl.py"
         core.write_text(
             core.read_text().replace(
-                'COORDINATOR_VERSION = "0.3.5"', 'COORDINATOR_VERSION = "9.9.9"'
+                'COORDINATOR_VERSION = "0.3.6"', 'COORDINATOR_VERSION = "9.9.9"'
             )
         )
         original["files"]["tools/handoffctl.py"]["sha256"] = VENDOR.sha256(core)
@@ -226,10 +226,10 @@ class VendorTest(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "regular file"):
             VENDOR.sha256(missing)
         with (
-            patch.object(VENDOR, "git_output", side_effect=["", "short", "v0.3.5"]),
+            patch.object(VENDOR, "git_output", side_effect=["", "short", "v0.3.6"]),
             self.assertRaisesRegex(RuntimeError, "full commit"),
         ):
-            VENDOR.release_identity(ROOT, "v0.3.5")
+            VENDOR.release_identity(ROOT, "v0.3.6")
 
     def test_install_failure_rolls_back_every_destination(self) -> None:
         staged = self.target / "staged"
@@ -261,7 +261,7 @@ class VendorTest(unittest.TestCase):
 
     def test_staging_failure_preserves_existing_vendor_snapshot(self) -> None:
         with patch("builtins.print"):
-            VENDOR.sync(ROOT, self.target, "v0.3.5", "a" * 40)
+            VENDOR.sync(ROOT, self.target, "v0.3.6", "a" * 40)
         before = {
             destination: (self.target / destination).read_bytes()
             for _, destination in VENDOR.SOURCE_FILES
@@ -281,7 +281,7 @@ class VendorTest(unittest.TestCase):
             patch.object(VENDOR, "atomic_bytes", side_effect=fail_during_staging),
             self.assertRaisesRegex(OSError, "No space left"),
         ):
-            VENDOR.sync(ROOT, self.target, "v0.3.5", "b" * 40)
+            VENDOR.sync(ROOT, self.target, "v0.3.6", "b" * 40)
         after = {
             destination: (self.target / destination).read_bytes()
             for _, destination in VENDOR.SOURCE_FILES
@@ -320,14 +320,14 @@ class VendorTest(unittest.TestCase):
                     "--target",
                     str(self.target),
                     "--version",
-                    "v0.3.5",
+                    "v0.3.6",
                 ],
             ),
             patch.object(VENDOR, "release_identity", return_value="c" * 40),
             patch.object(VENDOR, "sync") as sync,
         ):
             self.assertEqual(0, VENDOR.main())
-        sync.assert_called_once_with(ROOT, self.target, "v0.3.5", "c" * 40)
+        sync.assert_called_once_with(ROOT, self.target, "v0.3.6", "c" * 40)
 
 
 if __name__ == "__main__":
