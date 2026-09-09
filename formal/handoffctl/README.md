@@ -51,7 +51,10 @@ from the bound project is accepted; a call from any other project preserves stat
 identity is constant, accepted/rejected classification matches caller identity, and weak fairness
 of correct calls establishes that a correctly invoked coordinator can continue to make progress.
 The implementation refines this guard by checking the profile UUID, state Git root and origin,
-product identity and origin, and caller working directory before normal command execution.
+product identity and origin, and caller working directory before normal command execution. A
+wrapped command started from a product checkout has an additional runtime guard: its Git root and
+branch must match the active task's declared worktree key and branch. This command preflight is
+outside the lifecycle abstraction below and does not alter the TLA+ transition relation.
 
 ## Checked properties
 

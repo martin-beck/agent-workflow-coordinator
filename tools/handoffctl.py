@@ -79,7 +79,7 @@ type Meta = dict[str, Any]
 type Task = tuple[Path, Meta, str]
 type State = dict[str, Any]
 
-COORDINATOR_VERSION = "0.3.5"
+COORDINATOR_VERSION = "0.3.6"
 DEFAULT_PROJECT_SETTINGS: Meta = {
     "schema_version": 1,
     "project_id": "00000000-0000-4000-8000-000000000000",
@@ -219,6 +219,21 @@ def _assert_storage_binding(binding: Meta) -> None:
         SQLiteBackend(DATABASE, binding, TASKS).load_tasks()
 
 
+def configured_product_checkout(binding: Meta) -> tuple[Path, Path]:
+    """Validate runtime product identity and return its root and projects directory."""
+    runtime = config()
+    configured_github = runtime.get("github_repository")
+    if configured_github and repository_slug(configured_github) != repository_slug(
+        binding["product_repository"]
+    ):
+        raise RuntimeError("runtime product repository does not match coordinator binding")
+    projects_root = Path(str(runtime["projects_root"])).resolve()
+    product = projects_root / str(runtime["product_worktree"])
+    if git_repository_slug(product) != repository_slug(binding["product_repository"]):
+        raise RuntimeError("product checkout does not match coordinator binding")
+    return projects_root, product.resolve()
+
+
 def assert_project_binding() -> None:
     """Fail closed when this initialized coordinator is called from another project."""
     settings = project_settings()
@@ -232,18 +247,24 @@ def assert_project_binding() -> None:
     if git_repository_slug(ROOT) != repository_slug(binding["state_repository"]):
         raise RuntimeError("state repository does not match coordinator binding")
     allowed = [ROOT.resolve()]
+    projects_root: Path | None = None
     if CONFIG.exists():
-        runtime = config()
-        configured_github = runtime.get("github_repository")
-        if configured_github and repository_slug(configured_github) != repository_slug(
-            binding["product_repository"]
-        ):
-            raise RuntimeError("runtime product repository does not match coordinator binding")
-        product = Path(str(runtime["projects_root"])) / str(runtime["product_worktree"])
-        if git_repository_slug(product) != repository_slug(binding["product_repository"]):
-            raise RuntimeError("product checkout does not match coordinator binding")
-        allowed.append(product.resolve())
+        projects_root, product = configured_product_checkout(binding)
+        allowed.append(product)
     current = Path.cwd().resolve()
+    if projects_root is not None and inside(current, projects_root):
+        candidate = run(
+            ["git", "-C", str(current), "rev-parse", "--show-toplevel"], check=False
+        ).stdout.strip()
+        if candidate:
+            candidate_root = Path(candidate).resolve()
+            if (
+                candidate_root != ROOT.resolve()
+                and inside(candidate_root, projects_root)
+                and git_repository_slug(candidate_root)
+                == repository_slug(binding["product_repository"])
+            ):
+                allowed.append(candidate_root)
     if not any(inside(current, root) for root in allowed):
         raise RuntimeError("handoffctl must be called from its bound state or product project")
 
@@ -1429,6 +1450,61 @@ def require_active_owner(task_id: str, owner: str) -> None:
         errors = active_expiry_errors(task_id, meta.get("claim_expires"))
         if errors:
             raise RuntimeError(errors[0])
+        assert_invocation_worktree(meta)
+
+
+def invocation_worktree() -> tuple[str, str] | None:
+    """Return the product worktree identity when called from a product checkout.
+
+    The coordinator itself is normally invoked from the bound state repository, so
+    that location remains valid for state-only commands.  When a caller starts in
+    the configured product checkout, identify the actual Git root and branch so an
+    active task can be fenced to its declared worktree.
+    """
+    if not CONFIG.exists():
+        return None
+    settings = config()
+    if not {"projects_root", "product_worktree"}.issubset(settings):
+        return None
+    projects_root = Path(str(settings["projects_root"])).resolve()
+    current = Path.cwd().resolve()
+    if not inside(current, projects_root):
+        return None
+    top = Path(
+        run(["git", "-C", str(current), "rev-parse", "--show-toplevel"]).stdout.strip()
+    ).resolve()
+    if top == ROOT.resolve() or not inside(top, projects_root):
+        return None
+    branch = (
+        run(
+            ["git", "-C", str(current), "symbolic-ref", "--short", "-q", "HEAD"],
+            check=False,
+        ).stdout.strip()
+        or "DETACHED"
+    )
+    return top.name, branch
+
+
+def assert_invocation_worktree(meta: Meta) -> None:
+    """Reject product-checkout calls that do not match the active task claim."""
+    observed = invocation_worktree()
+    if observed is None:
+        return
+    expected_key = str(meta.get("worktree_key") or "")
+    expected_branch = str(meta.get("branch") or "")
+    if not expected_key or not expected_branch:
+        raise RuntimeError(f"{meta['id']}: active task lacks declared worktree and branch")
+    actual_key, actual_branch = observed
+    if actual_key != expected_key:
+        raise RuntimeError(
+            f"{meta['id']}: invocation worktree {actual_key!r} does not match declared "
+            f"worktree {expected_key!r}"
+        )
+    if actual_branch != expected_branch:
+        raise RuntimeError(
+            f"{meta['id']}: invocation branch {actual_branch!r} does not match declared "
+            f"branch {expected_branch!r}"
+        )
 
 
 def append_file_command_result(

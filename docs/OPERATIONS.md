@@ -43,8 +43,10 @@ deadline is 30 seconds, and the wrapped command deadline is 1800 seconds. On tim
 holder, process, commit and ref before retrying.
 
 Commands run outside the coordinator lock so long work cannot block heartbeats. The live claim is
-checked before execution; Git-backed commands additionally require runtime configuration. The
-privacy-safe task/owner/argv-digest/exit record is committed to SQLite or fsynced to the Git
+checked before execution; when invoked from the configured product checkout, the current Git
+worktree and branch must also match the task's declared `worktree_key` and `branch`. Invocations
+from the bound state repository remain valid for coordinator/state commands. Git-backed commands
+additionally require runtime configuration. The privacy-safe task/owner/argv-digest/exit record is committed to SQLite or fsynced to the Git
 backend's `.runtime/command-results.jsonl` immediately after execution and before any fallible task,
 Git, GitHub or reconciliation work. The task update is committed before live reconciliation. The
 recorded digest covers argv, not output or environment.

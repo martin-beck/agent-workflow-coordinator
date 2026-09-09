@@ -326,6 +326,7 @@ class HandoffTest(unittest.TestCase):
             self.assertRaisesRegex(RuntimeError, "state repository"),
         ):
             CORE.assert_project_binding()
+
         other = self.root.parent / f"{self.root.name}-other"
         wrong_top = subprocess.CompletedProcess([], 0, str(other) + "\n", "")
         with (
@@ -366,6 +367,155 @@ class HandoffTest(unittest.TestCase):
             self.assertRaisesRegex(RuntimeError, "must be called"),
         ):
             CORE.assert_project_binding()
+
+    def test_binding_accepts_linked_product_worktree_with_matching_origin(self) -> None:
+        projects_root = self.root.parent
+        product = projects_root / f"{self.root.name}-product"
+        linked = projects_root / f"{self.root.name}-product-worker"
+        product.mkdir()
+        linked.mkdir()
+        CORE.CONFIG.parent.mkdir()
+        CORE.CONFIG.write_text(
+            json.dumps(
+                {
+                    "projects_root": str(projects_root),
+                    "product_worktree": product.name,
+                    "github_repository": "owner/product",
+                    "push_enabled": False,
+                }
+            )
+        )
+
+        def git_query(args: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+            if args[-2:] == ["rev-parse", "--show-toplevel"]:
+                checkout = Path(args[2])
+                top = linked if checkout == linked else self.root
+                return subprocess.CompletedProcess(args, 0, str(top) + "\n", "")
+            if args[-3:] == ["remote", "get-url", "origin"]:
+                remote = (
+                    "git@github.com:owner/product.git"
+                    if Path(args[2]) != CORE.ROOT
+                    else "git@github.com:owner/state.git"
+                )
+                return subprocess.CompletedProcess(args, 0, remote + "\n", "")
+            raise AssertionError(args)
+
+        with (
+            patch.object(CORE, "run", side_effect=git_query),
+            patch.object(CORE.Path, "cwd", return_value=linked),
+        ):
+            CORE.assert_project_binding()
+
+    def configure_product_invocation(self, product: Path) -> None:
+        """Configure one product checkout for wrapped-command identity tests."""
+        CORE.CONFIG.parent.mkdir(parents=True, exist_ok=True)
+        CORE.CONFIG.write_text(
+            json.dumps(
+                {
+                    "projects_root": str(product.parent),
+                    "product_worktree": product.name,
+                    "github_repository": "owner/product",
+                    "push_enabled": False,
+                }
+            )
+        )
+
+    def product_git_query(self, product: Path, args: list[str], **_: object) -> Any:
+        """Answer the bounded Git identity queries used by invocation preflight."""
+        if args[-2:] == ["rev-parse", "--show-toplevel"]:
+            return subprocess.CompletedProcess(args, 0, str(product) + "\n", "")
+        if args[-4:] == ["symbolic-ref", "--short", "-q", "HEAD"]:
+            return subprocess.CompletedProcess(args, 0, "feature/good\n", "")
+        raise AssertionError(args)
+
+    def test_wrapped_product_invocation_must_match_declared_worktree(self) -> None:
+        product = self.root / "product"
+        product.mkdir()
+        self.configure_product_invocation(product)
+        self.make_task(
+            status="in_progress",
+            owner="worker",
+            claim_expires="2999-01-01T00:00:00+00:00",
+            worktree_key="product",
+            branch="feature/good",
+        )
+        with (
+            patch.object(CORE.Path, "cwd", return_value=product),
+            patch.object(
+                CORE,
+                "run",
+                side_effect=lambda args, **kwargs: self.product_git_query(product, args, **kwargs),
+            ),
+        ):
+            CORE.require_active_owner("AR-0001", "worker")
+
+    def test_wrapped_product_invocation_rejects_wrong_worktree_or_branch(self) -> None:
+        product = self.root / "product"
+        product.mkdir()
+        self.configure_product_invocation(product)
+        self.make_task(
+            status="in_progress",
+            owner="worker",
+            claim_expires="2999-01-01T00:00:00+00:00",
+            worktree_key="other-worktree",
+            branch="feature/good",
+        )
+        with (
+            patch.object(CORE.Path, "cwd", return_value=product),
+            patch.object(
+                CORE,
+                "run",
+                side_effect=lambda args, **kwargs: self.product_git_query(product, args, **kwargs),
+            ),
+            self.assertRaisesRegex(RuntimeError, "does not match declared worktree"),
+        ):
+            CORE.require_active_owner("AR-0001", "worker")
+
+        meta, body = CORE.read_task(CORE.locate("AR-0001")[0])
+        meta["worktree_key"] = "product"
+        meta["branch"] = "feature/expected"
+        CORE.write_task(CORE.locate("AR-0001")[0], meta, body)
+        with (
+            patch.object(CORE.Path, "cwd", return_value=product),
+            patch.object(
+                CORE,
+                "run",
+                side_effect=lambda args, **kwargs: self.product_git_query(product, args, **kwargs),
+            ),
+            self.assertRaisesRegex(RuntimeError, "does not match declared branch"),
+        ):
+            CORE.require_active_owner("AR-0001", "worker")
+
+    def test_wrapped_state_invocation_remains_valid_for_state_commands(self) -> None:
+        self.make_task(
+            status="in_progress",
+            owner="worker",
+            claim_expires="2999-01-01T00:00:00+00:00",
+            worktree_key="product",
+            branch="feature/good",
+        )
+        with patch.object(CORE.Path, "cwd", return_value=self.root):
+            CORE.require_active_owner("AR-0001", "worker")
+
+    def test_wrapped_product_invocation_requires_declared_identity(self) -> None:
+        product = self.root / "product"
+        product.mkdir()
+        self.configure_product_invocation(product)
+        self.make_task(
+            status="in_progress",
+            owner="worker",
+            claim_expires="2999-01-01T00:00:00+00:00",
+        )
+        with (
+            patch.object(CORE.Path, "cwd", return_value=product),
+            patch.object(
+                CORE,
+                "run",
+                side_effect=lambda args, **kwargs: self.product_git_query(product, args, **kwargs),
+            ),
+            self.assertRaisesRegex(RuntimeError, "lacks declared worktree"),
+        ):
+            CORE.require_active_owner("AR-0001", "worker")
 
     def test_atomic_task_round_trip_and_render(self) -> None:
         path = self.make_task()

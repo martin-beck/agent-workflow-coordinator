@@ -8,7 +8,9 @@ For autonomous or interactive agents using a project that embeds handoffctl:
    checkpoint, branch and worktree.
 4. Claim exactly one ready `open` task with a stable unique owner. Never claim planned, blocked,
    completed, dependency-blocked, or already-owned work.
-5. Use only the task's named branch/worktree. Preserve unrelated work.
+5. Use only the task's named branch/worktree. The wrapped-command preflight rejects a product
+   checkout whose Git worktree or branch differs from the active task declaration. Preserve
+   unrelated work.
 6. Route every product/Git/review/publication mutation through `handoffctl run`.
 7. After every material result or failure, update the task immediately. Heartbeat before expiry.
 8. If a command times out or has an ambiguous response, inspect durable state before any retry.
