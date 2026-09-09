@@ -37,6 +37,14 @@ SOURCE_FILES: tuple[tuple[str, str], ...] = (
     ),
     ("formal/handoffctl/Handoffctl.tla", "formal/handoffctl/Handoffctl.tla"),
     ("formal/handoffctl/Handoffctl.cfg", "formal/handoffctl/Handoffctl.cfg"),
+    (
+        "formal/handoffctl/HandoffctlRecovery.tla",
+        "formal/handoffctl/HandoffctlRecovery.tla",
+    ),
+    (
+        "formal/handoffctl/HandoffctlRecovery.cfg",
+        "formal/handoffctl/HandoffctlRecovery.cfg",
+    ),
     ("formal/handoffctl/HandoffctlLocks.tla", "formal/handoffctl/HandoffctlLocks.tla"),
     ("formal/handoffctl/HandoffctlLocks.cfg", "formal/handoffctl/HandoffctlLocks.cfg"),
     ("formal/handoffctl/HandoffctlRun.tla", "formal/handoffctl/HandoffctlRun.tla"),

@@ -769,7 +769,7 @@ class HandoffTest(unittest.TestCase):
         self.refresh_views()
         with (
             patch.object(CORE, "dirty_state_paths", return_value=[]),
-            self.assertRaisesRegex(RuntimeError, "promotion preflight failed"),
+            self.assertRaisesRegex(RuntimeError, "active claim metadata"),
         ):
             CORE.mutate(args, "promote")
         meta["owner"] = ""
@@ -1774,6 +1774,210 @@ class HandoffTest(unittest.TestCase):
             self.assertRaisesRegex(CORE.ExternalObservationError, "EXTERNAL_API_ERROR"),
         ):
             CORE.run_github_observation(["gh", "run", "list"])
+
+    def test_multiple_expired_claims_recover_sequentially(self) -> None:
+        expired = "2000-01-01T00:00:00+00:00"
+        first = self.make_task(
+            "AR-0001",
+            status="in_progress",
+            owner="worker-a",
+            claim_expires=expired,
+            worktree_key="worktree-a",
+            branch="feature/a",
+        )
+        second = self.make_task(
+            "AR-0002",
+            status="in_progress",
+            owner="worker-b",
+            claim_expires=expired,
+            worktree_key="worktree-b",
+            branch="feature/b",
+        )
+        with patch.object(CORE, "commit", return_value=True):
+            for task_id in ("AR-0001", "AR-0002"):
+                CORE.mutate(
+                    argparse.Namespace(
+                        task=task_id,
+                        expected_revision=1,
+                        note="No live process remains.",
+                    ),
+                    "recover-expired",
+                )
+        for path in (first, second):
+            meta, _ = CORE.read_task(path)
+            self.assertEqual("open", meta["status"])
+            self.assertEqual("", meta["owner"])
+            self.assertEqual(2, meta["task_revision"])
+        self.assertEqual([], CORE.validate())
+
+    def test_unrelated_expiry_does_not_block_healthy_lifecycle(self) -> None:
+        expired = "2000-01-01T00:00:00+00:00"
+        self.make_task(
+            "AR-0001",
+            status="in_progress",
+            owner="stale-worker",
+            claim_expires=expired,
+        )
+        claimed = self.make_task("AR-0002")
+        healthy = self.make_task(
+            "AR-0003",
+            status="in_progress",
+            owner="healthy-worker",
+            claim_expires="2099-01-01T00:00:00+00:00",
+        )
+        promoted = self.make_task("AR-0004", status="planned")
+        with patch.object(CORE, "commit", return_value=True):
+            CORE.mutate(
+                argparse.Namespace(task="AR-0002", owner="new-worker", lease_minutes=10),
+                "claim",
+            )
+            CORE.mutate(
+                argparse.Namespace(task="AR-0003", owner="healthy-worker", lease_minutes=20),
+                "heartbeat",
+            )
+            CORE.mutate(
+                argparse.Namespace(
+                    task="AR-0003",
+                    owner="healthy-worker",
+                    status="done",
+                    note="Healthy work completed.",
+                ),
+                "release",
+            )
+            with patch.object(CORE, "dirty_state_paths", return_value=[]):
+                CORE.mutate(
+                    argparse.Namespace(
+                        task="AR-0004",
+                        expected_revision=1,
+                        note="Dependencies verified.",
+                    ),
+                    "promote",
+                )
+        self.assertEqual("in_progress", CORE.read_task(claimed)[0]["status"])
+        self.assertEqual("done", CORE.read_task(healthy)[0]["status"])
+        self.assertEqual("open", CORE.read_task(promoted)[0]["status"])
+        self.assertIn("AR-0001: expired claim", CORE.validate())
+
+    def test_preexisting_privacy_and_size_findings_do_not_block_mutations(self) -> None:
+        expired = self.make_task(
+            "AR-0001",
+            status="in_progress",
+            owner="stale-worker",
+            claim_expires="2000-01-01T00:00:00+00:00",
+        )
+        claimed = self.make_task("AR-0002")
+        (self.root / "NOTES.md").write_text("Investigate " + "127." + "0.0.1.")
+        (self.root / "archive.txt").write_text("x" * 200001)
+        with patch.object(CORE, "commit", return_value=True):
+            CORE.mutate(
+                argparse.Namespace(
+                    task="AR-0001",
+                    expected_revision=1,
+                    note="No live process remains.",
+                ),
+                "recover-expired",
+            )
+            CORE.mutate(
+                argparse.Namespace(task="AR-0002", owner="new-worker", lease_minutes=10),
+                "claim",
+            )
+        self.assertEqual("open", CORE.read_task(expired)[0]["status"])
+        self.assertEqual("in_progress", CORE.read_task(claimed)[0]["status"])
+        errors = CORE.validate()
+        self.assertIn("NOTES.md: private or loopback IP", errors)
+        self.assertIn("archive.txt: state file exceeds 200 KiB", errors)
+
+    def test_new_privacy_and_size_findings_roll_back_exactly(self) -> None:
+        path = self.make_task(
+            status="in_progress",
+            owner="worker-a",
+            claim_expires="2099-01-01T00:00:00+00:00",
+        )
+        owned = (path, self.root / "CURRENT.md", self.root / "STATUS.md")
+        before = {candidate: candidate.read_text() for candidate in owned}
+        private_args = argparse.Namespace(
+            task="AR-0001",
+            owner="worker-a",
+            expected_revision=1,
+            status=None,
+            priority=None,
+            summary="Connect to " + "127." + "0.0.1.",
+            next_action=None,
+            note="Unsafe update.",
+        )
+        with (
+            patch.object(CORE, "commit", return_value=True) as commit,
+            self.assertRaisesRegex(RuntimeError, "newly introduced private or loopback IP"),
+        ):
+            CORE.mutate(private_args, "update")
+        commit.assert_not_called()
+        self.assertTrue(all(candidate.read_text() == before[candidate] for candidate in owned))
+
+        oversized_args = argparse.Namespace(
+            task="AR-0001",
+            owner="worker-a",
+            expected_revision=1,
+            status=None,
+            priority=None,
+            summary=None,
+            next_action="x" * 200001,
+            note="Oversized update.",
+        )
+        with (
+            patch.object(CORE, "commit", return_value=True) as commit,
+            self.assertRaisesRegex(RuntimeError, "state file exceeds 200 KiB"),
+        ):
+            CORE.mutate(oversized_args, "update")
+        commit.assert_not_called()
+        self.assertTrue(all(candidate.read_text() == before[candidate] for candidate in owned))
+        self.assertEqual(1, CORE.read_task(path)[0]["task_revision"])
+
+    def test_mutation_keeps_global_active_key_uniqueness(self) -> None:
+        self.make_task(
+            "AR-0001",
+            status="in_progress",
+            owner="worker-a",
+            claim_expires="2099-01-01T00:00:00+00:00",
+            worktree_key="shared-worktree",
+            branch="feature/shared",
+        )
+        target = self.make_task(
+            "AR-0002",
+            worktree_key="shared-worktree",
+            branch="feature/shared",
+        )
+        before = {
+            candidate: candidate.read_text()
+            for candidate in (target, self.root / "CURRENT.md", self.root / "STATUS.md")
+        }
+        with (
+            patch.object(CORE, "commit", return_value=True) as commit,
+            self.assertRaises(RuntimeError) as raised,
+        ):
+            CORE.mutate(
+                argparse.Namespace(task="AR-0002", owner="worker-b", lease_minutes=10), "claim"
+            )
+        commit.assert_not_called()
+        self.assertIn("active worktree_key also used", str(raised.exception))
+        self.assertIn("active branch also used", str(raised.exception))
+        self.assertTrue(all(candidate.read_text() == before[candidate] for candidate in before))
+
+    def test_mutation_requires_valid_target_even_with_unrelated_findings(self) -> None:
+        target = self.make_task("AR-0001", extra="unsupported")
+        before = {
+            candidate: candidate.read_text()
+            for candidate in (target, self.root / "CURRENT.md", self.root / "STATUS.md")
+        }
+        with (
+            patch.object(CORE, "commit", return_value=True) as commit,
+            self.assertRaisesRegex(RuntimeError, "unknown field extra"),
+        ):
+            CORE.mutate(
+                argparse.Namespace(task="AR-0001", owner="worker-a", lease_minutes=10),
+                "claim",
+            )
+        commit.assert_not_called()
+        self.assertTrue(all(candidate.read_text() == before[candidate] for candidate in before))
 
     def test_recover_expired_requires_exact_expired_revision(self) -> None:
         future = (

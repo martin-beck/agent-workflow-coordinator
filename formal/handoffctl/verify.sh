@@ -27,3 +27,4 @@ run_model HandoffctlLocks
 run_model HandoffctlRun
 run_model HandoffctlStorage
 run_model Handoffctl
+run_model HandoffctlRecovery

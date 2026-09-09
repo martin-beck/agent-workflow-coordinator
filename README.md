@@ -23,6 +23,10 @@ and does not depend on a package registry, network fetch, submodule, or upstream
   `synchronous=FULL` provide the local multi-process transaction boundary.
 - The existing Markdown/Git backend remains supported with `init --backend git`. Existing projects
   without a backend selector remain Git-backed and are never silently migrated.
+- Git-backed lifecycle mutations validate the resulting target, dependency graph, generated views,
+  and global active owner/branch/worktree uniqueness. Unrelated expired claims or pre-existing
+  privacy and size findings remain visible to strict `doctor` checks without preventing recovery
+  and other safe transitions.
 - Every accepted mutation is serialized by one repository-common POSIX `flock(2)`, including
   processes launched from different worktrees of the same local clone.
 - Exact task revisions reject stale concurrent writers.
