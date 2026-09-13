@@ -67,11 +67,13 @@ def build_command(
     swap_max: str = DEFAULT_SWAP_MAX,
     cpu_quota: str = "200%",
     tasks_max: int = 64,
+    timeout_seconds: int = 1800,
     cgroup_mode: str = "required",
 ) -> list[str]:
     """Build a bounded TLC command without executing it."""
     worker_count = _positive_int(str(workers), "workers")
     process_limit = _positive_int(str(tasks_max), "tasks_max")
+    timeout = _positive_int(str(timeout_seconds), "timeout_seconds")
     heap_bytes = _heap_bytes(heap)
     if memory_max == "0" or swap_max == "0":
         raise AdmissionError("memory and swap limits must be non-zero")
@@ -111,6 +113,8 @@ def build_command(
         "--property=MemorySwapMax=" + swap_max,
         "--property=CPUQuota=" + cpu_quota,
         "--property=TasksMax=" + str(process_limit),
+        "--property=KillMode=control-group",
+        "--property=RuntimeMaxSec=" + str(timeout),
         "--",
         *java,
     ]
@@ -155,6 +159,7 @@ def run(args: argparse.Namespace) -> int:
             swap_max=args.swap_max,
             cpu_quota=args.cpu_quota,
             tasks_max=args.tasks_max,
+            timeout_seconds=args.timeout_seconds,
             cgroup_mode=args.cgroup_mode,
         )
         with lock_path.open("w") as lock:
@@ -199,6 +204,9 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--swap-max", default=os.environ.get("TLC_SWAP_MAX", DEFAULT_SWAP_MAX))
     result.add_argument("--cpu-quota", default=os.environ.get("TLC_CPU_QUOTA", "200%"))
     result.add_argument("--tasks-max", type=int, default=int(os.environ.get("TLC_TASKS_MAX", "64")))
+    result.add_argument(
+        "--timeout-seconds", type=int, default=int(os.environ.get("TLC_TIMEOUT_SECONDS", "1800"))
+    )
     result.add_argument(
         "--cgroup-mode",
         choices=("required", "off"),
