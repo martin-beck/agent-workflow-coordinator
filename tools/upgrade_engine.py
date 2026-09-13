@@ -29,6 +29,7 @@ REQUIRED_EVIDENCE = {
     ),
     "reopen": ("validated", "barrier_held"),
 }
+PHASE_MUTATION = {phase: phase == "commit" for phase in PHASES}
 
 
 def _write(path: Path, value: Mapping[str, Any]) -> None:
@@ -92,6 +93,11 @@ class UpgradeEngine:
         if value["status"] == "completed":
             return value
         records: list[dict[str, Any]] = value["records"]
+        phase_records = [r.get("phase") for r in records if "phase" in r]
+        if phase_records != list(dict.fromkeys(phase_records)) or phase_records != list(
+            dict.fromkeys(PHASES[: len(phase_records)])
+        ):
+            raise UpgradeError("upgrade journal phase ordering is invalid")
         completed = {r["phase"] for r in records if r.get("outcome") == "success" and "phase" in r}
         for phase in PHASES:
             if phase in completed:
@@ -116,7 +122,11 @@ class UpgradeEngine:
                 _write(self.journal, value)
                 raise UpgradeError(f"phase failed: {phase}") from error
             required = REQUIRED_EVIDENCE.get(phase, ())
-            if any(result.get(field) is not True for field in required):
+            if (
+                any(result.get(field) is not True for field in required)
+                or result.get("mutates_authority", PHASE_MUTATION[phase])
+                is not PHASE_MUTATION[phase]
+            ):
                 record["outcome"] = "failed"
                 record["error"] = "required evidence missing"
                 value["status"] = "failed"
@@ -137,8 +147,14 @@ class UpgradeEngine:
         record: dict[str, Any] = {"operation_id": operation, "outcome": "started"}
         value["records"].append(record)
         try:
+            result = dict(handler(operation, value) or {})
+            if result.get("restored_verified") is not True:
+                record["outcome"] = "ambiguous"
+                value["status"] = "safe-mode"
+                _write(self.journal, value)
+                raise UpgradeError("rollback did not verify known-good runtime")
             record["outcome"] = "success"
-            record["result"] = dict(handler(operation, value) or {})
+            record["result"] = result
             value["status"] = "rolled-back"
         except Exception as error:
             record.update(outcome="ambiguous", error=type(error).__name__)

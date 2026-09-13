@@ -18,12 +18,25 @@ class UpgradeEngineTests(unittest.TestCase):
             engine.plan()
             seen: list[str] = []
 
-            def handler(_operation: str, _state: object, phase: str = "") -> dict[str, str]:
+            def handler(_operation: str, _state: object, phase: str = "") -> dict[str, object]:
                 seen.append(phase)
-                return {"phase": phase}
+                result: dict[str, object] = {"phase": phase}
+                if phase == "commit":
+                    result.update(quiesced=True, backup_verified=True, selector_verified=True)
+                if phase == "validate":
+                    result.update(
+                        runtime_validated=True,
+                        backend_roundtrip_valid=True,
+                        projections_valid=True,
+                        binding_valid=True,
+                    )
+                if phase == "reopen":
+                    result.update(validated=True, barrier_held=True)
+                result["mutates_authority"] = phase == "commit"
+                return result
 
             def make_handler(phase: str) -> Handler:
-                def run(operation: str, state: object) -> dict[str, str]:
+                def run(operation: str, state: object) -> dict[str, object]:
                     return handler(operation, state, phase)
 
                 return run
