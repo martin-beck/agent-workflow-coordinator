@@ -17,9 +17,11 @@ printf '%s  %s\n' "${TLA_SHA256}" "${JAR}" | sha256sum --check --strict
 
 run_model() {
     local model="$1"
-    java -XX:+UseParallelGC -cp "${JAR}" tlc2.TLC -cleanup \
-        -config "${SPEC_DIR}/${model}.cfg" -metadir "${TEMP_DIR}/${model}-states" \
-        -workers auto "${SPEC_DIR}/${model}.tla"
+    python3 "${SPEC_DIR}/../../tools/tlc_runner.py" \
+        --jar "${JAR}" \
+        --model "${SPEC_DIR}/${model}.tla" \
+        --config "${SPEC_DIR}/${model}.cfg" \
+        --metadir "${TEMP_DIR}/${model}-states"
 }
 
 run_model HandoffctlBinding
