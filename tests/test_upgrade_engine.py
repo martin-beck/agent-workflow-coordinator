@@ -62,6 +62,11 @@ class FakeAdapter:
         return result
 
 
+class FailingAdapter(FakeAdapter):
+    def snapshot(self, _phase: str, _context: object) -> dict[str, object]:
+        raise RuntimeError("authority probe failed")
+
+
 class UpgradeEngineTests(unittest.TestCase):
     def test_apply_is_ordered_and_idempotent(self) -> None:  # noqa: C901
         with tempfile.TemporaryDirectory() as directory:
@@ -257,6 +262,26 @@ class UpgradeEngineTests(unittest.TestCase):
             journal.write_text(json.dumps(value))
             with self.assertRaises(UpgradeError):
                 engine.apply({})
+
+    def test_authority_probe_failure_precedes_handler(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            engine = UpgradeEngine(
+                "op-probe",
+                Path(directory) / "journal.json",
+                {**CONTEXT, "operation_id": "op-probe"},
+                backend_adapter=FailingAdapter(),
+            )
+            engine.plan()
+            called = False
+
+            def handler(_operation: str, _state: object) -> dict[str, object]:
+                nonlocal called
+                called = True
+                return {"mutates_authority": False}
+
+            with self.assertRaises(UpgradeError):
+                engine.apply(dict.fromkeys(PHASES, handler))
+            self.assertFalse(called)
 
 
 if __name__ == "__main__":
