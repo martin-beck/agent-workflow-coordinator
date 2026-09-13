@@ -13,7 +13,7 @@ from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any, cast
+from typing import Any, Protocol, cast
 
 from tools.upgrade_admission import (
     admit_preflight,
@@ -35,6 +35,16 @@ class UpgradeError(RuntimeError):
 
 
 Handler = Callable[[str, Mapping[str, Any]], Mapping[str, Any] | None]
+
+
+class BackendAdapter(Protocol):
+    """Concrete authority adapter for Git or SQLite upgrade operations."""
+
+    def snapshot(self, phase: str, context: Mapping[str, object]) -> Mapping[str, object]: ...
+
+    def execute(self, phase: str, context: Mapping[str, object]) -> Mapping[str, object]: ...
+
+
 REQUIRED_EVIDENCE = {
     "discover": ("release_authentic", "runtime_supported", "backend_identity_verified"),
     "preflight": ("preflight_admitted", "capacity_verified", "backend_identity_verified"),
@@ -127,12 +137,14 @@ class UpgradeEngine:
         journal: Path,
         context: Mapping[str, object],
         lock_path: Path | None = None,
+        backend_adapter: BackendAdapter | None = None,
     ) -> None:
         if not operation_id or ":" in operation_id:
             raise UpgradeError("invalid operation identity")
         self.operation_id = operation_id
         self.journal = journal
         self.lock_path = lock_path or journal.parent / ".upgrade-engine.lock"
+        self.backend_adapter = backend_adapter
         supplied = dict(context)
         if set(supplied) != set(CONTEXT_FIELDS) or supplied.get("operation_id") != operation_id:
             raise UpgradeError("complete bound phase context is required")
@@ -271,26 +283,32 @@ class UpgradeEngine:
     def _admit(phase: str, result: Mapping[str, Any]) -> None:
         """Execute the coordinator-native admission contract, not just booleans."""
         if phase == "preflight":
-            snapshot = result.get("preflight_snapshot")
+            snapshot = result.get("preflight_snapshot", result)
             if not isinstance(snapshot, Mapping):
                 raise UpgradeError("preflight admission snapshot is absent")
             admit_preflight(snapshot)
         elif phase == "quiesce":
-            snapshot = result.get("quiescence_snapshot")
+            snapshot = result.get("quiescence_snapshot", result)
             if not isinstance(snapshot, Mapping):
                 raise UpgradeError("quiescence admission snapshot is absent")
             admit_quiesced(snapshot)
         elif phase == "commit":
-            admitted = result.get("admitted_snapshot")
-            current = result.get("current_snapshot")
+            admitted = result.get("admitted_snapshot", result)
+            current = result.get("current_snapshot", result)
             if not isinstance(admitted, Mapping) or not isinstance(current, Mapping):
                 raise UpgradeError("replacement admission snapshots are absent")
             recheck_before_replacement(admitted, current)
         elif phase == "reopen":
-            snapshot = result.get("reopen_snapshot")
+            snapshot = result.get("reopen_snapshot", result)
             if not isinstance(snapshot, Mapping):
                 raise UpgradeError("reopen admission snapshot is absent")
             admit_reopen(snapshot)
+
+    def _bind_snapshot(self, snapshot: Mapping[str, object]) -> None:
+        expected = asdict(self.context)
+        for field in ("operation_id", "state_revision", "fencing_token", "fencing_owner"):
+            if snapshot.get(field) != expected[field]:
+                raise UpgradeError(f"admission snapshot identity mismatch: {field}")
 
     def apply(self, handlers: Mapping[str, Handler]) -> dict[str, Any]:
         with self._exclusive():
@@ -302,6 +320,8 @@ class UpgradeEngine:
             return value
         if value["status"] in {"failed", "safe-mode", "rolled-back"}:
             raise UpgradeError("journal requires explicit recovery before apply")
+        if self.backend_adapter is None:
+            raise UpgradeError("backend adapter is required for authoritative upgrade")
         records: list[dict[str, Any]] = value["records"]
         phase_records = [r.get("phase") for r in records if "phase" in r]
         if phase_records != list(dict.fromkeys(phase_records)) or phase_records != list(
@@ -327,7 +347,19 @@ class UpgradeEngine:
             value["phase"] = phase
             _write(self.journal, value)
             try:
-                result = handlers[phase](operation, cast(Mapping[str, Any], _freeze(value))) or {}
+                frozen_context = cast(Mapping[str, object], _freeze(asdict(self.context)))
+                snapshot = self.backend_adapter.snapshot(phase, frozen_context)
+                self._bind_snapshot(snapshot)
+                self._admit(phase, {**snapshot})
+                adapter_result = self.backend_adapter.execute(phase, frozen_context)
+                result = dict(adapter_result)
+                handler_result = (
+                    handlers[phase](operation, cast(Mapping[str, Any], _freeze(value))) or {}
+                )
+                for key in set(result).intersection(handler_result):
+                    if result[key] != handler_result[key]:
+                        raise UpgradeError("handler cannot override backend evidence")
+                result.update(handler_result)
                 self._load()
             except Exception as error:
                 record.update(outcome="failed", error=type(error).__name__)
@@ -386,6 +418,8 @@ class UpgradeEngine:
 
     def _rollback_locked(self, handler: Handler) -> dict[str, Any]:
         value = self._load()
+        if self.backend_adapter is None:
+            raise UpgradeError("backend adapter is required for rollback")
         if value["status"] not in {"failed", "running", "safe-mode"}:
             raise UpgradeError("rollback requires failed, running, or safe-mode operation")
         if any(record.get("phase") == "rollback" for record in value["records"]):
@@ -399,7 +433,12 @@ class UpgradeEngine:
         value["records"].append(record)
         _write(self.journal, value)
         try:
-            result = dict(handler(operation, cast(Mapping[str, Any], _freeze(value))) or {})
+            result = dict(
+                self.backend_adapter.execute(
+                    "rollback", cast(Mapping[str, object], _freeze(asdict(self.context)))
+                )
+            )
+            result.update(handler(operation, cast(Mapping[str, Any], _freeze(value))) or {})
             required = ("restored_verified", "runtime_validated", "backend_roundtrip_valid")
             if any(
                 type(result.get(field)) is not bool or result.get(field) is not True

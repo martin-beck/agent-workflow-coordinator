@@ -7,6 +7,7 @@ from __future__ import annotations
 import json
 import tempfile
 import unittest
+from collections.abc import Mapping
 from pathlib import Path
 
 from tools.upgrade_admission import (
@@ -39,10 +40,34 @@ ADMISSION = {
 }
 
 
+class FakeAdapter:
+    def snapshot(self, _phase: str, context: object) -> dict[str, object]:
+        identity = dict(context) if isinstance(context, Mapping) else CONTEXT
+        return {
+            **ADMISSION,
+            **{
+                field: identity[field]
+                for field in ("operation_id", "state_revision", "fencing_token", "fencing_owner")
+            },
+        }
+
+    def execute(self, phase: str, _context: object) -> dict[str, object]:
+        result: dict[str, object] = {"backend": "sqlite", "fencing_token": "fence-1"}
+        if phase == "rollback":
+            result.update(
+                restored_verified=True,
+                runtime_validated=True,
+                backend_roundtrip_valid=True,
+            )
+        return result
+
+
 class UpgradeEngineTests(unittest.TestCase):
     def test_apply_is_ordered_and_idempotent(self) -> None:  # noqa: C901
         with tempfile.TemporaryDirectory() as directory:
-            engine = UpgradeEngine("op-1", Path(directory) / "journal.json", CONTEXT)
+            engine = UpgradeEngine(
+                "op-1", Path(directory) / "journal.json", CONTEXT, backend_adapter=FakeAdapter()
+            )
             engine.plan()
             seen: list[str] = []
 
@@ -117,7 +142,10 @@ class UpgradeEngineTests(unittest.TestCase):
     def test_failure_is_durable_and_rollback_can_enter_safe_mode(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             engine = UpgradeEngine(
-                "op-2", Path(directory) / "journal.json", {**CONTEXT, "operation_id": "op-2"}
+                "op-2",
+                Path(directory) / "journal.json",
+                {**CONTEXT, "operation_id": "op-2"},
+                backend_adapter=FakeAdapter(),
             )
             engine.plan()
 
@@ -140,6 +168,7 @@ class UpgradeEngineTests(unittest.TestCase):
                 "op-evidence",
                 Path(directory) / "journal.json",
                 {**CONTEXT, "operation_id": "op-evidence"},
+                backend_adapter=FakeAdapter(),
             )
             engine.plan()
 
@@ -190,7 +219,9 @@ class UpgradeEngineTests(unittest.TestCase):
     def test_missing_plan_and_duplicate_plan_fail_closed(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             journal = Path(directory) / "journal.json"
-            engine = UpgradeEngine("op-3", journal, {**CONTEXT, "operation_id": "op-3"})
+            engine = UpgradeEngine(
+                "op-3", journal, {**CONTEXT, "operation_id": "op-3"}, backend_adapter=FakeAdapter()
+            )
             with self.assertRaises(UpgradeError):
                 engine.apply({})
             engine.plan()
@@ -200,7 +231,9 @@ class UpgradeEngineTests(unittest.TestCase):
     def test_context_and_journal_tampering_fail_closed(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             journal = Path(directory) / "journal.json"
-            engine = UpgradeEngine("op-4", journal, {**CONTEXT, "operation_id": "op-4"})
+            engine = UpgradeEngine(
+                "op-4", journal, {**CONTEXT, "operation_id": "op-4"}, backend_adapter=FakeAdapter()
+            )
             engine.plan()
             value = json.loads(journal.read_text())
             value["context"]["backend"] = "git"
@@ -211,7 +244,9 @@ class UpgradeEngineTests(unittest.TestCase):
     def test_started_phase_requires_explicit_recovery(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             journal = Path(directory) / "journal.json"
-            engine = UpgradeEngine("op-5", journal, {**CONTEXT, "operation_id": "op-5"})
+            engine = UpgradeEngine(
+                "op-5", journal, {**CONTEXT, "operation_id": "op-5"}, backend_adapter=FakeAdapter()
+            )
             engine.plan()
             value = json.loads(journal.read_text())
             value["status"] = "running"
