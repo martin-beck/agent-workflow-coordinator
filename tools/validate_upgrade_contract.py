@@ -29,7 +29,7 @@ def validate_contract(document: dict[str, Any]) -> None:
     if document["from"]["version"] == document["to"]["version"]:
         raise ContractError("from and to versions must differ")
     for release in (document["from"], document["to"]):
-        if release["tag_ref"] != "refs/tags/{}".format(release["version"]):
+        if release["tag_ref"] != "refs/tags/" + release["version"]:
             raise ContractError("tag reference must match release version")
     _validate_phases(document)
     _validate_backends(document)
@@ -42,7 +42,6 @@ def _validate_phases(document: dict[str, Any]) -> None:
         raise ContractError("phase IDs must be unique and in canonical order")
     if [phase["order"] for phase in phases] != list(range(1, len(PHASES) + 1)):
         raise ContractError("phase orders must be contiguous from one")
-    by_id = {phase["id"]: phase["order"] for phase in phases}
     operation_ids: set[str] = set()
     top_operation_id = document["operation_id"]
     expected_dependencies = {
