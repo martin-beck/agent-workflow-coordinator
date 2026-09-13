@@ -62,7 +62,15 @@ def contract() -> dict[str, Any]:
                 "id": phase,
                 "order": order,
                 "mutates_authority": phase == "commit",
-                "requires": [] if order == 1 else [phases[order - 2]],
+                "requires": (
+                    []
+                    if order == 1
+                    else ["quiesce", "backup", "stage"]
+                    if phase == "commit"
+                    else ["validate"]
+                    if phase == "reopen"
+                    else [phases[order - 2]]
+                ),
                 "on_failure": "restore-known-good",
                 "operation": {
                     "timeout_seconds": 300,
@@ -129,8 +137,10 @@ class UpgradeContractTests(unittest.TestCase):
         self.assertTrue(
             next(phase for phase in phases if phase["id"] == "commit")["mutates_authority"]
         )
+        commit = next(phase for phase in phases if phase["id"] == "commit")
+        self.assertEqual(set(commit["requires"]), {"quiesce", "backup", "stage"})
         self.assertEqual(
-            next(phase for phase in phases if phase["id"] == "commit")["requires"], ["stage"]
+            next(phase for phase in phases if phase["id"] == "reopen")["requires"], ["validate"]
         )
 
     def test_graph_rejects_duplicate_or_forward_dependencies(self) -> None:
