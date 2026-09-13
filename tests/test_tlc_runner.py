@@ -38,6 +38,8 @@ class TLCAdmissionTests(unittest.TestCase):
         self.assertIn("--property=MemorySwapMax=3G", command)
         self.assertIn("--property=CPUQuota=200%", command)
         self.assertIn("--property=TasksMax=64", command)
+        self.assertIn("--property=KillMode=control-group", command)
+        self.assertIn("--property=RuntimeMaxSec=1800", command)
 
     def test_uncontained_execution_is_explicit_only(self) -> None:
         command = build_command(
@@ -91,6 +93,9 @@ class TLCAdmissionTests(unittest.TestCase):
                     "memory_max": "1G",
                     "swap_max": "1G",
                     "cgroup_mode": "off",
+                    "cpu_quota": "200%",
+                    "tasks_max": 64,
+                    "timeout_seconds": 1800,
                 },
             )()
             with patch("tools.tlc_runner.subprocess.run") as execute:
