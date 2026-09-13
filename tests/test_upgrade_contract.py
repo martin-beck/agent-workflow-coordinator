@@ -139,6 +139,13 @@ class UpgradeContractTests(unittest.TestCase):
         phases[4]["order"] = 4
         with self.assertRaises(AssertionError):
             self._assert_graph(phases)
+
+    def test_schema_requires_all_eight_phases(self) -> None:
+        schema = json.loads((ROOT / "schema/upgrade-contract.schema.json").read_text())
+        document = contract()
+        document["phases"] = [phase for phase in document["phases"] if phase["id"] != "discover"]
+        with self.assertRaises(jsonschema.ValidationError):
+            jsonschema.Draft202012Validator(schema).validate(document)
         phases[4]["order"] = 5
         phases[4]["requires"] = ["validate"]
         with self.assertRaises(AssertionError):
