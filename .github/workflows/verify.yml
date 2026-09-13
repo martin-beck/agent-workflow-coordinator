@@ -96,6 +96,11 @@ jobs:
           ).validate(backend)
           PY
       - name: Formal safety and liveness models
+        env:
+          # Hosted runners do not provide a user systemd bus.  portable uses
+          # prlimit/timeout to enforce aggregate address-space, process, CPU,
+          # and wall-clock limits, and fails closed if either tool is absent.
+          TLC_CGROUP_MODE: portable
         run: formal/handoffctl/verify.sh
       - name: DCO certification
         if: github.event_name == 'pull_request'

@@ -32,7 +32,7 @@
     "The evidence applies only to the specifications, configurations, invariants, and temporal properties executed by formal/handoffctl/verify.sh.",
     "Implementation tests provide separate correspondence evidence but do not turn bounded model checking into an implementation proof.",
     "Separate clones, network filesystems, non-cooperating writers, and failures outside the documented recovery boundary are excluded.",
-    "The cgroup resource boundary requires systemd-run user scopes; if unavailable, the runner fails closed rather than executing an unbounded model."
+    "The preferred cgroup boundary uses systemd-run user scopes; hosted CI selects the portable boundary, which requires timeout and prlimit and applies aggregate address-space, process, CPU-time, and wall-clock limits, failing closed if either tool is unavailable."
   ],
   "non_claims": [
     "This evidence does not prove the Python implementation correct.",

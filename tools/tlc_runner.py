@@ -98,6 +98,25 @@ def build_command(
     ]
     if cgroup_mode == "off":
         return java
+    if cgroup_mode == "portable":
+        timeout_bin = shutil.which("timeout")
+        prlimit_bin = shutil.which("prlimit")
+        if timeout_bin is None or prlimit_bin is None:
+            raise AdmissionError("portable containment requires timeout and prlimit")
+        cpu_percent = _positive_int(cpu_quota.rstrip("%"), "cpu_quota")
+        cpu_seconds = timeout * cpu_percent // 100
+        return [
+            timeout_bin,
+            "--signal=TERM",
+            "--kill-after=5s",
+            str(timeout),
+            prlimit_bin,
+            f"--as={_memory_bytes(memory_max)}:{_memory_bytes(memory_max)}",
+            f"--nproc={process_limit}:{process_limit}",
+            f"--cpu={cpu_seconds}:{cpu_seconds}",
+            "--",
+            *java,
+        ]
     systemd = shutil.which("systemd-run")
     if systemd is None:
         raise AdmissionError("systemd-run is required for TLC cgroup containment")
@@ -209,7 +228,7 @@ def parser() -> argparse.ArgumentParser:
     )
     result.add_argument(
         "--cgroup-mode",
-        choices=("required", "off"),
+        choices=("required", "portable", "off"),
         default=os.environ.get("TLC_CGROUP_MODE", "required"),
     )
     return result

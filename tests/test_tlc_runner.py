@@ -56,6 +56,38 @@ class TLCAdmissionTests(unittest.TestCase):
         self.assertEqual(command[0], "java")
         self.assertNotIn("auto", command)
 
+    def test_portable_execution_has_kernel_limits_and_timeout(self) -> None:
+        with (
+            patch("tools.tlc_runner.shutil.which", side_effect=lambda name: f"/usr/bin/{name}"),
+        ):
+            command = build_command(
+                jar=Path("tla.jar"),
+                model=Path("Model.tla"),
+                config=Path("Model.cfg"),
+                metadir=Path("states"),
+                cgroup_mode="portable",
+            )
+        self.assertEqual(
+            command[:5],
+            ["/usr/bin/timeout", "--signal=TERM", "--kill-after=5s", "1800", "/usr/bin/prlimit"],
+        )
+        self.assertIn("--as=3221225472:3221225472", command)
+        self.assertIn("--nproc=64:64", command)
+        self.assertIn("--cpu=3600:3600", command)
+
+    def test_portable_containment_fails_closed_without_tools(self) -> None:
+        with (
+            patch("tools.tlc_runner.shutil.which", return_value=None),
+            self.assertRaises(AdmissionError),
+        ):
+            build_command(
+                jar=Path("tla.jar"),
+                model=Path("Model.tla"),
+                config=Path("Model.cfg"),
+                metadir=Path("states"),
+                cgroup_mode="portable",
+            )
+
     def test_rejects_heap_that_exceeds_memory(self) -> None:
         with self.assertRaises(AdmissionError):
             build_command(

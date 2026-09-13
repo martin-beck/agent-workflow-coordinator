@@ -165,6 +165,4 @@ memory/swap limits (`3G`/`3G`). A canonical host-wide admission lock prevents
 multiple formal jobs from competing for memory while leaving coordinator worker
 processes and leases untouched. A durable per-job queue record survives caller
 death for stale-job recovery; completed, failed, and canceled outcomes retain
-the exact resource bounds and exit classification. `systemd-run` owns the
-process group (`KillMode=control-group`) and fails closed when cgroup
-containment is unavailable.
+the exact resource bounds and exit classification. `systemd-run` owns the process group (`KillMode=control-group`) on hosts with a user systemd bus. Hosted CI selects an explicit `portable` containment mode: GNU `timeout` and `prlimit` enforce aggregate address-space, process-count, CPU-time, and wall-clock limits; the runner fails closed if either tool is unavailable.
