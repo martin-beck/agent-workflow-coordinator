@@ -34,6 +34,9 @@
     {"properties": {"phases": {"contains": {"properties": {"id": {"const": "commit"}}}}}},
     {"properties": {"phases": {"contains": {"properties": {"id": {"const": "validate"}}}}}},
     {"properties": {"phases": {"contains": {"properties": {"id": {"const": "reopen"}}}}}}
+    ,{"properties": {"phases": {"contains": {"properties": {"id": {"const": "commit"}, "mutates_authority": {"const": true}, "requires": {"contains": {"const": "quiesce"}}}}}}}
+    ,{"properties": {"phases": {"contains": {"properties": {"id": {"const": "commit"}, "requires": {"contains": {"const": "backup"}}}}}}}
+    ,{"properties": {"phases": {"contains": {"properties": {"id": {"const": "reopen"}, "requires": {"contains": {"const": "validate"}}}}}}}
   ],
   "$defs": {
     "release": {
