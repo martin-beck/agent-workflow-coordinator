@@ -1,0 +1,1 @@
+{"adapters":[],"exceptions":[],"extensions":[],"fixture_paths":["fixtures/broken"],"governance":{"max_emergency_hours":24,"max_standard_days":30,"owners":["@project-maintainers"]},"profiles":["core","docs","formal-evidence","github-actions","privacy","python","schemas","shell","supply-chain"],"schema_version":3,"unknown_formats":"error"}

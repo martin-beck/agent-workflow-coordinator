@@ -111,6 +111,10 @@ tools/handoffctl doctor --live
 
 ## Develop
 
+Quality policy and gate ownership are documented in
+[docs/QUALITY.md](docs/QUALITY.md). The tracked AWQ policy is additive to the
+native coordinator verification contract.
+
 Install the pinned quality environment and run the downstream-compatible complexity gate locally:
 
 ```sh
