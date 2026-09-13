@@ -9,6 +9,7 @@ import importlib.util
 import json
 import unittest
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Any
 
 import jsonschema
@@ -23,6 +24,9 @@ _validator = importlib.util.module_from_spec(_validator_spec)
 _validator_spec.loader.exec_module(_validator)
 ContractError = _validator.ContractError
 validate_contract = _validator.validate_contract
+validate_phases = _validator._validate_phases
+validate_backends = _validator._validate_backends
+validate_main = _validator.main
 
 
 def contract() -> dict[str, Any]:
@@ -197,6 +201,37 @@ class UpgradeContractTests(unittest.TestCase):
         document["from"]["tag_ref"] = "refs/tags/v9.9.9"
         with self.assertRaises(ContractError):
             validate_contract(document)
+
+    def test_semantic_helper_branches_and_cli(self) -> None:
+        document = contract()
+        document["phases"][0]["id"] = "invalid"
+        with self.assertRaises(ContractError):
+            validate_phases(document)
+        document = contract()
+        document["phases"][0]["order"] = 2
+        with self.assertRaises(ContractError):
+            validate_phases(document)
+        document = contract()
+        document["phases"][0]["operation"]["operation_id"] = document["phases"][1]["operation"][
+            "operation_id"
+        ]
+        with self.assertRaises(ContractError):
+            validate_phases(document)
+        document = contract()
+        document["backend_contracts"] = [document["backend_contracts"][0]]
+        with self.assertRaises(ContractError):
+            validate_backends(document)
+        document = contract()
+        document["rollback"]["integrity_by_backend"]["git"] = "bad"
+        with self.assertRaises(ContractError):
+            validate_backends(document)
+        self.assertEqual(validate_main([]), 2)
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "contract.json"
+            path.write_text(json.dumps(contract()))
+            self.assertEqual(validate_main([str(path)]), 0)
+            path.write_text("{")
+            self.assertEqual(validate_main([str(path)]), 1)
         document = contract()
         document["phases"][2]["mutates_authority"] = True
         with self.assertRaises(ContractError):
