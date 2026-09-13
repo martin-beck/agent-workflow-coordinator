@@ -20,7 +20,8 @@
     "backend_contracts": {
       "type": "array",
       "items": {"$ref": "#/$defs/backend"},
-      "minItems": 1,
+      "minItems": 2,
+      "maxItems": 2,
       "uniqueItems": true
     },
     "rollback": {"$ref": "#/$defs/rollback"}
@@ -82,8 +83,9 @@
     "operation": {
       "additionalProperties": false,
       "type": "object",
-      "required": ["timeout_seconds", "resources", "preconditions", "postconditions", "evidence", "durable_record"],
+      "required": ["operation_id", "timeout_seconds", "resources", "preconditions", "postconditions", "evidence", "durable_record"],
       "properties": {
+        "operation_id": {"pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$", "type": "string"},
         "timeout_seconds": {"minimum": 1, "maximum": 86400, "type": "integer"},
         "resources": {"type": "array", "items": {"type": "string"}, "minItems": 1, "uniqueItems": true},
         "preconditions": {"type": "array", "items": {"type": "string"}, "minItems": 1, "uniqueItems": true},
@@ -114,10 +116,19 @@
     "rollback": {
       "additionalProperties": false,
       "type": "object",
-      "required": ["required", "backup_integrity", "equivalence", "reopen_gate", "ambiguous_external_result"],
+      "required": ["required", "backup_integrity", "integrity_by_backend", "equivalence", "reopen_gate", "ambiguous_external_result"],
       "properties": {
         "required": {"const": true},
         "backup_integrity": {"enum": ["hash-and-size", "git-object-and-ref", "sqlite-integrity-and-backup-api"]},
+        "integrity_by_backend": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["git", "sqlite"],
+          "properties": {
+            "git": {"const": "git-object-and-ref"},
+            "sqlite": {"const": "sqlite-integrity-and-backup-api"}
+          }
+        },
         "equivalence": {"const": "authority-compatible-round-trip"},
         "reopen_gate": {"const": "validate-before-reopen"},
         "ambiguous_external_result": {"enum": ["persist-operation-id-and-reconcile", "safe-mode"]}
