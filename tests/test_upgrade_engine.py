@@ -22,10 +22,13 @@ class UpgradeEngineTests(unittest.TestCase):
                 seen.append(phase)
                 return {"phase": phase}
 
-            handlers: dict[str, Handler] = {
-                phase: (lambda operation, state, p=phase: handler(operation, state, p))
-                for phase in PHASES
-            }
+            def make_handler(phase: str) -> Handler:
+                def run(operation: str, state: object) -> dict[str, str]:
+                    return handler(operation, state, phase)
+
+                return run
+
+            handlers: dict[str, Handler] = {phase: make_handler(phase) for phase in PHASES}
             result = engine.apply(handlers)
             self.assertEqual(seen, list(PHASES))
             self.assertEqual(result["status"], "completed")
