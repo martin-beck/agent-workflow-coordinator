@@ -14,7 +14,40 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  awq:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Require the reviewed AWQ source pin
+        env:
+          AWQ_COMMIT: f1c40859e9d10cacbc79100ed136c38bce48cd39
+        run: python3 -c 'import os,re; raise SystemExit(0 if re.fullmatch(r"[0-9a-f]{40}", os.environ["AWQ_COMMIT"]) else 1)'
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: martin-beck/agent-workflow-quality
+          ref: f1c40859e9d10cacbc79100ed136c38bce48cd39
+          path: quality-runtime
+          persist-credentials: false
+          fetch-depth: 1
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d
+        with:
+          version: "0.12.8"
+          enable-cache: false
+      - name: Install the pinned AWQ source environment
+        run: uv sync --directory quality-runtime --locked --python 3.12.14
+      - name: Run AWQ portable PR gates
+        run: |
+          uv run --directory quality-runtime --frozen python -m awq --root .. onboarding --format json
+          uv run --directory quality-runtime --frozen python -m awq --root .. check --tier pr --format json
+
   verify:
+    needs: awq
     runs-on: ${{ fromJSON((github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && '["self-hosted","Linux","X64","agent-workflow-coordinator-ci"]' || '["ubuntu-24.04"]') }}
     timeout-minutes: 30
     steps:
