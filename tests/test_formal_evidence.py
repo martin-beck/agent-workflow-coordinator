@@ -85,6 +85,7 @@ class FormalEvidenceTests(unittest.TestCase):
         for name in (
             "tlc_workers",
             "jvm_heap_mb",
+            "hosted_portable_jvm_heap_mb",
             "memory_max_mb",
             "swap_max_mb",
             "cpu_quota_percent",

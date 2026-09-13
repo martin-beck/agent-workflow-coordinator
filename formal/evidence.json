@@ -19,6 +19,7 @@
     "model_count": 6,
     "tlc_workers": 2,
     "jvm_heap_mb": 2048,
+    "hosted_portable_jvm_heap_mb": 1280,
     "memory_max_mb": 3072,
     "swap_max_mb": 3072,
     "cpu_quota_percent": 200,
