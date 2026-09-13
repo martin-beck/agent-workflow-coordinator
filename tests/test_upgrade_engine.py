@@ -23,7 +23,7 @@ CONTEXT = {
 
 
 class UpgradeEngineTests(unittest.TestCase):
-    def test_apply_is_ordered_and_idempotent(self) -> None:
+    def test_apply_is_ordered_and_idempotent(self) -> None:  # noqa: C901
         with tempfile.TemporaryDirectory() as directory:
             engine = UpgradeEngine("op-1", Path(directory) / "journal.json", CONTEXT)
             engine.plan()
@@ -31,7 +31,27 @@ class UpgradeEngineTests(unittest.TestCase):
 
             def handler(_operation: str, _state: object, phase: str = "") -> dict[str, object]:
                 seen.append(phase)
-                result: dict[str, object] = {"phase": phase}
+                result: dict[str, object] = {
+                    "phase": phase,
+                    "backend": "sqlite",
+                    "fencing_token": "fence-1",
+                    "backend_identity_verified": True,
+                }
+                if phase == "discover":
+                    result.update(release_authentic=True, runtime_supported=True)
+                if phase == "preflight":
+                    result.update(preflight_admitted=True, capacity_verified=True)
+                if phase == "quiesce":
+                    result.update(
+                        barrier_acquired=True,
+                        workers_drained=True,
+                        leases_fenced=True,
+                        fencing_verified=True,
+                    )
+                if phase == "backup":
+                    result.update(backup_verified=True, restore_roundtrip_verified=True)
+                if phase == "stage":
+                    result.update(staged_verified=True, manifest_verified=True)
                 if phase == "commit":
                     result.update(
                         quiesced=True,
@@ -39,6 +59,8 @@ class UpgradeEngineTests(unittest.TestCase):
                         selector_verified=True,
                         selector_commit_atomic=True,
                         fencing_verified=True,
+                        selector_before_verified=True,
+                        selector_after_verified=True,
                     )
                 if phase == "validate":
                     result.update(
@@ -95,7 +117,31 @@ class UpgradeEngineTests(unittest.TestCase):
             engine.plan()
 
             def evidence_handler(phase: str) -> Handler:
-                return lambda _operation, _state: {"mutates_authority": phase == "commit"}
+                def run(_operation: str, _state: object) -> dict[str, object]:
+                    result: dict[str, object] = {
+                        "backend": "sqlite",
+                        "fencing_token": "fence-1",
+                        "backend_identity_verified": True,
+                        "mutates_authority": phase == "commit",
+                    }
+                    if phase == "discover":
+                        result.update(release_authentic=True, runtime_supported=True)
+                    if phase == "preflight":
+                        result.update(preflight_admitted=True, capacity_verified=True)
+                    if phase == "quiesce":
+                        result.update(
+                            barrier_acquired=True,
+                            workers_drained=True,
+                            leases_fenced=True,
+                            fencing_verified=True,
+                        )
+                    if phase == "backup":
+                        result.update(backup_verified=True, restore_roundtrip_verified=True)
+                    if phase == "stage":
+                        result.update(staged_verified=True, manifest_verified=True)
+                    return result
+
+                return run
 
             handlers: dict[str, Handler] = {phase: evidence_handler(phase) for phase in PHASES}
             with self.assertRaises(UpgradeError):

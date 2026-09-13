@@ -29,12 +29,19 @@ class UpgradeError(RuntimeError):
 
 Handler = Callable[[str, Mapping[str, Any]], Mapping[str, Any] | None]
 REQUIRED_EVIDENCE = {
+    "discover": ("release_authentic", "runtime_supported", "backend_identity_verified"),
+    "preflight": ("preflight_admitted", "capacity_verified", "backend_identity_verified"),
+    "quiesce": ("barrier_acquired", "workers_drained", "leases_fenced", "fencing_verified"),
+    "backup": ("backup_verified", "restore_roundtrip_verified", "backend_identity_verified"),
+    "stage": ("staged_verified", "manifest_verified", "backend_identity_verified"),
     "commit": (
         "quiesced",
         "backup_verified",
         "selector_verified",
         "selector_commit_atomic",
         "fencing_verified",
+        "selector_before_verified",
+        "selector_after_verified",
     ),
     "validate": (
         "runtime_validated",
@@ -277,9 +284,7 @@ class UpgradeEngine:
             value["phase"] = phase
             _write(self.journal, value)
             try:
-                result = handlers[phase](
-                    operation, cast(Mapping[str, Any], _freeze(value))
-                ) or {}
+                result = handlers[phase](operation, cast(Mapping[str, Any], _freeze(value))) or {}
                 self._load()
             except Exception as error:
                 record.update(outcome="failed", error=type(error).__name__)
@@ -300,6 +305,19 @@ class UpgradeEngine:
                 value["status"] = "failed"
                 _write(self.journal, value)
                 raise UpgradeError(f"phase evidence incomplete: {phase}")
+            if result.get("backend") != self.context.backend:
+                record.update(outcome="failed", error="backend identity mismatch")
+                value["status"] = "failed"
+                _write(self.journal, value)
+                raise UpgradeError(f"phase backend mismatch: {phase}")
+            if (
+                phase in {"quiesce", "backup", "stage", "commit", "validate", "reopen"}
+                and result.get("fencing_token") != self.context.fencing_token
+            ):
+                record.update(outcome="failed", error="fencing token mismatch")
+                value["status"] = "failed"
+                _write(self.journal, value)
+                raise UpgradeError(f"phase fencing mismatch: {phase}")
             if result.get("ambiguous") is True:
                 record.update(outcome="ambiguous", error="external outcome is ambiguous")
                 value["status"] = "safe-mode"
@@ -328,9 +346,7 @@ class UpgradeEngine:
         }
         value["records"].append(record)
         try:
-            result = dict(
-                handler(operation, cast(Mapping[str, Any], _freeze(value))) or {}
-            )
+            result = dict(handler(operation, cast(Mapping[str, Any], _freeze(value))) or {})
             required = ("restored_verified", "runtime_validated", "backend_roundtrip_valid")
             if any(
                 type(result.get(field)) is not bool or result.get(field) is not True
