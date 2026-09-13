@@ -55,6 +55,10 @@ class UpgradeAdmissionTests(unittest.TestCase):
     def test_quiescence_requires_barrier_and_drained_work(self) -> None:
         snapshot = complete(QUIESCENCE_PREDICATES)
         admit_quiesced(snapshot)
+        missing_barrier = dict(snapshot)
+        missing_barrier.pop("durable_barrier_id")
+        with self.assertRaises(AdmissionError):
+            admit_quiesced(missing_barrier)
         for predicate in QUIESCENCE_PREDICATES:
             denied = dict(snapshot)
             denied.pop(predicate)
@@ -80,6 +84,18 @@ class UpgradeAdmissionTests(unittest.TestCase):
         current["state_revision"] = 5
         with self.assertRaises(AdmissionError):
             recheck_before_replacement(snapshot, current)
+        recheck_before_replacement(snapshot, dict(snapshot))
+        for field, value in (
+            ("operation_id", ""),
+            ("fencing_token", ""),
+            ("fencing_owner", ""),
+            ("state_revision", 0),
+            ("state_revision", False),
+        ):
+            denied = complete(PREFLIGHT_PREDICATES)
+            denied[field] = value
+            with self.subTest(field=field, value=value), self.assertRaises(AdmissionError):
+                admit_preflight(denied)
 
     def test_reopen_target_and_safe_mode_failure_paths(self) -> None:
         snapshot = complete(REOPEN_PREDICATES)
@@ -87,12 +103,35 @@ class UpgradeAdmissionTests(unittest.TestCase):
         with self.assertRaises(AdmissionError):
             admit_reopen(snapshot)
         snapshot = complete(REOPEN_PREDICATES)
+        snapshot.pop("durable_barrier_id")
+        with self.assertRaises(AdmissionError):
+            admit_reopen(snapshot)
+        snapshot = complete(REOPEN_PREDICATES)
         snapshot["validation_failed"] = True
         with self.assertRaises(AdmissionError):
             admit_reopen(snapshot)
+        for value in (1, 0, "true"):
+            snapshot = complete(REOPEN_PREDICATES)
+            snapshot["validation_failed"] = value
+            with self.subTest(value=value), self.assertRaises(AdmissionError):
+                admit_reopen(snapshot)
+        snapshot = complete(REOPEN_PREDICATES)
+        snapshot["safe_mode_ready"] = True
+        admit_safe_mode(snapshot)
+        snapshot["safe_mode_ready"] = False
         with self.assertRaises(AdmissionError):
-            admit_safe_mode({})
-        admit_safe_mode({"safe_mode_ready": True})
+            admit_safe_mode(snapshot)
+        snapshot.pop("durable_barrier_id")
+        with self.assertRaises(AdmissionError):
+            admit_safe_mode(snapshot)
+        snapshot["unexpected"] = True
+        with self.assertRaises(AdmissionError):
+            admit_safe_mode(snapshot)
+        for value in (1, 0, "true"):
+            snapshot = complete(REOPEN_PREDICATES)
+            snapshot["safe_mode_ready"] = value
+            with self.subTest(value=value), self.assertRaises(AdmissionError):
+                admit_safe_mode(snapshot)
 
     def test_non_boolean_truthy_values_fail_closed(self) -> None:
         snapshot = complete(PREFLIGHT_PREDICATES)

@@ -94,6 +94,7 @@ def recheck_before_replacement(
     admitted: Mapping[str, object], current: Mapping[str, object]
 ) -> None:
     """Atomically recheck identity and quiescence immediately before replacement."""
+    admit_quiesced(admitted)
     admit_quiesced(current)
     for field in (*IDENTITY_FIELDS, QUIESCENCE_IDENTITY):
         if admitted.get(field) != current.get(field):
@@ -106,11 +107,24 @@ def admit_reopen(snapshot: Mapping[str, object]) -> None:
     target = snapshot.get("target")
     if target not in {"new", "rollback"}:
         raise AdmissionError("reopen denied; target must be new or rollback")
-    if snapshot.get("validation_failed") is True:
+    barrier = snapshot.get(QUIESCENCE_IDENTITY)
+    if not isinstance(barrier, str) or not barrier:
+        raise AdmissionError("reopen denied; durable barrier proof is absent")
+    validation_failed = snapshot.get("validation_failed", False)
+    if not isinstance(validation_failed, bool):
+        raise AdmissionError("reopen denied; validation_failed must be boolean")
+    if validation_failed:
         raise AdmissionError("reopen denied; failed validation requires safe mode")
 
 
 def admit_safe_mode(snapshot: Mapping[str, object]) -> None:
     """Require an explicit safe-mode record when neither runtime can reopen."""
-    if snapshot.get("safe_mode_ready") is not True:
+    _require(snapshot, (), "safe mode")
+    barrier = snapshot.get(QUIESCENCE_IDENTITY)
+    if not isinstance(barrier, str) or not barrier:
+        raise AdmissionError("safe mode denied; durable barrier proof is absent")
+    safe_mode_ready = snapshot.get("safe_mode_ready")
+    if not isinstance(safe_mode_ready, bool):
+        raise AdmissionError("safe mode denied; safe_mode_ready must be boolean")
+    if not safe_mode_ready:
         raise AdmissionError("safe mode denied; durable safe-mode record is absent")

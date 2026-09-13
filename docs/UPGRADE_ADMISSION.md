@@ -16,3 +16,7 @@ The predicates in `tools/upgrade_admission.py` are pure checks and do not mutate
 authority. Missing keys, false values, and non-boolean truthy values all fail
 closed. A later executor must persist each barrier and validation result before
 crossing the corresponding boundary.
+
+The helper does not provide atomicity: the downstream executor must hold the
+repository lock or SQLite transaction, re-read the bound identity immediately
+before replacement, and commit the barrier/replacement decision atomically.
