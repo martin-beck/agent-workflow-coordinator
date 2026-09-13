@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import unittest
 from pathlib import Path
@@ -12,7 +13,14 @@ from typing import Any
 
 import jsonschema
 
-from tools.validate_upgrade_contract import ContractError, validate_contract
+_validator_spec = importlib.util.spec_from_file_location(
+    "upgrade_contract_validator", ROOT / "tools/validate_upgrade_contract.py"
+)
+assert _validator_spec and _validator_spec.loader
+_validator = importlib.util.module_from_spec(_validator_spec)
+_validator_spec.loader.exec_module(_validator)
+ContractError = _validator.ContractError
+validate_contract = _validator.validate_contract
 
 ROOT = Path(__file__).resolve().parents[1]
 
