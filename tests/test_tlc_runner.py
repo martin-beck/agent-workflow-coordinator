@@ -21,6 +21,10 @@ AdmissionError = _runner.AdmissionError
 _prune_stale = _runner._prune_stale
 build_command = _runner.build_command
 run = _runner.run
+parser = _runner.parser
+positive_int = _runner._positive_int
+heap_bytes = _runner._heap_bytes
+memory_bytes = _runner._memory_bytes
 
 
 class TLCAdmissionTests(unittest.TestCase):
@@ -63,6 +67,47 @@ class TLCAdmissionTests(unittest.TestCase):
                 memory_max="3G",
                 cgroup_mode="off",
             )
+
+    def test_rejects_malformed_bounds_and_parses_explicit_limits(self) -> None:
+        for function, value in ((positive_int, "0"), (positive_int, "bad")):
+            with self.assertRaises(AdmissionError):
+                function(value, "bound")
+        for function in (heap_bytes, memory_bytes):
+            with self.assertRaises(AdmissionError):
+                function("bad")
+        args = parser().parse_args(
+            [
+                "--jar",
+                "j",
+                "--model",
+                "m",
+                "--config",
+                "c",
+                "--metadir",
+                "d",
+                "--cgroup-mode",
+                "off",
+            ]
+        )
+        self.assertEqual(args.workers, 2)
+        self.assertEqual(args.timeout_seconds, 1800)
+
+    def test_rejects_zero_memory_or_process_limits(self) -> None:
+        for kwargs in (
+            {"memory_max": "0"},
+            {"swap_max": "0"},
+            {"tasks_max": 0},
+            {"timeout_seconds": 0},
+        ):
+            with self.assertRaises(AdmissionError):
+                build_command(
+                    jar=Path("tla.jar"),
+                    model=Path("Model.tla"),
+                    config=Path("Model.cfg"),
+                    metadir=Path("states"),
+                    cgroup_mode="off",
+                    **kwargs,
+                )
 
     def test_required_cgroup_rejects_missing_systemd(self) -> None:
         with (
