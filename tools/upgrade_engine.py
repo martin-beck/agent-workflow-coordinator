@@ -64,7 +64,7 @@ class UpgradeEngine:
             "records": [],
         }
         _write(self.journal, value)
-        return cast(dict[str, Any], value)
+        return value
 
     def _load(self) -> dict[str, Any]:
         try:
@@ -75,7 +75,7 @@ class UpgradeEngine:
             value.get("records"), list
         ):
             raise UpgradeError("upgrade journal identity or records are invalid")
-        return value
+        return cast(dict[str, Any], value)
 
     def apply(self, handlers: Mapping[str, Handler]) -> dict[str, Any]:
         value = self._load()
@@ -101,7 +101,8 @@ class UpgradeEngine:
                 value["status"] = "failed"
                 _write(self.journal, value)
                 raise UpgradeError(f"phase failed: {phase}") from error
-            record.update(outcome="success", result=dict(result))
+            record["outcome"] = "success"
+            record["result"] = dict(result)
             _write(self.journal, value)
         value["status"] = "completed"
         _write(self.journal, value)
@@ -115,7 +116,8 @@ class UpgradeEngine:
         record = {"operation_id": operation, "outcome": "started"}
         value["records"].append(record)
         try:
-            record.update(outcome="success", result=dict(handler(operation, value) or {}))
+            record["outcome"] = "success"
+            record["result"] = dict(handler(operation, value) or {})
             value["status"] = "rolled-back"
         except Exception as error:
             record.update(outcome="ambiguous", error=type(error).__name__)
