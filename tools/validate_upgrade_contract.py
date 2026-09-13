@@ -10,7 +10,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from jsonschema import Draft202012Validator
+from jsonschema import Draft202012Validator, ValidationError
 
 ROOT = Path(__file__).resolve().parents[1]
 PHASES = ("discover", "preflight", "quiesce", "backup", "stage", "commit", "validate", "reopen")
@@ -23,7 +23,10 @@ class ContractError(ValueError):
 def validate_contract(document: dict[str, Any]) -> None:
     """Validate a complete generated contract before any upgrade mutation."""
     schema = json.loads((ROOT / "schema/upgrade-contract.schema.json").read_text())
-    Draft202012Validator(schema).validate(document)
+    try:
+        Draft202012Validator(schema).validate(document)
+    except ValidationError as error:
+        raise ContractError(str(error)) from error
     if document["from"] == document["to"]:
         raise ContractError("from and to release identities must differ")
     if document["from"]["version"] == document["to"]["version"]:
