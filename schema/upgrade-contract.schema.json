@@ -121,7 +121,7 @@
       "required": ["required", "backup_integrity", "integrity_by_backend", "equivalence", "reopen_gate", "ambiguous_external_result"],
       "properties": {
         "required": {"const": true},
-        "backup_integrity": {"enum": ["hash-and-size", "git-object-and-ref", "sqlite-integrity-and-backup-api"]},
+        "backup_integrity": {"const": "backend-specific"},
         "integrity_by_backend": {
           "type": "object",
           "additionalProperties": false,

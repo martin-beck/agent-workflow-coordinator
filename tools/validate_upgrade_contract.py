@@ -26,6 +26,11 @@ def validate_contract(document: dict[str, Any]) -> None:
     Draft202012Validator(schema).validate(document)
     if document["from"] == document["to"]:
         raise ContractError("from and to release identities must differ")
+    if document["from"]["version"] == document["to"]["version"]:
+        raise ContractError("from and to versions must differ")
+    for release in (document["from"], document["to"]):
+        if release["tag_ref"] != f"refs/tags/{release[version]}":
+            raise ContractError("tag reference must match release version")
     _validate_phases(document)
     _validate_backends(document)
 
@@ -40,8 +45,22 @@ def _validate_phases(document: dict[str, Any]) -> None:
     by_id = {phase["id"]: phase["order"] for phase in phases}
     operation_ids: set[str] = set()
     top_operation_id = document["operation_id"]
+    expected_dependencies = {
+        "discover": set(),
+        "preflight": {"discover"},
+        "quiesce": {"preflight"},
+        "backup": {"quiesce"},
+        "stage": {"backup"},
+        "commit": {"stage", "quiesce", "backup"},
+        "validate": {"commit"},
+        "reopen": {"validate"},
+    }
     for phase in phases:
         phase_id = phase["id"]
+        if phase["mutates_authority"] != (phase_id == "commit"):
+            raise ContractError("only commit may mutate authority")
+        if set(phase["requires"]) != expected_dependencies[phase_id]:
+            raise ContractError(f"incorrect dependencies for {phase_id}")
         for dependency in phase["requires"]:
             if dependency not in by_id or by_id[dependency] >= phase["order"]:
                 raise ContractError(f"invalid dependency {dependency!r} for {phase_id}")
@@ -51,14 +70,10 @@ def _validate_phases(document: dict[str, Any]) -> None:
             raise ContractError(f"operation ID is not bound to {phase_id}")
         operation_ids.add(operation_id)
     commit = phases[5]
-    if not commit["mutates_authority"] or not {"stage", "quiesce", "backup"} <= set(
-        commit["requires"]
-    ):
+    if not commit["mutates_authority"] or set(commit["requires"]) != {"stage", "quiesce", "backup"}:
         raise ContractError(
             "commit must be the only authority mutation and require stage/quiesce/backup"
         )
-    if set(phases[7]["requires"]) != {"validate"}:
-        raise ContractError("reopen must require validate")
 
 
 def _validate_backends(document: dict[str, Any]) -> None:
@@ -66,6 +81,8 @@ def _validate_backends(document: dict[str, Any]) -> None:
     if {backend["backend"] for backend in document["backend_contracts"]} != {"git", "sqlite"}:
         raise ContractError("both Git and SQLite backend contracts are required")
     integrity = document["rollback"]["integrity_by_backend"]
+    if document["rollback"]["backup_integrity"] != "backend-specific":
+        raise ContractError("generic rollback integrity must be backend-specific")
     if integrity != {"git": "git-object-and-ref", "sqlite": "sqlite-integrity-and-backup-api"}:
         raise ContractError("rollback integrity must match each backend")
 
