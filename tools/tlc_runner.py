@@ -15,7 +15,6 @@ import sys
 import time
 import uuid
 from pathlib import Path
-from typing import Sequence
 
 DEFAULT_WORKERS = 2
 DEFAULT_HEAP = "2048m"
@@ -158,7 +157,7 @@ def run(args: argparse.Namespace) -> int:
             fcntl.flock(lock, fcntl.LOCK_EX)
             record["state"] = "running"
             job.write_text(json.dumps(record, sort_keys=True) + "\n")
-            return subprocess.run(command, check=False).returncode
+            return subprocess.run(command, check=False)  # noqa: S603
     except (AdmissionError, OSError) as error:
         print(f"TLC admission failed closed: {error}", file=sys.stderr)
         return 2
@@ -175,7 +174,7 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--metadir", required=True)
     result.add_argument(
         "--queue",
-        default=os.environ.get("TLC_ADMISSION_QUEUE", "/tmp/agent-workflow-coordinator-tlc"),
+        default=os.environ.get("TLC_ADMISSION_QUEUE", "/tmp/agent-workflow-coordinator-tlc"),  # noqa: S108
     )
     result.add_argument(
         "--workers", type=int, default=int(os.environ.get("TLC_WORKERS", DEFAULT_WORKERS))
