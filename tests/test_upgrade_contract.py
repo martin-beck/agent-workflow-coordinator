@@ -113,12 +113,25 @@ class UpgradeContractTests(unittest.TestCase):
         jsonschema.Draft202012Validator(schema).validate(document)
         phases = document["phases"]
         self.assertEqual([phase["order"] for phase in phases], list(range(1, 9)))
-        self.assertEqual([phase["id"] for phase in phases], [
-            "discover", "preflight", "quiesce", "backup",
-            "stage", "commit", "validate", "reopen",
-        ])
-        self.assertTrue(next(phase for phase in phases if phase["id"] == "commit")["mutates_authority"])
-        self.assertEqual(next(phase for phase in phases if phase["id"] == "commit")["requires"], ["stage"])
+        self.assertEqual(
+            [phase["id"] for phase in phases],
+            [
+                "discover",
+                "preflight",
+                "quiesce",
+                "backup",
+                "stage",
+                "commit",
+                "validate",
+                "reopen",
+            ],
+        )
+        self.assertTrue(
+            next(phase for phase in phases if phase["id"] == "commit")["mutates_authority"]
+        )
+        self.assertEqual(
+            next(phase for phase in phases if phase["id"] == "commit")["requires"], ["stage"]
+        )
 
     def test_graph_rejects_duplicate_or_forward_dependencies(self) -> None:
         document = contract()
@@ -134,10 +147,9 @@ class UpgradeContractTests(unittest.TestCase):
     def test_self_consistency_and_backend_obligations(self) -> None:
         document = contract()
         phases = document["phases"]
-        self.assertFalse(any(
-            phase["mutates_authority"] and phase["id"] != "commit"
-            for phase in phases
-        ))
+        self.assertFalse(
+            any(phase["mutates_authority"] and phase["id"] != "commit" for phase in phases)
+        )
         commit = next(phase for phase in phases if phase["id"] == "commit")
         self.assertIn("stage", commit["requires"])
         self.assertEqual(
