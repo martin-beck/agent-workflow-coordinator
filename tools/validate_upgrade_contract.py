@@ -36,11 +36,11 @@ def validate_contract(document: dict[str, Any]) -> None:
     for phase in phases:
         for dependency in phase["requires"]:
             if dependency not in by_id or by_id[dependency] >= phase["order"]:
-                raise ContractError(f"invalid dependency {dependency!r} for {phase[id]}")
+                raise ContractError(f"invalid dependency {dependency!r} for {phase[\"id\"]}")
         operation_id = phase["operation"]["operation_id"]
-        expected = f"{document[operation_id]}:{phase[id]}"
+        expected = f"{document[\"operation_id\"]}:{phase[\"id\"]}"
         if operation_id != expected or operation_id in operation_ids:
-            raise ContractError(f"operation ID is not bound to {phase[id]}")
+            raise ContractError(f"operation ID is not bound to {phase[\"id\"]}")
         operation_ids.add(operation_id)
     commit = phases[5]
     if not commit["mutates_authority"] or not {"stage", "quiesce", "backup"} <= set(commit["requires"]):
