@@ -10,6 +10,7 @@ import sqlite3
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 SPEC = importlib.util.spec_from_file_location("sqlite_backup", ROOT / "tools/sqlite_backup.py")
@@ -102,6 +103,55 @@ class SQLiteBackupTests(unittest.TestCase):
                 backup, self.root / "restored.sqlite3", manifest, BINDING, quiesced=True
             )
 
+    def test_failed_replace_preserves_existing_destination(self) -> None:
+        backup = self.root / "backup.sqlite3"
+        manifest = backup_database(self.source, backup, BINDING)
+        destination = self.root / "restored.sqlite3"
+        create_database(destination, body="known-good")
+        with (
+            patch.object(Path, "replace", side_effect=OSError("replace failed")),
+            self.assertRaises(BackupError),
+        ):
+            restore_database(backup, destination, manifest, BINDING, quiesced=True)
+        with sqlite3.connect(destination) as connection:
+            self.assertEqual(
+                "known-good", connection.execute("SELECT body FROM records").fetchone()[0]
+            )
+
+    def test_failed_directory_fsync_restores_existing_destination(self) -> None:
+        backup = self.root / "backup.sqlite3"
+        manifest = backup_database(self.source, backup, BINDING)
+        destination = self.root / "restored.sqlite3"
+        create_database(destination, body="known-good")
+        with (
+            patch.object(MODULE, "_fsync_directory", side_effect=[OSError("fsync failed"), None]),
+            self.assertRaises(BackupError),
+        ):
+            restore_database(backup, destination, manifest, BINDING, quiesced=True)
+        with sqlite3.connect(destination) as connection:
+            self.assertEqual(
+                "known-good", connection.execute("SELECT body FROM records").fetchone()[0]
+            )
+
+    def test_cleanup_failure_is_reported_fail_closed(self) -> None:
+        backup = self.root / "backup.sqlite3"
+        with (
+            patch.object(MODULE, "_unlink", side_effect=BackupError("cleanup failed")),
+            self.assertRaises(BackupError),
+        ):
+            backup_database(self.source, backup, BINDING)
+        self.assertTrue(backup.exists())
+
+    def test_atomic_manifest_replace_and_fsync_failures_are_reported(self) -> None:
+        backup = self.root / "backup.sqlite3"
+        manifest = backup_database(self.source, backup, BINDING)
+        manifest_path = self.root / "manifest.json"
+        with (
+            patch.object(MODULE, "_fsync_directory", side_effect=OSError("fsync failed")),
+            self.assertRaises(BackupError),
+        ):
+            write_manifest(manifest_path, manifest)
+
     def test_manifest_tampering_and_corruption_fail_closed(self) -> None:
         backup = self.root / "backup.sqlite3"
         manifest = backup_database(self.source, backup, BINDING)
@@ -120,6 +170,62 @@ class SQLiteBackupTests(unittest.TestCase):
         wrong = dict(BINDING, project_id="22222222-2222-4222-8222-222222222222")
         with self.assertRaises(BackupError):
             backup_database(self.source, self.root / "backup.sqlite3", wrong)
+
+    def test_malformed_source_and_corrupt_backup_fail_closed(self) -> None:
+        malformed = self.root / "malformed.sqlite3"
+        sqlite3.connect(malformed).close()
+        with self.assertRaises(BackupError):
+            backup_database(malformed, self.root / "backup.sqlite3", BINDING)
+        with self.assertRaises(BackupError):
+            MODULE._integrity(self.root / "missing.sqlite3", BINDING)
+
+    def test_foreign_key_integrity_failure_is_rejected(self) -> None:
+        invalid = self.root / "invalid.sqlite3"
+        with sqlite3.connect(invalid) as connection:
+            connection.executescript(
+                "CREATE TABLE metadata(key TEXT PRIMARY KEY, value TEXT NOT NULL);"
+                "CREATE TABLE parent(id INTEGER PRIMARY KEY);"
+                "CREATE TABLE child(parent_id INTEGER REFERENCES parent(id));"
+            )
+            connection.executemany(
+                "INSERT INTO metadata VALUES (?, ?)",
+                [
+                    ("schema_version", "1"),
+                    ("backend", "sqlite"),
+                    ("project_id", BINDING["project_id"]),
+                    ("state_repository", BINDING["state_repository"]),
+                    ("product_repository", BINDING["product_repository"]),
+                    ("state", "active"),
+                ],
+            )
+            connection.execute("INSERT INTO child VALUES (99)")
+        with self.assertRaises(BackupError):
+            MODULE._integrity(invalid, BINDING)
+
+    def test_cleanup_and_preservation_failures_are_normalized(self) -> None:
+        with (
+            patch.object(Path, "unlink", side_effect=OSError("unlink failed")),
+            self.assertRaises(BackupError),
+        ):
+            MODULE._unlink(self.root / "temporary.sqlite3")
+        destination = self.root / "restored.sqlite3"
+        create_database(destination, body="known-good")
+        with (
+            patch.object(MODULE.os, "link", side_effect=OSError("link failed")),
+            self.assertRaises(BackupError),
+        ):
+            MODULE._backup_existing(destination)
+
+    def test_failed_install_without_prior_destination_removes_new_authority(self) -> None:
+        backup = self.root / "backup.sqlite3"
+        manifest = backup_database(self.source, backup, BINDING)
+        destination = self.root / "restored.sqlite3"
+        with (
+            patch.object(MODULE, "_fsync_directory", side_effect=OSError("fsync failed")),
+            self.assertRaises(BackupError),
+        ):
+            restore_database(backup, destination, manifest, BINDING, quiesced=True)
+        self.assertFalse(destination.exists())
 
     def test_source_symlink_is_rejected(self) -> None:
         link = self.root / "source-link.sqlite3"
