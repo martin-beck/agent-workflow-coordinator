@@ -60,6 +60,26 @@ class UpgradeGeneratorTests(unittest.TestCase):
         document["arbitrary_script"] = "rm -rf /"
         with self.assertRaises(ContractError):
             MODULE._validate_transition(document)
+        with self.assertRaises(ContractError):
+            MODULE._validate_transition([])
+        document = transition()
+        document["operation_id"] = 7
+        with self.assertRaises(ContractError):
+            MODULE._validate_transition(document)
+        document = transition()
+        document["from"] = []
+        with self.assertRaises(ContractError):
+            MODULE._validate_transition(document)
+
+    def test_input_loader_and_cli_fail_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            malformed = Path(directory) / "malformed.json"
+            malformed.write_text("{", encoding="utf-8")
+            with self.assertRaises(ContractError):
+                MODULE._load_transition(malformed)
+            with self.assertRaises(ContractError):
+                MODULE._load_transition(Path(directory) / "missing.json")
+            self.assertEqual(MODULE.main([str(malformed), str(Path(directory) / "out.json")]), 1)
 
     def test_floating_ref_and_noop_transition_are_rejected(self) -> None:
         document = transition()
