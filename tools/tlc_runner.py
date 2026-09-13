@@ -20,6 +20,7 @@ DEFAULT_WORKERS = 2
 DEFAULT_HEAP = "2048m"
 DEFAULT_MEMORY_MAX = "3G"
 DEFAULT_SWAP_MAX = "3G"
+DEFAULT_ADMISSION_LOCK = "/tmp/agent-workflow-coordinator-tlc-admission.lock"  # noqa: S108
 
 
 class AdmissionError(RuntimeError):
@@ -130,7 +131,7 @@ def run(args: argparse.Namespace) -> int:
     _prune_stale(queue)
     job = queue / f"{os.getpid()}-{uuid.uuid4().hex}.job.json"
     outcome = job.with_name(job.name.replace(".job.json", ".outcome.json"))
-    lock_path = Path(args.lock).resolve()
+    lock_path = Path(DEFAULT_ADMISSION_LOCK)
     record = {
         "model": str(args.model),
         "pid": os.getpid(),
@@ -152,6 +153,8 @@ def run(args: argparse.Namespace) -> int:
             heap=args.heap,
             memory_max=args.memory_max,
             swap_max=args.swap_max,
+            cpu_quota=args.cpu_quota,
+            tasks_max=args.tasks_max,
             cgroup_mode=args.cgroup_mode,
         )
         with lock_path.open("w") as lock:
@@ -185,13 +188,6 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument(
         "--queue",
         default=os.environ.get("TLC_ADMISSION_QUEUE", "/tmp/agent-workflow-coordinator-tlc"),  # noqa: S108
-    )
-    result.add_argument(
-        "--lock",
-        default=os.environ.get(
-            "TLC_ADMISSION_LOCK",
-            "/tmp/agent-workflow-coordinator-tlc-admission.lock",  # noqa: S108
-        ),
     )
     result.add_argument(
         "--workers", type=int, default=int(os.environ.get("TLC_WORKERS", DEFAULT_WORKERS))
