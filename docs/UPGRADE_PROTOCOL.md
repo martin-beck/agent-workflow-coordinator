@@ -45,6 +45,17 @@ No phase may silently skip its predecessor. `commit` is the only phase
 allowed to replace the selected runtime, and it is never allowed before
 verified backup and quiescence.
 
+The schema and contract tests reject duplicate or non-contiguous phase orders,
+unknown or forward dependencies, missing phase operations, unbounded time or
+resource declarations, and incomplete release identity. Every release binds
+its version to a full source commit, tag reference and object, signature,
+trust-policy digest, and vendor-manifest digest. Every backend contract must
+name its authority, backup, restore, selector, projections, and
+authority-compatible round-trip evidence; SQLite additionally declares WAL
+handling. A generated plan must also prove that only `commit` mutates
+authority, that `commit` depends on both quiescence and backup, and that
+`reopen` depends on validation.
+
 ## Invariants
 
 - The maintenance/admission barrier is durable and held from quiescence
