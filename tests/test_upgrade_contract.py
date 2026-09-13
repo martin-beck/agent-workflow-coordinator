@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 import jsonschema
+from tools.validate_upgrade_contract import ContractError, validate_contract
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -73,6 +74,7 @@ def contract() -> dict[str, Any]:
                 ),
                 "on_failure": "restore-known-good",
                 "operation": {
+                    "operation_id": f"upgrade:v0.3.5-to-v0.3.6:001:{phase}",
                     "timeout_seconds": 300,
                     "resources": ["maintenance-barrier"],
                     "preconditions": ["previous-phase-complete"],
@@ -107,6 +109,10 @@ def contract() -> dict[str, Any]:
         "rollback": {
             "required": True,
             "backup_integrity": "hash-and-size",
+            "integrity_by_backend": {
+                "git": "git-object-and-ref",
+                "sqlite": "sqlite-integrity-and-backup-api",
+            },
             "equivalence": "authority-compatible-round-trip",
             "reopen_gate": "validate-before-reopen",
             "ambiguous_external_result": "persist-operation-id-and-reconcile",
@@ -119,6 +125,7 @@ class UpgradeContractTests(unittest.TestCase):
         schema = json.loads((ROOT / "schema/upgrade-contract.schema.json").read_text())
         document = contract()
         jsonschema.Draft202012Validator(schema).validate(document)
+        validate_contract(document)
         phases = document["phases"]
         self.assertEqual([phase["order"] for phase in phases], list(range(1, 9)))
         self.assertEqual(
@@ -160,6 +167,16 @@ class UpgradeContractTests(unittest.TestCase):
         document["phases"] = [phase for phase in document["phases"] if phase["id"] != "discover"]
         with self.assertRaises(jsonschema.ValidationError):
             jsonschema.Draft202012Validator(schema).validate(document)
+
+    def test_semantic_validator_rejects_noop_and_unbound_operation(self) -> None:
+        document = contract()
+        document["to"] = document["from"].copy()
+        with self.assertRaises(ContractError):
+            validate_contract(document)
+        document = contract()
+        document["phases"][0]["operation"]["operation_id"] = "other-operation"
+        with self.assertRaises(ContractError):
+            validate_contract(document)
 
     def test_self_consistency_and_backend_obligations(self) -> None:
         document = contract()
