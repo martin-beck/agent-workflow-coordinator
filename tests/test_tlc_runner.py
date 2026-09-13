@@ -38,6 +38,7 @@ class TLCAdmissionTests(unittest.TestCase):
         self.assertIn("-workers", command)
         self.assertIn("2", command)
         self.assertIn("-Xmx2048m", command)
+        self.assertIn("-XX:+UseSerialGC", command)
         self.assertIn("--property=MemoryMax=3G", command)
         self.assertIn("--property=MemorySwapMax=3G", command)
         self.assertIn("--property=CPUQuota=200%", command)

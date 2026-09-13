@@ -82,9 +82,7 @@ def build_command(
     java = [
         "java",
         f"-Xmx{heap}",
-        "-XX:+UseParallelGC",
-        "-XX:ParallelGCThreads=2",
-        "-XX:ConcGCThreads=1",
+        "-XX:+UseSerialGC",
         f"-XX:ActiveProcessorCount={worker_count}",
         "-cp",
         str(jar),
