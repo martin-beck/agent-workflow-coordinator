@@ -46,7 +46,7 @@ def _heap_bytes(heap: str) -> int:
 
 def _prune_stale(queue: Path, max_age: int = 86400) -> None:
     now = time.time()
-    for item in queue.glob("*.json"):
+    for item in queue.glob("*.job.json"):
         try:
             if now - item.stat().st_mtime > max_age:
                 item.unlink()
@@ -128,8 +128,9 @@ def run(args: argparse.Namespace) -> int:
     queue = Path(args.queue).resolve()
     queue.mkdir(mode=0o700, parents=True, exist_ok=True)
     _prune_stale(queue)
-    job = queue / f"{os.getpid()}-{uuid.uuid4().hex}.json"
-    lock_path = queue / "admission.lock"
+    job = queue / f"{os.getpid()}-{uuid.uuid4().hex}.job.json"
+    outcome = job.with_name(job.name.replace(".job.json", ".outcome.json"))
+    lock_path = Path(args.lock).resolve()
     record = {
         "model": str(args.model),
         "pid": os.getpid(),
@@ -157,8 +158,17 @@ def run(args: argparse.Namespace) -> int:
             fcntl.flock(lock, fcntl.LOCK_EX)
             record["state"] = "running"
             job.write_text(json.dumps(record, sort_keys=True) + "\n")
-            return subprocess.run(command, check=False).returncode  # noqa: S603
+            exit_code = subprocess.run(command, check=False).returncode  # noqa: S603
+            record.update({"ended": time.time(), "state": "completed", "exit_code": exit_code})
+            outcome.write_text(json.dumps(record, sort_keys=True) + "\n")
+            return exit_code
+    except KeyboardInterrupt:
+        record.update({"ended": time.time(), "state": "canceled", "exit_code": 130})
+        outcome.write_text(json.dumps(record, sort_keys=True) + "\n")
+        raise
     except (AdmissionError, OSError) as error:
+        record.update({"ended": time.time(), "state": "failed", "error": str(error)})
+        outcome.write_text(json.dumps(record, sort_keys=True) + "\n")
         print(f"TLC admission failed closed: {error}", file=sys.stderr)
         return 2
     finally:
@@ -175,6 +185,12 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument(
         "--queue",
         default=os.environ.get("TLC_ADMISSION_QUEUE", "/tmp/agent-workflow-coordinator-tlc"),  # noqa: S108
+    )
+    result.add_argument(
+        "--lock",
+        default=os.environ.get(
+            "TLC_ADMISSION_LOCK", "/tmp/agent-workflow-coordinator-tlc-admission.lock"
+        ),  # noqa: S108
     )
     result.add_argument(
         "--workers", type=int, default=int(os.environ.get("TLC_WORKERS", DEFAULT_WORKERS))
