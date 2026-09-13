@@ -57,6 +57,7 @@ class FormalEvidenceTests(unittest.TestCase):
                 "evidence_class",
                 "limitations",
                 "non_claims",
+                "resource_bounds",
                 "schema_version",
                 "scope",
             },

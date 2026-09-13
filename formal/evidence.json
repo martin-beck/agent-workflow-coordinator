@@ -30,6 +30,15 @@
     "This evidence does not prove correctness of arbitrary commands executed through handoffctl run.",
     "This evidence does not establish atomicity across power loss, storage loss, or arbitrary process termination."
   ],
+  "resource_bounds": {
+    "workers": 2,
+    "jvm_heap": "2048m",
+    "memory_max": "3G",
+    "swap_max": "3G",
+    "cpu_quota": "200%",
+    "tasks_max": 64,
+    "admission": "host-wide-flock-and-durable-job-record"
+  },
   "schema_version": 1,
   "scope": "handoffctl-coordination-models"
 }
