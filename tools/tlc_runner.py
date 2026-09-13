@@ -190,7 +190,7 @@ def parser() -> argparse.ArgumentParser:
         "--lock",
         default=os.environ.get(
             "TLC_ADMISSION_LOCK", "/tmp/agent-workflow-coordinator-tlc-admission.lock"  # noqa: S108
-        ),  # noqa: S108
+        ),
     )
     result.add_argument(
         "--workers", type=int, default=int(os.environ.get("TLC_WORKERS", DEFAULT_WORKERS))
