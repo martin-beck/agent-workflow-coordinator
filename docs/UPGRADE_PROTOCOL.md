@@ -6,6 +6,13 @@ that an upgrade has been executed. Release plans must validate against
 `schema/upgrade-contract.schema.json` and bind every operation to a durable
 `operation_id`.
 
+The mandatory fail-closed semantic validator is
+`tools/validate_upgrade_contract.py`. A generator must invoke it and refuse to
+produce an executable plan when it reports an error. JSON Schema provides the
+shape and required fields; the validator additionally proves dependency
+references and ordering, operation-ID binding, non-no-op release identity,
+backend coverage, and backend-specific rollback integrity.
+
 ## Safety contract
 
 The coordinator remains usable at every externally observable point. Before
