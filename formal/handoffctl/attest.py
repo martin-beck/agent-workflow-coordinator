@@ -66,6 +66,7 @@ def main() -> int:
         "non_claims": [
             "portable-smoke is non-exhaustive and cannot support full formal claims",
             "bounded model checking does not prove implementation correspondence",
+            "state_counts are unavailable unless parsed from TLC output and are not evidence of exhaustive exploration",
         ],
     }
     args.output.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")

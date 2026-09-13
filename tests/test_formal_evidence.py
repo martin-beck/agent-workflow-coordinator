@@ -111,6 +111,9 @@ class FormalEvidenceTests(unittest.TestCase):
             manifest["profiles"]["full-exhaustive"]["models"],
         )
         self.assertEqual(6, len(manifest["profiles"]["full-exhaustive"]["models"]))
+        attest = (ROOT / "formal" / "handoffctl" / "attest.py").read_text(encoding="utf-8")
+        self.assertIn("state_counts", attest)
+        self.assertIn("not evidence of exhaustive exploration", attest)
 
     def test_attestation_rejects_failed_formal_outcomes(self) -> None:
         script = ROOT / "formal" / "handoffctl" / "attest.py"
