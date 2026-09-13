@@ -83,6 +83,8 @@ def build_command(
         "java",
         f"-Xmx{heap}",
         "-XX:+UseParallelGC",
+        "-XX:ParallelGCThreads=2",
+        "-XX:ConcGCThreads=1",
         f"-XX:ActiveProcessorCount={worker_count}",
         "-cp",
         str(jar),
@@ -105,6 +107,7 @@ def build_command(
             raise AdmissionError("portable containment requires timeout and prlimit")
         cpu_percent = _positive_int(cpu_quota.rstrip("%"), "cpu_quota")
         cpu_seconds = timeout * cpu_percent // 100
+        host_processes = len(list(Path("/proc").glob("[0-9]*")))
         return [
             timeout_bin,
             "--signal=TERM",
@@ -112,7 +115,7 @@ def build_command(
             str(timeout),
             prlimit_bin,
             f"--as={_memory_bytes(memory_max)}:{_memory_bytes(memory_max)}",
-            f"--nproc={process_limit}:{process_limit}",
+            f"--nproc={host_processes + process_limit}:{host_processes + process_limit}",
             f"--cpu={cpu_seconds}:{cpu_seconds}",
             "--",
             *java,

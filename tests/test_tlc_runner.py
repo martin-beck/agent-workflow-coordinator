@@ -72,7 +72,7 @@ class TLCAdmissionTests(unittest.TestCase):
             ["/usr/bin/timeout", "--signal=TERM", "--kill-after=5s", "1800", "/usr/bin/prlimit"],
         )
         self.assertIn("--as=3221225472:3221225472", command)
-        self.assertIn("--nproc=64:64", command)
+        self.assertTrue(any(item.startswith("--nproc=") for item in command))
         self.assertIn("--cpu=3600:3600", command)
 
     def test_portable_containment_fails_closed_without_tools(self) -> None:
@@ -87,6 +87,47 @@ class TLCAdmissionTests(unittest.TestCase):
                 metadir=Path("states"),
                 cgroup_mode="portable",
             )
+
+    def test_portable_containment_validates_each_tool_and_cpu_bound(self) -> None:
+        for missing in ("timeout", "prlimit"):
+            with (
+                patch(
+                    "tools.tlc_runner.shutil.which",
+                    side_effect=lambda name, absent=missing: (
+                        None if name == absent else "/usr/bin/tool"
+                    ),
+                ),
+                self.assertRaises(AdmissionError),
+            ):
+                build_command(
+                    jar=Path("tla.jar"),
+                    model=Path("Model.tla"),
+                    config=Path("Model.cfg"),
+                    metadir=Path("states"),
+                    cgroup_mode="portable",
+                )
+        with (
+            patch("tools.tlc_runner.shutil.which", return_value="/usr/bin/tool"),
+            self.assertRaises(AdmissionError),
+        ):
+            build_command(
+                jar=Path("tla.jar"),
+                model=Path("Model.tla"),
+                config=Path("Model.cfg"),
+                metadir=Path("states"),
+                cpu_quota="bad",
+                cgroup_mode="portable",
+            )
+
+    def test_required_containment_builds_when_systemd_exists(self) -> None:
+        with patch("tools.tlc_runner.shutil.which", return_value="/usr/bin/systemd-run"):
+            command = build_command(
+                jar=Path("tla.jar"),
+                model=Path("Model.tla"),
+                config=Path("Model.cfg"),
+                metadir=Path("states"),
+            )
+        self.assertEqual(command[0], "/usr/bin/systemd-run")
 
     def test_rejects_heap_that_exceeds_memory(self) -> None:
         with self.assertRaises(AdmissionError):
