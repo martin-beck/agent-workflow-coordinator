@@ -37,7 +37,9 @@
     {"properties": {"phases": {"contains": {"properties": {"id": {"const": "reopen"}}}}}}
     ,{"properties": {"phases": {"contains": {"properties": {"id": {"const": "commit"}, "mutates_authority": {"const": true}, "requires": {"contains": {"const": "quiesce"}}}}}}}
     ,{"properties": {"phases": {"contains": {"properties": {"id": {"const": "commit"}, "requires": {"contains": {"const": "backup"}}}}}}}
-    ,{"properties": {"phases": {"contains": {"properties": {"id": {"const": "reopen"}, "requires": {"contains": {"const": "validate"}}}}}}}
+    ,{"properties": {"phases": {"contains": {"properties": {"id": {"const": "reopen"}, "requires": {"contains": {"const": "validate"}}}}}}},
+    {"properties": {"backend_contracts": {"contains": {"properties": {"backend": {"const": "git"}}}}}},
+    {"properties": {"backend_contracts": {"contains": {"properties": {"backend": {"const": "sqlite"}}}}}}
   ],
   "$defs": {
     "release": {
