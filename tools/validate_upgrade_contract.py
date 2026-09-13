@@ -26,6 +26,12 @@ def validate_contract(document: dict[str, Any]) -> None:
     Draft202012Validator(schema).validate(document)
     if document["from"] == document["to"]:
         raise ContractError("from and to release identities must differ")
+    _validate_phases(document)
+    _validate_backends(document)
+
+
+def _validate_phases(document: dict[str, Any]) -> None:
+    """Validate ordering, dependencies, operation identity, and gates."""
     phases = document["phases"]
     if [phase["id"] for phase in phases] != list(PHASES):
         raise ContractError("phase IDs must be unique and in canonical order")
@@ -33,15 +39,16 @@ def validate_contract(document: dict[str, Any]) -> None:
         raise ContractError("phase orders must be contiguous from one")
     by_id = {phase["id"]: phase["order"] for phase in phases}
     operation_ids: set[str] = set()
+    top_operation_id = document["operation_id"]
     for phase in phases:
         phase_id = phase["id"]
         for dependency in phase["requires"]:
             if dependency not in by_id or by_id[dependency] >= phase["order"]:
-                raise ContractError("invalid dependency {!r} for {}".format(dependency, phase_id))
+                raise ContractError(f"invalid dependency {dependency!r} for {phase_id}")
         operation_id = phase["operation"]["operation_id"]
-        expected = "{}:{}".format(document["operation_id"], phase_id)
+        expected = f"{top_operation_id}:{phase_id}"
         if operation_id != expected or operation_id in operation_ids:
-            raise ContractError("operation ID is not bound to {}".format(phase_id))
+            raise ContractError(f"operation ID is not bound to {phase_id}")
         operation_ids.add(operation_id)
     commit = phases[5]
     if not commit["mutates_authority"] or not {"stage", "quiesce", "backup"} <= set(
@@ -52,6 +59,10 @@ def validate_contract(document: dict[str, Any]) -> None:
         )
     if set(phases[7]["requires"]) != {"validate"}:
         raise ContractError("reopen must require validate")
+
+
+def _validate_backends(document: dict[str, Any]) -> None:
+    """Validate backend coverage and backend-specific rollback integrity."""
     if {backend["backend"] for backend in document["backend_contracts"]} != {"git", "sqlite"}:
         raise ContractError("both Git and SQLite backend contracts are required")
     integrity = document["rollback"]["integrity_by_backend"]

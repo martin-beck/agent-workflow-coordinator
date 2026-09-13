@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 import jsonschema
+
 from tools.validate_upgrade_contract import ContractError, validate_contract
 
 ROOT = Path(__file__).resolve().parents[1]
