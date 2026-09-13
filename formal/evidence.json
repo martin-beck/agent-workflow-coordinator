@@ -6,7 +6,7 @@
     "A continuously runnable process is eventually scheduled and a lock holder eventually exits its critical section.",
     "Successful local commits and SQLite transactions have the durability described by the coordinator contract.",
     "The pinned TLC verifier is downloaded successfully and matches its recorded SHA-256 digest.",
-    "Every TLC invocation uses two workers, a 2048 MiB JVM heap, 3072 MiB memory and swap limits, 200 percent CPU quota, 64 tasks, and a 1800 second runtime bound.",
+    "Every TLC invocation uses two workers, a 2048 MiB JVM heap, 256 MiB metaspace, 128 MiB compressed class space, 256 KiB thread stacks, 3072 MiB address-space limit, 200 percent CPU quota, 64 additional process slots, and a 1800 second runtime bound.",
     "Formal jobs use one canonical host-wide flock admission lock and durable per-job queue and outcome records; admission does not stop coordinator workers."
   ],
   "bounds": {
@@ -32,7 +32,7 @@
     "The evidence applies only to the specifications, configurations, invariants, and temporal properties executed by formal/handoffctl/verify.sh.",
     "Implementation tests provide separate correspondence evidence but do not turn bounded model checking into an implementation proof.",
     "Separate clones, network filesystems, non-cooperating writers, and failures outside the documented recovery boundary are excluded.",
-    "The preferred cgroup boundary uses systemd-run user scopes; hosted CI selects the portable boundary, which requires timeout and prlimit and applies aggregate address-space, process, CPU-time, and wall-clock limits, failing closed if either tool is unavailable."
+    "The preferred cgroup boundary uses systemd-run user scopes; hosted CI selects the portable boundary, which requires timeout and prlimit and applies aggregate address-space, process, CPU-time, and wall-clock limits, failing closed if either tool is unavailable. Portable address-space enforcement is not equivalent to cgroup RSS or swap accounting."
   ],
   "non_claims": [
     "This evidence does not prove the Python implementation correct.",
