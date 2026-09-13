@@ -13,6 +13,8 @@ from typing import Any
 
 import jsonschema
 
+ROOT = Path(__file__).resolve().parents[1]
+
 _validator_spec = importlib.util.spec_from_file_location(
     "upgrade_contract_validator", ROOT / "tools/validate_upgrade_contract.py"
 )
@@ -21,8 +23,6 @@ _validator = importlib.util.module_from_spec(_validator_spec)
 _validator_spec.loader.exec_module(_validator)
 ContractError = _validator.ContractError
 validate_contract = _validator.validate_contract
-
-ROOT = Path(__file__).resolve().parents[1]
 
 
 def contract() -> dict[str, Any]:
