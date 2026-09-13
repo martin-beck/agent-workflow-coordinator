@@ -157,7 +157,7 @@ def run(args: argparse.Namespace) -> int:
             fcntl.flock(lock, fcntl.LOCK_EX)
             record["state"] = "running"
             job.write_text(json.dumps(record, sort_keys=True) + "\n")
-            return subprocess.run(command, check=False)  # noqa: S603
+            return subprocess.run(command, check=False).returncode  # noqa: S603
     except (AdmissionError, OSError) as error:
         print(f"TLC admission failed closed: {error}", file=sys.stderr)
         return 2
