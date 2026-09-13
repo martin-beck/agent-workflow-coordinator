@@ -6,12 +6,21 @@
 from __future__ import annotations
 
 import json
+import importlib.util
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from tools.tlc_runner import AdmissionError, _prune_stale, build_command, run
+ROOT = Path(__file__).resolve().parents[1]
+_runner_spec = importlib.util.spec_from_file_location("tlc_runner", ROOT / "tools/tlc_runner.py")
+assert _runner_spec and _runner_spec.loader
+_runner = importlib.util.module_from_spec(_runner_spec)
+_runner_spec.loader.exec_module(_runner)
+AdmissionError = _runner.AdmissionError
+_prune_stale = _runner._prune_stale
+build_command = _runner.build_command
+run = _runner.run
 
 
 class TLCAdmissionTests(unittest.TestCase):
