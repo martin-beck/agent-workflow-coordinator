@@ -214,13 +214,16 @@ class TLCAdmissionTests(unittest.TestCase):
                     "heap": "64m",
                     "memory_max": "1G",
                     "swap_max": "1G",
-                    "cgroup_mode": "off",
+                    "cgroup_mode": "portable",
                     "cpu_quota": "200%",
                     "tasks_max": 64,
                     "timeout_seconds": 1800,
                 },
             )()
-            with patch("tools.tlc_runner.subprocess.run") as execute:
+            with (
+                patch("tools.tlc_runner.shutil.which", return_value="/usr/bin/tool"),
+                patch("tools.tlc_runner.subprocess.run") as execute,
+            ):
                 execute.return_value.returncode = 0
                 self.assertEqual(run(args), 0)
                 execute.assert_called_once()
