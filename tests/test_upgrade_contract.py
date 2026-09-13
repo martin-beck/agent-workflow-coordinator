@@ -117,7 +117,7 @@ def contract() -> dict[str, Any]:
         ],
         "rollback": {
             "required": True,
-            "backup_integrity": "hash-and-size",
+            "backup_integrity": "backend-specific",
             "integrity_by_backend": {
                 "git": "git-object-and-ref",
                 "sqlite": "sqlite-integrity-and-backup-api",
@@ -183,7 +183,30 @@ class UpgradeContractTests(unittest.TestCase):
         with self.assertRaises(ContractError):
             validate_contract(document)
         document = contract()
+        document["to"]["version"] = document["from"]["version"]
+        document["to"]["source_commit"] = "9" * 40
+        with self.assertRaises(ContractError):
+            validate_contract(document)
+        document = contract()
         document["phases"][0]["operation"]["operation_id"] = "other-operation"
+        with self.assertRaises(ContractError):
+            validate_contract(document)
+
+    def test_semantic_validator_rejects_phase_and_identity_mismatches(self) -> None:
+        document = contract()
+        document["from"]["tag_ref"] = "refs/tags/v9.9.9"
+        with self.assertRaises(ContractError):
+            validate_contract(document)
+        document = contract()
+        document["phases"][2]["mutates_authority"] = True
+        with self.assertRaises(ContractError):
+            validate_contract(document)
+        document = contract()
+        document["phases"][4]["requires"] = ["quiesce"]
+        with self.assertRaises(ContractError):
+            validate_contract(document)
+        document = contract()
+        document["rollback"]["backup_integrity"] = "hash-and-size"
         with self.assertRaises(ContractError):
             validate_contract(document)
 
