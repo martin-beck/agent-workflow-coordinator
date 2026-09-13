@@ -89,7 +89,9 @@ class UpgradeEngine:
             if phase not in handlers:
                 raise UpgradeError(f"missing phase handler: {phase}")
             operation = f"{self.operation_id}:{phase}"
-            record = {"operation_id": operation, "phase": phase, "outcome": "started"}
+            record: dict[str, Any] = {
+                "operation_id": operation, "phase": phase, "outcome": "started"
+            }
             records.append(record)
             value["status"] = "running"
             value["phase"] = phase
@@ -113,7 +115,7 @@ class UpgradeEngine:
         if value["status"] not in {"failed", "running"}:
             raise UpgradeError("rollback requires failed or running operation")
         operation = f"{self.operation_id}:rollback"
-        record = {"operation_id": operation, "outcome": "started"}
+        record: dict[str, Any] = {"operation_id": operation, "outcome": "started"}
         value["records"].append(record)
         try:
             record["outcome"] = "success"
