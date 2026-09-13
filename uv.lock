@@ -13,6 +13,7 @@ source = { virtual = "." }
 
 [package.dev-dependencies]
 quality = [
+    { name = "agent-workflow-quality" },
     { name = "coverage" },
     { name = "jsonschema", extra = ["format"] },
     { name = "lizard" },
@@ -27,6 +28,7 @@ quality = [
 
 [package.metadata.requires-dev]
 quality = [
+    { name = "agent-workflow-quality", git = "https://github.com/martin-beck/agent-workflow-quality.git?rev=f1c40859e9d10cacbc79100ed136c38bce48cd39" },
     { name = "coverage", specifier = "==7.13.4" },
     { name = "jsonschema", extras = ["format"], specifier = "==4.25.1" },
     { name = "lizard", specifier = "==1.24.0" },
@@ -36,6 +38,11 @@ quality = [
     { name = "ruff", specifier = "==0.16.5" },
     { name = "types-jsonschema", specifier = "==4.26.0.20260518" },
 ]
+
+[[package]]
+name = "agent-workflow-quality"
+version = "0.32.0"
+source = { git = "https://github.com/martin-beck/agent-workflow-quality.git?rev=f1c40859e9d10cacbc79100ed136c38bce48cd39#f1c40859e9d10cacbc79100ed136c38bce48cd39" }
 
 [[package]]
 name = "arrow"

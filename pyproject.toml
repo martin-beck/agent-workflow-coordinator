@@ -6,6 +6,7 @@ dependencies = []
 
 [dependency-groups]
 quality = [
+  "agent-workflow-quality",
   "coverage==7.13.4",
   "jsonschema[format]==4.25.1",
   "lizard==1.24.0",
@@ -18,6 +19,9 @@ quality = [
 
 [tool.uv]
 package = false
+
+[tool.uv.sources]
+agent-workflow-quality = { git = "https://github.com/martin-beck/agent-workflow-quality.git", rev = "f1c40859e9d10cacbc79100ed136c38bce48cd39" }
 
 [tool.ruff]
 line-length = 100
