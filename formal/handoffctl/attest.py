@@ -79,7 +79,9 @@ def main() -> int:
             "heap": os.environ.get("TLC_HEAP", "2048m"),
             "memory_max": "3G",
             "swap_max": "3G",
-            "admission": "portable-or-systemd-fail-closed",
+            "admission": (
+                "systemd-run-user-cgroup" if boundary == "required" else "portable-timeout-prlimit"
+            ),
         },
         "outcomes": outcomes,
         "state_counts": {model: None for model in args.models},
