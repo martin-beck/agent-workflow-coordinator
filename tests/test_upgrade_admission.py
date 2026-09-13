@@ -5,21 +5,41 @@
 
 from __future__ import annotations
 
+import importlib.util
 import unittest
+from pathlib import Path
 
-from tools.upgrade_admission import (
-    PREFLIGHT_PREDICATES,
-    QUIESCENCE_PREDICATES,
-    REOPEN_PREDICATES,
-    AdmissionError,
-    admit_preflight,
-    admit_quiesced,
-    admit_reopen,
+ROOT = Path(__file__).resolve().parents[1]
+SPEC = importlib.util.spec_from_file_location(
+    "upgrade_admission", ROOT / "tools/upgrade_admission.py"
 )
+assert SPEC and SPEC.loader
+MODULE = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(MODULE)
+PREFLIGHT_PREDICATES = MODULE.PREFLIGHT_PREDICATES
+QUIESCENCE_PREDICATES = MODULE.QUIESCENCE_PREDICATES
+REOPEN_PREDICATES = MODULE.REOPEN_PREDICATES
+AdmissionError = MODULE.AdmissionError
+admit_preflight = MODULE.admit_preflight
+admit_quiesced = MODULE.admit_quiesced
+admit_reopen = MODULE.admit_reopen
+admit_safe_mode = MODULE.admit_safe_mode
+recheck_before_replacement = MODULE.recheck_before_replacement
 
 
-def complete(names: tuple[str, ...]) -> dict[str, bool]:
-    return dict.fromkeys(names, True)
+def complete(names: tuple[str, ...]) -> dict[str, object]:
+    snapshot: dict[str, object] = dict.fromkeys(names, True)
+    snapshot.update(
+        {
+            "operation_id": "upgrade:001",
+            "state_revision": 4,
+            "fencing_token": "fence:4",
+            "fencing_owner": "worker-1",
+            "durable_barrier_id": "barrier:4",
+            "target": "new",
+        }
+    )
+    return snapshot
 
 
 class UpgradeAdmissionTests(unittest.TestCase):
@@ -49,6 +69,30 @@ class UpgradeAdmissionTests(unittest.TestCase):
             denied[predicate] = False
             with self.subTest(predicate=predicate), self.assertRaises(AdmissionError):
                 admit_reopen(denied)
+
+    def test_unknown_and_stale_identity_fail_closed(self) -> None:
+        snapshot = complete(PREFLIGHT_PREDICATES)
+        snapshot["unexpected"] = True
+        with self.assertRaises(AdmissionError):
+            admit_preflight(snapshot)
+        snapshot = complete(QUIESCENCE_PREDICATES)
+        current = dict(snapshot)
+        current["state_revision"] = 5
+        with self.assertRaises(AdmissionError):
+            recheck_before_replacement(snapshot, current)
+
+    def test_reopen_target_and_safe_mode_failure_paths(self) -> None:
+        snapshot = complete(REOPEN_PREDICATES)
+        snapshot["target"] = "other"
+        with self.assertRaises(AdmissionError):
+            admit_reopen(snapshot)
+        snapshot = complete(REOPEN_PREDICATES)
+        snapshot["validation_failed"] = True
+        with self.assertRaises(AdmissionError):
+            admit_reopen(snapshot)
+        with self.assertRaises(AdmissionError):
+            admit_safe_mode({})
+        admit_safe_mode({"safe_mode_ready": True})
 
     def test_non_boolean_truthy_values_fail_closed(self) -> None:
         snapshot = complete(PREFLIGHT_PREDICATES)

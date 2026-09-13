@@ -48,8 +48,30 @@ REOPEN_PREDICATES = (
     "lease_fence_valid",
 )
 
+IDENTITY_FIELDS = (
+    "operation_id",
+    "state_revision",
+    "fencing_token",
+    "fencing_owner",
+)
+QUIESCENCE_IDENTITY = "durable_barrier_id"
+KNOWN_FIELDS = set(PREFLIGHT_PREDICATES + QUIESCENCE_PREDICATES + REOPEN_PREDICATES)
+KNOWN_FIELDS.update(
+    (*IDENTITY_FIELDS, QUIESCENCE_IDENTITY, "target", "validation_failed", "safe_mode_ready")
+)
+
 
 def _require(snapshot: Mapping[str, object], predicates: tuple[str, ...], phase: str) -> None:
+    unknown = set(snapshot) - KNOWN_FIELDS
+    if unknown:
+        raise AdmissionError(f"{phase} denied; unknown fields: {', '.join(sorted(unknown))}")
+    for field in IDENTITY_FIELDS:
+        value = snapshot.get(field)
+        if field == "state_revision":
+            if not isinstance(value, int) or isinstance(value, bool) or value < 1:
+                raise AdmissionError(f"{phase} denied; invalid {field}")
+        elif not isinstance(value, str) or not value:
+            raise AdmissionError(f"{phase} denied; invalid {field}")
     missing = [name for name in predicates if snapshot.get(name) is not True]
     if missing:
         raise AdmissionError(f"{phase} denied; unmet predicates: {', '.join(missing)}")
@@ -63,8 +85,32 @@ def admit_preflight(snapshot: Mapping[str, object]) -> None:
 def admit_quiesced(snapshot: Mapping[str, object]) -> None:
     """Allow replacement only while the durable maintenance barrier is held."""
     _require(snapshot, QUIESCENCE_PREDICATES, "quiescence")
+    barrier = snapshot.get(QUIESCENCE_IDENTITY)
+    if not isinstance(barrier, str) or not barrier:
+        raise AdmissionError("quiescence denied; durable barrier proof is absent")
+
+
+def recheck_before_replacement(
+    admitted: Mapping[str, object], current: Mapping[str, object]
+) -> None:
+    """Atomically recheck identity and quiescence immediately before replacement."""
+    admit_quiesced(current)
+    for field in (*IDENTITY_FIELDS, QUIESCENCE_IDENTITY):
+        if admitted.get(field) != current.get(field):
+            raise AdmissionError(f"replacement denied; stale {field}")
 
 
 def admit_reopen(snapshot: Mapping[str, object]) -> None:
     """Allow work to reopen only after target or rollback integrity validation."""
     _require(snapshot, REOPEN_PREDICATES, "reopen")
+    target = snapshot.get("target")
+    if target not in {"new", "rollback"}:
+        raise AdmissionError("reopen denied; target must be new or rollback")
+    if snapshot.get("validation_failed") is True:
+        raise AdmissionError("reopen denied; failed validation requires safe mode")
+
+
+def admit_safe_mode(snapshot: Mapping[str, object]) -> None:
+    """Require an explicit safe-mode record when neither runtime can reopen."""
+    if snapshot.get("safe_mode_ready") is not True:
+        raise AdmissionError("safe mode denied; durable safe-mode record is absent")
