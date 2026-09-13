@@ -9,6 +9,11 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from tools.upgrade_admission import (
+    PREFLIGHT_PREDICATES,
+    QUIESCENCE_PREDICATES,
+    REOPEN_PREDICATES,
+)
 from tools.upgrade_engine import PHASES, Handler, UpgradeEngine, UpgradeError
 
 CONTEXT = {
@@ -20,6 +25,18 @@ CONTEXT = {
     "authority_revision": "authority-1",
     "target": "new",
 }
+ADMISSION = {
+    **dict.fromkeys(PREFLIGHT_PREDICATES, True),
+    **dict.fromkeys(QUIESCENCE_PREDICATES, True),
+    **dict.fromkeys(REOPEN_PREDICATES, True),
+    "operation_id": "op-1",
+    "state_revision": 1,
+    "fencing_token": "fence-1",
+    "fencing_owner": "worker-1",
+    "durable_barrier_id": "barrier-1",
+    "target": "new",
+    "validation_failed": False,
+}
 
 
 class UpgradeEngineTests(unittest.TestCase):
@@ -29,7 +46,9 @@ class UpgradeEngineTests(unittest.TestCase):
             engine.plan()
             seen: list[str] = []
 
-            def handler(_operation: str, _state: object, phase: str = "") -> dict[str, object]:
+            def handler(  # noqa: C901
+                _operation: str, _state: object, phase: str = ""
+            ) -> dict[str, object]:
                 seen.append(phase)
                 result: dict[str, object] = {
                     "phase": phase,
@@ -71,6 +90,14 @@ class UpgradeEngineTests(unittest.TestCase):
                     )
                 if phase == "reopen":
                     result.update(validated=True, barrier_held=True)
+                if phase == "preflight":
+                    result["preflight_snapshot"] = ADMISSION
+                if phase == "quiesce":
+                    result["quiescence_snapshot"] = ADMISSION
+                if phase == "commit":
+                    result.update(admitted_snapshot=ADMISSION, current_snapshot=ADMISSION)
+                if phase == "reopen":
+                    result["reopen_snapshot"] = ADMISSION
                 result["mutates_authority"] = phase == "commit"
                 return result
 
@@ -107,7 +134,7 @@ class UpgradeEngineTests(unittest.TestCase):
                 engine.rollback(fail)
             self.assertEqual(engine._load()["status"], "safe-mode")
 
-    def test_commit_validate_and_reopen_require_safety_evidence(self) -> None:
+    def test_commit_validate_and_reopen_require_safety_evidence(self) -> None:  # noqa: C901
         with tempfile.TemporaryDirectory() as directory:
             engine = UpgradeEngine(
                 "op-evidence",
@@ -116,8 +143,10 @@ class UpgradeEngineTests(unittest.TestCase):
             )
             engine.plan()
 
-            def evidence_handler(phase: str) -> Handler:
-                def run(_operation: str, _state: object) -> dict[str, object]:
+            def evidence_handler(phase: str) -> Handler:  # noqa: C901
+                def run(  # noqa: C901
+                    _operation: str, _state: object
+                ) -> dict[str, object]:
                     result: dict[str, object] = {
                         "backend": "sqlite",
                         "fencing_token": "fence-1",
@@ -139,6 +168,14 @@ class UpgradeEngineTests(unittest.TestCase):
                         result.update(backup_verified=True, restore_roundtrip_verified=True)
                     if phase == "stage":
                         result.update(staged_verified=True, manifest_verified=True)
+                    if phase == "preflight":
+                        result["preflight_snapshot"] = ADMISSION
+                    if phase == "quiesce":
+                        result["quiescence_snapshot"] = ADMISSION
+                    if phase == "commit":
+                        result.update(admitted_snapshot=ADMISSION, current_snapshot=ADMISSION)
+                    if phase == "reopen":
+                        result["reopen_snapshot"] = ADMISSION
                     return result
 
                 return run

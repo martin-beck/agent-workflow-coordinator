@@ -15,6 +15,13 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Any, cast
 
+from tools.upgrade_admission import (
+    admit_preflight,
+    admit_quiesced,
+    admit_reopen,
+    recheck_before_replacement,
+)
+
 try:
     import fcntl
 except ImportError:  # pragma: no cover - the coordinator is POSIX-only
@@ -260,6 +267,31 @@ class UpgradeEngine:
             raise UpgradeError("completed journal is incomplete")
         return cast(dict[str, Any], value)
 
+    @staticmethod
+    def _admit(phase: str, result: Mapping[str, Any]) -> None:
+        """Execute the coordinator-native admission contract, not just booleans."""
+        if phase == "preflight":
+            snapshot = result.get("preflight_snapshot")
+            if not isinstance(snapshot, Mapping):
+                raise UpgradeError("preflight admission snapshot is absent")
+            admit_preflight(snapshot)
+        elif phase == "quiesce":
+            snapshot = result.get("quiescence_snapshot")
+            if not isinstance(snapshot, Mapping):
+                raise UpgradeError("quiescence admission snapshot is absent")
+            admit_quiesced(snapshot)
+        elif phase == "commit":
+            admitted = result.get("admitted_snapshot")
+            current = result.get("current_snapshot")
+            if not isinstance(admitted, Mapping) or not isinstance(current, Mapping):
+                raise UpgradeError("replacement admission snapshots are absent")
+            recheck_before_replacement(admitted, current)
+        elif phase == "reopen":
+            snapshot = result.get("reopen_snapshot")
+            if not isinstance(snapshot, Mapping):
+                raise UpgradeError("reopen admission snapshot is absent")
+            admit_reopen(snapshot)
+
     def apply(self, handlers: Mapping[str, Handler]) -> dict[str, Any]:
         with self._exclusive():
             return self._apply_locked(handlers)
@@ -321,6 +353,13 @@ class UpgradeEngine:
                 value["status"] = "failed"
                 _write(self.journal, value)
                 raise UpgradeError(f"phase backend mismatch: {phase}")
+            try:
+                self._admit(phase, result)
+            except Exception as error:
+                record.update(outcome="failed", error=type(error).__name__)
+                value["status"] = "failed"
+                _write(self.journal, value)
+                raise UpgradeError(f"phase admission denied: {phase}") from error
             if (
                 phase in {"quiesce", "backup", "stage", "commit", "validate", "reopen"}
                 and result.get("fencing_token") != self.context.fencing_token
