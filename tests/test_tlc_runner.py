@@ -82,7 +82,6 @@ class TLCAdmissionTests(unittest.TestCase):
                 (),
                 {
                     "queue": str(queue),
-                    "lock": str(queue / "host.lock"),
                     "model": "Model.tla",
                     "jar": "tla.jar",
                     "config": "Model.cfg",
