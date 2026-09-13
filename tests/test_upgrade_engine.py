@@ -17,10 +17,10 @@ class UpgradeEngineTests(unittest.TestCase):
             engine = UpgradeEngine("op-1", Path(directory) / "journal.json")
             engine.plan()
             seen: list[str] = []
-            handlers = {
-                phase: lambda _operation, _state, p=phase: seen.append(p) or {"phase": p}
-                for phase in PHASES
-            }
+            def handler(_operation: str, _state: object, phase: str = "") -> dict[str, str]:
+                seen.append(phase)
+                return {"phase": phase}
+            handlers = {phase: (lambda operation, state, p=phase: handler(operation, state, p)) for phase in PHASES}
             result = engine.apply(handlers)
             self.assertEqual(seen, list(PHASES))
             self.assertEqual(result["status"], "completed")
@@ -35,7 +35,7 @@ class UpgradeEngineTests(unittest.TestCase):
             def fail(_operation: str, _state: object) -> None:
                 raise OSError("ambiguous")
 
-            handlers = {
+            handlers: dict[str, object] = {
                 phase: (fail if phase == "commit" else lambda _operation, _state: {})
                 for phase in PHASES
             }

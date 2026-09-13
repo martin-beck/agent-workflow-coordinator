@@ -9,7 +9,7 @@ import os
 import tempfile
 from collections.abc import Callable, Mapping
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 PHASES = ("discover", "preflight", "quiesce", "backup", "stage", "commit", "validate", "reopen")
 
@@ -64,7 +64,7 @@ class UpgradeEngine:
             "records": [],
         }
         _write(self.journal, value)
-        return value
+        return cast(dict[str, Any], value)
 
     def _load(self) -> dict[str, Any]:
         try:
@@ -91,7 +91,8 @@ class UpgradeEngine:
             operation = f"{self.operation_id}:{phase}"
             record = {"operation_id": operation, "phase": phase, "outcome": "started"}
             records.append(record)
-            value.update(status="running", phase=phase)
+            value["status"] = "running"
+            value["phase"] = phase
             _write(self.journal, value)
             try:
                 result = handlers[phase](operation, value) or {}
