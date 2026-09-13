@@ -53,6 +53,19 @@ class UpgradeEngineTests(unittest.TestCase):
                 engine.rollback(fail)
             self.assertEqual(engine._load()["status"], "safe-mode")
 
+    def test_commit_validate_and_reopen_require_safety_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            engine = UpgradeEngine("op-evidence", Path(directory) / "journal.json")
+            engine.plan()
+            handlers: dict[str, Handler] = {
+                phase: (lambda _operation, _state: {}) for phase in PHASES
+            }
+            with self.assertRaises(UpgradeError):
+                engine.apply(handlers)
+            journal = engine._load()
+            self.assertEqual(journal["phase"], "commit")
+            self.assertEqual(journal["status"], "failed")
+
     def test_missing_plan_and_duplicate_plan_fail_closed(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             journal = Path(directory) / "journal.json"

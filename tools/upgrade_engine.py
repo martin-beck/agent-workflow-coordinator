@@ -19,6 +19,16 @@ class UpgradeError(RuntimeError):
 
 
 Handler = Callable[[str, Mapping[str, Any]], Mapping[str, Any] | None]
+REQUIRED_EVIDENCE = {
+    "commit": ("quiesced", "backup_verified", "selector_verified"),
+    "validate": (
+        "runtime_validated",
+        "backend_roundtrip_valid",
+        "projections_valid",
+        "binding_valid",
+    ),
+    "reopen": ("validated", "barrier_held"),
+}
 
 
 def _write(path: Path, value: Mapping[str, Any]) -> None:
@@ -90,7 +100,9 @@ class UpgradeEngine:
                 raise UpgradeError(f"missing phase handler: {phase}")
             operation = f"{self.operation_id}:{phase}"
             record: dict[str, Any] = {
-                "operation_id": operation, "phase": phase, "outcome": "started"
+                "operation_id": operation,
+                "phase": phase,
+                "outcome": "started",
             }
             records.append(record)
             value["status"] = "running"
@@ -103,6 +115,13 @@ class UpgradeEngine:
                 value["status"] = "failed"
                 _write(self.journal, value)
                 raise UpgradeError(f"phase failed: {phase}") from error
+            required = REQUIRED_EVIDENCE.get(phase, ())
+            if any(result.get(field) is not True for field in required):
+                record["outcome"] = "failed"
+                record["error"] = "required evidence missing"
+                value["status"] = "failed"
+                _write(self.journal, value)
+                raise UpgradeError(f"phase evidence incomplete: {phase}")
             record["outcome"] = "success"
             record["result"] = dict(result)
             _write(self.journal, value)
