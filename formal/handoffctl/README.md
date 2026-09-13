@@ -157,3 +157,14 @@ uv run python -m unittest discover -s tests -p 'test_*.py'
 `verify.sh` downloads the official TLA+ 1.7.4 verifier into a temporary
 directory and verifies its pinned SHA-256 before execution. It does not retain
 the JAR or modify coordinator state.
+
+Each model is executed through `tools/tlc_runner.py`, never directly through
+TLC. The runner uses finite workers (`2`), JVM heap (`2048m`), CPU quota
+(`200%`), process limit (`64`), runtime deadline (`1800` seconds), and cgroup
+memory/swap limits (`3G`/`3G`). A canonical host-wide admission lock prevents
+multiple formal jobs from competing for memory while leaving coordinator worker
+processes and leases untouched. A durable per-job queue record survives caller
+death for stale-job recovery; completed, failed, and canceled outcomes retain
+the exact resource bounds and exit classification. `systemd-run` owns the
+process group (`KillMode=control-group`) and fails closed when cgroup
+containment is unavailable.
