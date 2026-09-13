@@ -103,7 +103,7 @@ jobs:
           TLC_CGROUP_MODE: portable
           # Hosted runners have less native headroom than production hosts.
           # Production/systemd retains the 2048m default.
-          TLC_HEAP: 768m
+          TLC_HEAP: 1280m
         run: formal/handoffctl/verify.sh
       - name: DCO certification
         if: github.event_name == 'pull_request'
