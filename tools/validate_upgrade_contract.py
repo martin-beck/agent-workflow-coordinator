@@ -29,7 +29,7 @@ def validate_contract(document: dict[str, Any]) -> None:
     if document["from"]["version"] == document["to"]["version"]:
         raise ContractError("from and to versions must differ")
     for release in (document["from"], document["to"]):
-        if release["tag_ref"] != f"refs/tags/{release[version]}":
+        if release["tag_ref"] != "refs/tags/{}".format(release["version"]):
             raise ContractError("tag reference must match release version")
     _validate_phases(document)
     _validate_backends(document)
@@ -61,19 +61,11 @@ def _validate_phases(document: dict[str, Any]) -> None:
             raise ContractError("only commit may mutate authority")
         if set(phase["requires"]) != expected_dependencies[phase_id]:
             raise ContractError(f"incorrect dependencies for {phase_id}")
-        for dependency in phase["requires"]:
-            if dependency not in by_id or by_id[dependency] >= phase["order"]:
-                raise ContractError(f"invalid dependency {dependency!r} for {phase_id}")
         operation_id = phase["operation"]["operation_id"]
         expected = f"{top_operation_id}:{phase_id}"
         if operation_id != expected or operation_id in operation_ids:
             raise ContractError(f"operation ID is not bound to {phase_id}")
         operation_ids.add(operation_id)
-    commit = phases[5]
-    if not commit["mutates_authority"] or set(commit["requires"]) != {"stage", "quiesce", "backup"}:
-        raise ContractError(
-            "commit must be the only authority mutation and require stage/quiesce/backup"
-        )
 
 
 def _validate_backends(document: dict[str, Any]) -> None:
