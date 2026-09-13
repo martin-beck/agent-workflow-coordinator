@@ -97,7 +97,10 @@ class TLCAdmissionTests(unittest.TestCase):
                 execute.return_value.returncode = 0
                 self.assertEqual(run(args), 0)
                 execute.assert_called_once()
-            self.assertEqual(list(queue.glob("*.json")), [])
+            self.assertEqual(list(queue.glob("*.job.json")), [])
+            outcomes = list(queue.glob("*.outcome.json"))
+            self.assertEqual(len(outcomes), 1)
+            self.assertEqual(json.loads(outcomes[0].read_text())["state"], "completed")
 
     def test_stale_queue_records_are_pruned(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
