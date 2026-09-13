@@ -159,7 +159,8 @@ directory and verifies its pinned SHA-256 before execution. It does not retain
 the JAR or modify coordinator state.
 
 Each model is executed through `tools/tlc_runner.py`, never directly through
-TLC. The runner uses finite workers (`2`), JVM heap (`2048m`), CPU quota
+TLC. The runner uses finite workers (`2`), JVM heap (`2048m` in production,
+`768m` in hosted portable CI), CPU quota
 (`200%`), process limit (`64`), runtime deadline (`1800` seconds), and cgroup
 memory/swap limits (`3G`/`3G`). A canonical host-wide admission lock prevents
 multiple formal jobs from competing for memory while leaving coordinator worker
