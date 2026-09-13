@@ -116,6 +116,61 @@ class TLCAdmissionTests(unittest.TestCase):
                 _prune_stale(Path(directory))
             self.assertFalse(record.exists())
 
+    def test_caller_cancel_persists_canceled_outcome(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            queue = Path(directory)
+            args = type(
+                "Args",
+                (),
+                {
+                    "queue": str(queue),
+                    "model": "Model.tla",
+                    "jar": "tla.jar",
+                    "config": "Model.cfg",
+                    "metadir": str(queue / "states"),
+                    "workers": 2,
+                    "heap": "64m",
+                    "memory_max": "1G",
+                    "swap_max": "1G",
+                    "cpu_quota": "200%",
+                    "tasks_max": 64,
+                    "timeout_seconds": 1800,
+                    "cgroup_mode": "off",
+                },
+            )()
+            with patch("tools.tlc_runner.subprocess.run", side_effect=KeyboardInterrupt):
+                with self.assertRaises(KeyboardInterrupt):
+                    run(args)
+            outcome = next(queue.glob("*.outcome.json"))
+            self.assertEqual(json.loads(outcome.read_text())["state"], "canceled")
+
+    def test_cgroup_rejection_persists_failed_outcome(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            queue = Path(directory)
+            args = type(
+                "Args",
+                (),
+                {
+                    "queue": str(queue),
+                    "model": "Model.tla",
+                    "jar": "tla.jar",
+                    "config": "Model.cfg",
+                    "metadir": str(queue / "states"),
+                    "workers": 2,
+                    "heap": "64m",
+                    "memory_max": "1G",
+                    "swap_max": "1G",
+                    "cpu_quota": "200%",
+                    "tasks_max": 64,
+                    "timeout_seconds": 1800,
+                    "cgroup_mode": "required",
+                },
+            )()
+            with patch("tools.tlc_runner.shutil.which", return_value=None):
+                self.assertEqual(run(args), 2)
+            outcome = next(queue.glob("*.outcome.json"))
+            self.assertEqual(json.loads(outcome.read_text())["state"], "failed")
+
 
 if __name__ == "__main__":
     unittest.main()
