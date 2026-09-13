@@ -5,6 +5,8 @@ name: Verify
     branches: [main]
   pull_request:
   workflow_dispatch:
+  schedule:
+    - cron: "17 3 * * 0"
 
 permissions:
   contents: read
@@ -46,9 +48,32 @@ jobs:
           uv run --directory quality-runtime --frozen python -m awq --root .. onboarding --format json
           uv run --directory quality-runtime --frozen python -m awq --root .. check --tier pr --format json
 
+  scope:
+    runs-on: ubuntu-24.04
+    outputs:
+      formal_changed: ${{ steps.scope.outputs.formal_changed }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - id: scope
+        shell: bash
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          if [[ "$EVENT" != "pull_request" ]] || git diff --name-only "$BASE...$HEAD" | grep -Eq "^(formal/|tools/tlc_runner.py|\\.github/workflows/verify\\.yml)"; then
+            echo "formal_changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "formal_changed=false" >> "$GITHUB_OUTPUT"
+          fi
+
   verify:
-    needs: awq
-    runs-on: ${{ fromJSON((github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && '["self-hosted","Linux","X64","agent-workflow-coordinator-ci"]' || '["ubuntu-24.04"]') }}
+    needs: [awq, scope]
+    if: ${{ github.event_name != 'pull_request' || needs.scope.outputs.formal_changed == 'true' }}
+    runs-on: [self-hosted, Linux, X64, agent-workflow-coordinator-ci]
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -104,7 +129,14 @@ jobs:
           # Hosted runners have less native headroom than production hosts.
           # Production/systemd retains the 2048m default.
           TLC_HEAP: 1280m
-        run: formal/handoffctl/verify.sh
+          TLC_ATTESTATION_PATH: ${{ runner.temp }}/full-exhaustive-attestation.json
+        run: formal/handoffctl/verify.sh --tier full-exhaustive
+      - name: Publish exact-head full attestation
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08
+        with:
+          name: handoffctl-full-exhaustive-${{ github.sha }}
+          path: ${{ runner.temp }}/full-exhaustive-attestation.json
+          if-no-files-found: error
       - name: DCO certification
         if: github.event_name == 'pull_request'
         env:
@@ -115,3 +147,57 @@ jobs:
             expected=$(git show -s --format='Signed-off-by: %an <%ae>' "$revision")
             git show -s --format=%B "$revision" | grep -Fx -- "$expected"
           done < <(git rev-list "$BASE..$HEAD")
+
+  smoke:
+    needs: [awq, scope]
+    if: ${{ github.event_name == 'pull_request' && needs.scope.outputs.formal_changed == 'false' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961
+        with:
+          distribution: temurin
+          java-version: "17"
+      - name: Portable smoke model (non-exhaustive)
+        env:
+          TLC_CGROUP_MODE: portable
+          TLC_HEAP: 512m
+          TLC_ATTESTATION_PATH: ${{ runner.temp }}/portable-smoke-attestation.json
+        run: formal/handoffctl/verify.sh --tier portable-smoke
+      - name: Publish non-exhaustive smoke attestation
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08
+        with:
+          name: handoffctl-portable-smoke-${{ github.sha }}
+          path: ${{ runner.temp }}/portable-smoke-attestation.json
+          if-no-files-found: error
+
+  weekly-full:
+    if: ${{ false }}
+    # The scheduled/manual full run is handled by the exact `verify` job above.
+    # Keep this retired job name out of the workflow rather than running a
+    # duplicate uncontained suite on a hosted Ubuntu runner.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961
+        with:
+          distribution: temurin
+          java-version: "17"
+      - name: Full exhaustive formal run
+        env:
+          TLC_CGROUP_MODE: required
+          TLC_HEAP: 2048m
+          TLC_ATTESTATION_PATH: ${{ runner.temp }}/full-exhaustive-attestation.json
+        run: formal/handoffctl/verify.sh --tier full-exhaustive
+      - name: Publish immutable full attestation
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08
+        with:
+          name: handoffctl-full-exhaustive-${{ github.sha }}
+          path: ${{ runner.temp }}/full-exhaustive-attestation.json
+          if-no-files-found: error

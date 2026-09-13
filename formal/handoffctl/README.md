@@ -158,6 +158,13 @@ uv run python -m unittest discover -s tests -p 'test_*.py'
 directory and verifies its pinned SHA-256 before execution. It does not retain
 the JAR or modify coordinator state.
 
+Formal tiers are explicit: `verify.sh --tier portable-smoke` runs one model
+and is non-exhaustive; it cannot produce or substitute for full evidence.
+`verify.sh --tier full-exhaustive` runs all six tracked models and is required
+on every formal-affecting PR at its exact head. The scheduled weekly full run
+is a monitoring and immutable-attestation signal; it never substitutes for
+the exact-head PR gate or authorizes release after a failed or stale run.
+
 Each model is executed through `tools/tlc_runner.py`, never directly through
 TLC. The runner uses finite workers (`2`), JVM heap (`2048m` in production,
 `1280m` in hosted portable CI), CPU quota

@@ -3,6 +3,13 @@
 # SPDX-License-Identifier: MIT
 set -euo pipefail
 
+if [[ "${1:-}" != "--tier" || ( "${2:-}" != "portable-smoke" && "${2:-}" != "full-exhaustive" ) || "$#" -ne 2 ]]; then
+    echo "usage: $0 --tier portable-smoke|full-exhaustive" >&2
+    exit 64
+fi
+readonly TIER="$2"
+readonly ATTESTATION="${TLC_ATTESTATION_PATH:-${TMPDIR:-/tmp}/handoffctl-${TIER}-attestation.json}"
+
 readonly TLA_VERSION=1.7.4
 readonly TLA_SHA256=936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88
 readonly SPEC_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
@@ -24,9 +31,16 @@ run_model() {
         --metadir "${TEMP_DIR}/${model}-states"
 }
 
-run_model HandoffctlBinding
-run_model HandoffctlLocks
-run_model HandoffctlRun
-run_model HandoffctlStorage
-run_model Handoffctl
-run_model HandoffctlRecovery
+if [[ "${TIER}" == "portable-smoke" ]]; then
+    # Smoke is deliberately non-exhaustive and never produces full evidence.
+    run_model HandoffctlBinding
+else
+    run_model HandoffctlBinding
+    run_model HandoffctlLocks
+    run_model HandoffctlRun
+    run_model HandoffctlStorage
+    run_model Handoffctl
+    run_model HandoffctlRecovery
+fi
+python3 "${SPEC_DIR}/attest.py" --tier "${TIER}" --output "${ATTESTATION}" --jar "${JAR}" \
+    --models $(if [[ "${TIER}" == "portable-smoke" ]]; then echo HandoffctlBinding; else echo HandoffctlBinding HandoffctlLocks HandoffctlRun HandoffctlStorage Handoffctl HandoffctlRecovery; fi)

@@ -50,9 +50,42 @@ def _prune_stale(queue: Path, max_age: int = 86400) -> None:
     for item in queue.glob("*.job.json"):
         try:
             if now - item.stat().st_mtime > max_age:
+                record = json.loads(item.read_text(encoding="utf-8"))
+                if record.get("state") != "queued":
+                    # A running record may still have a live process or an
+                    # externally completed outcome. Retain it until verified
+                    # reconciliation can fence and classify that operation.
+                    continue
+                record.update(
+                    {
+                        "ended": now,
+                        "state": "orphaned",
+                        "error": "stale queued job; caller did not complete admission",
+                    }
+                )
+                outcome = item.with_name(item.name.replace(".job.json", ".outcome.json"))
+                if not outcome.exists():
+                    outcome.write_text(json.dumps(record, sort_keys=True) + "\n")
                 item.unlink()
         except FileNotFoundError:
             continue
+        except (OSError, ValueError, TypeError):
+            # Corrupt stale records are not executable work; preserve a
+            # durable failure marker and remove only the stale queue entry.
+            outcome = item.with_name(item.name.replace(".job.json", ".outcome.json"))
+            if not outcome.exists():
+                outcome.write_text(
+                    json.dumps(
+                        {
+                            "state": "orphaned",
+                            "ended": now,
+                            "error": "stale queue record was unreadable",
+                        },
+                        sort_keys=True,
+                    )
+                    + "\n"
+                )
+            item.unlink(missing_ok=True)
 
 
 def build_command(

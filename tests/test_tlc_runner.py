@@ -240,6 +240,31 @@ class TLCAdmissionTests(unittest.TestCase):
             with patch("tools.tlc_runner.time.time", return_value=record.stat().st_mtime + 90000):
                 _prune_stale(Path(directory))
             self.assertFalse(record.exists())
+            outcome = next(Path(directory).glob("*.outcome.json"))
+            self.assertEqual(json.loads(outcome.read_text())["state"], "orphaned")
+
+    def test_corrupt_stale_queue_record_is_durable_orphan(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            queue = Path(directory)
+            record = queue / "corrupt.job.json"
+            record.write_text("not-json")
+            record.touch()
+            with patch("tools.tlc_runner.time.time", return_value=record.stat().st_mtime + 90000):
+                _prune_stale(queue)
+            self.assertFalse(record.exists())
+            outcome = queue / "corrupt.outcome.json"
+            self.assertEqual(json.loads(outcome.read_text())["state"], "orphaned")
+
+    def test_stale_running_record_is_retained_for_reconciliation(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            queue = Path(directory)
+            record = queue / "running.job.json"
+            record.write_text(json.dumps({"state": "running", "pid": 1234}))
+            record.touch()
+            with patch("tools.tlc_runner.time.time", return_value=record.stat().st_mtime + 90000):
+                _prune_stale(queue)
+            self.assertTrue(record.exists())
+            self.assertFalse((queue / "running.outcome.json").exists())
 
     def test_caller_cancel_persists_canceled_outcome(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -268,7 +293,7 @@ class TLCAdmissionTests(unittest.TestCase):
                 self.assertRaises(KeyboardInterrupt),
             ):
                 run(args)
-            outcome = next(queue.glob("*.outcome.json"))
+            outcome = next(Path(directory).glob("*.outcome.json"))
             self.assertEqual(json.loads(outcome.read_text())["state"], "canceled")
 
     def test_cgroup_rejection_persists_failed_outcome(self) -> None:
@@ -295,7 +320,7 @@ class TLCAdmissionTests(unittest.TestCase):
             )()
             with patch("tools.tlc_runner.shutil.which", return_value=None):
                 self.assertEqual(run(args), 2)
-            outcome = next(queue.glob("*.outcome.json"))
+            outcome = next(Path(directory).glob("*.outcome.json"))
             self.assertEqual(json.loads(outcome.read_text())["state"], "failed")
 
 

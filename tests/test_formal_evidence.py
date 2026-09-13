@@ -7,9 +7,12 @@ from __future__ import annotations
 
 import json
 import re
+import runpy
+import sys
 import unittest
 from pathlib import Path
 from typing import Any
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 FORMAL_ROOT = ROOT / "formal" / "handoffctl"
@@ -76,7 +79,7 @@ class FormalEvidenceTests(unittest.TestCase):
         configs = sorted(FORMAL_ROOT.glob("*.cfg"))
         models = {config.stem for config in configs}
         runner = (FORMAL_ROOT / "verify.sh").read_text(encoding="utf-8")
-        invoked = set(re.findall(r"^run_model\s+(\w+)\s*$", runner, re.MULTILINE))
+        invoked = set(re.findall(r"^\s*run_model\s+(\w+)\s*$", runner, re.MULTILINE))
 
         self.assertEqual(models, invoked)
         bounds = load_evidence()["bounds"]
@@ -94,6 +97,44 @@ class FormalEvidenceTests(unittest.TestCase):
         ):
             self.assertIsInstance(bounds[name], int)
             self.assertGreater(bounds[name], 0)
+
+    def test_formal_tiers_require_explicit_non_ambiguous_selection(self) -> None:
+        verify = (FORMAL_ROOT / "verify.sh").read_text(encoding="utf-8")
+        self.assertIn("--tier", verify)
+        self.assertIn("portable-smoke", verify)
+        self.assertIn("full-exhaustive", verify)
+        manifest = json.loads((ROOT / "formal" / "tier-evidence.json").read_text())
+        self.assertFalse(manifest["profiles"]["portable-smoke"]["exhaustive"])
+        self.assertTrue(manifest["profiles"]["full-exhaustive"]["exhaustive"])
+        self.assertNotEqual(
+            manifest["profiles"]["portable-smoke"]["models"],
+            manifest["profiles"]["full-exhaustive"]["models"],
+        )
+        self.assertEqual(6, len(manifest["profiles"]["full-exhaustive"]["models"]))
+
+    def test_attestation_rejects_failed_formal_outcomes(self) -> None:
+        script = ROOT / "formal" / "handoffctl" / "attest.py"
+        with (
+            mock.patch.object(
+                sys,
+                "argv",
+                [
+                    str(script),
+                    "--tier",
+                    "portable-smoke",
+                    "--status",
+                    "oom",
+                    "--output",
+                    str(ROOT / "formal" / "_unused.json"),
+                    "--jar",
+                    str(script),
+                    "--models",
+                    "HandoffctlBinding",
+                ],
+            ),
+            self.assertRaises(SystemExit),
+        ):
+            runpy.run_path(str(script), run_name="__main__")
 
 
 if __name__ == "__main__":
