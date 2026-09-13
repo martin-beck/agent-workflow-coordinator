@@ -1,1 +1,124 @@
-{"$schema":"https://json-schema.org/draft/2020-12/schema","$id":"https://github.com/martin-beck/agent-workflow-coordinator/schema/upgrade-contract.schema.json","additionalProperties":false,"type":"object","required":["schema_version","operation_id","from","to","preconditions","phases","backends","rollback"],"properties":{"schema_version":{"const":1},"operation_id":{"pattern":"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$","type":"string"},"from":{"$ref":"#/$defs/release"},"to":{"$ref":"#/$defs/release"},"preconditions":{"type":"array","items":{"$ref":"#/$defs/check"},"minItems":1,"uniqueItems":true},"phases":{"type":"array","items":{"$ref":"#/$defs/phase"},"minItems":8},"backends":{"type":"array","items":{"enum":["git","sqlite"]},"minItems":1,"uniqueItems":true},"rollback":{"$ref":"#/$defs/rollback"}},"$defs":{"release":{"additionalProperties":false,"type":"object","required":["version","source_commit"],"properties":{"version":{"pattern":"^v[0-9]+\\.[0-9]+\\.[0-9]+$","type":"string"},"source_commit":{"pattern":"^[0-9a-f]{40}$","type":"string"}}},"check":{"additionalProperties":false,"type":"object","required":["id","effect","failure_mode"],"properties":{"id":{"pattern":"^[A-Z0-9][A-Z0-9._:-]{1,127}$","type":"string"},"effect":{"enum":["read-only","quiesce","backup","replace","validate","reopen"]},"failure_mode":{"enum":["stop-before-mutation","restore-known-good","safe-mode"]}}},"phase":{"additionalProperties":false,"type":"object","required":["id","order","mutates_authority","requires","on_failure"],"properties":{"id":{"enum":["discover","preflight","quiesce","backup","stage","commit","validate","reopen"]},"order":{"minimum":1,"type":"integer"},"mutates_authority":{"type":"boolean"},"requires":{"type":"array","items":{"type":"string"},"uniqueItems":true},"on_failure":{"enum":["stop-before-mutation","restore-known-good","safe-mode"]}}},"rollback":{"additionalProperties":false,"type":"object","required":["required","backup_integrity","equivalence","reopen_gate","ambiguous_external_result"],"properties":{"required":{"const":true},"backup_integrity":{"enum":["hash-and-size","git-object-and-ref","sqlite-integrity-and-backup-api"]},"equivalence":{"enum":["authority-compatible-round-trip"]},"reopen_gate":{"const":"validate-before-reopen"},"ambiguous_external_result":{"enum":["persist-operation-id-and-reconcile","safe-mode"]}}}}}
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/martin-beck/agent-workflow-coordinator/schema/upgrade-contract.schema.json",
+  "additionalProperties": false,
+  "type": "object",
+  "required": ["schema_version", "operation_id", "from", "to", "preconditions", "phases", "backend_contracts", "rollback"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "operation_id": {"pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$", "type": "string"},
+    "from": {"$ref": "#/$defs/release"},
+    "to": {"$ref": "#/$defs/release"},
+    "preconditions": {"type": "array", "items": {"$ref": "#/$defs/check"}, "minItems": 1, "uniqueItems": true},
+    "phases": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/phase"},
+      "minItems": 8,
+      "maxItems": 8,
+      "uniqueItems": true
+    },
+    "backend_contracts": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/backend"},
+      "minItems": 1,
+      "uniqueItems": true
+    },
+    "rollback": {"$ref": "#/$defs/rollback"}
+  },
+  "allOf": [
+    {"contains": {"properties": {"phases": {"contains": {"properties": {"id": {"const": "discover"}}}}}}},
+    {"properties": {"phases": {"contains": {"properties": {"id": {"const": "preflight"}}}}}},
+    {"properties": {"phases": {"contains": {"properties": {"id": {"const": "quiesce"}}}}}},
+    {"properties": {"phases": {"contains": {"properties": {"id": {"const": "backup"}}}}}},
+    {"properties": {"phases": {"contains": {"properties": {"id": {"const": "stage"}}}}}},
+    {"properties": {"phases": {"contains": {"properties": {"id": {"const": "commit"}}}}}},
+    {"properties": {"phases": {"contains": {"properties": {"id": {"const": "validate"}}}}}},
+    {"properties": {"phases": {"contains": {"properties": {"id": {"const": "reopen"}}}}}}
+  ],
+  "$defs": {
+    "release": {
+      "additionalProperties": false,
+      "type": "object",
+      "required": ["version", "source_commit", "tag_ref", "tag_object", "signature_sha256", "trust_policy_sha256", "vendor_manifest_sha256"],
+      "properties": {
+        "version": {"pattern": "^v[0-9]+\\.[0-9]+\\.[0-9]+$", "type": "string"},
+        "source_commit": {"pattern": "^[0-9a-f]{40}$", "type": "string"},
+        "tag_ref": {"pattern": "^refs/tags/v[0-9]+\\.[0-9]+\\.[0-9]+$", "type": "string"},
+        "tag_object": {"pattern": "^[0-9a-f]{40}$", "type": "string"},
+        "signature_sha256": {"pattern": "^[0-9a-f]{64}$", "type": "string"},
+        "trust_policy_sha256": {"pattern": "^[0-9a-f]{64}$", "type": "string"},
+        "vendor_manifest_sha256": {"pattern": "^[0-9a-f]{64}$", "type": "string"}
+      }
+    },
+    "check": {
+      "additionalProperties": false,
+      "type": "object",
+      "required": ["id", "effect", "failure_mode", "preconditions", "postconditions", "evidence"],
+      "properties": {
+        "id": {"pattern": "^[A-Z0-9][A-Z0-9._:-]{1,127}$", "type": "string"},
+        "effect": {"enum": ["read-only", "quiesce", "backup", "replace", "validate", "reopen"]},
+        "failure_mode": {"enum": ["stop-before-mutation", "restore-known-good", "safe-mode"]},
+        "preconditions": {"type": "array", "items": {"type": "string"}, "minItems": 1, "uniqueItems": true},
+        "postconditions": {"type": "array", "items": {"type": "string"}, "minItems": 1, "uniqueItems": true},
+        "evidence": {"type": "array", "items": {"type": "string"}, "minItems": 1, "uniqueItems": true}
+      }
+    },
+    "phase": {
+      "additionalProperties": false,
+      "type": "object",
+      "required": ["id", "order", "mutates_authority", "requires", "on_failure", "operation"],
+      "properties": {
+        "id": {"enum": ["discover", "preflight", "quiesce", "backup", "stage", "commit", "validate", "reopen"]},
+        "order": {"minimum": 1, "maximum": 8, "type": "integer"},
+        "mutates_authority": {"type": "boolean"},
+        "requires": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+        "on_failure": {"enum": ["stop-before-mutation", "restore-known-good", "safe-mode"]},
+        "operation": {"$ref": "#/$defs/operation"}
+      }
+    },
+    "operation": {
+      "additionalProperties": false,
+      "type": "object",
+      "required": ["timeout_seconds", "resources", "preconditions", "postconditions", "evidence", "durable_record"],
+      "properties": {
+        "timeout_seconds": {"minimum": 1, "maximum": 86400, "type": "integer"},
+        "resources": {"type": "array", "items": {"type": "string"}, "minItems": 1, "uniqueItems": true},
+        "preconditions": {"type": "array", "items": {"type": "string"}, "minItems": 1, "uniqueItems": true},
+        "postconditions": {"type": "array", "items": {"type": "string"}, "minItems": 1, "uniqueItems": true},
+        "evidence": {"type": "array", "items": {"type": "string"}, "minItems": 1, "uniqueItems": true},
+        "durable_record": {"enum": ["operation-id-and-outcome", "safe-mode-record"]}
+      }
+    },
+    "backend": {
+      "additionalProperties": false,
+      "type": "object",
+      "required": ["backend", "authority", "backup", "restore", "selector", "projections", "equivalence"],
+      "properties": {
+        "backend": {"enum": ["git", "sqlite"]},
+        "authority": {"type": "array", "items": {"type": "string"}, "minItems": 1, "uniqueItems": true},
+        "backup": {"type": "array", "items": {"type": "string"}, "minItems": 1, "uniqueItems": true},
+        "restore": {"type": "array", "items": {"type": "string"}, "minItems": 1, "uniqueItems": true},
+        "selector": {"type": "array", "items": {"type": "string"}, "minItems": 1, "uniqueItems": true},
+        "projections": {"type": "array", "items": {"type": "string"}, "minItems": 1, "uniqueItems": true},
+        "equivalence": {"const": "authority-compatible-round-trip"},
+        "wal": {"type": "array", "items": {"type": "string"}, "minItems": 1, "uniqueItems": true}
+      },
+      "allOf": [
+        {"if": {"properties": {"backend": {"const": "sqlite"}}}, "then": {"required": ["wal"]}},
+        {"if": {"properties": {"backend": {"const": "git"}}}, "then": {"not": {"required": ["wal"]}}}
+      ]
+    },
+    "rollback": {
+      "additionalProperties": false,
+      "type": "object",
+      "required": ["required", "backup_integrity", "equivalence", "reopen_gate", "ambiguous_external_result"],
+      "properties": {
+        "required": {"const": true},
+        "backup_integrity": {"enum": ["hash-and-size", "git-object-and-ref", "sqlite-integrity-and-backup-api"]},
+        "equivalence": {"const": "authority-compatible-round-trip"},
+        "reopen_gate": {"const": "validate-before-reopen"},
+        "ambiguous_external_result": {"enum": ["persist-operation-id-and-reconcile", "safe-mode"]}
+      }
+    }
+  }
+}
