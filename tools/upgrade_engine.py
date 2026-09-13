@@ -114,11 +114,18 @@ def _write(path: Path, value: Mapping[str, Any]) -> None:
 class UpgradeEngine:
     """Execute exactly eight ordered phases with durable outcomes."""
 
-    def __init__(self, operation_id: str, journal: Path, context: Mapping[str, object]) -> None:
+    def __init__(
+        self,
+        operation_id: str,
+        journal: Path,
+        context: Mapping[str, object],
+        lock_path: Path | None = None,
+    ) -> None:
         if not operation_id or ":" in operation_id:
             raise UpgradeError("invalid operation identity")
         self.operation_id = operation_id
         self.journal = journal
+        self.lock_path = lock_path or journal.parent / ".upgrade-engine.lock"
         supplied = dict(context)
         if set(supplied) != set(CONTEXT_FIELDS) or supplied.get("operation_id") != operation_id:
             raise UpgradeError("complete bound phase context is required")
@@ -146,7 +153,7 @@ class UpgradeEngine:
         """Serialize journal decisions and fail closed if locking is unavailable."""
         if fcntl is None:
             raise UpgradeError("upgrade lock is unavailable")
-        lock = self.journal.with_name(f".{self.journal.name}.lock")
+        lock = self.lock_path
         lock.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         with lock.open("a+") as stream:
             try:
@@ -241,8 +248,10 @@ class UpgradeEngine:
             raise UpgradeError("planned journal contains records")
         if status == "planned" and value.get("phase") is not None:
             raise UpgradeError("planned journal has an active phase")
-        if status == "running" and (not phase_outcomes or phase_outcomes[-1] != "started"):
-            raise UpgradeError("running journal is not at a started phase")
+        if status == "running" and (
+            not phase_outcomes or phase_outcomes[-1] not in {"started", "success"}
+        ):
+            raise UpgradeError("running journal is not recoverable")
         if status == "running" and value.get("phase") != PHASES[len(phase_outcomes) - 1]:
             raise UpgradeError("running journal phase is inconsistent")
         if status in {"failed", "safe-mode"} and not phase_outcomes:
@@ -259,7 +268,7 @@ class UpgradeEngine:
         value = self._load()
         if value["status"] == "completed":
             return value
-        if value["status"] in {"failed", "running", "safe-mode", "rolled-back"}:
+        if value["status"] in {"failed", "safe-mode", "rolled-back"}:
             raise UpgradeError("journal requires explicit recovery before apply")
         records: list[dict[str, Any]] = value["records"]
         phase_records = [r.get("phase") for r in records if "phase" in r]
@@ -268,6 +277,8 @@ class UpgradeEngine:
         ):
             raise UpgradeError("upgrade journal phase ordering is invalid")
         completed = {r["phase"] for r in records if r.get("outcome") == "success" and "phase" in r}
+        if value["status"] == "running" and records and records[-1].get("outcome") == "started":
+            raise UpgradeError("started phase requires explicit recovery")
         for phase in PHASES:
             if phase in completed:
                 continue
@@ -338,6 +349,8 @@ class UpgradeEngine:
         value = self._load()
         if value["status"] not in {"failed", "running", "safe-mode"}:
             raise UpgradeError("rollback requires failed, running, or safe-mode operation")
+        if any(record.get("phase") == "rollback" for record in value["records"]):
+            raise UpgradeError("rollback outcome requires explicit reconciliation")
         operation = f"{self.operation_id}:rollback"
         record: dict[str, Any] = {
             "operation_id": operation,
@@ -345,6 +358,7 @@ class UpgradeEngine:
             "outcome": "started",
         }
         value["records"].append(record)
+        _write(self.journal, value)
         try:
             result = dict(handler(operation, cast(Mapping[str, Any], _freeze(value))) or {})
             required = ("restored_verified", "runtime_validated", "backend_roundtrip_valid")
