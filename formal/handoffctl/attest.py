@@ -23,12 +23,24 @@ def main() -> int:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--jar", type=Path, required=True)
     parser.add_argument("--models", nargs="+", required=True)
+    parser.add_argument("--manifest", type=Path, required=True)
     parser.add_argument(
         "--status", choices=("success", "oom", "timeout", "canceled", "incomplete"), default="success"
     )
     args = parser.parse_args()
     if args.status != "success":
         parser.error("failed or incomplete formal runs cannot produce a success attestation")
+    boundary = os.environ.get("TLC_CGROUP_MODE", "required")
+    if args.tier == "full-exhaustive" and boundary != "required":
+        parser.error("full-exhaustive attestation requires TLC_CGROUP_MODE=required")
+    if not args.manifest.exists():
+        parser.error("attestation requires the runner-produced outcome manifest")
+    outcomes = {}
+    for line in args.manifest.read_text(encoding="utf-8").splitlines():
+        model, result = line.split(" ", 1)
+        outcomes[model] = result
+    if set(outcomes) != set(args.models) or any(result != "success" for result in outcomes.values()):
+        parser.error("runner outcome manifest is incomplete or non-success")
     if args.tier == "portable-smoke" and len(args.models) != 1:
         parser.error("portable-smoke attestation must contain exactly one model")
     if args.tier == "full-exhaustive" and len(args.models) != 6:
@@ -36,6 +48,15 @@ def main() -> int:
     root = Path(__file__).resolve().parents[2]
     configs = {model: digest(root / "formal" / "handoffctl" / f"{model}.cfg") for model in args.models}
     models = {model: digest(root / "formal" / "handoffctl" / f"{model}.tla") for model in args.models}
+    inputs = {
+        name: digest(root / name)
+        for name in (
+            "formal/handoffctl/verify.sh",
+            "tools/tlc_runner.py",
+            "formal/handoffctl/attest.py",
+            "formal/tier-evidence.json",
+        )
+    }
     commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
     tree = subprocess.check_output(["git", "rev-parse", "HEAD^{tree}"], cwd=root, text=True).strip()
     formal_hash = hashlib.sha256(
@@ -48,9 +69,11 @@ def main() -> int:
         "commit": commit,
         "tree": tree,
         "formal_input_sha256": formal_hash,
+        "formal_inputs": inputs,
         "models": models,
         "configs": configs,
         "tool_jar_sha256": digest(args.jar),
+        "containment_mode": boundary,
         "resource_bounds": {
             "workers": 2,
             "heap": os.environ.get("TLC_HEAP", "2048m"),
@@ -58,7 +81,7 @@ def main() -> int:
             "swap_max": "3G",
             "admission": "portable-or-systemd-fail-closed",
         },
-        "outcomes": {model: "success" for model in args.models},
+        "outcomes": outcomes,
         "state_counts": {model: None for model in args.models},
         "status": "success",
         "timestamp_epoch": int(time.time()),

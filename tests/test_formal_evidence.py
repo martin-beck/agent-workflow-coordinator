@@ -114,6 +114,8 @@ class FormalEvidenceTests(unittest.TestCase):
         attest = (ROOT / "formal" / "handoffctl" / "attest.py").read_text(encoding="utf-8")
         self.assertIn("state_counts", attest)
         self.assertIn("not evidence of exhaustive exploration", attest)
+        self.assertIn("requires TLC_CGROUP_MODE=required", attest)
+        self.assertIn("runner-produced outcome manifest", attest)
 
     def test_attestation_rejects_failed_formal_outcomes(self) -> None:
         script = ROOT / "formal" / "handoffctl" / "attest.py"

@@ -9,6 +9,8 @@ if [[ "${1:-}" != "--tier" || ( "${2:-}" != "portable-smoke" && "${2:-}" != "ful
 fi
 readonly TIER="$2"
 readonly ATTESTATION="${TLC_ATTESTATION_PATH:-${TMPDIR:-/tmp}/handoffctl-${TIER}-attestation.json}"
+readonly MANIFEST="${TEMP_DIR}/outcomes.manifest"
+: > "${MANIFEST}"
 
 readonly TLA_VERSION=1.7.4
 readonly TLA_SHA256=936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88
@@ -29,6 +31,7 @@ run_model() {
         --model "${SPEC_DIR}/${model}.tla" \
         --config "${SPEC_DIR}/${model}.cfg" \
         --metadir "${TEMP_DIR}/${model}-states"
+    printf "%s success\\n" "${model}" >> "${MANIFEST}"
 }
 
 if [[ "${TIER}" == "portable-smoke" ]]; then
@@ -42,5 +45,5 @@ else
     run_model Handoffctl
     run_model HandoffctlRecovery
 fi
-python3 "${SPEC_DIR}/attest.py" --tier "${TIER}" --output "${ATTESTATION}" --jar "${JAR}" \
+python3 "${SPEC_DIR}/attest.py" --tier "${TIER}" --output "${ATTESTATION}" --jar "${JAR}" --manifest "${MANIFEST}" \
     --models $(if [[ "${TIER}" == "portable-smoke" ]]; then echo HandoffctlBinding; else echo HandoffctlBinding HandoffctlLocks HandoffctlRun HandoffctlStorage Handoffctl HandoffctlRecovery; fi)
