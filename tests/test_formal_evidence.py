@@ -57,7 +57,6 @@ class FormalEvidenceTests(unittest.TestCase):
                 "evidence_class",
                 "limitations",
                 "non_claims",
-                "resource_bounds",
                 "schema_version",
                 "scope",
             },
@@ -80,7 +79,20 @@ class FormalEvidenceTests(unittest.TestCase):
         invoked = set(re.findall(r"^run_model\s+(\w+)\s*$", runner, re.MULTILINE))
 
         self.assertEqual(models, invoked)
-        self.assertEqual(configured_bounds(configs), load_evidence()["bounds"])
+        bounds = load_evidence()["bounds"]
+        model_bounds = configured_bounds(configs)
+        self.assertEqual(model_bounds, {name: bounds[name] for name in model_bounds})
+        for name in (
+            "tlc_workers",
+            "jvm_heap_mb",
+            "memory_max_mb",
+            "swap_max_mb",
+            "cpu_quota_percent",
+            "tasks_max",
+            "runtime_max_seconds",
+        ):
+            self.assertIsInstance(bounds[name], int)
+            self.assertGreater(bounds[name], 0)
 
 
 if __name__ == "__main__":

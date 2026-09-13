@@ -5,7 +5,9 @@
     "SQLite processes use separate connections to one database on a supported local filesystem.",
     "A continuously runnable process is eventually scheduled and a lock holder eventually exits its critical section.",
     "Successful local commits and SQLite transactions have the durability described by the coordinator contract.",
-    "The pinned TLC verifier is downloaded successfully and matches its recorded SHA-256 digest."
+    "The pinned TLC verifier is downloaded successfully and matches its recorded SHA-256 digest.",
+    "Every TLC invocation uses two workers, a 2048 MiB JVM heap, 3072 MiB memory and swap limits, 200 percent CPU quota, 64 tasks, and a 1800 second runtime bound.",
+    "Formal jobs use one canonical host-wide flock admission lock and durable per-job queue and outcome records; admission does not stop coordinator workers."
   ],
   "bounds": {
     "max_actors": 2,
@@ -14,7 +16,14 @@
     "max_revision": 2,
     "max_tasks": 2,
     "max_worktrees": 2,
-    "model_count": 6
+    "model_count": 6,
+    "tlc_workers": 2,
+    "jvm_heap_mb": 2048,
+    "memory_max_mb": 3072,
+    "swap_max_mb": 3072,
+    "cpu_quota_percent": 200,
+    "tasks_max": 64,
+    "runtime_max_seconds": 1800
   },
   "correspondence": "not-proven",
   "evidence_class": "bounded-model",
@@ -22,7 +31,8 @@
     "TLC explores only the finite constants declared in the six tracked model configurations.",
     "The evidence applies only to the specifications, configurations, invariants, and temporal properties executed by formal/handoffctl/verify.sh.",
     "Implementation tests provide separate correspondence evidence but do not turn bounded model checking into an implementation proof.",
-    "Separate clones, network filesystems, non-cooperating writers, and failures outside the documented recovery boundary are excluded."
+    "Separate clones, network filesystems, non-cooperating writers, and failures outside the documented recovery boundary are excluded.",
+    "The cgroup resource boundary requires systemd-run user scopes; if unavailable, the runner fails closed rather than executing an unbounded model."
   ],
   "non_claims": [
     "This evidence does not prove the Python implementation correct.",
@@ -30,15 +40,6 @@
     "This evidence does not prove correctness of arbitrary commands executed through handoffctl run.",
     "This evidence does not establish atomicity across power loss, storage loss, or arbitrary process termination."
   ],
-  "resource_bounds": {
-    "workers": 2,
-    "jvm_heap": "2048m",
-    "memory_max": "3G",
-    "swap_max": "3G",
-    "cpu_quota": "200%",
-    "tasks_max": 64,
-    "admission": "host-wide-flock-and-durable-job-record"
-  },
   "schema_version": 1,
   "scope": "handoffctl-coordination-models"
 }
