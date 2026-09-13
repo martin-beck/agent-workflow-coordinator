@@ -138,9 +138,11 @@ class TLCAdmissionTests(unittest.TestCase):
                     "cgroup_mode": "off",
                 },
             )()
-            with patch("tools.tlc_runner.subprocess.run", side_effect=KeyboardInterrupt):
-                with self.assertRaises(KeyboardInterrupt):
-                    run(args)
+            with (
+                patch("tools.tlc_runner.subprocess.run", side_effect=KeyboardInterrupt),
+                self.assertRaises(KeyboardInterrupt),
+            ):
+                run(args)
             outcome = next(queue.glob("*.outcome.json"))
             self.assertEqual(json.loads(outcome.read_text())["state"], "canceled")
 
