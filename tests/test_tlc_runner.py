@@ -82,6 +82,7 @@ class TLCAdmissionTests(unittest.TestCase):
                 (),
                 {
                     "queue": str(queue),
+                    "lock": str(queue / "host.lock"),
                     "model": "Model.tla",
                     "jar": "tla.jar",
                     "config": "Model.cfg",
@@ -104,7 +105,7 @@ class TLCAdmissionTests(unittest.TestCase):
 
     def test_stale_queue_records_are_pruned(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            record = Path(directory) / "stale.json"
+            record = Path(directory) / "stale.job.json"
             record.write_text(json.dumps({"state": "queued"}))
             record.touch()
             with patch("tools.tlc_runner.time.time", return_value=record.stat().st_mtime + 90000):
