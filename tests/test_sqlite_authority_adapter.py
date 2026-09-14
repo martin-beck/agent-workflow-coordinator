@@ -10,6 +10,7 @@ import unittest
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from pathlib import Path
+from unittest.mock import patch
 
 from tools.scoped_backend_adapter import ScopedBackendAdapter
 from tools.sqlite_authority_adapter import SQLiteAuthorityAdapter, SQLiteAuthorityError
@@ -67,6 +68,7 @@ class SQLiteAuthorityAdapterTests(unittest.TestCase):
         self.assertFalse(result["mutates_authority"])
         with self.assertRaisesRegex(SQLiteAuthorityError, "not implemented"):
             self.adapter.execute("commit", CONTEXT)
+        self.assertFalse(self.adapter.verify_rollback_context(CONTEXT)["rollback_context_verified"])
 
     def test_scoped_wrapper_guards_disabled_execute(self) -> None:
         adapter = ScopedBackendAdapter(self.adapter, Scope())
@@ -80,6 +82,37 @@ class SQLiteAuthorityAdapterTests(unittest.TestCase):
             self.adapter.snapshot("discover", CONTEXT)
         with self.assertRaisesRegex(SQLiteAuthorityError, "mismatched"):
             self.adapter.snapshot("discover", {**CONTEXT, "backend": "git"})
+
+    def test_unavailable_and_unsafe_descriptors_fail_closed(self) -> None:
+        with self.assertRaisesRegex(SQLiteAuthorityError, "unavailable"):
+            SQLiteAuthorityAdapter(self.root / "missing.sqlite")
+        self.authority.chmod(0o644)
+        with self.assertRaisesRegex(SQLiteAuthorityError, "unsafe"):
+            SQLiteAuthorityAdapter(self.authority)
+
+    def test_non_ok_integrity_result_fails_closed(self) -> None:
+        class Cursor:
+            def __init__(self, value: object) -> None:
+                self.value = value
+
+            def fetchone(self) -> tuple[object]:
+                return (self.value,)
+
+            def __iter__(self) -> Iterator[object]:
+                return iter(())
+
+        class Connection:
+            def execute(self, statement: str) -> Cursor:
+                return Cursor("not-ok" if "integrity" in statement else None)
+
+            def close(self) -> None:
+                pass
+
+        with (
+            patch("tools.sqlite_authority_adapter.sqlite3.connect", return_value=Connection()),
+            self.assertRaisesRegex(SQLiteAuthorityError, "not clean"),
+        ):
+            self.adapter.snapshot("discover", CONTEXT)
 
 
 if __name__ == "__main__":
