@@ -80,6 +80,22 @@ class RollbackControlStoreTests(unittest.TestCase):
             with self.assertRaises(ControlStoreError):
                 store.cas(2, {**releasing, "status": "held", "revision": 3})
 
+    def test_ambiguous_requires_explicit_newer_reconciliation(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            store = SQLiteRollbackControlStore(Path(directory) / "control.sqlite", PROJECT)
+            ambiguous = store.cas(0, RECORD)
+            ambiguous = store.cas(1, {**ambiguous, "status": "ambiguous", "revision": 2})
+            with self.assertRaises(ControlStoreError):
+                store.reconcile_ambiguous("op-1", {**RECORD, "operation_id": "op-2"})
+            replacement = {
+                **RECORD,
+                "operation_id": "op-2",
+                "state_revision": 2,
+                "fencing_token": "fence-2",
+            }
+            recovered = store.reconcile_ambiguous("op-1", replacement)
+            self.assertEqual("held", recovered["status"])
+
     def test_schema_corruption_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "control.sqlite"

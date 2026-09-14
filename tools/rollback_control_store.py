@@ -286,6 +286,23 @@ class SQLiteRollbackControlStore:
         releasing = self.cas(cast(int, current["revision"]), {**current, "status": "releasing"})
         return self.cas(cast(int, releasing["revision"]), {**releasing, "status": "released"})
 
+    def reconcile_ambiguous(
+        self, operation_id: str, replacement: Mapping[str, object]
+    ) -> dict[str, object]:
+        """Start a new fenced operation only after explicit ambiguous recovery."""
+        previous = self.snapshot(operation_id)
+        if previous["status"] != "ambiguous":
+            raise ControlStoreError("only ambiguous barriers require reconciliation")
+        candidate = _validate(replacement)
+        if candidate["operation_id"] == operation_id or candidate["status"] != "held":
+            raise ControlStoreError("ambiguous reconciliation requires a new held operation")
+        if (
+            candidate["project_id"] != previous["project_id"]
+            or cast(int, candidate["state_revision"]) <= cast(int, previous["state_revision"])
+        ):
+            raise ControlStoreError("ambiguous reconciliation requires a newer project fence")
+        return self.cas(0, candidate)
+
     def _cas_connection(  # noqa: C901
         self, connection: sqlite3.Connection, expected_revision: int, supplied: dict[str, object]
     ) -> dict[str, object]:
