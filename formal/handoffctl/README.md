@@ -157,3 +157,24 @@ uv run python -m unittest discover -s tests -p 'test_*.py'
 `verify.sh` downloads the official TLA+ 1.7.4 verifier into a temporary
 directory and verifies its pinned SHA-256 before execution. It does not retain
 the JAR or modify coordinator state.
+
+Formal tiers are explicit: `verify.sh --tier portable-smoke` runs one model
+and is non-exhaustive; it cannot produce publication or full evidence.
+`verify.sh --tier pr-publication` checks every invariant family. Five models
+use their full configurations; the general lifecycle model uses the
+one-process `HandoffctlPR.cfg`, while the separate lock and recovery models
+retain independent-process races. This exact-head PR tier is not the complete
+two-process lifecycle cross-product and cannot produce full release evidence.
+`verify.sh --tier full-exhaustive` runs all six full configurations on the
+scheduled weekly or manually dispatched gate. A release claim requires its
+fresh exact-head full attestation; neither smaller tier substitutes for it.
+
+Each model is executed through `tools/tlc_runner.py`, never directly through
+TLC. The runner uses finite workers (`2`), a `2048m` heap for cgroup-contained
+publication runs, a `512m` heap for hosted smoke, CPU quota (`200%`), process
+limit (`64`), a 1200-second PR or 6000-second weekly per-model deadline, and
+cgroup memory/swap limits (`3G`/`3G`). A canonical host-wide admission lock prevents
+multiple formal jobs from competing for memory while leaving coordinator worker
+processes and leases untouched. A durable per-job queue record survives caller
+death for stale-job recovery; completed, failed, and canceled outcomes retain
+the exact resource bounds and exit classification. `systemd-run` owns the process group (`KillMode=control-group`) on hosts with a user systemd bus. Hosted CI selects an explicit `portable` containment mode: GNU `timeout` and `prlimit` enforce aggregate address-space, process-count, CPU-time, and wall-clock limits; the runner fails closed if either tool is unavailable.
