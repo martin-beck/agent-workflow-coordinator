@@ -159,17 +159,21 @@ directory and verifies its pinned SHA-256 before execution. It does not retain
 the JAR or modify coordinator state.
 
 Formal tiers are explicit: `verify.sh --tier portable-smoke` runs one model
-and is non-exhaustive; it cannot produce or substitute for full evidence.
-`verify.sh --tier full-exhaustive` runs all six tracked models and is required
-on every formal-affecting PR at its exact head. The scheduled weekly full run
-is a monitoring and immutable-attestation signal; it never substitutes for
-the exact-head PR gate or authorizes release after a failed or stale run.
+and is non-exhaustive; it cannot produce publication or full evidence.
+`verify.sh --tier pr-publication` checks every invariant family. Five models
+use their full configurations; the general lifecycle model uses the
+one-process `HandoffctlPR.cfg`, while the separate lock and recovery models
+retain independent-process races. This exact-head PR tier is not the complete
+two-process lifecycle cross-product and cannot produce full release evidence.
+`verify.sh --tier full-exhaustive` runs all six full configurations on the
+scheduled weekly or manually dispatched gate. A release claim requires its
+fresh exact-head full attestation; neither smaller tier substitutes for it.
 
 Each model is executed through `tools/tlc_runner.py`, never directly through
-TLC. The runner uses finite workers (`2`), JVM heap (`2048m` in production,
-`1280m` in hosted portable CI), CPU quota
-(`200%`), process limit (`64`), runtime deadline (`1800` seconds), and cgroup
-memory/swap limits (`3G`/`3G`). A canonical host-wide admission lock prevents
+TLC. The runner uses finite workers (`2`), a `2048m` heap for cgroup-contained
+publication runs, a `512m` heap for hosted smoke, CPU quota (`200%`), process
+limit (`64`), a 1200-second PR or 6000-second weekly per-model deadline, and
+cgroup memory/swap limits (`3G`/`3G`). A canonical host-wide admission lock prevents
 multiple formal jobs from competing for memory while leaving coordinator worker
 processes and leases untouched. A durable per-job queue record survives caller
 death for stale-job recovery; completed, failed, and canceled outcomes retain

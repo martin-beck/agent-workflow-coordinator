@@ -12,6 +12,27 @@ import subprocess
 import time
 from pathlib import Path
 
+EXPECTED_MODELS = {
+    "portable-smoke": {"HandoffctlBinding"},
+    "pr-publication": {
+        "HandoffctlBinding",
+        "HandoffctlLocks",
+        "HandoffctlRun",
+        "HandoffctlStorage",
+        "HandoffctlPR",
+        "HandoffctlRecovery",
+    },
+    "full-exhaustive": {
+        "HandoffctlBinding",
+        "HandoffctlLocks",
+        "HandoffctlRun",
+        "HandoffctlStorage",
+        "Handoffctl",
+        "HandoffctlRecovery",
+    },
+}
+MODEL_SOURCE = {"HandoffctlPR": "Handoffctl"}
+
 
 def digest(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
@@ -19,35 +40,44 @@ def digest(path: Path) -> str:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--tier", choices=("portable-smoke", "full-exhaustive"), required=True)
+    parser.add_argument("--tier", choices=tuple(EXPECTED_MODELS), required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--jar", type=Path, required=True)
     parser.add_argument("--models", nargs="+", required=True)
     parser.add_argument("--manifest", type=Path, required=True)
     parser.add_argument(
-        "--status", choices=("success", "oom", "timeout", "canceled", "incomplete"), default="success"
+        "--status",
+        choices=("success", "oom", "timeout", "canceled", "incomplete"),
+        default="success",
     )
     args = parser.parse_args()
     if args.status != "success":
         parser.error("failed or incomplete formal runs cannot produce a success attestation")
     boundary = os.environ.get("TLC_CGROUP_MODE", "required")
-    if args.tier == "full-exhaustive" and boundary != "required":
-        parser.error("full-exhaustive attestation requires TLC_CGROUP_MODE=required")
+    if args.tier != "portable-smoke" and boundary != "required":
+        parser.error(f"{args.tier} attestation requires TLC_CGROUP_MODE=required")
     if not args.manifest.exists():
         parser.error("attestation requires the runner-produced outcome manifest")
     outcomes = {}
     for line in args.manifest.read_text(encoding="utf-8").splitlines():
         model, result = line.split(" ", 1)
         outcomes[model] = result
-    if set(outcomes) != set(args.models) or any(result != "success" for result in outcomes.values()):
+    if set(outcomes) != set(args.models) or any(
+        result != "success" for result in outcomes.values()
+    ):
         parser.error("runner outcome manifest is incomplete or non-success")
-    if args.tier == "portable-smoke" and len(args.models) != 1:
-        parser.error("portable-smoke attestation must contain exactly one model")
-    if args.tier == "full-exhaustive" and len(args.models) != 6:
-        parser.error("full-exhaustive attestation must contain all six models")
+    if set(args.models) != EXPECTED_MODELS[args.tier] or len(args.models) != len(
+        EXPECTED_MODELS[args.tier]
+    ):
+        parser.error(f"{args.tier} attestation has an unexpected model set")
     root = Path(__file__).resolve().parents[2]
-    configs = {model: digest(root / "formal" / "handoffctl" / f"{model}.cfg") for model in args.models}
-    models = {model: digest(root / "formal" / "handoffctl" / f"{model}.tla") for model in args.models}
+    configs = {
+        model: digest(root / "formal" / "handoffctl" / f"{model}.cfg") for model in args.models
+    }
+    models = {
+        model: digest(root / "formal" / "handoffctl" / f"{MODEL_SOURCE.get(model, model)}.tla")
+        for model in args.models
+    }
     inputs = {
         name: digest(root / name)
         for name in (
@@ -57,8 +87,16 @@ def main() -> int:
             "formal/tier-evidence.json",
         )
     }
-    commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
-    tree = subprocess.check_output(["git", "rev-parse", "HEAD^{tree}"], cwd=root, text=True).strip()
+    commit = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"],  # noqa: S607
+        cwd=root,
+        text=True,
+    ).strip()
+    tree = subprocess.check_output(
+        ["git", "rev-parse", "HEAD^{tree}"],  # noqa: S607
+        cwd=root,
+        text=True,
+    ).strip()
     formal_hash = hashlib.sha256(
         json.dumps({"models": models, "configs": configs}, sort_keys=True).encode()
     ).hexdigest()
@@ -79,19 +117,23 @@ def main() -> int:
             "heap": os.environ.get("TLC_HEAP", "2048m"),
             "memory_max": "3G",
             "swap_max": "3G",
+            "timeout_seconds": int(os.environ.get("TLC_TIMEOUT_SECONDS", "1800")),
             "admission": (
                 "systemd-run-user-cgroup" if boundary == "required" else "portable-timeout-prlimit"
             ),
         },
         "outcomes": outcomes,
-        "state_counts": {model: None for model in args.models},
+        "state_counts": dict.fromkeys(args.models),
         "status": "success",
         "timestamp_epoch": int(time.time()),
         "freshness_seconds": 0,
         "non_claims": [
-            "portable-smoke is non-exhaustive and cannot support full formal claims",
+            f"{args.tier} is non-exhaustive and cannot support full formal claims"
+            if args.tier != "full-exhaustive"
+            else "full-exhaustive is bounded model checking, not an implementation proof",
             "bounded model checking does not prove implementation correspondence",
-            "state_counts are unavailable unless parsed from TLC output and are not evidence of exhaustive exploration",
+            "state_counts are unavailable unless parsed from TLC output and are not evidence "
+            "of exhaustive exploration",
         ],
     }
     args.output.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")

@@ -76,10 +76,12 @@ class FormalEvidenceTests(unittest.TestCase):
             self.assertEqual(len(values), len(set(values)))
 
     def test_evidence_bounds_and_runner_match_tracked_models(self) -> None:
-        configs = sorted(FORMAL_ROOT.glob("*.cfg"))
-        models = {config.stem for config in configs}
+        tier_manifest = json.loads((ROOT / "formal" / "tier-evidence.json").read_text())
+        full_models = tier_manifest["profiles"]["full-exhaustive"]["models"]
+        configs = [FORMAL_ROOT / f"{model}.cfg" for model in full_models]
+        models = {config.stem for config in FORMAL_ROOT.glob("*.cfg")}
         runner = (FORMAL_ROOT / "verify.sh").read_text(encoding="utf-8")
-        invoked = set(re.findall(r"^\s*run_model\s+(\w+)\s*$", runner, re.MULTILINE))
+        invoked = set(re.findall(r"^\s*run_model\s+(\w+)(?:\s+\w+)?\s*$", runner, re.MULTILINE))
 
         self.assertEqual(models, invoked)
         bounds = load_evidence()["bounds"]
@@ -94,6 +96,7 @@ class FormalEvidenceTests(unittest.TestCase):
             "cpu_quota_percent",
             "tasks_max",
             "runtime_max_seconds",
+            "pr_runtime_max_seconds",
         ):
             self.assertIsInstance(bounds[name], int)
             self.assertGreater(bounds[name], 0)
@@ -102,20 +105,39 @@ class FormalEvidenceTests(unittest.TestCase):
         verify = (FORMAL_ROOT / "verify.sh").read_text(encoding="utf-8")
         self.assertIn("--tier", verify)
         self.assertIn("portable-smoke", verify)
+        self.assertIn("pr-publication", verify)
         self.assertIn("full-exhaustive", verify)
         manifest = json.loads((ROOT / "formal" / "tier-evidence.json").read_text())
         self.assertFalse(manifest["profiles"]["portable-smoke"]["exhaustive"])
+        self.assertFalse(manifest["profiles"]["pr-publication"]["exhaustive"])
         self.assertTrue(manifest["profiles"]["full-exhaustive"]["exhaustive"])
         self.assertNotEqual(
             manifest["profiles"]["portable-smoke"]["models"],
             manifest["profiles"]["full-exhaustive"]["models"],
         )
         self.assertEqual(6, len(manifest["profiles"]["full-exhaustive"]["models"]))
+        self.assertEqual(6, len(manifest["profiles"]["pr-publication"]["models"]))
+        pr_config = (FORMAL_ROOT / "HandoffctlPR.cfg").read_text()
+        self.assertIn("Processes = {p1}", pr_config)
+        self.assertIn("EventualCompletion", pr_config)
         attest = (ROOT / "formal" / "handoffctl" / "attest.py").read_text(encoding="utf-8")
         self.assertIn("state_counts", attest)
-        self.assertIn("not evidence of exhaustive exploration", attest)
-        self.assertIn("requires TLC_CGROUP_MODE=required", attest)
+        self.assertIn("state_counts are unavailable", attest)
+        self.assertIn("of exhaustive exploration", attest)
+        self.assertIn("attestation requires TLC_CGROUP_MODE=required", attest)
         self.assertIn("runner-produced outcome manifest", attest)
+
+    def test_workflow_separates_fork_pr_publication_and_weekly_tiers(self) -> None:
+        workflow = (ROOT / ".github" / "workflows" / "verify.yml").read_text()
+        self.assertIn(
+            "github.event.pull_request.head.repo.full_name != github.repository", workflow
+        )
+        self.assertIn("&& 'portable-smoke' || 'pr-publication'", workflow)
+        self.assertIn("&& 'full-exhaustive'", workflow)
+        self.assertIn("env.TLC_CGROUP_MODE == 'required'", workflow)
+        self.assertIn("timeout-minutes: ${{", workflow)
+        self.assertIn("&& 120 || 30", workflow)
+        self.assertIn("TLC_TIMEOUT_SECONDS:", workflow)
 
     def test_attestation_rejects_failed_formal_outcomes(self) -> None:
         script = ROOT / "formal" / "handoffctl" / "attest.py"

@@ -221,6 +221,7 @@ class TLCAdmissionTests(unittest.TestCase):
                 },
             )()
             with (
+                patch.object(_runner, "DEFAULT_ADMISSION_LOCK", queue / "admission.lock"),
                 patch("tools.tlc_runner.shutil.which", return_value="/usr/bin/tool"),
                 patch("tools.tlc_runner.subprocess.run") as execute,
             ):
@@ -289,6 +290,7 @@ class TLCAdmissionTests(unittest.TestCase):
                 },
             )()
             with (
+                patch.object(_runner, "DEFAULT_ADMISSION_LOCK", queue / "admission.lock"),
                 patch("tools.tlc_runner.subprocess.run", side_effect=KeyboardInterrupt),
                 self.assertRaises(KeyboardInterrupt),
             ):
@@ -318,7 +320,10 @@ class TLCAdmissionTests(unittest.TestCase):
                     "cgroup_mode": "required",
                 },
             )()
-            with patch("tools.tlc_runner.shutil.which", return_value=None):
+            with (
+                patch.object(_runner, "DEFAULT_ADMISSION_LOCK", queue / "admission.lock"),
+                patch("tools.tlc_runner.shutil.which", return_value=None),
+            ):
                 self.assertEqual(run(args), 2)
             outcome = next(Path(directory).glob("*.outcome.json"))
             self.assertEqual(json.loads(outcome.read_text())["state"], "failed")

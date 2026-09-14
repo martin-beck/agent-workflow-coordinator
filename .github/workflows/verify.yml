@@ -12,7 +12,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -73,8 +73,13 @@ jobs:
   verify:
     needs: [awq, scope]
     if: ${{ github.event_name != 'pull_request' || needs.scope.outputs.formal_changed == 'true' }}
-    runs-on: [self-hosted, Linux, X64, agent-workflow-coordinator-ci]
-    timeout-minutes: 30
+    runs-on: ${{ fromJSON((github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && '["self-hosted","Linux","X64","agent-workflow-coordinator-ci"]' || '["ubuntu-24.04"]') }}
+    timeout-minutes: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && 120 || 30 }}
+    env:
+      TLC_TIER: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && 'full-exhaustive' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && 'portable-smoke' || 'pr-publication' }}
+      TLC_CGROUP_MODE: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && 'portable' || 'required' }}
+      TLC_HEAP: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && '512m' || '2048m' }}
+      TLC_TIMEOUT_SECONDS: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && '6000' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && '600' || '1200' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -121,6 +126,7 @@ jobs:
           ).validate(backend)
           PY
       - name: Establish existing runner user bus and cgroup prerequisite
+        if: ${{ env.TLC_CGROUP_MODE == 'required' }}
         shell: bash
         run: |
           runner_uid=$(id -u)
@@ -132,19 +138,15 @@ jobs:
           test "$(stat -fc %T /sys/fs/cgroup)" = cgroup2fs
           XDG_RUNTIME_DIR="${runtime_dir}" DBUS_SESSION_BUS_ADDRESS="${bus_address}" \
             systemd-run --user --wait --pipe --quiet true
-      - name: Formal safety and liveness models
+      - name: Run event-appropriate formal tier
         env:
-          # The exhaustive publication gate requires the real cgroup boundary;
-          # portable prlimit execution is reserved for the non-exhaustive smoke tier.
-          TLC_CGROUP_MODE: required
-          TLC_HEAP: 2048m
-          TLC_ATTESTATION_PATH: ${{ runner.temp }}/full-exhaustive-attestation.json
-        run: formal/handoffctl/verify.sh --tier full-exhaustive
-      - name: Publish exact-head full attestation
+          TLC_ATTESTATION_PATH: ${{ runner.temp }}/formal-attestation.json
+        run: formal/handoffctl/verify.sh --tier "$TLC_TIER"
+      - name: Publish exact-head tier attestation
         uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08
         with:
-          name: handoffctl-full-exhaustive-${{ github.sha }}
-          path: ${{ runner.temp }}/full-exhaustive-attestation.json
+          name: handoffctl-${{ env.TLC_TIER }}-${{ github.sha }}
+          path: ${{ runner.temp }}/formal-attestation.json
           if-no-files-found: error
       - name: DCO certification
         if: github.event_name == 'pull_request'
