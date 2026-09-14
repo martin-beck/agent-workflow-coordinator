@@ -536,6 +536,7 @@ class RollbackControlStoreTests(unittest.TestCase):
                 final.identity.identity_digest, reopened_final.identity.identity_digest
             )
             self.assertEqual(4, reopened_final.identity.state_revision)
+            self.assertGreater(reopened_final.identity.state_revision, 1)
             self.assertEqual("fence-2", reopened_final.identity.fencing_token)
             self.assertEqual("owner-1", reopened_final.identity.fencing_owner)
             self.assertEqual("barrier-2", reopened_final.identity.durable_barrier_id)
