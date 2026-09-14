@@ -35,9 +35,9 @@ IDENTITY_FIELDS = (
 )
 STATUSES = {"held", "releasing", "released", "ambiguous"}
 STATUS_TRANSITIONS = {
-    "held": {"held", "releasing", "released", "ambiguous"},
+    "held": {"held", "releasing", "ambiguous"},
     "releasing": {"releasing", "released", "ambiguous"},
-    "released": {"released", "held", "ambiguous"},
+    "released": {"released", "ambiguous"},
     "ambiguous": {"ambiguous"},
 }
 _TOKEN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,126}")
@@ -67,6 +67,7 @@ def _validate(record: Mapping[str, object]) -> dict[str, object]:  # noqa: C901
     if (
         record["state_revision"] < 1
         or not isinstance(record["revision"], int)
+        or isinstance(record["revision"], bool)
         or record["revision"] < 1
     ):
         raise ControlStoreError("control revision is invalid")
@@ -142,6 +143,10 @@ class SQLiteRollbackControlStore:
                 )"""
             )
             connection.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS one_active_barrier_per_project "
+                "ON barrier(project_id) WHERE status IN ('held','releasing')"
+            )
+            connection.execute(
                 "INSERT OR IGNORE INTO control_meta(key,value) VALUES ('schema_version','1')"
             )
             value = connection.execute(
@@ -196,14 +201,17 @@ class SQLiteRollbackControlStore:
         with locked(), closing(self._connect()) as connection:
             return self._cas_connection(connection, expected_revision, supplied)
 
-    def _cas_connection(
+    def _cas_connection(  # noqa: C901
         self, connection: sqlite3.Connection, expected_revision: int, supplied: dict[str, object]
     ) -> dict[str, object]:
         connection.execute("BEGIN IMMEDIATE")
         current = connection.execute(
-            "SELECT revision,status FROM barrier WHERE operation_id=?", (supplied["operation_id"],)
+            "SELECT operation_id,project_id,state_revision,fencing_token,fencing_owner,backend,"
+            "authority_revision,durable_barrier_id,barrier_identity_digest,envelope_digest,"
+            "target,status,revision FROM barrier WHERE operation_id=?",
+            (supplied["operation_id"],),
         ).fetchone()
-        if current is not None and current[0] != expected_revision:
+        if current is not None and current[-1] != expected_revision:
             connection.rollback()
             raise ControlStoreError("control barrier CAS conflict")
         if current is None and expected_revision != 0:
@@ -213,7 +221,23 @@ class SQLiteRollbackControlStore:
         if current is None and supplied["status"] != "held":
             connection.rollback()
             raise ControlStoreError("new control barrier must start held")
-        if current is not None and supplied["status"] not in STATUS_TRANSITIONS[str(current[1])]:
+        if current is None:
+            active = connection.execute(
+                "SELECT operation_id FROM barrier WHERE project_id=? "
+                "AND status IN ('held','releasing') LIMIT 1",
+                (supplied["project_id"],),
+            ).fetchone()
+            if active is not None:
+                connection.rollback()
+                raise ControlStoreError("project already has an active barrier")
+        if current is not None:
+            current_record = dict(
+                zip((*IDENTITY_FIELDS, "status", "revision"), current, strict=True)
+            )
+            if any(current_record[field] != supplied[field] for field in IDENTITY_FIELDS):
+                connection.rollback()
+                raise ControlStoreError("control identity changed during CAS")
+        if current is not None and supplied["status"] not in STATUS_TRANSITIONS[str(current[-2])]:
             connection.rollback()
             raise ControlStoreError("illegal control barrier transition")
         columns = (*IDENTITY_FIELDS, "status", "revision")

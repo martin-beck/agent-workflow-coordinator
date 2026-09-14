@@ -40,17 +40,18 @@ class RollbackControlStoreTests(unittest.TestCase):
             self.assertFalse(
                 store.verify_rollback_context({**created, "envelope_digest": "e" * 64})
             )
-            released = store.cas(1, {**created, "status": "released", "revision": 2})
+            releasing = store.cas(1, {**created, "status": "releasing", "revision": 2})
+            released = store.cas(2, {**releasing, "status": "released", "revision": 3})
             self.assertEqual("released", released["status"])
-            self.assertEqual(2, store.snapshot("op-1")["revision"])
+            self.assertEqual(3, store.snapshot("op-1")["revision"])
 
     def test_status_transition_is_fail_closed(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             store = SQLiteRollbackControlStore(Path(directory) / "control.sqlite", PROJECT)
             store.cas(0, RECORD)
-            released = store.cas(1, {**RECORD, "status": "released", "revision": 2})
+            releasing = store.cas(1, {**RECORD, "status": "releasing", "revision": 2})
             with self.assertRaises(ControlStoreError):
-                store.cas(2, {**released, "status": "releasing", "revision": 3})
+                store.cas(2, {**releasing, "status": "held", "revision": 3})
 
     def test_with_barrier_holds_coordinator_lock_through_authority_callback(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -59,11 +60,11 @@ class RollbackControlStoreTests(unittest.TestCase):
 
             def authority(record: Mapping[str, object]) -> Mapping[str, object]:
                 seen.append(str(record["status"]))
-                return {**record, "status": "released"}
+                return {**record, "status": "releasing"}
 
             result = store.with_barrier(0, RECORD, authority)
             self.assertEqual(["held"], seen)
-            self.assertEqual("released", result["status"])
+            self.assertEqual("releasing", result["status"])
 
     def test_cas_conflict_and_binding_mismatch_fail_closed(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -73,6 +74,8 @@ class RollbackControlStoreTests(unittest.TestCase):
                 store.cas(0, {**RECORD, "revision": 1})
             with self.assertRaises(ControlStoreError):
                 store.cas(1, {**RECORD, "project_id": "22222222-2222-4222-8222-222222222222"})
+            with self.assertRaises(ControlStoreError):
+                store.cas(0, {**RECORD, "operation_id": "op-2"})
 
     def test_invalid_identity_and_status_are_rejected_before_write(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
