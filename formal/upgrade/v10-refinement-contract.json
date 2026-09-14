@@ -13,8 +13,9 @@
     }
   },
   "implementation_snapshot": {
-    "revision": "257ac7cf7914e0218ab945da7813df9de7da639b",
-    "status": "control-plane checkpoint; executable apply and rollback remain rejection-only"
+    "revision": "7cb1c7be8711242ffb551b82db77b90d793600f0",
+    "runtime_revision": "c6999ca684b67365d71d9e0069b71b0cd3c7834c",
+    "status": "descriptor-safe control-store reread and write-route admission evidence; executable apply and rollback remain rejection-only"
   },
   "correspondence": [
     {
