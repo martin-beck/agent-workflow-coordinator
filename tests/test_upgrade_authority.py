@@ -39,6 +39,57 @@ class RuntimeSelectorTests(unittest.TestCase):
         )
         self.assertEqual(0, result.returncode, result.stderr)
 
+    def test_inspect_authority_classifies_git_and_sqlite_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            fake = MagicMock()
+            fake.ROOT = root
+            fake.project_binding.return_value = {
+                "project_id": "11111111-1111-4111-8111-111111111111",
+                "state_repository": "owner/state",
+                "product_repository": "owner/product",
+            }
+            fake._assert_storage_binding.return_value = None
+            fake.backend_selection.return_value = {"backend": "git", "legacy": False}
+            with (
+                patch.object(upgrade_authority, "_handoffctl", return_value=fake),
+                patch("tools.upgrade_authority.subprocess.run") as run,
+            ):
+                run.return_value.stdout = ""
+                result = upgrade_authority.inspect_authority()
+                self.assertTrue(result["state_clean"])
+                self.assertEqual("git", result["backend"])
+            fake.backend_selection.return_value = {"backend": "sqlite", "legacy": True}
+            fake.storage_backend.return_value.load_tasks.return_value = [1, 2]
+            with patch.object(upgrade_authority, "_handoffctl", return_value=fake):
+                result = upgrade_authority.inspect_authority()
+            self.assertTrue(result["state_clean"])
+            self.assertEqual(2, result["task_count"])
+
+    def test_inspect_authority_rejects_dirty_git_and_failed_sqlite(self) -> None:
+        fake = MagicMock()
+        fake.ROOT = Path()
+        fake.project_binding.return_value = {
+            "project_id": "11111111-1111-4111-8111-111111111111",
+            "state_repository": "owner/state",
+            "product_repository": "owner/product",
+        }
+        fake.backend_selection.return_value = {"backend": "git", "legacy": False}
+        with (
+            patch.object(upgrade_authority, "_handoffctl", return_value=fake),
+            patch("tools.upgrade_authority.subprocess.run") as run,
+        ):
+            run.return_value.stdout = " M tasks/AR-0001.md\n"
+            with self.assertRaisesRegex(AuthorityError, "Git authority is dirty"):
+                upgrade_authority.inspect_authority()
+        fake.backend_selection.return_value = {"backend": "sqlite", "legacy": False}
+        fake.storage_backend.side_effect = RuntimeError("database unavailable")
+        with (
+            patch.object(upgrade_authority, "_handoffctl", return_value=fake),
+            self.assertRaisesRegex(AuthorityError, "SQLite authority inspection failed"),
+        ):
+            upgrade_authority.inspect_authority()
+
     def test_atomic_selector_round_trip_and_strict_schema(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "runtime-selector.json"

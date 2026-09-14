@@ -11,9 +11,10 @@ import sqlite3
 import subprocess
 import sys
 import unittest
+from collections.abc import Callable
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import Any
+from typing import Any, Literal
 from unittest.mock import patch
 
 from tools.sqlite_storage import (
@@ -201,6 +202,55 @@ class SQLiteStorageTest(unittest.TestCase):
         connection = sqlite3.connect(self.database)
         self.assertEqual(2, connection.execute("SELECT revision FROM tasks").fetchone()[0])
         self.assertEqual(2, connection.execute("SELECT count(*) FROM events").fetchone()[0])
+        connection.close()
+
+    def test_every_write_route_enters_fence_before_sqlite_mutation(self) -> None:
+        ordinary = self.create()
+
+        class RejectScope:
+            def __enter__(self) -> None:
+                raise RuntimeError("mutation fence rejected")
+
+            def __exit__(self, *_args: object) -> Literal[False]:
+                return False
+
+        def reject_scope() -> RejectScope:
+            return RejectScope()
+
+        fenced = SQLiteBackend(
+            self.database,
+            BINDING,
+            self.tasks,
+            mutation_scope=reject_scope,
+        )
+
+        def transition(meta: dict[str, Any], _tasks: list[Any]) -> tuple[str, str]:
+            meta["summary"] = "must not commit"
+            return "update", "must not commit"
+
+        routes: tuple[Callable[[], None], ...] = (
+            lambda: fenced.mutate("AR-0001", 1, "update", "2026-09-08T00:01:00+00:00", transition),
+            lambda: fenced.update_observations(
+                {"": {"branch": "main", "head": "a" * 40, "dirty": False}},
+                "2026-09-08T00:01:00+00:00",
+            ),
+            lambda: fenced.append_command_result(
+                "AR-0001", "worker", "a" * 64, 0, "EXIT", "2026-09-08T00:01:00+00:00"
+            ),
+            lambda: fenced.retire(lambda _tasks: None, lambda: None),
+        )
+        for route in routes:
+            with self.assertRaisesRegex(RuntimeError, "mutation fence rejected"):
+                route()
+        self.assertEqual(1, ordinary.load_tasks()[0][1]["task_revision"])
+        connection = sqlite3.connect(self.database)
+        self.assertEqual(
+            0, connection.execute("SELECT count(*) FROM command_results").fetchone()[0]
+        )
+        self.assertEqual(
+            "active",
+            connection.execute("SELECT value FROM metadata WHERE key='state'").fetchone()[0],
+        )
         connection.close()
 
     def test_real_processes_cannot_double_claim(self) -> None:

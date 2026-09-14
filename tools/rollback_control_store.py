@@ -23,7 +23,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol, cast
 
-from tools.handoffctl import locked
+from tools.handoffctl import (
+    CoordinatorLockGuard,
+    LockOwnershipError,
+    coordinator_lock_path,
+    locked,
+)
 from tools.upgrade_authority import inspect_sqlite_release_authority
 from tools.upgrade_identity import (
     ENVELOPE_FIELDS,
@@ -785,6 +790,27 @@ class SQLiteRollbackControlStore:
             finally:
                 self._operation_owner = None
 
+    @contextmanager
+    def lock_owned_by_caller(self, common_guard: CoordinatorLockGuard) -> Iterator[None]:
+        """Hold the control lock under a caller-owned common-lock capability."""
+        if not isinstance(common_guard, CoordinatorLockGuard):
+            raise LockOwnershipError("caller-owned coordinator lock guard is required")
+        common_guard.assert_owned()
+        if common_guard.path != coordinator_lock_path().resolve():
+            raise ControlStoreError("coordinator lock guard path mismatch")
+        if self._operation_owner == threading.get_ident():
+            raise ControlStoreError("control store lock is non-reentrant")
+        with self._control_lock():
+            if self._operation_owner is not None:
+                raise ControlStoreError("control store operation is already active")
+            self._operation_owner = threading.get_ident()
+            try:
+                common_guard.assert_owned()
+                yield
+                common_guard.assert_owned()
+            finally:
+                self._operation_owner = None
+
     @property
     def operation_owned_by_current_thread(self) -> bool:
         return self._operation_owner == threading.get_ident()
@@ -1114,6 +1140,12 @@ class SQLiteBarrierSessionStore:
         """Acquire the common lock, then this control store's lock."""
         return self._control.operation_lock()
 
+    def lock_owned_by_caller(
+        self, common_guard: CoordinatorLockGuard
+    ) -> AbstractContextManager[None]:
+        """Hold the control lock under a caller-owned common-lock capability."""
+        return self._control.lock_owned_by_caller(common_guard)
+
     def snapshot(self) -> BarrierSessionState | None:
         if self.operation_owned_by_current_thread:
             raise ControlStoreError("control store lock is non-reentrant")
@@ -1150,6 +1182,60 @@ class SQLiteBarrierSessionStore:
                     PRIMARY KEY(project_id, attempt_id)
                 )"""
         )
+        connection.execute(
+            """CREATE TABLE IF NOT EXISTS barrier_session_intent (
+                    project_id TEXT NOT NULL,
+                    intent_id TEXT PRIMARY KEY,
+                    attempt_id TEXT NOT NULL,
+                    expected_revision INTEGER NOT NULL,
+                    proposed_revision INTEGER NOT NULL,
+                    proposed_status TEXT NOT NULL,
+                    identity_digest TEXT NOT NULL,
+                    outcome TEXT NOT NULL,
+                    cause_code TEXT,
+                    FOREIGN KEY(project_id) REFERENCES barrier_session(project_id)
+                )"""
+        )
+
+    def _prepared_intents_locked(
+        self, connection: sqlite3.Connection
+    ) -> list[tuple[str, str, int, int, str, str]]:
+        self._control._require_operation_lock()
+        rows = connection.execute(
+            "SELECT intent_id,attempt_id,expected_revision,proposed_revision,identity_digest,"
+            "proposed_status "
+            "FROM barrier_session_intent "
+            "WHERE project_id=? AND outcome='prepared' ORDER BY proposed_revision",
+            (self.project_id,),
+        ).fetchall()
+        return [
+            (
+                cast(str, row[0]),
+                cast(str, row[1]),
+                cast(int, row[2]),
+                cast(int, row[3]),
+                cast(str, row[4]),
+                cast(str, row[5]),
+            )
+            for row in rows
+        ]
+
+    def _mark_intent_locked(
+        self,
+        connection: sqlite3.Connection,
+        intent_id: str,
+        outcome: str,
+        cause_code: str | None = None,
+    ) -> None:
+        if outcome not in {"committed", "ambiguous", "reconciled"}:
+            raise ControlStoreError("barrier session intent outcome is invalid")
+        cursor = connection.execute(
+            "UPDATE barrier_session_intent SET outcome=?,cause_code=? "
+            "WHERE project_id=? AND intent_id=? AND outcome='prepared'",
+            (outcome, cause_code, self.project_id, intent_id),
+        )
+        if cursor.rowcount != 1:
+            raise ControlStoreError("barrier session intent outcome fence was lost")
 
     @staticmethod
     def _child_json(child: BarrierChildIdentity | None) -> str | None:
@@ -1286,6 +1372,45 @@ class SQLiteBarrierSessionStore:
                 raise ControlStoreError("barrier session authority revision changed")
             return current
 
+    def recheck_held_locked(  # noqa: C901
+        self,
+        common_guard: CoordinatorLockGuard,
+        expected_identity: BarrierSessionIdentity,
+        expected_revision: int,
+    ) -> BarrierSessionState:
+        """Read-only held-session recheck while the caller owns both locks."""
+        if not isinstance(common_guard, CoordinatorLockGuard):
+            raise LockOwnershipError("caller-owned coordinator lock guard is required")
+        common_guard.assert_owned()
+        if common_guard.path != coordinator_lock_path().resolve():
+            raise ControlStoreError("coordinator lock guard path mismatch")
+        if not isinstance(expected_identity, BarrierSessionIdentity):
+            raise ControlStoreError("barrier session identity is required")
+        if type(expected_revision) is not int or expected_revision < 1:
+            raise ControlStoreError("barrier session expected revision is invalid")
+        self._control._require_operation_lock()
+        if self._authority_revision_reader is None:
+            raise ControlStoreError("fresh authority rereader is required")
+        try:
+            fresh_authority_revision = self._authority_revision_reader()
+        except Exception as error:
+            raise ControlStoreError("fresh authority reread failed") from error
+        if not isinstance(fresh_authority_revision, str) or not fresh_authority_revision:
+            raise ControlStoreError("fresh authority revision is invalid")
+        current = self._snapshot_locked()
+        if current is None:
+            raise ControlStoreError("barrier session is absent")
+        if current.revision != expected_revision:
+            raise ControlStoreError("barrier session CAS conflict")
+        if current.identity != expected_identity:
+            raise ControlStoreError("barrier session identity changed")
+        if current.status != "held":
+            raise ControlStoreError("barrier session is not held")
+        if current.identity.authority_revision_at_acquire != fresh_authority_revision:
+            raise ControlStoreError("barrier session authority revision changed")
+        common_guard.assert_owned()
+        return current
+
     def cas(self, expected_revision: int, state: BarrierSessionState) -> BarrierSessionState:
         if type(expected_revision) is not int or expected_revision < 0:
             raise ControlStoreError("barrier session expected revision is invalid")
@@ -1377,6 +1502,23 @@ class SQLiteBarrierSessionStore:
             if supplied.revision != next_revision:
                 connection.rollback()
                 raise ControlStoreError("barrier session revision is invalid")
+            intent_id = uuid.uuid4().hex
+            connection.execute(
+                "INSERT INTO barrier_session_intent "
+                "(project_id,intent_id,attempt_id,expected_revision,proposed_revision,"
+                "proposed_status,identity_digest,outcome,cause_code) VALUES (?,?,?,?,?,?,?,?,?)",
+                (
+                    self.project_id,
+                    intent_id,
+                    supplied.identity.attempt_id,
+                    expected_revision,
+                    supplied.revision,
+                    supplied.status,
+                    supplied.identity.identity_digest,
+                    "prepared",
+                    None,
+                ),
+            )
             values = (
                 *supplied.identity.as_record().values(),
                 supplied.status,
@@ -1428,7 +1570,149 @@ class SQLiteBarrierSessionStore:
                 ) from self._mark_ambiguous_after_commit_failure(
                     connection, supplied, expected_revision, error
                 )
+            try:
+                connection.execute("BEGIN IMMEDIATE")
+                self._mark_intent_locked(connection, intent_id, "committed")
+                connection.commit()
+            except Exception as error:
+                raise ControlStoreError(
+                    "barrier session outcome publication is ambiguous; recovery is required"
+                ) from error
             return supplied
+
+    def recover_unknown(self) -> BarrierSessionState | None:
+        """Fence every prepared outcome left by a process death or lost reply."""
+        if self.operation_owned_by_current_thread:
+            raise ControlStoreError("control store lock is non-reentrant")
+        with self.operation_lock(), self._control._connection() as connection:
+            self._ensure_table(connection)
+            prepared = self._prepared_intents_locked(connection)
+            if not prepared:
+                return self._snapshot_locked()
+            current = self._snapshot_locked()
+            if current is None:
+                raise ControlStoreError("prepared session intent has no session")
+            for (
+                _intent_id,
+                attempt_id,
+                expected_revision,
+                proposed_revision,
+                identity_digest,
+                proposed_status,
+            ) in prepared:
+                if (
+                    attempt_id != current.identity.attempt_id
+                    or identity_digest != current.identity.identity_digest
+                    or proposed_revision != current.revision
+                    or expected_revision != current.revision - 1
+                    or proposed_status not in STATUS_TRANSITIONS
+                    or proposed_status != current.status
+                ):
+                    raise ControlStoreError("prepared session intent identity is invalid")
+            if current.status != "ambiguous":
+                connection.execute("BEGIN IMMEDIATE")
+                connection.execute(
+                    "UPDATE barrier_session SET status='ambiguous',revision=? "
+                    "WHERE project_id=? AND revision=? AND status IN ('held','releasing')",
+                    (current.revision + 1, self.project_id, current.revision),
+                )
+                if connection.execute("SELECT changes()").fetchone()[0] != 1:
+                    connection.rollback()
+                    raise ControlStoreError("unknown session outcome lost its row fence")
+                current = BarrierSessionState(
+                    current.identity,
+                    "ambiguous",
+                    current.revision + 1,
+                    current.forward_child,
+                    current.rollback_child,
+                )
+                connection.commit()
+            connection.execute("BEGIN IMMEDIATE")
+            for intent_id, _attempt_id, _expected, _proposed, _digest, _status in prepared:
+                self._mark_intent_locked(connection, intent_id, "ambiguous", "process-death")
+            connection.commit()
+            return current
+
+    def reconcile_ambiguous(  # noqa: C901
+        self,
+        expected_revision: int,
+        replacement: BarrierSessionState,
+    ) -> BarrierSessionState:
+        """Replace an ambiguous session only with a distinct newer fence."""
+        if type(expected_revision) is not int or expected_revision < 1:
+            raise ControlStoreError("barrier session expected revision is invalid")
+        if (
+            replacement.status != "held"
+            or replacement.revision != 1
+            or replacement.identity.project_id != self.project_id
+        ):
+            raise ControlStoreError("ambiguous reconciliation requires a new held session")
+        if self.operation_owned_by_current_thread:
+            raise ControlStoreError("control store lock is non-reentrant")
+        with self.operation_lock(), self._control._connection() as connection:
+            self._ensure_table(connection)
+            current = self._snapshot_locked()
+            if current is None or current.status != "ambiguous":
+                raise ControlStoreError("only ambiguous sessions require reconciliation")
+            if current.revision != expected_revision:
+                raise ControlStoreError("barrier session CAS conflict")
+            if (
+                replacement.identity.attempt_id == current.identity.attempt_id
+                or replacement.identity.state_revision <= current.identity.state_revision
+                or replacement.identity.durable_barrier_id == current.identity.durable_barrier_id
+                or replacement.identity.fencing_token == current.identity.fencing_token
+            ):
+                raise ControlStoreError("ambiguous reconciliation requires a distinct newer fence")
+            if self._prepared_intents_locked(connection):
+                raise ControlStoreError("ambiguous reconciliation has unresolved intent")
+            if self._authority_revision_reader is None:
+                raise ControlStoreError("fresh authority rereader is required")
+            try:
+                fresh_authority_revision = self._authority_revision_reader()
+            except Exception as error:
+                raise ControlStoreError("fresh authority reread failed") from error
+            if not isinstance(fresh_authority_revision, str) or not fresh_authority_revision:
+                raise ControlStoreError("fresh authority revision is invalid")
+            if fresh_authority_revision != replacement.identity.authority_revision_at_acquire:
+                raise ControlStoreError("replacement authority revision changed")
+            connection.execute("BEGIN IMMEDIATE")
+            connection.execute(
+                "INSERT OR REPLACE INTO barrier_session_history "
+                "(project_id,attempt_id,revision,record_json) VALUES (?,?,?,?)",
+                (
+                    self.project_id,
+                    current.identity.attempt_id,
+                    current.revision,
+                    json.dumps(
+                        {
+                            **current.identity.as_record(),
+                            "status": current.status,
+                            "revision": current.revision,
+                            "forward_child": self._child_json(current.forward_child),
+                            "rollback_child": self._child_json(current.rollback_child),
+                        },
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ),
+                ),
+            )
+            connection.execute("DELETE FROM barrier_session WHERE project_id=?", (self.project_id,))
+            values = (
+                *replacement.identity.as_record().values(),
+                replacement.status,
+                replacement.revision,
+                self._child_json(replacement.forward_child),
+                self._child_json(replacement.rollback_child),
+            )
+            connection.execute(
+                "INSERT INTO barrier_session "
+                "(schema_version,project_id,attempt_id,state_revision,authority_revision_at_acquire,"
+                "durable_barrier_id,fencing_token,fencing_owner,identity_digest,status,revision,"
+                "forward_child,rollback_child) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                values,
+            )
+            connection.commit()
+            return replacement
 
     def _mark_ambiguous_after_commit_failure(
         self,

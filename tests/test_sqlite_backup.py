@@ -217,6 +217,23 @@ class SQLiteBackupTests(unittest.TestCase):
         ):
             MODULE._backup_existing(destination)
 
+    def test_restore_failure_is_classified_as_ambiguous(self) -> None:
+        destination = self.root / "restored.sqlite3"
+        previous = self.root / "previous.sqlite3"
+        previous.write_bytes(b"known-good")
+        with (
+            patch.object(Path, "replace", side_effect=OSError("restore failed")),
+            self.assertRaisesRegex(BackupError, "authority restore was ambiguous"),
+        ):
+            MODULE._restore_existing(destination, previous)
+
+    def test_manifest_verification_claims_are_strict(self) -> None:
+        backup = self.root / "backup.sqlite3"
+        manifest = backup_database(self.source, backup, BINDING)
+        manifest["wal_consistent"] = False
+        with self.assertRaisesRegex(BackupError, "invalid verification claims"):
+            write_manifest(self.root / "manifest.json", manifest)
+
     def test_failed_install_without_prior_destination_removes_new_authority(self) -> None:
         backup = self.root / "backup.sqlite3"
         manifest = backup_database(self.source, backup, BINDING)
