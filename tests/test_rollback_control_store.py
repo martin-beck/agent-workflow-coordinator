@@ -2463,6 +2463,16 @@ class RollbackControlStoreTests(unittest.TestCase):
             second.cas(0, RECORD)
             self.assertEqual("op-1", second.snapshot("op-1")["operation_id"])
 
+    def test_operation_lock_clears_owner_after_body_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            store = SQLiteRollbackControlStore(Path(directory) / "control.sqlite", PROJECT)
+            with self.assertRaisesRegex(RuntimeError, "body failed"), store.operation_lock():
+                self.assertTrue(store.operation_owned_by_current_thread)
+                raise RuntimeError("body failed")
+            self.assertFalse(store.operation_owned_by_current_thread)
+            with store.operation_lock():
+                self.assertTrue(store.operation_owned_by_current_thread)
+
     def test_releasing_barrier_cannot_be_completed_without_authority_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             store = SQLiteRollbackControlStore(Path(directory) / "control.sqlite", PROJECT)
