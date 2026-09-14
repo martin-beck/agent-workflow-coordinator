@@ -89,6 +89,19 @@ class UpgradeAdmissionTests(unittest.TestCase):
         current["state_revision"] = 5
         with self.assertRaises(AdmissionError):
             recheck_before_replacement(snapshot, current)
+        for field in (
+            "project_id",
+            "backend",
+            "authority_revision",
+            "durable_barrier_id",
+            "barrier_identity_digest",
+            "envelope_digest",
+            "target",
+        ):
+            current = dict(snapshot)
+            current[field] = "tampered"
+            with self.subTest(field=field), self.assertRaises(AdmissionError):
+                recheck_before_replacement(snapshot, current)
         recheck_before_replacement(snapshot, dict(snapshot))
         for field, value in (
             ("operation_id", ""),

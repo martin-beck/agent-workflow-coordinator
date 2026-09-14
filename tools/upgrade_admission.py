@@ -61,6 +61,7 @@ IDENTITY_FIELDS = (
     "barrier_identity_digest",
     "envelope_digest",
     "target",
+    "durable_barrier_id",
 )
 QUIESCENCE_IDENTITY = "durable_barrier_id"
 KNOWN_FIELDS = set(PREFLIGHT_PREDICATES + QUIESCENCE_PREDICATES + REOPEN_PREDICATES)
@@ -117,7 +118,7 @@ def recheck_before_replacement(
     """Atomically recheck identity and quiescence immediately before replacement."""
     admit_quiesced(admitted)
     admit_quiesced(current)
-    for field in (*IDENTITY_FIELDS, QUIESCENCE_IDENTITY):
+    for field in (*IDENTITY_FIELDS,):
         if admitted.get(field) != current.get(field):
             raise AdmissionError(f"replacement denied; stale {field}")
 

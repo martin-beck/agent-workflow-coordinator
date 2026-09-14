@@ -282,6 +282,35 @@ class UpgradeEngineTests(unittest.TestCase):
             with self.assertRaises(UpgradeError):
                 engine.apply({})
 
+    def test_every_journal_record_context_field_is_bound(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            journal = Path(directory) / "journal.json"
+            engine = UpgradeEngine(
+                "op-record",
+                journal,
+                {**CONTEXT, "operation_id": "op-record"},
+                backend_adapter=FakeAdapter(),
+            )
+            engine.plan()
+            base = json.loads(journal.read_text())
+            base["status"] = "running"
+            base["phase"] = "discover"
+            base["records"] = [
+                {
+                    "operation_id": "op-record",
+                    "step_id": "op-record.discover",
+                    "phase": "discover",
+                    "outcome": "started",
+                    "context": {**CONTEXT, "operation_id": "op-record"},
+                }
+            ]
+            for field in CONTEXT:
+                tampered = json.loads(json.dumps(base))
+                tampered["records"][0]["context"][field] = "tampered"
+                journal.write_text(json.dumps(tampered))
+                with self.subTest(field=field), self.assertRaises(UpgradeError):
+                    engine._load()
+
     def test_started_phase_requires_explicit_recovery(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             journal = Path(directory) / "journal.json"
@@ -293,7 +322,13 @@ class UpgradeEngineTests(unittest.TestCase):
             value["status"] = "running"
             value["phase"] = "discover"
             value["records"] = [
-                {"operation_id": "op-5:discover", "phase": "discover", "outcome": "started"}
+                {
+                    "operation_id": "op-5",
+                    "step_id": "op-5.discover",
+                    "phase": "discover",
+                    "outcome": "started",
+                    "context": {**CONTEXT, "operation_id": "op-5"},
+                }
             ]
             journal.write_text(json.dumps(value))
             with self.assertRaises(UpgradeError):

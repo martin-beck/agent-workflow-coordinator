@@ -73,6 +73,7 @@ REQUIRED_EVIDENCE = {
 PHASE_MUTATION = {phase: phase == "commit" for phase in PHASES}
 STATUSES = {"planned", "running", "failed", "completed", "rolled-back", "safe-mode"}
 TOP_LEVEL_FIELDS = {"schema_version", "operation_id", "status", "phase", "context", "records"}
+RECORD_FIELDS = {"operation_id", "step_id", "phase", "outcome", "result", "error", "context"}
 CONTEXT_FIELDS = (
     "operation_id",
     "project_id",
@@ -271,32 +272,51 @@ class UpgradeEngine:
                 raise UpgradeError("upgrade journal record is invalid")
             phase = record.get("phase")
             if phase == "rollback":
-                if record.get("operation_id") != f"{self.operation_id}:rollback":
+                if (
+                    record.get("operation_id") != self.operation_id
+                    or record.get("step_id") != f"{self.operation_id}.rollback"
+                ):
                     raise UpgradeError("upgrade journal rollback identity is invalid")
                 if record.get("outcome") not in {"started", "success", "ambiguous"}:
                     raise UpgradeError("upgrade journal rollback outcome is invalid")
+                if record.get("context") != asdict(self.context) or set(record) - RECORD_FIELDS:
+                    raise UpgradeError("upgrade journal rollback context is invalid")
+                if record["outcome"] == "success" and not isinstance(record.get("result"), dict):
+                    raise UpgradeError("successful rollback lacks result evidence")
+                if record["outcome"] == "ambiguous" and not isinstance(record.get("error"), str):
+                    raise UpgradeError("ambiguous rollback lacks error evidence")
                 continue
             if phase is not None:
                 if (
                     expected >= len(PHASES)
                     or phase != PHASES[expected]
-                    or record.get("operation_id") != f"{self.operation_id}:{phase}"
+                    or record.get("operation_id") != self.operation_id
+                    or record.get("step_id") != f"{self.operation_id}.{phase}"
                 ):
                     raise UpgradeError("upgrade journal phase identity is invalid")
                 if record.get("outcome") not in {"started", "success", "failed", "ambiguous"}:
                     raise UpgradeError("upgrade journal outcome is invalid")
-                if set(record) - {"operation_id", "phase", "outcome", "result", "error"}:
+                if set(record) - RECORD_FIELDS or record.get("context") != asdict(self.context):
                     raise UpgradeError("upgrade journal record fields are invalid")
                 outcome = record["outcome"]
                 if outcome == "success" and not isinstance(record.get("result"), dict):
                     raise UpgradeError("successful phase lacks result evidence")
                 if outcome in {"failed", "ambiguous"} and not isinstance(record.get("error"), str):
                     raise UpgradeError("failed phase lacks error evidence")
-                if outcome == "started" and set(record) != {"operation_id", "phase", "outcome"}:
+                if outcome == "started" and set(record) != {
+                    "operation_id",
+                    "step_id",
+                    "phase",
+                    "outcome",
+                    "context",
+                }:
                     raise UpgradeError("started phase has terminal evidence")
                 phase_outcomes.append(cast(str, record["outcome"]))
                 expected += 1
-            elif record.get("operation_id") != f"{self.operation_id}:rollback":
+            elif (
+                record.get("operation_id") != self.operation_id
+                or record.get("step_id") != "rollback"
+            ):
                 raise UpgradeError("upgrade journal auxiliary identity is invalid")
         status = cast(str, value["status"])
         if status == "planned" and records:
@@ -372,11 +392,14 @@ class UpgradeEngine:
                 continue
             if phase not in handlers:
                 raise UpgradeError(f"missing phase handler: {phase}")
-            operation = f"{self.operation_id}:{phase}"
+            operation = self.operation_id
+            step_id = f"{self.operation_id}.{phase}"
             record: dict[str, Any] = {
                 "operation_id": operation,
+                "step_id": step_id,
                 "phase": phase,
                 "outcome": "started",
+                "context": asdict(self.context),
             }
             records.append(record)
             value["status"] = "running"
@@ -390,7 +413,7 @@ class UpgradeEngine:
                 adapter_result = self.backend_adapter.execute(phase, frozen_context)
                 result = dict(adapter_result)
                 handler_result = (
-                    handlers[phase](operation, cast(Mapping[str, Any], _freeze(value))) or {}
+                    handlers[phase](step_id, cast(Mapping[str, Any], _freeze(value))) or {}
                 )
                 for key in set(result).intersection(handler_result):
                     if result[key] != handler_result[key]:
@@ -460,11 +483,14 @@ class UpgradeEngine:
             raise UpgradeError("rollback requires failed, running, or safe-mode operation")
         if any(record.get("phase") == "rollback" for record in value["records"]):
             raise UpgradeError("rollback outcome requires explicit reconciliation")
-        operation = f"{self.operation_id}:rollback"
+        operation = self.operation_id
+        step_id = f"{self.operation_id}.rollback"
         record: dict[str, Any] = {
             "operation_id": operation,
+            "step_id": step_id,
             "phase": "rollback",
             "outcome": "started",
+            "context": asdict(self.context),
         }
         value["records"].append(record)
         _write(self.journal, value)
@@ -474,7 +500,7 @@ class UpgradeEngine:
                     "rollback", cast(Mapping[str, object], _freeze(asdict(self.context)))
                 )
             )
-            result.update(handler(operation, cast(Mapping[str, Any], _freeze(value))) or {})
+            result.update(handler(step_id, cast(Mapping[str, Any], _freeze(value))) or {})
             required = ("restored_verified", "runtime_validated", "backend_roundtrip_valid")
             if any(
                 type(result.get(field)) is not bool or result.get(field) is not True
