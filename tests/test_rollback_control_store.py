@@ -501,6 +501,15 @@ class RollbackControlStoreTests(unittest.TestCase):
                 stale.returncode,
                 msg=f"stale stdout={stale_stdout}; stderr={stale_stderr}",
             )
+            restarted_stale = self._run_stale_fence_process(
+                control_path, authority_path, ready_path, "stale"
+            )
+            restarted_stdout, restarted_stderr = restarted_stale.communicate(timeout=10)
+            self.assertEqual(
+                0,
+                restarted_stale.returncode,
+                msg=f"restarted stale stdout={restarted_stdout}; stderr={restarted_stderr}",
+            )
             final = seed.snapshot()
             self.assertIsNotNone(final)
             assert final is not None
