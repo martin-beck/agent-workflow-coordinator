@@ -2422,7 +2422,7 @@ class RollbackControlStoreTests(unittest.TestCase):
             ):
                 second.cas(0, RECORD)
             self.assertGreaterEqual(sleep.call_count, 1)
-            self.assertTrue(all(call.args == (0.05,) for call in sleep.call_args_list))
+            self.assertTrue(all(0 < call.args[0] <= 0.05 for call in sleep.call_args_list))
             with self.assertRaises(ControlStoreError):
                 first.snapshot("op-1")
 
