@@ -7,8 +7,10 @@ from __future__ import annotations
 import unittest
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
-from typing import cast
+from typing import Any, cast
 
+from tools.lock_domain import LockDomainIdentity
+from tools.rollback_control_store import BarrierSessionState
 from tools.scoped_backend_adapter import ScopedBackendAdapter
 from tools.upgrade_engine import BackendAdapter as EngineBackendAdapter
 
@@ -134,6 +136,17 @@ class ScopedBackendAdapterTests(unittest.TestCase):
 
         with self.assertRaisesRegex(TypeError, "incomplete"):
             ScopedBackendAdapter(IncompleteBackend(), Scope())  # type: ignore[arg-type]
+
+    def test_session_entry_rejects_missing_typed_identity(self) -> None:
+        with self.assertRaisesRegex(TypeError, "identity"):
+            ScopedBackendAdapter.from_validated_session(
+                Backend(),
+                Scope(),
+                cast(LockDomainIdentity, object()),
+                object(),
+                cast(BarrierSessionState, object()),
+                cast(Any, object()),
+            )
 
 
 if __name__ == "__main__":

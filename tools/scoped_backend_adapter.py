@@ -7,7 +7,10 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any, Protocol, runtime_checkable
 
+from tools.admission_lease import AdmissionLease
 from tools.admitted_control_store import OrderedAdmissionScope
+from tools.lock_domain import LockDomainIdentity
+from tools.rollback_control_store import BarrierSessionState
 
 
 @runtime_checkable
@@ -42,6 +45,23 @@ class ScopedBackendAdapter:
             raise TypeError("caller trace scope is required")
         self._backend = backend
         self._scope = scope
+
+    @classmethod
+    def from_validated_session(
+        cls,
+        backend: BackendAdapter,
+        scope: CallerTraceScope,
+        identity: LockDomainIdentity,
+        current_identity: object,
+        session_state: BarrierSessionState,
+        lease: AdmissionLease,
+    ) -> ScopedBackendAdapter:
+        """Construct only after descriptor and durable caller evidence match."""
+        if not isinstance(identity, LockDomainIdentity):
+            raise TypeError("lock-domain identity is required")
+        identity.assert_descriptor_binding(current_identity)
+        identity.assert_session_binding(session_state, lease)
+        return cls(backend, scope)
 
     def snapshot(self, phase: str, context: Mapping[str, object]) -> dict[str, Any]:
         """Read backend evidence only while the scope is held."""
