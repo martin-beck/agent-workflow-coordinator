@@ -8,6 +8,7 @@ from __future__ import annotations
 import importlib.util
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from tools.upgrade_identity import canonical_barrier_digest, canonical_envelope_digest
 
@@ -167,6 +168,32 @@ class UpgradeAdmissionTests(unittest.TestCase):
             snapshot["safe_mode_ready"] = value
             with self.subTest(value=value), self.assertRaises(AdmissionError):
                 admit_safe_mode(snapshot)
+
+    def test_reopen_and_safe_mode_require_durable_barrier_identity(self) -> None:
+        snapshot = complete(REOPEN_PREDICATES)
+        snapshot["target"] = "unsupported"
+        snapshot["barrier_identity_digest"] = canonical_barrier_digest(snapshot)
+        snapshot["envelope_digest"] = canonical_envelope_digest(snapshot)
+        with (
+            patch.object(MODULE, "validate_envelope", return_value=snapshot),
+            self.assertRaisesRegex(AdmissionError, "target must be new or rollback"),
+        ):
+            admit_reopen(snapshot)
+        snapshot = complete(REOPEN_PREDICATES)
+        snapshot["durable_barrier_id"] = ""
+        with (
+            patch.object(MODULE, "validate_envelope", return_value=snapshot),
+            self.assertRaisesRegex(AdmissionError, "barrier proof is absent"),
+        ):
+            admit_reopen(snapshot)
+        snapshot = complete(())
+        snapshot["safe_mode_ready"] = True
+        snapshot["durable_barrier_id"] = ""
+        with (
+            patch.object(MODULE, "validate_envelope", return_value=snapshot),
+            self.assertRaisesRegex(AdmissionError, "barrier proof is absent"),
+        ):
+            admit_safe_mode(snapshot)
 
     def test_non_boolean_truthy_values_fail_closed(self) -> None:
         snapshot = complete(PREFLIGHT_PREDICATES)
