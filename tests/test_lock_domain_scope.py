@@ -139,6 +139,34 @@ class LockDomainScopeTests(unittest.TestCase):
         with self.assertRaisesRegex(LockDomainError, "binding|identity"), scope.hold():
             self.fail("unreachable")
 
+    def test_abort_then_recheck_rejects_replaced_authority(self) -> None:
+        """A caller abort cannot make a replaced authority descriptor admissible."""
+        scope = LockDomainScope(self.domain, self.session, self.fence, self.lease, locked)
+        with self.assertRaisesRegex(SystemExit, "simulated abort"), scope.hold():
+            raise SystemExit("simulated abort")
+        self.assertFalse(self.session.operation_owned_by_current_thread)
+
+        replacement = self.root / "replacement-authority.sqlite"
+        replacement.write_bytes(b"replacement")
+        replacement.chmod(0o600)
+        self.authority.unlink()
+        replacement.replace(self.authority)
+        with self.assertRaisesRegex(LockDomainError, "binding|identity"), scope.hold():
+            self.fail("replaced authority must be rejected after abort")
+        self.assertFalse(self.session.operation_owned_by_current_thread)
+
+    def test_abort_then_recheck_rejects_durable_session_state_change(self) -> None:
+        """A durable ambiguous session remains fail-closed after caller abort."""
+        scope = LockDomainScope(self.domain, self.session, self.fence, self.lease, locked)
+        with self.assertRaisesRegex(SystemExit, "simulated abort"), scope.hold():
+            raise SystemExit("simulated abort")
+        self.assertFalse(self.session.operation_owned_by_current_thread)
+
+        self.session.mark_ambiguous(1, "caller-abort")
+        with self.assertRaisesRegex(LockDomainError, "not held"), scope.hold():
+            self.fail("ambiguous durable session must be rejected")
+        self.assertFalse(self.session.operation_owned_by_current_thread)
+
     def test_two_process_scopes_never_overlap(self) -> None:
         context = multiprocessing.get_context("fork")
         start = context.Event()
