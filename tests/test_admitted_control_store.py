@@ -113,17 +113,17 @@ class AdmittedControlStoreTests(unittest.TestCase):
 
         class MutableRecord(Mapping[str, object]):
             def __init__(self, values: Mapping[str, object]) -> None:
-                self.values = dict(values)
+                self._data = dict(values)
 
             def __getitem__(self, key: str) -> object:
-                return self.values[key]
+                return self._data[key]
 
             def __iter__(self) -> Iterator[str]:
                 events.append("snapshot")
-                return iter(self.values)
+                return iter(self._data)
 
             def __len__(self) -> int:
-                return len(self.values)
+                return len(self._data)
 
         class Scope:
             def assert_ordered(self) -> None:
@@ -138,11 +138,12 @@ class AdmittedControlStoreTests(unittest.TestCase):
             def cas(
                 self,
                 expected_revision: int,  # noqa: ARG002
-                record: dict[str, object],
+                record: Mapping[str, object],
             ) -> dict[str, object]:
                 events.append("write")
-                self.record = record
-                return record
+                snapshot = dict(record)
+                self.record = snapshot
+                return snapshot
 
         store = Store()
         result = admitted_cas(
