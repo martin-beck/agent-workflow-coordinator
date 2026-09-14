@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import sqlite3
 import tempfile
 import unittest
 from collections.abc import Mapping
@@ -52,6 +53,16 @@ class RollbackControlStoreTests(unittest.TestCase):
             releasing = store.cas(1, {**RECORD, "status": "releasing", "revision": 2})
             with self.assertRaises(ControlStoreError):
                 store.cas(2, {**releasing, "status": "held", "revision": 3})
+
+    def test_schema_corruption_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "control.sqlite"
+            store = SQLiteRollbackControlStore(path, PROJECT)
+            store.cas(0, RECORD)
+            with sqlite3.connect(path) as connection:
+                connection.execute("UPDATE control_meta SET value='99' WHERE key='schema_version'")
+            with self.assertRaises(ControlStoreError):
+                store.snapshot("op-1")
 
     def test_with_barrier_holds_coordinator_lock_through_authority_callback(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

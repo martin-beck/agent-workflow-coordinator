@@ -149,6 +149,11 @@ class SQLiteRollbackControlStore:
             connection.execute(
                 "INSERT OR IGNORE INTO control_meta(key,value) VALUES ('schema_version','1')"
             )
+            schema = connection.execute(
+                "SELECT value FROM control_meta WHERE key='schema_version'"
+            ).fetchone()
+            if schema is None or schema[0] != str(SCHEMA_VERSION):
+                raise ControlStoreError("control store schema version mismatch")
             value = connection.execute(
                 "SELECT value FROM control_meta WHERE key='project_id'"
             ).fetchone()
