@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import sqlite3
 import uuid
@@ -186,15 +187,31 @@ class SQLiteRollbackControlStore:
             raise ControlStoreError("control project_id must be UUIDv4")
 
     @staticmethod
-    def _check_paths(path: Path, authority_path: Path | None) -> None:
+    def _check_paths(path: Path, authority_path: Path | None) -> None:  # noqa: C901
         if path.exists() and path.is_symlink():
             raise ControlStoreError("control store path must not be a symlink")
         if any(parent.exists() and parent.is_symlink() for parent in path.parents):
             raise ControlStoreError("control store parent must not be a symlink")
+        if path.exists():
+            try:
+                descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+                try:
+                    if not os.fstat(descriptor).st_mode & 0o100000:
+                        raise ControlStoreError("control store is not a regular file")
+                finally:
+                    os.close(descriptor)
+            except OSError as error:
+                raise ControlStoreError("control store descriptor is unsafe") from error
         if authority_path is None:
             return
         if authority_path.exists() and authority_path.is_symlink():
             raise ControlStoreError("authority path must not be a symlink")
+        if authority_path.exists():
+            try:
+                descriptor = os.open(authority_path, os.O_RDONLY | os.O_NOFOLLOW)
+                os.close(descriptor)
+            except OSError as error:
+                raise ControlStoreError("authority descriptor is unsafe") from error
         try:
             if path.exists() and authority_path.exists() and path.samefile(authority_path):
                 raise ControlStoreError("control store aliases authority")
