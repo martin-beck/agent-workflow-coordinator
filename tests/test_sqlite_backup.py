@@ -77,6 +77,18 @@ def _manifest_then_crash_before_directory_fsync(path: str, manifest: dict[str, o
         write_manifest(Path(path), manifest)
 
 
+def _restore_then_crash_after_replace(
+    backup: str, destination: str, manifest: dict[str, object]
+) -> None:
+    """Kill after verified restore replacement and before directory fsync."""
+
+    def crash(_directory: Path) -> None:
+        os.kill(os.getpid(), signal.SIGKILL)
+
+    with patch.object(MODULE, "_fsync_directory", side_effect=crash):
+        restore_database(Path(backup), Path(destination), manifest, BINDING, quiesced=True)
+
+
 class SQLiteBackupTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = TemporaryDirectory()
@@ -172,6 +184,25 @@ class SQLiteBackupTests(unittest.TestCase):
         reopened = MODULE.json.loads(manifest_path.read_text(encoding="utf-8"))
         MODULE._validate_manifest(reopened)
         self.assertEqual(manifest["database_sha256"], reopened["database_sha256"])
+
+    def test_ambiguous_restore_reopens_and_idempotently_retries(self) -> None:
+        backup = self.root / "backup.sqlite3"
+        manifest = backup_database(self.source, backup, BINDING)
+        destination = self.root / "restored.sqlite3"
+        create_database(destination, body="known-good")
+        process = multiprocessing.get_context("fork").Process(
+            target=_restore_then_crash_after_replace,
+            args=(str(backup), str(destination), manifest),
+        )
+        process.start()
+        process.join(timeout=10)
+        self.assertEqual(-signal.SIGKILL, process.exitcode)
+        self.assertFalse(process.is_alive())
+        MODULE._integrity(destination, BINDING)
+        self.assertEqual(manifest["database_sha256"], MODULE._digest(destination))
+        restore_database(backup, destination, manifest, BINDING, quiesced=True)
+        MODULE._integrity(destination, BINDING)
+        self.assertEqual(manifest["database_sha256"], MODULE._digest(destination))
 
     def test_failed_directory_fsync_restores_existing_destination(self) -> None:
         backup = self.root / "backup.sqlite3"
