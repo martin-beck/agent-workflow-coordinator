@@ -85,7 +85,7 @@ class GitAuthorityAdapterTests(unittest.TestCase):
 
         adapter = ScopedBackendAdapter(self.adapter, Scope())
         self.assertTrue(adapter.snapshot("discover", CONTEXT)["git_clean"])
-        with self.assertRaisesRegex(GitAuthorityError, "not implemented"):
+        with self.assertRaisesRegex(TypeError, "disabled"):
             adapter.execute("commit", CONTEXT)
 
     def test_dirty_or_detached_or_mismatched_context_fails_closed(self) -> None:

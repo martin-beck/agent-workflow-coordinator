@@ -12,6 +12,8 @@ from tools.admitted_control_store import OrderedAdmissionScope
 from tools.lock_domain import LockDomainIdentity
 from tools.rollback_control_store import BarrierSessionState
 
+DISABLED_MUTATION_PHASES = frozenset({"commit", "apply", "rollback"})
+
 
 @runtime_checkable
 class CallerTraceScope(OrderedAdmissionScope, Protocol):
@@ -91,6 +93,8 @@ class ScopedBackendAdapter:
 
     def execute(self, phase: str, context: Mapping[str, object]) -> dict[str, Any]:
         """Execute one adapter operation only while the scope is held."""
+        if phase in DISABLED_MUTATION_PHASES:
+            raise TypeError("mutation phase is disabled at scoped adapter boundary")
         self._scope.assert_context(context)
         with self._scope.hold():
             result = self._backend.execute(phase, context)

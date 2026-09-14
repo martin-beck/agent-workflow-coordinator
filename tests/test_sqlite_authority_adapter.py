@@ -97,7 +97,7 @@ class SQLiteAuthorityAdapterTests(unittest.TestCase):
     def test_scoped_wrapper_guards_disabled_execute(self) -> None:
         adapter = ScopedBackendAdapter(self.adapter, Scope())
         self.assertTrue(adapter.snapshot("discover", CONTEXT)["sqlite_integrity_verified"])
-        with self.assertRaisesRegex(SQLiteAuthorityError, "not implemented"):
+        with self.assertRaisesRegex(TypeError, "disabled"):
             adapter.execute("commit", CONTEXT)
 
     def test_corrupt_or_mismatched_authority_fails_closed(self) -> None:

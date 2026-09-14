@@ -120,7 +120,17 @@ class ScopedBackendAdapterTests(unittest.TestCase):
 
         adapter = ScopedBackendAdapter(MutatingBackend(), Scope())
         with self.assertRaisesRegex(TypeError, "non-mutating"):
-            adapter.execute("commit", {})
+            adapter.execute("reopen", {})
+
+    def test_execute_rejects_disabled_mutation_phases_before_scope(self) -> None:
+        class UnexpectedScope(Scope):
+            def assert_context(self, _context: Mapping[str, object]) -> None:
+                raise AssertionError("disabled phase must stop before scope")
+
+        adapter = ScopedBackendAdapter(Backend(), UnexpectedScope())
+        for phase in ("commit", "apply", "rollback"):
+            with self.subTest(phase=phase), self.assertRaisesRegex(TypeError, "disabled"):
+                adapter.execute(phase, {})
 
     def test_invalid_scope_is_rejected_before_engine_binding(self) -> None:
         with self.assertRaisesRegex(TypeError, "scope"):
