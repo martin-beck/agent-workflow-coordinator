@@ -6,6 +6,10 @@ This module is an optional seam: ordinary coordination does not construct it.
 The SQLite backend accepts it only when an explicitly provisioned caller binds
 the route; ``storage_backend`` remains unbound. Upgrade admission and
 apply/rollback remain rejection-only.
+
+This slice does not claim WAL/SHM crash consistency, process-death recovery,
+or refinement of the durable barrier protocol; those require a separate
+formal and multiprocess evidence slice.
 """
 
 from __future__ import annotations
@@ -17,6 +21,7 @@ import json
 import os
 import re
 import secrets
+import sqlite3
 import stat
 import threading
 from collections.abc import Callable, Iterator
@@ -103,6 +108,87 @@ def _read_json(path: Path, label: str) -> dict[str, object]:
     if not isinstance(value, dict):
         raise MutationFenceError(f"{label} schema is invalid")
     return value
+
+
+def _validate_binding(binding: object, project_id: str) -> dict[str, object]:
+    if not isinstance(binding, dict):
+        raise MutationFenceError("control binding schema is invalid")
+    if binding.get("identity_digest") != _digest(
+        {key: value for key, value in binding.items() if key != "identity_digest"}
+    ):
+        raise MutationFenceError("control binding digest is invalid")
+    if binding.get("project_id") != project_id:
+        raise MutationFenceError("control binding project identity changed")
+    return binding
+
+
+def _open_binding_descriptor(
+    path: Path, project_id: str
+) -> tuple[int, int, os.stat_result, os.stat_result, dict[str, object], bytes]:
+    parent_fd, parent = _parent(path)
+    descriptor = -1
+    try:
+        descriptor = os.open(path.name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=parent_fd)
+        before = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(before.st_mode)
+            or before.st_uid != os.geteuid()
+            or before.st_nlink != 1
+            or stat.S_IMODE(before.st_mode) != 0o600
+        ):
+            raise MutationFenceError("control binding is not an owner-only regular file")
+        binding_bytes = os.read(descriptor, 1 << 20)
+        if os.read(descriptor, 1):
+            raise MutationFenceError("control binding is too large")
+        if (
+            before.st_dev != os.fstat(descriptor).st_dev
+            or before.st_ino != os.fstat(descriptor).st_ino
+        ):
+            raise MutationFenceError("control binding identity changed")
+        binding = _validate_binding(json.loads(binding_bytes.decode("utf-8")), project_id)
+        return parent_fd, descriptor, parent, before, binding, binding_bytes
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        if descriptor >= 0:
+            os.close(descriptor)
+        os.close(parent_fd)
+        raise MutationFenceError("control binding is unreadable") from error
+    except MutationFenceError:
+        if descriptor >= 0:
+            os.close(descriptor)
+        os.close(parent_fd)
+        raise
+
+
+def _verify_binding_unchanged(
+    path: Path,
+    parent_fd: int,
+    parent: os.stat_result,
+    descriptor: int,
+    before: os.stat_result,
+    original: bytes,
+) -> None:
+    if _identity(os.fstat(descriptor), os.fstat(parent_fd)) != _identity(before, parent):
+        raise MutationFenceError("control binding identity changed")
+    os.lseek(descriptor, 0, os.SEEK_SET)
+    if os.read(descriptor, 1 << 20) != original:
+        raise MutationFenceError("control binding contents changed")
+    path_descriptor = os.open(path.name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=parent_fd)
+    try:
+        if _identity(os.fstat(path_descriptor), os.fstat(parent_fd)) != _identity(before, parent):
+            raise MutationFenceError("control binding identity changed")
+    finally:
+        os.close(path_descriptor)
+
+
+def _parent_after_binding(
+    path: Path, binding_descriptor: int, binding_parent_fd: int
+) -> tuple[int, os.stat_result]:
+    try:
+        return _parent(path)
+    except (MutationFenceError, OSError):
+        os.close(binding_descriptor)
+        os.close(binding_parent_fd)
+        raise
 
 
 def _parent(path: Path) -> tuple[int, os.stat_result]:
@@ -293,6 +379,7 @@ class MutationFence:
         self.control_binding = control_binding
         self.control_lock = control_lock
         self._scope_owner: int | None = None
+        self._process_lock = threading.Lock()
 
     def _verify(self) -> dict[str, object]:
         record = _read_json(self.marker, "authority fence marker")
@@ -376,15 +463,16 @@ class MutationFence:
     def mutation_scope(
         self,
         common_lock: Callable[[], AbstractContextManager[object]],
-        barrier_status: Callable[[], str | None],
     ) -> Iterator[None]:
         """Acquire common -> control -> authority and admit only released."""
         if self._scope_owner == threading.get_ident():
             raise MutationFenceError("mutation fence scope is non-reentrant")
+        if not self._process_lock.acquire(blocking=False):
+            raise MutationFenceError("mutation fence scope is busy")
         self._scope_owner = threading.get_ident()
         try:
             with common_lock(), self.control_locked(), self.locked():
-                status = barrier_status()
+                status = self._read_barrier_status()
                 if status != "released":
                     raise MutationFenceError(
                         f"authority mutation rejected while barrier is {status}"
@@ -392,6 +480,68 @@ class MutationFence:
                 yield
         finally:
             self._scope_owner = None
+            self._process_lock.release()
+
+    def _read_barrier_status(self) -> str:
+        if self.control_store is None or self.control_binding is None:
+            raise MutationFenceError("control binding prerequisites are incomplete")
+        project_id = self._verify_marker(_read_json(self.marker, "authority fence marker"))
+        (
+            binding_parent_fd,
+            binding_descriptor,
+            binding_parent,
+            binding_before,
+            binding,
+            binding_bytes,
+        ) = _open_binding_descriptor(self.control_binding, project_id)
+        expected_identity = binding.get("control_store")
+        parent_fd, parent = _parent_after_binding(
+            self.control_store, binding_descriptor, binding_parent_fd
+        )
+        descriptor = -1
+        connection: sqlite3.Connection | None = None
+        try:
+            descriptor = os.open(
+                self.control_store.name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=parent_fd
+            )
+            status = os.fstat(descriptor)
+            if asdict(_identity(status, parent)) != expected_identity:
+                raise MutationFenceError("control store identity changed")
+            # The /proc descriptor URI contains no caller-controlled pathname,
+            # so URI metacharacters cannot redirect the SQLite open.
+            connection = sqlite3.connect(
+                f"file:/proc/self/fd/{descriptor}?mode=ro", uri=True, timeout=10
+            )
+            rows = connection.execute(
+                "SELECT status FROM barrier WHERE project_id=?", (project_id,)
+            ).fetchall()
+            current = os.fstat(descriptor)
+            if _identity(current, os.fstat(parent_fd)) != _identity(status, parent):
+                raise MutationFenceError("control store identity changed")
+            _verify_binding_unchanged(
+                self.control_binding,
+                binding_parent_fd,
+                binding_parent,
+                binding_descriptor,
+                binding_before,
+                binding_bytes,
+            )
+        except (sqlite3.Error, OSError) as error:
+            raise MutationFenceError("durable control barrier is unreadable") from error
+        finally:
+            if connection is not None:
+                connection.close()
+            if descriptor >= 0:
+                os.close(descriptor)
+            os.close(parent_fd)
+            os.close(binding_descriptor)
+            os.close(binding_parent_fd)
+        if len(rows) != 1:
+            raise MutationFenceError("durable control barrier is missing or ambiguous")
+        status = rows[0][0]
+        if not isinstance(status, str):
+            raise MutationFenceError("durable control barrier status is invalid")
+        return status
 
     @contextmanager
     def locked(self) -> Iterator[None]:

@@ -8,6 +8,7 @@ from __future__ import annotations
 import errno
 import json
 import os
+import sqlite3
 import tempfile
 import unittest
 from collections.abc import Iterator
@@ -38,7 +39,11 @@ class MutationFenceTests(unittest.TestCase):
         self.lifecycle = self.root / "wal-lifecycle.json"
         self.lock = self.root / "authority.lock"
         self.control = self.root / "control.sqlite3"
-        self.control.write_bytes(b"existing control")
+        connection = sqlite3.connect(self.control)
+        connection.execute("CREATE TABLE barrier(project_id TEXT, status TEXT)")
+        connection.execute("INSERT INTO barrier VALUES ('project', 'released')")
+        connection.commit()
+        connection.close()
         self.control.chmod(0o600)
         self.control_lock = self.root / "control.lock"
         self.control_binding = self.root / "control-binding.json"
@@ -257,6 +262,14 @@ class MutationFenceTests(unittest.TestCase):
             self.control_lock,
         )
 
+    def _set_barrier(self, status: str | None) -> None:
+        connection = sqlite3.connect(self.control)
+        connection.execute("DELETE FROM barrier WHERE project_id='project'")
+        if status is not None:
+            connection.execute("INSERT INTO barrier VALUES ('project', ?)", (status,))
+        connection.commit()
+        connection.close()
+
     def test_scope_rejects_missing_and_nonreleased_barriers(self) -> None:
         fence = self._fenced()
 
@@ -265,17 +278,16 @@ class MutationFenceTests(unittest.TestCase):
             yield None
 
         for status in (None, "held", "releasing", "ambiguous"):
-
-            def read_status(status: str | None = status) -> str | None:
-                return status
+            self._set_barrier(status)
 
             with (
                 self.subTest(status=status),
-                self.assertRaisesRegex(MutationFenceError, "rejected"),
-                fence.mutation_scope(common, read_status),
+                self.assertRaisesRegex(MutationFenceError, "rejected|missing"),
+                fence.mutation_scope(common),
             ):
                 pass
-        with fence.mutation_scope(common, lambda: "released"):
+        self._set_barrier("released")
+        with fence.mutation_scope(common):
             pass
 
     def test_scope_is_nonreentrant_and_sqlite_route_uses_it(self) -> None:
@@ -286,9 +298,9 @@ class MutationFenceTests(unittest.TestCase):
             yield None
 
         with (
-            fence.mutation_scope(common, lambda: "released"),
+            fence.mutation_scope(common),
             self.assertRaisesRegex(MutationFenceError, "non-reentrant"),
-            fence.mutation_scope(common, lambda: "released"),
+            fence.mutation_scope(common),
         ):
             pass
         database = self.root / "backend.sqlite3"
@@ -321,7 +333,7 @@ class MutationFenceTests(unittest.TestCase):
 
         @contextmanager
         def route_scope() -> Iterator[object]:
-            with backend_fence.mutation_scope(common, lambda: "released"):
+            with backend_fence.mutation_scope(common):
                 yield None
 
         backend = SQLiteBackend(database, binding, self.root, mutation_scope=route_scope)
@@ -334,10 +346,198 @@ class MutationFenceTests(unittest.TestCase):
             database,
             binding,
             self.root,
-            mutation_scope=lambda: backend_fence.mutation_scope(common, lambda: "held"),
+            mutation_scope=lambda: backend_fence.mutation_scope(common),
         )
+        self._set_barrier("held")
         with self.assertRaisesRegex(MutationFenceError, "rejected"), blocked.transaction():
             pass
+
+    def test_durable_barrier_read_failures_are_fail_closed(self) -> None:
+        fence = self._fenced()
+
+        @contextmanager
+        def common() -> Iterator[object]:
+            yield None
+
+        connection = sqlite3.connect(self.control)
+        connection.execute("INSERT INTO barrier VALUES ('project', 'released')")
+        connection.commit()
+        connection.close()
+        with (
+            self.assertRaisesRegex(MutationFenceError, "missing or ambiguous"),
+            fence.mutation_scope(common),
+        ):
+            pass
+        self._set_barrier("held")
+        connection = sqlite3.connect(self.control)
+        connection.execute(
+            "UPDATE barrier SET status=? WHERE project_id='project'", (sqlite3.Binary(b"x"),)
+        )
+        connection.commit()
+        connection.close()
+        with (
+            self.assertRaisesRegex(MutationFenceError, "status is invalid"),
+            fence.mutation_scope(common),
+        ):
+            pass
+        self.control.write_bytes(b"not sqlite")
+        self.control.chmod(0o600)
+        with self.assertRaisesRegex(MutationFenceError, "unreadable"), fence.mutation_scope(common):
+            pass
+
+    def test_control_store_symlink_and_replacement_are_rejected(self) -> None:
+        fence = self._fenced()
+        copy = self.root / "control-copy.sqlite3"
+        copy.write_bytes(self.control.read_bytes())
+        copy.chmod(0o600)
+        self.control.unlink()
+        self.control.symlink_to(copy)
+        with self.assertRaisesRegex(MutationFenceError, "identity|unreadable|descriptor"):
+            fence._read_barrier_status()
+        original = self.root / "control-original.sqlite3"
+        self.control.rename(original)
+        replacement = self.root / "control-replacement.sqlite3"
+        replacement.write_bytes(copy.read_bytes())
+        replacement.chmod(0o600)
+        replacement.rename(self.control)
+        with self.assertRaisesRegex(MutationFenceError, "identity"):
+            fence._read_barrier_status()
+
+    def test_binding_replacement_during_control_open_is_rejected(self) -> None:
+        fence = self._fenced()
+        original = self.control_binding.read_bytes()
+        replacement = self.root / "control-binding-replacement.json"
+        replacement.write_bytes(original)
+        replacement.chmod(0o600)
+        moved = self.root / "control-binding-original.json"
+        replaced = False
+        real_open = os.open
+
+        def replacing_open(
+            path: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+            flags: int,
+            *args: int,
+            **kwargs: int,
+        ) -> int:
+            nonlocal replaced
+            if path == self.control.name and not replaced:
+                self.control_binding.rename(moved)
+                replacement.rename(self.control_binding)
+                replaced = True
+            return real_open(path, flags, *args, **kwargs)
+
+        with (
+            patch.object(os, "open", side_effect=replacing_open),
+            self.assertRaisesRegex(MutationFenceError, "control binding identity changed"),
+        ):
+            fence._read_barrier_status()
+        self.assertTrue(replaced)
+
+    def test_binding_snapshot_schema_and_size_are_fail_closed(self) -> None:
+        fence = self._fenced()
+        original = self.control_binding.read_bytes()
+        changed = json.loads(original)
+        changed["project_id"] = "other"
+        changed["identity_digest"] = mutation_fence._digest(
+            {key: value for key, value in changed.items() if key != "identity_digest"}
+        )
+        cases = [
+            (b"[]", "schema is invalid"),
+            (b"{", "unreadable"),
+            (json.dumps({"project_id": "project"}).encode(), "digest is invalid"),
+            (json.dumps(changed).encode(), "project identity changed"),
+            (b"x" * (1 << 20) + b"y", "too large"),
+        ]
+        try:
+            for content, message in cases:
+                self.control_binding.write_bytes(content)
+                self.control_binding.chmod(0o600)
+                with self.assertRaisesRegex(MutationFenceError, message):
+                    fence._read_barrier_status()
+        finally:
+            self.control_binding.write_bytes(original)
+            self.control_binding.chmod(0o600)
+
+    def test_binding_permission_and_parent_failures_are_rejected(self) -> None:
+        fence = self._fenced()
+        self.control_binding.chmod(0o644)
+        with self.assertRaisesRegex(MutationFenceError, "owner-only"):
+            fence._read_barrier_status()
+        self.control_binding.chmod(0o600)
+        missing_parent = self.root / "missing" / "control.sqlite3"
+        missing_fence = MutationFence(
+            self.authority,
+            self.marker,
+            self.lifecycle,
+            self.lock,
+            control_store=missing_parent,
+            control_binding=self.control_binding,
+            control_lock=self.control_lock,
+        )
+        with self.assertRaises(OSError):
+            missing_fence._read_barrier_status()
+
+    def test_binding_content_rewrite_after_control_read_is_rejected(self) -> None:
+        fence = self._fenced()
+        real_open = os.open
+        real_read = os.read
+        binding_fd: int | None = None
+        binding_reads = 0
+
+        def tracking_open(
+            path: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+            flags: int,
+            *args: int,
+            **kwargs: int,
+        ) -> int:
+            nonlocal binding_fd
+            descriptor = real_open(path, flags, *args, **kwargs)
+            if path == self.control_binding.name:
+                binding_fd = descriptor
+            return descriptor
+
+        def rewriting_read(fd: int, size: int) -> bytes:
+            nonlocal binding_reads
+            value = real_read(fd, size)
+            if fd == binding_fd:
+                binding_reads += 1
+                if binding_reads == 3:
+                    return b"rewritten"
+            return value
+
+        with (
+            patch.object(os, "open", side_effect=tracking_open),
+            patch.object(os, "read", side_effect=rewriting_read),
+            self.assertRaisesRegex(MutationFenceError, "contents changed"),
+        ):
+            fence._read_barrier_status()
+
+    def test_missing_binding_and_process_busy_are_rejected(self) -> None:
+        provision(self.authority, self.marker, self.lifecycle, self.lock, "project")
+        incomplete = MutationFence(
+            self.authority,
+            self.marker,
+            self.lifecycle,
+            self.lock,
+            control_store=self.control,
+        )
+
+        @contextmanager
+        def common() -> Iterator[object]:
+            yield None
+
+        with (
+            self.assertRaisesRegex(MutationFenceError, "prerequisites"),
+            incomplete.mutation_scope(common),
+        ):
+            pass
+        fence = self._fenced()
+        fence._process_lock.acquire()
+        try:
+            with self.assertRaisesRegex(MutationFenceError, "busy"), fence.mutation_scope(common):
+                pass
+        finally:
+            fence._process_lock.release()
 
     def test_record_permissions_and_descriptor_races_fail_closed(self) -> None:
         provision(self.authority, self.marker, self.lifecycle, self.lock, "project")
