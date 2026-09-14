@@ -1,0 +1,287 @@
+# Copyright (C) Huawei Technologies Co., Ltd. 2026. All rights reserved.
+# SPDX-License-Identifier: MIT
+"""Provisioned authority-lock and mutation-fence foundation.
+
+This module is intentionally a seam: ordinary coordination does not construct
+it, and upgrade admission remains rejection-only until a later slice binds the
+durable barrier reread to every authority mutation.
+"""
+
+from __future__ import annotations
+
+import errno
+import fcntl
+import hashlib
+import json
+import os
+import re
+import secrets
+import stat
+from collections.abc import Iterator
+from contextlib import contextmanager, suppress
+from dataclasses import asdict, dataclass
+from pathlib import Path
+
+
+class MutationFenceError(RuntimeError):
+    """A provisioned authority fence is missing or no longer trustworthy."""
+
+
+SCHEMA_VERSION = 1
+LIFECYCLE_STATES = {"absent", "active", "clean_checkpointed"}
+_PROJECT_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
+
+
+@dataclass(frozen=True, slots=True)
+class DescriptorIdentity:
+    """Stable identity of one retained project-bound filesystem object."""
+
+    device: int
+    inode: int
+    parent_device: int
+    parent_inode: int
+    mode: int
+    owner: int
+    links: int
+
+
+def _identity(status: os.stat_result, parent: os.stat_result) -> DescriptorIdentity:
+    return DescriptorIdentity(
+        status.st_dev,
+        status.st_ino,
+        parent.st_dev,
+        parent.st_ino,
+        stat.S_IMODE(status.st_mode),
+        status.st_uid,
+        status.st_nlink,
+    )
+
+
+def _canonical(value: dict[str, object]) -> bytes:
+    return json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8")
+
+
+def _digest(value: dict[str, object]) -> str:
+    return "sha256:" + hashlib.sha256(_canonical(value)).hexdigest()
+
+
+def _read_json(path: Path, label: str) -> dict[str, object]:
+    try:
+        value = json.loads(path.read_text())
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise MutationFenceError(f"{label} is unreadable") from error
+    if not isinstance(value, dict):
+        raise MutationFenceError(f"{label} schema is invalid")
+    return value
+
+
+def _parent(path: Path) -> tuple[int, os.stat_result]:
+    if not path.is_absolute() or ".." in path.parts or path.name in {"", ".", ".."}:
+        raise MutationFenceError("fence path is not canonical and absolute")
+    descriptor = os.open("/", os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        for part in path.parent.parts[1:]:
+            child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=descriptor)
+            os.close(descriptor)
+            descriptor = child
+        status = os.fstat(descriptor)
+        if status.st_uid != os.geteuid() or stat.S_IMODE(status.st_mode) != 0o700:
+            raise MutationFenceError("fence parent requires an owner-only provisioned directory")
+        return descriptor, status
+    except Exception:
+        os.close(descriptor)
+        raise
+
+
+def _existing(path: Path, label: str) -> DescriptorIdentity:
+    parent_fd, parent = _parent(path)
+    descriptor = -1
+    try:
+        descriptor = os.open(path.name, os.O_RDWR | os.O_NOFOLLOW, dir_fd=parent_fd)
+        status = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(status.st_mode)
+            or status.st_uid != os.geteuid()
+            or status.st_nlink != 1
+            or stat.S_IMODE(status.st_mode) != 0o600
+        ):
+            raise MutationFenceError(f"{label} is not an owner-only regular file")
+        return _identity(status, parent)
+    except FileNotFoundError as error:
+        raise MutationFenceError(f"{label} is missing") from error
+    except OSError as error:
+        raise MutationFenceError(f"{label} descriptor is unsafe") from error
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+        os.close(parent_fd)
+
+
+def _create_lock(path: Path) -> DescriptorIdentity:
+    parent_fd, parent = _parent(path)
+    descriptor = -1
+    try:
+        try:
+            descriptor = os.open(
+                path.name,
+                os.O_CREAT | os.O_EXCL | os.O_RDWR | os.O_NOFOLLOW,
+                0o600,
+                dir_fd=parent_fd,
+            )
+            os.fsync(descriptor)
+            os.fsync(parent_fd)
+        except FileExistsError:
+            descriptor = os.open(path.name, os.O_RDWR | os.O_NOFOLLOW, dir_fd=parent_fd)
+        status = os.fstat(descriptor)
+        if not stat.S_ISREG(status.st_mode) or status.st_uid != os.geteuid():
+            raise MutationFenceError("authority.lock is not an owner-only regular file")
+        if stat.S_IMODE(status.st_mode) != 0o600 or status.st_nlink != 1:
+            raise MutationFenceError("authority.lock permissions or links are unsafe")
+        return _identity(status, parent)
+    except OSError as error:
+        raise MutationFenceError("authority.lock cannot be provisioned safely") from error
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+        os.close(parent_fd)
+
+
+def _atomic_json(path: Path, value: dict[str, object]) -> None:
+    parent_fd, _ = _parent(path)
+    temporary = path.parent / f".{path.name}.{secrets.token_hex(8)}.tmp"
+    descriptor = -1
+    try:
+        descriptor = os.open(
+            temporary.name,
+            os.O_CREAT | os.O_EXCL | os.O_WRONLY | os.O_NOFOLLOW,
+            0o600,
+            dir_fd=parent_fd,
+        )
+        payload = _canonical(value) + b"\n"
+        os.write(descriptor, payload)
+        os.fsync(descriptor)
+        os.close(descriptor)
+        descriptor = -1
+        os.rename(temporary.name, path.name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+        os.fsync(parent_fd)
+    except OSError as error:
+        raise MutationFenceError("fence record publication is ambiguous") from error
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+        with suppress(FileNotFoundError):
+            os.unlink(temporary.name, dir_fd=parent_fd)
+        os.close(parent_fd)
+
+
+def provision(
+    authority: Path,
+    marker: Path,
+    lifecycle: Path,
+    authority_lock: Path,
+    project_id: str,
+) -> dict[str, object]:
+    """Bind an existing authority and publish its fence records atomically."""
+    if _PROJECT_ID.fullmatch(project_id) is None:
+        raise MutationFenceError("project identifier is not canonical and opaque")
+    authority_identity = _existing(authority, "authority database")
+    lock_identity = _create_lock(authority_lock)
+    record: dict[str, object] = {
+        "schema_version": SCHEMA_VERSION,
+        "project_id": project_id,
+        "authority": asdict(authority_identity),
+        "authority_lock": asdict(lock_identity),
+        "lifecycle": str(lifecycle.name),
+    }
+    record["identity_digest"] = _digest(record)
+    lifecycle_record = {
+        "schema_version": SCHEMA_VERSION,
+        "authority_digest": record["identity_digest"],
+        "state": "clean_checkpointed",
+        "generation": 0,
+    }
+    lifecycle_record["record_digest"] = _digest(lifecycle_record)
+    if marker.exists():
+        existing = _read_json(marker, "authority fence marker")
+        if existing != record:
+            raise MutationFenceError("authority fence is already provisioned with another identity")
+        if _read_json(lifecycle, "authority lifecycle") != lifecycle_record:
+            raise MutationFenceError(
+                "authority lifecycle is already provisioned with another state"
+            )
+        return record
+    if lifecycle.exists():
+        if _read_json(lifecycle, "authority lifecycle") != lifecycle_record:
+            raise MutationFenceError("authority lifecycle already exists with another identity")
+    else:
+        _atomic_json(lifecycle, lifecycle_record)
+    _atomic_json(marker, record)
+    return record
+
+
+class MutationFence:
+    """Concrete authority.lock seam for a future barrier-aware writer."""
+
+    def __init__(self, authority: Path, marker: Path, lifecycle: Path, authority_lock: Path):
+        self.authority = authority
+        self.marker = marker
+        self.lifecycle = lifecycle
+        self.authority_lock = authority_lock
+
+    def _verify(self) -> dict[str, object]:
+        record = _read_json(self.marker, "authority fence marker")
+        if record.get("identity_digest") != _digest(
+            {key: value for key, value in record.items() if key != "identity_digest"}
+        ):
+            raise MutationFenceError("authority fence marker digest is invalid")
+        if record.get("schema_version") != SCHEMA_VERSION:
+            raise MutationFenceError("authority fence schema is unsupported")
+        project_id = record.get("project_id")
+        if not isinstance(project_id, str) or _PROJECT_ID.fullmatch(project_id) is None:
+            raise MutationFenceError("project identifier is not canonical and opaque")
+        if asdict(_existing(self.authority, "authority database")) != record.get("authority"):
+            raise MutationFenceError("authority database identity changed")
+        if asdict(_existing(self.authority_lock, "authority.lock")) != record.get("authority_lock"):
+            raise MutationFenceError("authority.lock identity changed")
+        life = _read_json(self.lifecycle, "authority lifecycle")
+        if life.get("record_digest") != _digest(
+            {key: value for key, value in life.items() if key != "record_digest"}
+        ):
+            raise MutationFenceError("authority lifecycle digest is invalid")
+        if life.get("authority_digest") != record["identity_digest"]:
+            raise MutationFenceError("authority lifecycle binding is invalid")
+        if life.get("state") not in LIFECYCLE_STATES:
+            raise MutationFenceError("authority lifecycle state is invalid")
+        return record
+
+    @contextmanager
+    def locked(self) -> Iterator[None]:
+        """Hold authority.lock after a complete identity/lifecycle reread."""
+        self._verify()
+        parent_fd, _ = _parent(self.authority_lock)
+        descriptor = -1
+        try:
+            descriptor = os.open(
+                self.authority_lock.name, os.O_RDWR | os.O_NOFOLLOW, dir_fd=parent_fd
+            )
+            status = os.fstat(descriptor)
+            parent_status = os.fstat(parent_fd)
+            actual = _identity(status, parent_status)
+            marker = _read_json(self.marker, "authority fence marker")
+            if asdict(actual) != marker.get("authority_lock"):
+                raise MutationFenceError("authority.lock identity changed")
+            fcntl.flock(descriptor, fcntl.LOCK_EX)
+            self._verify()
+            yield
+        except OSError as error:
+            if error.errno in {errno.EACCES, errno.EAGAIN}:
+                raise MutationFenceError("authority.lock acquisition failed") from error
+            raise
+        finally:
+            try:
+                if descriptor >= 0:
+                    fcntl.flock(descriptor, fcntl.LOCK_UN)
+            finally:
+                if descriptor >= 0:
+                    os.close(descriptor)
+                os.close(parent_fd)
