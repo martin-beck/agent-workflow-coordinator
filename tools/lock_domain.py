@@ -9,9 +9,13 @@ import stat
 from dataclasses import dataclass
 from pathlib import Path
 
+from tools.admission_lease import AdmissionLease
 from tools.handoffctl import CoordinatorLockGuard
 from tools.mutation_fence import MutationFence, MutationFenceError
-from tools.rollback_control_store import SQLiteBarrierSessionStore
+from tools.rollback_control_store import (
+    BarrierSessionState,
+    SQLiteBarrierSessionStore,
+)
 
 
 class LockDomainError(RuntimeError):
@@ -74,6 +78,7 @@ def _identity(path: Path) -> DescriptorIdentity:
 class LockDomainIdentity:
     """Immutable identity snapshot; capturing it acquires no locks."""
 
+    project_id: str
     common_lock: Path
     control_store: Path
     control_lock: Path
@@ -95,6 +100,30 @@ class LockDomainIdentity:
         current = LockDomainContract.capture(common_guard, session_store, authority_fence)
         if current != self:
             raise LockDomainError("lock-domain identity changed")
+
+    def assert_session_binding(
+        self, session_state: BarrierSessionState, lease: AdmissionLease
+    ) -> None:
+        """Require durable held-session identity to match caller lease evidence."""
+        if not isinstance(session_state, BarrierSessionState):
+            raise LockDomainError("durable barrier session is required")
+        if not isinstance(lease, AdmissionLease):
+            raise LockDomainError("admission lease is required")
+        if session_state.status != "held":
+            raise LockDomainError("durable barrier session is not held")
+        identity = session_state.identity
+        fields = (
+            (identity.project_id, lease.project_id),
+            (identity.authority_revision_at_acquire, lease.authority_revision),
+            (identity.fencing_token, lease.fencing_token),
+            (identity.fencing_owner, lease.fencing_owner),
+            (identity.durable_barrier_id, lease.durable_barrier_id),
+            (identity.project_id, self.project_id),
+        )
+        if any(left != right for left, right in fields):
+            raise LockDomainError("durable session and lease identity do not match")
+        if session_state.revision != lease.revision:
+            raise LockDomainError("durable session and lease revision do not match")
 
 
 class LockDomainContract:
@@ -156,6 +185,7 @@ class LockDomainContract:
         except MutationFenceError as error:
             raise LockDomainError("authority fence binding is invalid") from error
         return LockDomainIdentity(
+            project_id=session_store.project_id,
             common_lock=common_guard.path,
             control_store=control_store,
             control_lock=control_lock,

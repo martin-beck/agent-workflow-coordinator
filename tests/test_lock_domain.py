@@ -11,12 +11,34 @@ from dataclasses import replace
 from pathlib import Path
 from typing import cast
 
+from tools.admission_lease import AdmissionLease
 from tools.handoffctl import CoordinatorLockGuard, locked
 from tools.lock_domain import LockDomainContract, LockDomainError, _identity
 from tools.mutation_fence import MutationFence, provision, provision_control_binding
-from tools.rollback_control_store import SQLiteBarrierSessionStore, SQLiteRollbackControlStore
+from tools.rollback_control_store import (
+    BarrierSessionState,
+    SQLiteBarrierSessionStore,
+    SQLiteRollbackControlStore,
+)
+from tools.upgrade_identity import BarrierSessionIdentity, canonical_barrier_session_digest
 
 PROJECT = "11111111-1111-4111-8111-111111111111"
+
+
+def session_identity() -> BarrierSessionIdentity:
+    record: dict[str, object] = {
+        "schema_version": 1,
+        "project_id": PROJECT,
+        "attempt_id": "attempt-1",
+        "state_revision": 3,
+        "authority_revision_at_acquire": "authority-1",
+        "durable_barrier_id": "barrier-1",
+        "fencing_token": "fence-1",
+        "fencing_owner": "owner-1",
+        "identity_digest": "0" * 64,
+    }
+    record["identity_digest"] = canonical_barrier_session_digest(record)
+    return BarrierSessionIdentity.from_record(record)
 
 
 class LockDomainTests(unittest.TestCase):
@@ -196,6 +218,23 @@ class LockDomainTests(unittest.TestCase):
             altered = replace(captured, authority=self.root / "other.sqlite")
             with self.assertRaisesRegex(LockDomainError, "identity changed"):
                 altered.assert_current(guard, self.session, self.fence)
+
+    def test_session_binding_matches_durable_identity_and_lease(self) -> None:
+        with locked() as guard:
+            captured = LockDomainContract.capture(guard, self.session, self.fence)
+        identity = session_identity()
+        lease = AdmissionLease(PROJECT, "authority-1", "fence-1", "owner-1", "barrier-1", 3)
+        captured.assert_session_binding(BarrierSessionState(identity, "held", 3), lease)
+
+        for changed in (
+            replace(lease, fencing_token="other"),  # noqa: S106
+            replace(lease, revision=4),
+        ):
+            with self.subTest(changed=changed), self.assertRaisesRegex(LockDomainError, "match"):
+                captured.assert_session_binding(BarrierSessionState(identity, "held", 3), changed)
+
+        with self.assertRaisesRegex(LockDomainError, "not held"):
+            captured.assert_session_binding(BarrierSessionState(identity, "released", 3), lease)
 
 
 if __name__ == "__main__":
