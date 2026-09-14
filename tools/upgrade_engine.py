@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -30,6 +31,7 @@ except ImportError:  # pragma: no cover - the coordinator is POSIX-only
     fcntl = None  # type: ignore[assignment]
 
 PHASES = ("discover", "preflight", "quiesce", "backup", "stage", "commit", "validate", "reopen")
+MAX_OPERATION_ID_LENGTH = 128 - max(len(f".{phase}") for phase in (*PHASES, "rollback"))
 
 
 class UpgradeError(RuntimeError):
@@ -156,7 +158,10 @@ def _validate_context_identities(supplied: dict[str, object]) -> None:
         "authority_revision",
         "durable_barrier_id",
     ):
-        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", cast(str, supplied[field])):
+        limit = MAX_OPERATION_ID_LENGTH if field == "operation_id" else 127
+        if not re.fullmatch(
+            rf"[A-Za-z0-9][A-Za-z0-9._-]{{0,{limit - 1}}}", cast(str, supplied[field])
+        ):
             raise UpgradeError(f"invalid {field}")
     try:
         project = uuid.UUID(cast(str, supplied["project_id"]))
@@ -250,6 +255,26 @@ class UpgradeEngine:
     def _rollback_context(self) -> dict[str, Any]:
         context = asdict(self.context)
         context["target"] = "rollback"
+        identity = {
+            key: context[key]
+            for key in (
+                "project_id",
+                "operation_id",
+                "state_revision",
+                "authority_revision",
+                "durable_barrier_id",
+                "fencing_token",
+                "fencing_owner",
+                "target",
+            )
+        }
+        context["barrier_identity_digest"] = hashlib.sha256(
+            json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+        envelope = {key: value for key, value in context.items() if key != "envelope_digest"}
+        context["envelope_digest"] = hashlib.sha256(
+            json.dumps(envelope, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
         return context
 
     def _load(self) -> dict[str, Any]:  # noqa: C901
@@ -286,14 +311,21 @@ class UpgradeEngine:
                     or record.get("step_id") != f"{self.operation_id}.rollback"
                 ):
                     raise UpgradeError("upgrade journal rollback identity is invalid")
-                if record.get("outcome") not in {"started", "success", "ambiguous"}:
+                if record.get("outcome") not in {"started", "rollback_completed", "ambiguous"}:
                     raise UpgradeError("upgrade journal rollback outcome is invalid")
                 if record.get("context") != self._rollback_context() or set(record) - RECORD_FIELDS:
                     raise UpgradeError("upgrade journal rollback context is invalid")
                 outcome = record["outcome"]
                 expected_fields = {
                     "started": {"operation_id", "step_id", "phase", "outcome", "context"},
-                    "success": {"operation_id", "step_id", "phase", "outcome", "context", "result"},
+                    "rollback_completed": {
+                        "operation_id",
+                        "step_id",
+                        "phase",
+                        "outcome",
+                        "context",
+                        "result",
+                    },
                     "ambiguous": {
                         "operation_id",
                         "step_id",
@@ -305,7 +337,7 @@ class UpgradeEngine:
                 }[outcome]
                 if set(record) != expected_fields:
                     raise UpgradeError("rollback record fields are invalid")
-                if outcome == "success" and not isinstance(record["result"], dict):
+                if outcome == "rollback_completed" and not isinstance(record["result"], dict):
                     raise UpgradeError("successful rollback lacks result evidence")
                 if outcome == "ambiguous" and not isinstance(record["error"], str):
                     raise UpgradeError("ambiguous rollback lacks error evidence")
@@ -327,6 +359,21 @@ class UpgradeEngine:
                 if set(record) - RECORD_FIELDS or record.get("context") != asdict(self.context):
                     raise UpgradeError("upgrade journal record fields are invalid")
                 outcome = record["outcome"]
+                expected_fields = {
+                    "started": {"operation_id", "step_id", "phase", "outcome", "context"},
+                    "success": {"operation_id", "step_id", "phase", "outcome", "context", "result"},
+                    "failed": {"operation_id", "step_id", "phase", "outcome", "context", "error"},
+                    "ambiguous": {
+                        "operation_id",
+                        "step_id",
+                        "phase",
+                        "outcome",
+                        "context",
+                        "error",
+                    },
+                }[outcome]
+                if set(record) != expected_fields:
+                    raise UpgradeError("phase outcome fields are invalid")
                 if outcome == "success" and not isinstance(record.get("result"), dict):
                     raise UpgradeError("successful phase lacks result evidence")
                 if outcome in {"failed", "ambiguous"} and not isinstance(record.get("error"), str):
@@ -358,6 +405,11 @@ class UpgradeEngine:
             raise UpgradeError("failed journal has no failed phase")
         if status == "completed" and phase_outcomes != ["success"] * len(PHASES):
             raise UpgradeError("completed journal is incomplete")
+        if status == "rolled-back" and not any(
+            record.get("phase") == "rollback" and record.get("outcome") == "rollback_completed"
+            for record in records
+        ):
+            raise UpgradeError("rolled-back journal lacks rollback completion")
         return cast(dict[str, Any], value)
 
     @staticmethod
@@ -535,7 +587,7 @@ class UpgradeEngine:
                 value["status"] = "safe-mode"
                 _write(self.journal, value)
                 raise UpgradeError("rollback did not verify known-good runtime")
-            record["outcome"] = "success"
+            record["outcome"] = "rollback_completed"
             record["result"] = result
             value["status"] = "rolled-back"
         except Exception as error:

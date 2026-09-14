@@ -346,6 +346,34 @@ class UpgradeEngineTests(unittest.TestCase):
                 with self.subTest(mutation=mutation), self.assertRaises(UpgradeError):
                     engine._load()
 
+    def test_successful_rollback_requires_and_writes_terminal_record(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            journal = Path(directory) / "journal.json"
+            engine = UpgradeEngine(
+                "op-success-rollback",
+                journal,
+                {**CONTEXT, "operation_id": "op-success-rollback"},
+                backend_adapter=FakeAdapter(),
+            )
+            engine.plan()
+            value = json.loads(journal.read_text())
+            value["status"] = "failed"
+            value["phase"] = "discover"
+            value["records"] = [
+                {
+                    "operation_id": "op-success-rollback",
+                    "step_id": "op-success-rollback.discover",
+                    "phase": "discover",
+                    "outcome": "failed",
+                    "error": "failed",
+                    "context": {**CONTEXT, "operation_id": "op-success-rollback"},
+                }
+            ]
+            journal.write_text(json.dumps(value))
+            result = engine.rollback(lambda _step, _state: {})
+            self.assertEqual("rolled-back", result["status"])
+            self.assertEqual("rollback_completed", result["records"][-1]["outcome"])
+
     def test_started_phase_requires_explicit_recovery(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             journal = Path(directory) / "journal.json"
