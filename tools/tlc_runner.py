@@ -191,7 +191,7 @@ def run(args: argparse.Namespace) -> int:
     _prune_stale(queue)
     job = queue / f"{os.getpid()}-{uuid.uuid4().hex}.job.json"
     outcome = job.with_name(job.name.replace(".job.json", ".outcome.json"))
-    lock_path = Path(DEFAULT_ADMISSION_LOCK)
+    lock_path = Path(getattr(args, "admission_lock", DEFAULT_ADMISSION_LOCK))
     record = {
         "model": str(args.model),
         "pid": os.getpid(),
@@ -249,6 +249,11 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument(
         "--queue",
         default=os.environ.get("TLC_ADMISSION_QUEUE", "/tmp/agent-workflow-coordinator-tlc"),  # noqa: S108
+    )
+    result.add_argument(
+        "--admission-lock",
+        default=DEFAULT_ADMISSION_LOCK,
+        help="explicit admission lock; publication workflows retain the canonical default",
     )
     result.add_argument(
         "--workers", type=int, default=int(os.environ.get("TLC_WORKERS", DEFAULT_WORKERS))
