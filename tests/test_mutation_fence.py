@@ -15,7 +15,12 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from tools import mutation_fence
-from tools.mutation_fence import MutationFence, MutationFenceError, provision
+from tools.mutation_fence import (
+    MutationFence,
+    MutationFenceError,
+    provision,
+    provision_control_binding,
+)
 
 
 class MutationFenceTests(unittest.TestCase):
@@ -29,6 +34,11 @@ class MutationFenceTests(unittest.TestCase):
         self.marker = self.root / "upgrade-control-required.json"
         self.lifecycle = self.root / "wal-lifecycle.json"
         self.lock = self.root / "authority.lock"
+        self.control = self.root / "control.sqlite3"
+        self.control.write_bytes(b"existing control")
+        self.control.chmod(0o600)
+        self.control_lock = self.root / "control.lock"
+        self.control_binding = self.root / "control-binding.json"
 
     def tearDown(self) -> None:
         self.directory.cleanup()
@@ -211,6 +221,25 @@ class MutationFenceTests(unittest.TestCase):
             MutationFence(self.authority, self.marker, self.lifecycle, self.lock).locked(),
         ):
             pass
+
+    def test_control_binding_descriptor_is_project_bound_and_idempotent(self) -> None:
+        record = provision_control_binding(
+            self.control, self.control_binding, self.control_lock, "project"
+        )
+        self.assertEqual(
+            record,
+            provision_control_binding(
+                self.control, self.control_binding, self.control_lock, "project"
+            ),
+        )
+        self.assertTrue(str(record["identity_digest"]).startswith("sha256:"))
+        changed = json.loads(self.control_binding.read_text())
+        changed["project_id"] = "other"
+        self.control_binding.write_text(json.dumps(changed) + "\n")
+        with self.assertRaisesRegex(MutationFenceError, "another identity"):
+            provision_control_binding(
+                self.control, self.control_binding, self.control_lock, "project"
+            )
 
     def test_record_permissions_and_descriptor_races_fail_closed(self) -> None:
         provision(self.authority, self.marker, self.lifecycle, self.lock, "project")
