@@ -187,6 +187,12 @@ def _validate(record: Mapping[str, object]) -> dict[str, object]:
     return dict(record)
 
 
+def _validate_expected_revision(expected_revision: object) -> int:
+    if type(expected_revision) is not int or expected_revision < 0:
+        raise ControlStoreError("control expected revision is invalid")
+    return expected_revision
+
+
 class SQLiteRollbackControlStore:
     """WAL-backed control store with coordinator-common locking and CAS."""
 
@@ -516,6 +522,7 @@ class SQLiteRollbackControlStore:
         )
 
     def cas(self, expected_revision: int, record: Mapping[str, object]) -> dict[str, object]:
+        expected_revision = _validate_expected_revision(expected_revision)
         supplied = _validate(record)
         if supplied["status"] == "released":
             raise ControlStoreError("released status requires authority revalidation")
@@ -527,6 +534,7 @@ class SQLiteRollbackControlStore:
             return self._cas_locked(expected_revision, supplied)
 
     def _cas_locked(self, expected_revision: int, supplied: dict[str, object]) -> dict[str, object]:
+        expected_revision = _validate_expected_revision(expected_revision)
         self._require_operation_lock()
         with self._connection() as connection:
             return self._cas_connection(connection, expected_revision, supplied)
@@ -615,6 +623,7 @@ class SQLiteRollbackControlStore:
     def _cas_connection(  # noqa: C901
         self, connection: sqlite3.Connection, expected_revision: int, supplied: dict[str, object]
     ) -> dict[str, object]:
+        expected_revision = _validate_expected_revision(expected_revision)
         connection.execute("BEGIN IMMEDIATE")
         current = connection.execute(_SELECT_SQL, (supplied["operation_id"],)).fetchone()
         if current is not None and current[-1] != expected_revision:

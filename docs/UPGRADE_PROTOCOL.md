@@ -52,6 +52,21 @@ No phase may silently skip its predecessor. `commit` is the only phase
 allowed to replace the selected runtime, and it is never allowed before
 verified backup and quiescence.
 
+## Journal schema compatibility
+
+The exact-v9 engine writes journal schema v3. Schema-v2 journals are detected
+and refused before mutation because they do not contain the complete v9
+envelope or the durable `rollback_verified` release boundary. The engine never
+infers those fields, rewrites an in-flight schema-v2 journal, or treats its
+top-level rollback boolean as release evidence.
+
+An operator encountering schema v2 must retain the journal and backup, use the
+known-good coordinator runtime that created it to reconcile the operation to a
+terminal state, and independently verify the authority before starting a new
+schema-v3 operation with a new operation ID and fencing token. An unresolved
+or unavailable originating runtime remains in safe mode; there is no automatic
+in-place migration path.
+
 The schema and contract tests reject duplicate or non-contiguous phase orders,
 unknown or forward dependencies, missing phase operations, unbounded time or
 resource declarations, and incomplete release identity. Every release binds

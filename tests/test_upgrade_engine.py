@@ -5,6 +5,8 @@
 from __future__ import annotations
 
 import json
+import os
+import signal
 import tempfile
 import unittest
 from collections.abc import Mapping
@@ -12,6 +14,7 @@ from pathlib import Path
 from typing import cast
 
 from tools.rollback_control_store import (
+    SQLiteControlStoreAdapter,
     SQLiteRollbackControlStore,
     bind_control_store,
 )
@@ -341,6 +344,23 @@ class UpgradeEngineTests(unittest.TestCase):
             with self.assertRaises(UpgradeError):
                 engine.apply({})
 
+    def test_schema_v2_journal_is_refused_without_implicit_migration(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            journal = Path(directory) / "journal.json"
+            engine = UpgradeEngine(
+                "op-schema-v2",
+                journal,
+                make_context("op-schema-v2"),
+                backend_adapter=FakeAdapter(),
+            )
+            current = engine.plan()
+            legacy = {**current, "schema_version": 2, "rollback_verified": False}
+            journal.write_text(json.dumps(legacy))
+            before = journal.read_bytes()
+            with self.assertRaisesRegex(UpgradeError, "schema v2 requires recovery"):
+                engine._load()
+            self.assertEqual(before, journal.read_bytes())
+
     def test_every_journal_record_context_field_is_bound(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             journal = Path(directory) / "journal.json"
@@ -557,6 +577,85 @@ class UpgradeEngineTests(unittest.TestCase):
                 self.assertEqual("rollback_completed", recovered["records"][-1]["outcome"])
                 self.assertEqual("released", adapter.rollback_status)
                 self.assertEqual(1, adapter.restore_calls)
+
+    def test_sigkill_after_durable_releasing_recovers_without_second_restore(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            operation_id = "op-sigkill"
+            root = Path(directory)
+            journal, _ = self._prepare_failed_journal(directory, operation_id, FakeAdapter())
+            marker = root / "restore.marker"
+            authority = root / "authority.sqlite"
+            authority.touch()
+            control_path = root / "control.sqlite"
+            rollback_context = make_context(operation_id, target="rollback")
+            store = SQLiteRollbackControlStore(
+                control_path, cast(str, rollback_context["project_id"]), authority
+            )
+            control_record = {**rollback_context, "status": "held", "revision": 1}
+            store.cas(0, control_record)
+
+            class DurableDelegate(FakeAdapter):
+                def snapshot(self, phase: str, context: object) -> dict[str, object]:
+                    if phase == "rollback":
+                        return {**rollback_context, "rollback_context_verified": True}
+                    return super().snapshot(phase, context)
+
+                def execute(self, phase: str, context: object) -> dict[str, object]:
+                    if phase == "rollback":
+                        descriptor = os.open(marker, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+                        try:
+                            os.write(descriptor, b"restore\n")
+                            os.fsync(descriptor)
+                        finally:
+                            os.close(descriptor)
+                    return super().execute(phase, context)
+
+            class KillAfterBeginAdapter(SQLiteControlStoreAdapter):
+                def begin_release_rollback_context(
+                    self, context: Mapping[str, object]
+                ) -> Mapping[str, object]:
+                    super().begin_release_rollback_context(context)
+                    os.kill(os.getpid(), signal.SIGKILL)
+                    raise AssertionError("SIGKILL returned")
+
+            child = os.fork()
+            if child == 0:  # pragma: no branch - child is terminated by SIGKILL
+                try:
+                    child_store = SQLiteRollbackControlStore(
+                        control_path, cast(str, rollback_context["project_id"]), authority
+                    )
+                    child_adapter = KillAfterBeginAdapter(DurableDelegate(), child_store)
+                    UpgradeEngine(
+                        operation_id,
+                        journal,
+                        make_context(operation_id),
+                        backend_adapter=child_adapter,
+                    ).rollback(lambda _step, _state: {})
+                except BaseException:
+                    os._exit(91)
+                os._exit(92)
+            waited, status = os.waitpid(child, 0)
+            self.assertEqual(child, waited)
+            self.assertTrue(os.WIFSIGNALED(status))
+            self.assertEqual(signal.SIGKILL, os.WTERMSIG(status))
+            self.assertEqual(
+                "rollback_verified", json.loads(journal.read_text())["records"][-1]["outcome"]
+            )
+            self.assertEqual(["restore"], marker.read_text().splitlines())
+
+            recovery_store = SQLiteRollbackControlStore(
+                control_path, cast(str, rollback_context["project_id"]), authority
+            )
+            recovery_adapter = bind_control_store("sqlite", DurableDelegate(), recovery_store)
+            recovered = UpgradeEngine(
+                operation_id,
+                journal,
+                make_context(operation_id),
+                backend_adapter=recovery_adapter,
+            ).rollback(lambda _step, _state: self.fail("restore handler was repeated"))
+            self.assertEqual("rolled-back", recovered["status"])
+            self.assertEqual("released", recovery_store.snapshot(operation_id)["status"])
+            self.assertEqual(["restore"], marker.read_text().splitlines())
 
     def test_rollback_requires_adapter_verified_context_and_cannot_forge_evidence(self) -> None:
         class UnverifiedAdapter(FakeAdapter):

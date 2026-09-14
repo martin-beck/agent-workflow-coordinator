@@ -337,6 +337,18 @@ class RollbackControlStoreTests(unittest.TestCase):
             with self.assertRaises(ControlStoreError):
                 store.cas(0, {**RECORD, "operation_id": "op-2"})
 
+    def test_boolean_expected_revision_is_rejected_by_public_and_private_cas(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            store = SQLiteRollbackControlStore(Path(directory) / "control.sqlite", PROJECT)
+            with self.assertRaises(ControlStoreError):
+                store.cas(False, RECORD)
+            with self.assertRaises(ControlStoreError):
+                store.snapshot("op-1")
+            created = store.cas(0, RECORD)
+            with store.operation_lock(), self.assertRaises(ControlStoreError):
+                store._cas_locked(True, {**created, "status": "releasing", "revision": 2})
+            self.assertEqual(1, store.snapshot("op-1")["revision"])
+
     def test_invalid_identity_and_status_are_rejected_before_write(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             store = SQLiteRollbackControlStore(Path(directory) / "control.sqlite", PROJECT)

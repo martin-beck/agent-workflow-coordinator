@@ -237,6 +237,10 @@ class UpgradeEngine:
             value = json.loads(self.journal.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as error:
             raise UpgradeError("upgrade journal is unreadable") from error
+        if isinstance(value, dict) and value.get("schema_version") == 2:
+            raise UpgradeError(
+                "upgrade journal schema v2 requires recovery with its originating runtime"
+            )
         if (
             value.get("schema_version") != JOURNAL_SCHEMA_VERSION
             or set(value) != TOP_LEVEL_FIELDS
