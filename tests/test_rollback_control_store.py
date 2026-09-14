@@ -186,6 +186,7 @@ with control.operation_lock(), control._connection() as connection:
 # attempts to commit using the old session identity and revision.
 _STALE_FENCE_SCRIPT = r"""
 import sys
+import time
 from pathlib import Path
 
 from tools.rollback_control_store import (
@@ -238,9 +239,11 @@ if role == "replace":
 
 if role != "stale":
     raise SystemExit("unknown role")
-while not ready_path.exists():
-    import time
+deadline = time.monotonic() + 10
+while not ready_path.exists() and time.monotonic() < deadline:
     time.sleep(0.01)
+if not ready_path.exists():
+    raise SystemExit("replacement checkpoint timeout")
 stale = identity("attempt-1", 3, "barrier-1", "fence-1")
 try:
     store.cas(1, BarrierSessionState(stale, "releasing", 2))
@@ -446,8 +449,14 @@ class RollbackControlStoreTests(unittest.TestCase):
                 control_path, authority_path, ready_path, "replace"
             )
             stale = self._run_stale_fence_process(control_path, authority_path, ready_path, "stale")
-            replace_stdout, replace_stderr = replace.communicate(timeout=10)
-            stale_stdout, stale_stderr = stale.communicate(timeout=10)
+            try:
+                replace_stdout, replace_stderr = replace.communicate(timeout=10)
+                stale_stdout, stale_stderr = stale.communicate(timeout=10)
+            finally:
+                for process in (replace, stale):
+                    if process.poll() is None:
+                        process.kill()
+                    process.communicate(timeout=5)
             self.assertEqual(
                 0,
                 replace.returncode,
