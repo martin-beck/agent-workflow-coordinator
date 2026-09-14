@@ -16,6 +16,7 @@ from typing import Any
 from unittest.mock import MagicMock, patch
 
 from tools import upgrade_authority
+from tools.admission_lease import AdmissionLease, validate_recheck
 from tools.upgrade_authority import (
     AuthorityError,
     SelectorPublicationAmbiguousError,
@@ -41,25 +42,64 @@ class RuntimeSelectorTests(unittest.TestCase):
 
             def assert_ordered(self) -> None:
                 self.events.append("assert-order")
-                if not self.ordered or self.events != ["hold", "assert-order"]:
+                if not self.ordered or self.events != ["assert-order"]:
                     raise AuthorityError("selector admission lock order is invalid")
+
+        lease = AdmissionLease(
+            project_id="project",
+            authority_revision="authority-1",
+            fencing_token="fence-1",  # noqa: S106
+            fencing_owner="owner-1",
+            durable_barrier_id="barrier-1",
+            revision=1,
+        )
+        recheck = validate_recheck(
+            lease,
+            project_id="project",
+            authority_revision="authority-1",
+            fencing_token="fence-1",  # noqa: S106
+            fencing_owner="owner-1",
+            durable_barrier_id="barrier-1",
+            revision=1,
+        )
 
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "selector.json"
             with self.assertRaisesRegex(AuthorityError, "lease is required"):
-                commit_runtime_selector_admitted(path, "new", "old", None)  # type: ignore[arg-type]
+                commit_runtime_selector_admitted(path, "new", "old", None, recheck, Lease())  # type: ignore[arg-type]
             with self.assertRaisesRegex(AuthorityError, "lease is required"):
-                commit_runtime_selector_admitted(path, "new", "old", object())  # type: ignore[arg-type]
+                commit_runtime_selector_admitted(path, "new", "old", object(), recheck, Lease())  # type: ignore[arg-type]
 
             unordered = Lease(ordered=False)
             with self.assertRaisesRegex(AuthorityError, "lock order is invalid"):
-                commit_runtime_selector_admitted(path, "new", "old", unordered)
+                commit_runtime_selector_admitted(path, "new", "old", lease, recheck, unordered)
             self.assertFalse(path.exists())
 
+            other_lease = AdmissionLease(
+                project_id="project",
+                authority_revision="authority-1",
+                fencing_token="fence-2",  # noqa: S106
+                fencing_owner="owner-1",
+                durable_barrier_id="barrier-2",
+                revision=2,
+            )
+            other_recheck = validate_recheck(
+                other_lease,
+                project_id="project",
+                authority_revision="authority-1",
+                fencing_token="fence-2",  # noqa: S106
+                fencing_owner="owner-1",
+                durable_barrier_id="barrier-2",
+                revision=2,
+            )
             valid = Lease()
-            commit_runtime_selector_admitted(path, "new", "old", valid)
+            with self.assertRaisesRegex(AuthorityError, "does not match"):
+                commit_runtime_selector_admitted(path, "new", "old", lease, other_recheck, valid)
+            self.assertFalse(path.exists())
+
+            commit_runtime_selector_admitted(path, "new", "old", lease, recheck, valid)
             self.assertEqual(
-                ["hold", "assert-order", "release"],
+                ["assert-order", "hold", "release"],
                 valid.events,
             )
             self.assertEqual("new", read_runtime_selector(path)["active_release"])

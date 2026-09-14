@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, Protocol, cast, runtime_checkable
 
+from tools.admission_lease import AdmissionLease, AdmissionLeaseError, AdmissionRecheck
 from tools.sqlite_storage import SCHEMA_VERSION as SQLITE_SCHEMA_VERSION
 
 
@@ -601,7 +602,9 @@ def commit_runtime_selector_admitted(
     path: Path,
     active_release: str,
     previous_release: str,
-    admission_lease: SelectorAdmissionLease,
+    admission_lease: AdmissionLease,
+    admission_recheck: AdmissionRecheck,
+    admission_scope: SelectorAdmissionLease,
 ) -> None:
     """Publish a selector only inside a caller-owned ordered admission lease.
 
@@ -610,14 +613,20 @@ def commit_runtime_selector_admitted(
     execution must bind this adapter to the concrete barrier implementation
     before selector mutation is enabled.
     """
-    if not isinstance(admission_lease, SelectorAdmissionLease):
+    if not isinstance(admission_lease, AdmissionLease):
         raise AuthorityError("selector admission lease is required")
+    if not isinstance(admission_recheck, AdmissionRecheck):
+        raise AuthorityError("selector admission recheck is required")
+    if admission_recheck.lease != admission_lease:
+        raise AuthorityError("selector admission recheck does not match lease")
+    if not isinstance(admission_scope, SelectorAdmissionLease):
+        raise AuthorityError("selector admission scope is required")
     try:
-        scope = admission_lease.hold()
+        admission_scope.assert_ordered()
+        scope = admission_scope.hold()
         with scope:
-            admission_lease.assert_ordered()
             commit_runtime_selector(path, active_release, previous_release)
-    except (AttributeError, TypeError) as error:
+    except (AdmissionLeaseError, AttributeError, TypeError) as error:
         raise AuthorityError("selector admission lease is invalid") from error
 
 
