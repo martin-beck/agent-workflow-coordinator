@@ -187,6 +187,28 @@ class ScopedBackendAdapterTests(unittest.TestCase):
             )
         self.assertEqual(["held", "released"], scope.events)
 
+    def test_rechecked_entry_unwinds_scope_on_process_abort(self) -> None:
+        class AbortScope(Scope):
+            @contextmanager
+            def hold(self) -> Iterator[object]:
+                self.events.append("held")
+                try:
+                    raise SystemExit("simulated process death")
+                finally:
+                    self.events.append("released")
+
+        scope = AbortScope()
+        with self.assertRaisesRegex(SystemExit, "process death"):
+            ScopedBackendAdapter.from_rechecked_session(
+                Backend(),
+                scope,
+                cast(LockDomainIdentity, object()),
+                object(),
+                cast(BarrierSessionState, object()),
+                cast(Any, object()),
+            )
+        self.assertEqual(["held", "released"], scope.events)
+
 
 if __name__ == "__main__":
     unittest.main()
