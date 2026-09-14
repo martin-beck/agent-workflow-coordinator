@@ -164,6 +164,10 @@ cannot discard or silently mark an in-flight command complete.
 
 ## Fencing SQLite authority writes
 
+The provisioning, identity, lock-order, migration, and privacy contract for
+this boundary is specified in
+[`CONTROL_STORE_PROVISIONING.md`](CONTROL_STORE_PROVISIONING.md).
+
 Every SQLite-authority mutation, including lifecycle changes, command-result
 append, observation updates, migrations, and mutating reconciliation, must use
 the outer operation scope. Under the common and control locks it reads the
