@@ -45,6 +45,8 @@ class BackendAdapter(Protocol):
 
     def snapshot(self, phase: str, context: Mapping[str, object]) -> Mapping[str, object]: ...
 
+    def verify_rollback_context(self, context: Mapping[str, object]) -> bool: ...
+
     def execute(self, phase: str, context: Mapping[str, object]) -> Mapping[str, object]: ...
 
 
@@ -300,6 +302,9 @@ class UpgradeEngine:
                         rollback_context[field] != asdict(self.context)[field]
                     ):
                         raise UpgradeError(f"rollback context mismatch: {field}")
+                verifier = getattr(self.backend_adapter, "verify_rollback_context", None)
+                if not callable(verifier) or verifier(rollback_context) is not True:
+                    raise UpgradeError("rollback context is not verified by authority")
                 if set(record) - RECORD_FIELDS:
                     raise UpgradeError("upgrade journal rollback context is invalid")
                 outcome = record["outcome"]
@@ -568,6 +573,9 @@ class UpgradeEngine:
                     and supplied[field] != asdict(self.context)[field]
                 ):
                     raise UpgradeError(f"rollback context mismatch: {field}")
+            verifier = getattr(self.backend_adapter, "verify_rollback_context", None)
+            if not callable(verifier) or verifier(supplied) is not True:
+                raise UpgradeError("rollback context is not verified by authority")
             self._verified_rollback_context = supplied
             return self._rollback_locked(handler)
 

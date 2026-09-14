@@ -16,7 +16,7 @@ from tools.upgrade_admission import (
     QUIESCENCE_PREDICATES,
     REOPEN_PREDICATES,
 )
-from tools.upgrade_engine import PHASES, Handler, UpgradeEngine, UpgradeError
+from tools.upgrade_engine import CONTEXT_FIELDS, PHASES, Handler, UpgradeEngine, UpgradeError
 
 CONTEXT = {
     "operation_id": "op-1",
@@ -57,6 +57,16 @@ ADMISSION = {
 
 
 class FakeAdapter:
+    def verify_rollback_context(self, context: Mapping[str, object]) -> bool:
+        return (
+            all(
+                context.get(field) == ROLLBACK_CONTEXT[field]
+                for field in CONTEXT_FIELDS
+                if field not in {"operation_id"}
+            )
+            and context.get("target") == "rollback"
+        )
+
     def snapshot(self, phase: str, context: object) -> dict[str, object]:
         identity = dict(context) if isinstance(context, Mapping) else CONTEXT
         if phase == "rollback":
@@ -395,6 +405,12 @@ class UpgradeEngineTests(unittest.TestCase):
                 backend_adapter=FakeAdapter(),
             )
             self.assertEqual("rollback", reloaded._load()["phase"])
+
+            tampered = json.loads(journal.read_text())
+            tampered["records"][-1]["context"]["envelope_digest"] = "e" * 64
+            journal.write_text(json.dumps(tampered))
+            with self.assertRaises(UpgradeError):
+                reloaded._load()
 
     def test_rollback_requires_adapter_verified_context_and_cannot_forge_evidence(self) -> None:
         class UnverifiedAdapter(FakeAdapter):
