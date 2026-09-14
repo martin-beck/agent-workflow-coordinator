@@ -385,6 +385,24 @@ class MutationFenceTests(unittest.TestCase):
         with self.assertRaisesRegex(MutationFenceError, "unreadable"), fence.mutation_scope(common):
             pass
 
+    def test_control_store_symlink_and_replacement_are_rejected(self) -> None:
+        fence = self._fenced()
+        copy = self.root / "control-copy.sqlite3"
+        copy.write_bytes(self.control.read_bytes())
+        copy.chmod(0o600)
+        self.control.unlink()
+        self.control.symlink_to(copy)
+        with self.assertRaisesRegex(MutationFenceError, "identity|unreadable|descriptor"):
+            fence._read_barrier_status()
+        original = self.root / "control-original.sqlite3"
+        self.control.rename(original)
+        replacement = self.root / "control-replacement.sqlite3"
+        replacement.write_bytes(copy.read_bytes())
+        replacement.chmod(0o600)
+        replacement.rename(self.control)
+        with self.assertRaisesRegex(MutationFenceError, "identity"):
+            fence._read_barrier_status()
+
     def test_missing_binding_and_process_busy_are_rejected(self) -> None:
         provision(self.authority, self.marker, self.lifecycle, self.lock, "project")
         incomplete = MutationFence(

@@ -6,6 +6,10 @@ This module is an optional seam: ordinary coordination does not construct it.
 The SQLite backend accepts it only when an explicitly provisioned caller binds
 the route; ``storage_backend`` remains unbound. Upgrade admission and
 apply/rollback remain rejection-only.
+
+This slice does not claim WAL/SHM crash consistency, process-death recovery,
+or refinement of the durable barrier protocol; those require a separate
+formal and multiprocess evidence slice.
 """
 
 from __future__ import annotations
@@ -398,20 +402,40 @@ class MutationFence:
             self._process_lock.release()
 
     def _read_barrier_status(self) -> str:
-        if self.control_store is None:
+        if self.control_store is None or self.control_binding is None:
             raise MutationFenceError("control binding prerequisites are incomplete")
         project_id = self._verify_marker(_read_json(self.marker, "authority fence marker"))
+        binding = _read_json(self.control_binding, "control binding")
+        expected_identity = binding.get("control_store")
+        parent_fd, parent = _parent(self.control_store)
+        descriptor = -1
         connection: sqlite3.Connection | None = None
         try:
-            connection = sqlite3.connect(f"file:{self.control_store}?mode=ro", uri=True, timeout=10)
+            descriptor = os.open(
+                self.control_store.name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=parent_fd
+            )
+            status = os.fstat(descriptor)
+            if asdict(_identity(status, parent)) != expected_identity:
+                raise MutationFenceError("control store identity changed")
+            # The /proc descriptor URI contains no caller-controlled pathname,
+            # so URI metacharacters cannot redirect the SQLite open.
+            connection = sqlite3.connect(
+                f"file:/proc/self/fd/{descriptor}?mode=ro", uri=True, timeout=10
+            )
             rows = connection.execute(
                 "SELECT status FROM barrier WHERE project_id=?", (project_id,)
             ).fetchall()
+            current = os.fstat(descriptor)
+            if _identity(current, os.fstat(parent_fd)) != _identity(status, parent):
+                raise MutationFenceError("control store identity changed")
         except (sqlite3.Error, OSError) as error:
             raise MutationFenceError("durable control barrier is unreadable") from error
         finally:
             if connection is not None:
                 connection.close()
+            if descriptor >= 0:
+                os.close(descriptor)
+            os.close(parent_fd)
         if len(rows) != 1:
             raise MutationFenceError("durable control barrier is missing or ambiguous")
         status = rows[0][0]
