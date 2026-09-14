@@ -66,3 +66,12 @@ scope is held. Its tests reject missing, structurally invalid, mismatched, and
 incorrectly ordered inputs. This is an API contract only; no existing caller
 uses it, and selector mutation remains disabled in the rejection-only upgrade
 paths.
+
+The uncalled `AdmissionSession` composes the typed control-store and selector
+adapters around one caller-owned lease, exact recheck, and ordered scope. It
+acquires the scope separately for each operation, so a failed CAS or selector
+publication cannot leave a session-wide lock held. This remains an integration
+seam only: no coordinator production caller constructs the session, and no
+upgrade or rollback mutation path is enabled by this slice. Its tests cover
+stale rechecks, lock-order rejection, release on injected failure, and
+cross-process non-overlap in the supplied scope.
