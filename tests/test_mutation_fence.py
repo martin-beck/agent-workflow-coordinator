@@ -403,6 +403,115 @@ class MutationFenceTests(unittest.TestCase):
         with self.assertRaisesRegex(MutationFenceError, "identity"):
             fence._read_barrier_status()
 
+    def test_binding_replacement_during_control_open_is_rejected(self) -> None:
+        fence = self._fenced()
+        original = self.control_binding.read_bytes()
+        replacement = self.root / "control-binding-replacement.json"
+        replacement.write_bytes(original)
+        replacement.chmod(0o600)
+        moved = self.root / "control-binding-original.json"
+        replaced = False
+        real_open = os.open
+
+        def replacing_open(
+            path: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+            flags: int,
+            *args: int,
+            **kwargs: int,
+        ) -> int:
+            nonlocal replaced
+            if path == self.control.name and not replaced:
+                self.control_binding.rename(moved)
+                replacement.rename(self.control_binding)
+                replaced = True
+            return real_open(path, flags, *args, **kwargs)
+
+        with (
+            patch.object(os, "open", side_effect=replacing_open),
+            self.assertRaisesRegex(MutationFenceError, "control binding identity changed"),
+        ):
+            fence._read_barrier_status()
+        self.assertTrue(replaced)
+
+    def test_binding_snapshot_schema_and_size_are_fail_closed(self) -> None:
+        fence = self._fenced()
+        original = self.control_binding.read_bytes()
+        changed = json.loads(original)
+        changed["project_id"] = "other"
+        changed["identity_digest"] = mutation_fence._digest(
+            {key: value for key, value in changed.items() if key != "identity_digest"}
+        )
+        cases = [
+            (b"[]", "schema is invalid"),
+            (b"{", "unreadable"),
+            (json.dumps({"project_id": "project"}).encode(), "digest is invalid"),
+            (json.dumps(changed).encode(), "project identity changed"),
+            (b"x" * (1 << 20) + b"y", "too large"),
+        ]
+        try:
+            for content, message in cases:
+                self.control_binding.write_bytes(content)
+                self.control_binding.chmod(0o600)
+                with self.assertRaisesRegex(MutationFenceError, message):
+                    fence._read_barrier_status()
+        finally:
+            self.control_binding.write_bytes(original)
+            self.control_binding.chmod(0o600)
+
+    def test_binding_permission_and_parent_failures_are_rejected(self) -> None:
+        fence = self._fenced()
+        self.control_binding.chmod(0o644)
+        with self.assertRaisesRegex(MutationFenceError, "owner-only"):
+            fence._read_barrier_status()
+        self.control_binding.chmod(0o600)
+        missing_parent = self.root / "missing" / "control.sqlite3"
+        missing_fence = MutationFence(
+            self.authority,
+            self.marker,
+            self.lifecycle,
+            self.lock,
+            control_store=missing_parent,
+            control_binding=self.control_binding,
+            control_lock=self.control_lock,
+        )
+        with self.assertRaises(OSError):
+            missing_fence._read_barrier_status()
+
+    def test_binding_content_rewrite_after_control_read_is_rejected(self) -> None:
+        fence = self._fenced()
+        real_open = os.open
+        real_read = os.read
+        binding_fd: int | None = None
+        binding_reads = 0
+
+        def tracking_open(
+            path: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+            flags: int,
+            *args: int,
+            **kwargs: int,
+        ) -> int:
+            nonlocal binding_fd
+            descriptor = real_open(path, flags, *args, **kwargs)
+            if path == self.control_binding.name:
+                binding_fd = descriptor
+            return descriptor
+
+        def rewriting_read(fd: int, size: int) -> bytes:
+            nonlocal binding_reads
+            value = real_read(fd, size)
+            if fd == binding_fd:
+                binding_reads += 1
+                if binding_reads == 3:
+                    return b"rewritten"
+            return value
+
+        with (
+            patch.object(os, "open", side_effect=tracking_open),
+            patch.object(os, "read", side_effect=rewriting_read),
+            self.assertRaisesRegex(MutationFenceError, "contents changed"),
+        ):
+            fence._read_barrier_status()
+
     def test_missing_binding_and_process_busy_are_rejected(self) -> None:
         provision(self.authority, self.marker, self.lifecycle, self.lock, "project")
         incomplete = MutationFence(
