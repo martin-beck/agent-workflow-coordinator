@@ -11,7 +11,7 @@ import tempfile
 import time
 import uuid
 from collections.abc import Callable, Iterator, Mapping
-from contextlib import contextmanager
+from contextlib import AbstractContextManager, contextmanager, nullcontext
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from types import MappingProxyType
@@ -510,12 +510,14 @@ class UpgradeEngine:
             if snapshot.get(field) != expected[field]:
                 raise UpgradeError(f"admission snapshot identity mismatch: {field}")
 
+    def _operation_scope(self) -> AbstractContextManager[None]:
+        operation_lock = getattr(self.backend_adapter, "operation_lock", None)
+        if callable(operation_lock):
+            return cast(AbstractContextManager[None], operation_lock())
+        return nullcontext()
+
     def apply(self, handlers: Mapping[str, Handler]) -> dict[str, Any]:
-        with self._exclusive():
-            operation_lock = getattr(self.backend_adapter, "operation_lock", None)
-            if callable(operation_lock):
-                with operation_lock():
-                    return self._apply_locked(handlers)
+        with self._operation_scope(), self._exclusive():
             return self._apply_locked(handlers)
 
     def _apply_locked(self, handlers: Mapping[str, Handler]) -> dict[str, Any]:  # noqa: C901
@@ -620,7 +622,7 @@ class UpgradeEngine:
         return value
 
     def rollback(self, handler: Handler) -> dict[str, Any]:
-        with self._exclusive():
+        with self._operation_scope(), self._exclusive():
             if self.backend_adapter is None:
                 raise UpgradeError("backend adapter is required for rollback")
             snapshot = self.backend_adapter.snapshot(

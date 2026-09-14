@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import sqlite3
 import tempfile
+import threading
 import unittest
 from collections.abc import Mapping
 from pathlib import Path
@@ -180,6 +181,57 @@ class RollbackControlStoreTests(unittest.TestCase):
             store = SQLiteRollbackControlStore(Path(directory) / "control.sqlite", PROJECT)
             with store.operation_lock(), self.assertRaises(ControlStoreError):
                 store.operation_lock().__enter__()
+            with store.operation_lock(), self.assertRaises(ControlStoreError):
+                store.snapshot("op-1")
+
+    def test_operation_lock_blocks_a_second_store_instance(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "control.sqlite"
+            first = SQLiteRollbackControlStore(path, PROJECT)
+            second = SQLiteRollbackControlStore(path, PROJECT)
+            started = threading.Event()
+            finished = threading.Event()
+            errors: list[str] = []
+
+            def read_from_second_instance() -> None:
+                started.set()
+                try:
+                    second.snapshot("op-1")
+                except ControlStoreError as error:
+                    errors.append(str(error))
+                finally:
+                    finished.set()
+
+            with first.operation_lock():
+                worker = threading.Thread(target=read_from_second_instance)
+                worker.start()
+                self.assertTrue(started.wait(1))
+                self.assertFalse(finished.wait(0.1))
+            self.assertTrue(finished.wait(2))
+            worker.join()
+            self.assertEqual(["control barrier is missing"], errors)
+
+    def test_release_fault_leaves_durable_releasing_barrier(self) -> None:
+        class FaultingStore(SQLiteRollbackControlStore):
+            fail_on_cas: int | None = None
+            cas_calls = 0
+
+            def _cas_locked(
+                self, expected_revision: int, supplied: dict[str, object]
+            ) -> dict[str, object]:
+                self.cas_calls += 1
+                if self.cas_calls == self.fail_on_cas:
+                    raise OSError("injected release fault")
+                return super()._cas_locked(expected_revision, supplied)
+
+        with tempfile.TemporaryDirectory() as directory:
+            store = FaultingStore(Path(directory) / "control.sqlite", PROJECT)
+            store.cas(0, RECORD)
+            store.cas_calls = 0
+            store.fail_on_cas = 2
+            with self.assertRaises(OSError):
+                store.release("op-1")
+            self.assertEqual("releasing", store.snapshot("op-1")["status"])
 
     def test_cas_conflict_and_binding_mismatch_fail_closed(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

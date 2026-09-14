@@ -14,6 +14,8 @@ import json
 import os
 import re
 import sqlite3
+import threading
+import time
 import uuid
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import AbstractContextManager, closing, contextmanager
@@ -102,15 +104,24 @@ class SQLiteControlStoreAdapter:
         return self._delegate.execute(phase, context)
 
     def verify_rollback_context(self, context: Mapping[str, object]) -> dict[str, object] | None:
+        if self._store.operation_owned_by_current_thread:
+            return self._store._verify_rollback_context_locked(context)
         return self._store.verify_rollback_context(context)
 
     def release_rollback_context(self, context: Mapping[str, object]) -> Mapping[str, object]:
-        return self._store.release(str(context["operation_id"]))
+        operation_id = str(context["operation_id"])
+        if self._store.operation_owned_by_current_thread:
+            return self._store._release_locked(operation_id)
+        return self._store.release(operation_id)
 
     def revalidate_rollback(
         self, context: Mapping[str, object], result: Mapping[str, object]
     ) -> Mapping[str, object]:
-        durable = self._store.verify_rollback_context(context)
+        durable = (
+            self._store._verify_rollback_context_locked(context)
+            if self._store.operation_owned_by_current_thread
+            else self._store.verify_rollback_context(context)
+        )
         if durable is None or durable["status"] != "released":
             raise ControlStoreError("rollback control record is not released")
         return dict(result)
@@ -180,7 +191,7 @@ class SQLiteRollbackControlStore:
         self._check_paths(path, authority_path)
         self.path = path
         self.authority_path = authority_path
-        self._critical = False
+        self._operation_owner: int | None = None
         self.project_id = project_id
         try:
             project = uuid.UUID(project_id)
@@ -281,21 +292,74 @@ class SQLiteRollbackControlStore:
             raise
 
     @contextmanager
+    def _control_lock(self) -> Iterator[None]:
+        """Hold the store-specific lock after the coordinator-common lock."""
+        lock_path = self.path.parent / f".{self.path.name}.lock"
+        lock_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        try:
+            descriptor = os.open(
+                lock_path,
+                os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW,
+                0o600,
+            )
+        except OSError as error:
+            raise ControlStoreError("control store lock is unavailable") from error
+        try:
+            import fcntl
+        except ImportError as error:  # pragma: no cover - coordinator is POSIX-only
+            os.close(descriptor)
+            raise ControlStoreError("control store locking is unavailable") from error
+        try:
+            deadline = time.monotonic() + 10.0
+            while True:
+                try:
+                    fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError as error:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise ControlStoreError(
+                            "control store lock acquisition timed out"
+                        ) from error
+                    time.sleep(min(0.05, remaining))
+            yield
+        finally:
+            try:
+                fcntl.flock(descriptor, fcntl.LOCK_UN)
+            finally:
+                os.close(descriptor)
+
+    @contextmanager
     def operation_lock(self) -> Iterator[None]:
-        """Hold the coordinator lock once for a complete authority operation."""
-        if self._critical:
+        """Hold common then control-store locks once for a complete operation."""
+        if self._operation_owner == threading.get_ident():
             raise ControlStoreError("control store lock is non-reentrant")
-        with locked():
-            self._critical = True
+        with locked(), self._control_lock():
+            if self._operation_owner is not None:
+                raise ControlStoreError("control store operation is already active")
+            self._operation_owner = threading.get_ident()
             try:
                 yield
             finally:
-                self._critical = False
+                self._operation_owner = None
+
+    @property
+    def operation_owned_by_current_thread(self) -> bool:
+        return self._operation_owner == threading.get_ident()
+
+    def _require_operation_lock(self) -> None:
+        if not self.operation_owned_by_current_thread:
+            raise ControlStoreError("control store operation lock is required")
 
     def snapshot(self, operation_id: str) -> dict[str, object]:
-        if self._critical:
+        if self._operation_owner is not None:
             raise ControlStoreError("control store lock is non-reentrant")
-        with locked(), closing(self._connect()) as connection:
+        with self.operation_lock():
+            return self._snapshot_locked(operation_id)
+
+    def _snapshot_locked(self, operation_id: str) -> dict[str, object]:
+        self._require_operation_lock()
+        with closing(self._connect()) as connection:
             row = connection.execute(
                 "SELECT operation_id,project_id,state_revision,fencing_token,fencing_owner,backend,"
                 "authority_revision,durable_barrier_id,barrier_identity_digest,envelope_digest,"
@@ -308,11 +372,20 @@ class SQLiteRollbackControlStore:
 
     def verify_rollback_context(self, context: Mapping[str, object]) -> dict[str, object] | None:
         """Re-read the durable control record and compare every bound identity."""
+        if self._operation_owner is not None:
+            raise ControlStoreError("control store lock is non-reentrant")
+        with self.operation_lock():
+            return self._verify_rollback_context_locked(context)
+
+    def _verify_rollback_context_locked(
+        self, context: Mapping[str, object]
+    ) -> dict[str, object] | None:
+        self._require_operation_lock()
         operation_id = context.get("operation_id")
         if not isinstance(operation_id, str):
             return None
         try:
-            durable = self.snapshot(operation_id)
+            durable = self._snapshot_locked(operation_id)
             supplied = _validate(
                 {
                     **{field: context.get(field) for field in IDENTITY_FIELDS},
@@ -334,16 +407,34 @@ class SQLiteRollbackControlStore:
         supplied = _validate(record)
         if supplied["project_id"] != self.project_id:
             raise ControlStoreError("control project binding mismatch")
-        with locked(), closing(self._connect()) as connection:
+        if self._operation_owner is not None:
+            raise ControlStoreError("control store lock is non-reentrant")
+        with self.operation_lock():
+            return self._cas_locked(expected_revision, supplied)
+
+    def _cas_locked(self, expected_revision: int, supplied: dict[str, object]) -> dict[str, object]:
+        self._require_operation_lock()
+        with closing(self._connect()) as connection:
             return self._cas_connection(connection, expected_revision, supplied)
 
     def release(self, operation_id: str) -> dict[str, object]:
         """Durably release a held barrier through the releasing state."""
-        current = self.snapshot(operation_id)
+        if self._operation_owner is not None:
+            raise ControlStoreError("control store lock is non-reentrant")
+        with self.operation_lock():
+            return self._release_locked(operation_id)
+
+    def _release_locked(self, operation_id: str) -> dict[str, object]:
+        self._require_operation_lock()
+        current = self._snapshot_locked(operation_id)
         if current["status"] != "held":
             raise ControlStoreError("barrier is not held")
-        releasing = self.cas(cast(int, current["revision"]), {**current, "status": "releasing"})
-        return self.cas(cast(int, releasing["revision"]), {**releasing, "status": "released"})
+        releasing = self._cas_locked(
+            cast(int, current["revision"]), {**current, "status": "releasing"}
+        )
+        return self._cas_locked(
+            cast(int, releasing["revision"]), {**releasing, "status": "released"}
+        )
 
     def reconcile_release(self, operation_id: str) -> dict[str, object]:
         """Complete a release interrupted after its durable releasing transition."""
@@ -444,13 +535,9 @@ class SQLiteRollbackControlStore:
         supplied = _validate(record)
         if supplied["project_id"] != self.project_id:
             raise ControlStoreError("control project binding mismatch")
-        with locked(), closing(self._connect()) as connection:
-            self._critical = True
-            try:
-                held = self._cas_connection(connection, expected_revision, supplied)
-                result = dict(authority(dict(held)))
-                return self._cas_connection(
-                    connection, cast(int, held["revision"]), _validate(result)
-                )
-            finally:
-                self._critical = False
+        if self._operation_owner is not None:
+            raise ControlStoreError("control store lock is non-reentrant")
+        with self.operation_lock(), closing(self._connect()) as connection:
+            held = self._cas_connection(connection, expected_revision, supplied)
+            result = dict(authority(dict(held)))
+            return self._cas_connection(connection, cast(int, held["revision"]), _validate(result))

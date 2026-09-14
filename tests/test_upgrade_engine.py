@@ -13,6 +13,7 @@ from typing import cast
 
 from tools.rollback_control_store import (
     SQLiteRollbackControlStore,
+    bind_control_store,
     canonical_barrier_digest,
     canonical_envelope_digest,
 )
@@ -519,8 +520,12 @@ class UpgradeEngineTests(unittest.TestCase):
     def test_rollback_uses_durable_sqlite_control_record(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             operation_id = "op-control-store"
+            authority = Path(directory) / "authority.sqlite"
+            authority.touch()
             control = SQLiteRollbackControlStore(
-                Path(directory) / "control.sqlite", cast(str, CONTEXT["project_id"])
+                Path(directory) / "control.sqlite",
+                cast(str, CONTEXT["project_id"]),
+                authority,
             )
             control_record = {
                 **ROLLBACK_CONTEXT,
@@ -532,23 +537,27 @@ class UpgradeEngineTests(unittest.TestCase):
             control_record["envelope_digest"] = canonical_envelope_digest(control_record)
             control.cas(0, control_record)
 
-            class ControlAdapter(FakeAdapter):
+            lock_observations: list[bool] = []
+
+            class ControlDelegate(FakeAdapter):
                 def snapshot(self, phase: str, context: object) -> dict[str, object]:
+                    lock_observations.append(control.operation_owned_by_current_thread)
                     if phase == "rollback":
                         return {**control_record, "rollback_context_verified": True}
                     return super().snapshot(phase, context)
 
-                def verify_rollback_context(
-                    self, context: Mapping[str, object]
-                ) -> dict[str, object] | None:
-                    return control.verify_rollback_context(context)
+                def execute(self, phase: str, context: object) -> dict[str, object]:
+                    lock_observations.append(control.operation_owned_by_current_thread)
+                    return super().execute(phase, context)
+
+            adapter = bind_control_store("sqlite", ControlDelegate(), control)
 
             journal = Path(directory) / "journal.json"
             engine = UpgradeEngine(
                 operation_id,
                 journal,
                 {**CONTEXT, "operation_id": operation_id},
-                backend_adapter=ControlAdapter(),
+                backend_adapter=adapter,
             )
             engine.plan()
             value = json.loads(journal.read_text())
@@ -567,6 +576,16 @@ class UpgradeEngineTests(unittest.TestCase):
             journal.write_text(json.dumps(value))
             result = engine.rollback(lambda _step, _state: {})
             self.assertEqual("rolled-back", result["status"])
+            self.assertEqual("released", control.snapshot(operation_id)["status"])
+            self.assertTrue(lock_observations)
+            self.assertTrue(all(lock_observations))
+            reloaded = UpgradeEngine(
+                operation_id,
+                journal,
+                {**CONTEXT, "operation_id": operation_id},
+                backend_adapter=adapter,
+            )
+            self.assertEqual("rolled-back", reloaded._load()["status"])
 
     def test_started_phase_requires_explicit_recovery(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
