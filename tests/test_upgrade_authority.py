@@ -10,7 +10,9 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
+from tools import upgrade_authority
 from tools.upgrade_authority import (
     AuthorityError,
     commit_runtime_selector,
@@ -54,6 +56,52 @@ class RuntimeSelectorTests(unittest.TestCase):
             path.symlink_to(target)
             with self.assertRaises(AuthorityError):
                 commit_runtime_selector(path, "new", "old")
+
+    def test_selector_publication_requires_private_real_ancestors(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            public = root / "public"
+            public.mkdir(mode=0o755)
+            public.chmod(0o755)
+            with self.assertRaisesRegex(AuthorityError, "owner-only provisioned"):
+                commit_runtime_selector(public / "selector.json", "new", "old")
+            self.assertFalse((public / "selector.json").exists())
+
+            private = root / "private"
+            private.mkdir(mode=0o700)
+            linked = root / "linked"
+            linked.symlink_to(private, target_is_directory=True)
+            with self.assertRaisesRegex(AuthorityError, "parent descriptor is unsafe"):
+                commit_runtime_selector(linked / "selector.json", "new", "old")
+            self.assertFalse((private / "selector.json").exists())
+
+    def test_selector_publication_detects_parent_replacement_before_commit(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            parent = root / "runtime"
+            parent.mkdir(mode=0o700)
+            selector = parent / "selector.json"
+            commit_runtime_selector(selector, "old", "older")
+            displaced = root / "displaced"
+            original_recheck = upgrade_authority._recheck_parent
+
+            def replace_parent(path: Path, identity: tuple[int, int]) -> None:
+                parent.rename(displaced)
+                parent.mkdir(mode=0o700)
+                original_recheck(path, identity)
+
+            with (
+                patch.object(upgrade_authority, "_recheck_parent", side_effect=replace_parent),
+                self.assertRaisesRegex(AuthorityError, "publication failed"),
+            ):
+                commit_runtime_selector(selector, "new", "old")
+            self.assertFalse(selector.exists())
+            self.assertEqual(
+                "old", read_runtime_selector(displaced / "selector.json")["active_release"]
+            )
+            self.assertFalse(
+                any(path.name.startswith(".selector.json.") for path in displaced.iterdir())
+            )
 
 
 if __name__ == "__main__":

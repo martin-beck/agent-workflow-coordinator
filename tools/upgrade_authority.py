@@ -8,10 +8,10 @@ import hashlib
 import importlib
 import json
 import os
+import secrets
 import sqlite3
 import stat
 import subprocess
-import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
@@ -142,6 +142,32 @@ def _recheck_regular(
     finally:
         os.close(descriptor)
         os.close(parent)
+
+
+def _recheck_parent(path: Path, identity: tuple[int, int]) -> None:
+    descriptor, current = _open_parent(path)
+    try:
+        if current != identity:
+            raise AuthorityError("authority parent identity changed")
+    finally:
+        os.close(descriptor)
+
+
+def _existing_regular_identity(parent: int, name: str) -> tuple[int, int] | None:
+    descriptor = -1
+    try:
+        descriptor = os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=parent)
+        status = os.fstat(descriptor)
+        if not stat.S_ISREG(status.st_mode) or status.st_nlink != 1:
+            raise AuthorityError("runtime selector is not a private regular file")
+        return _file_identity(status)
+    except FileNotFoundError:
+        return None
+    except OSError as error:
+        raise AuthorityError("runtime selector descriptor is unsafe") from error
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
 
 
 def _sidecar_identities(parent: int, name: str) -> dict[str, tuple[int, int] | None]:
@@ -446,14 +472,28 @@ def read_runtime_selector(path: Path) -> dict[str, Any]:
 
 
 def commit_runtime_selector(path: Path, active_release: str, previous_release: str) -> None:
-    """Atomically publish a versioned runtime selector with no backend mutation."""
-    if not active_release or not previous_release or path.is_symlink():
+    """Atomically publish through a retained, owner-only parent descriptor."""
+    if not active_release or not previous_release:
         raise AuthorityError("runtime selector identity is invalid")
-    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    descriptor, name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
-    temporary = Path(name)
+    parent, parent_identity = _open_parent(path)
+    status = os.fstat(parent)
+    if status.st_uid != os.geteuid() or stat.S_IMODE(status.st_mode) != 0o700:
+        os.close(parent)
+        raise AuthorityError("runtime selector requires an owner-only provisioned directory")
+    _existing_regular_identity(parent, path.name)
+    descriptor = -1
+    temporary = f".{path.name}.{secrets.token_hex(16)}"
     try:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+        descriptor = os.open(
+            temporary,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+            0o600,
+            dir_fd=parent,
+        )
+        temporary_identity = _file_identity(os.fstat(descriptor))
+        stream = os.fdopen(descriptor, "w", encoding="utf-8")
+        descriptor = -1
+        with stream:
             json.dump(
                 {
                     "schema_version": 1,
@@ -466,12 +506,29 @@ def commit_runtime_selector(path: Path, active_release: str, previous_release: s
             stream.write("\n")
             stream.flush()
             os.fsync(stream.fileno())
-        temporary.replace(path)
-        directory = os.open(path.parent, os.O_DIRECTORY)
+        _recheck_parent(path, parent_identity)
+        os.replace(temporary, path.name, src_dir_fd=parent, dst_dir_fd=parent)
+        published = os.open(path.name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=parent)
         try:
-            os.fsync(directory)
+            published_status = os.fstat(published)
+            if (
+                not stat.S_ISREG(published_status.st_mode)
+                or published_status.st_nlink != 1
+                or _file_identity(published_status) != temporary_identity
+            ):
+                raise AuthorityError("runtime selector publication identity changed")
         finally:
-            os.close(directory)
-    except OSError as error:
-        temporary.unlink(missing_ok=True)
+            os.close(published)
+        os.fsync(parent)
+        _recheck_parent(path, parent_identity)
+    except (OSError, AuthorityError) as error:
         raise AuthorityError("runtime selector publication failed") from error
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+        try:
+            os.unlink(temporary, dir_fd=parent)
+        except FileNotFoundError:
+            pass
+        finally:
+            os.close(parent)
