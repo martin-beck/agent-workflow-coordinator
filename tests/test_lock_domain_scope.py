@@ -6,9 +6,11 @@ from __future__ import annotations
 
 import multiprocessing
 import os
+import sqlite3
 import tempfile
 import time
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -165,6 +167,35 @@ class LockDomainScopeTests(unittest.TestCase):
         self.session.mark_ambiguous(1, "caller-abort")
         with self.assertRaisesRegex(LockDomainError, "not held"), scope.hold():
             self.fail("ambiguous durable session must be rejected")
+        self.assertFalse(self.session.operation_owned_by_current_thread)
+
+    def test_abort_then_recheck_rejects_replaced_session_identity(self) -> None:
+        """A replaced durable authority revision cannot pass the old lease."""
+        scope = LockDomainScope(self.domain, self.session, self.fence, self.lease, locked)
+        with self.assertRaisesRegex(SystemExit, "simulated crash"), scope.hold():
+            raise SystemExit("simulated crash")
+        self.assertFalse(self.session.operation_owned_by_current_thread)
+
+        changed_record = replace(
+            identity(), authority_revision_at_acquire="authority-2", state_revision=2
+        ).as_record()
+        changed_record["identity_digest"] = canonical_barrier_session_digest(changed_record)
+        with sqlite3.connect(self.store.control_store_path) as connection:
+            connection.execute(
+                "UPDATE barrier_session SET authority_revision_at_acquire=?, "
+                "state_revision=?, identity_digest=?, revision=? WHERE project_id=?",
+                (
+                    changed_record["authority_revision_at_acquire"],
+                    changed_record["state_revision"],
+                    changed_record["identity_digest"],
+                    2,
+                    PROJECT,
+                ),
+            )
+            connection.commit()
+
+        with self.assertRaisesRegex(LockDomainError, "do not match"), scope.hold():
+            self.fail("replaced durable session identity must be rejected")
         self.assertFalse(self.session.operation_owned_by_current_thread)
 
     def test_two_process_scopes_never_overlap(self) -> None:
