@@ -209,6 +209,53 @@ class ScopedBackendAdapterTests(unittest.TestCase):
             )
         self.assertEqual(["held", "released"], scope.events)
 
+    def test_disabled_mutation_rejects_before_stale_context_recheck(self) -> None:
+        class StaleScope(Scope):
+            def assert_context(self, _context: Mapping[str, object]) -> None:
+                raise AssertionError("stale context must not be reached")
+
+        adapter = ScopedBackendAdapter(Backend(), StaleScope())
+        with self.assertRaisesRegex(TypeError, "disabled"):
+            adapter.execute("rollback", {})
+
+    def test_recheck_abort_releases_scope_before_retry(self) -> None:
+        class OneShotAbortScope(Scope):
+            def __init__(self) -> None:
+                super().__init__()
+                self.aborted = False
+
+            @contextmanager
+            def hold(self) -> Iterator[object]:
+                self.events.append("held")
+                try:
+                    if not self.aborted:
+                        self.aborted = True
+                        raise SystemExit("simulated abort")
+                    yield object()
+                finally:
+                    self.events.append("released")
+
+        scope = OneShotAbortScope()
+        with self.assertRaisesRegex(SystemExit, "abort"):
+            ScopedBackendAdapter.from_rechecked_session(
+                Backend(),
+                scope,
+                cast(LockDomainIdentity, object()),
+                object(),
+                cast(BarrierSessionState, object()),
+                cast(Any, object()),
+            )
+        with self.assertRaisesRegex(TypeError, "identity"):
+            ScopedBackendAdapter.from_rechecked_session(
+                Backend(),
+                scope,
+                cast(LockDomainIdentity, object()),
+                object(),
+                cast(BarrierSessionState, object()),
+                cast(Any, object()),
+            )
+        self.assertEqual(["held", "released", "held", "released"], scope.events)
+
 
 if __name__ == "__main__":
     unittest.main()
