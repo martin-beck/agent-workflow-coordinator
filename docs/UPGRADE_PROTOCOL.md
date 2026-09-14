@@ -67,6 +67,31 @@ schema-v3 operation with a new operation ID and fencing token. An unresolved
 or unavailable originating runtime remains in safe mode; there is no automatic
 in-place migration path.
 
+## SQLite control-store provisioning boundary
+
+The rollback control database must live in a dedicated directory owned by the
+coordinator process effective user with mode `0700`. The main database, lock,
+and SQLite `-wal`/`-shm` sidecars are opened without following symlinks. Any
+pre-existing sidecar must be a single-link regular file; its device/inode
+identity is bound after WAL activation and rechecked before the connection is
+closed. A missing, aliased, replaced, or unreadable sidecar fails closed.
+
+This is an explicit deployment trust boundary for the standard-library SQLite
+VFS: unrelated code running as the same operating-system user can bypass
+advisory locks and replace files in an owner-writable directory. Such code is
+trusted to the same extent as the coordinator process. Deployments that need
+protection from mutually hostile same-UID processes require separate OS users
+or a reviewed descriptor-native custom VFS; they must not weaken the directory
+or sidecar checks.
+
+The upgrade delegate cannot authorize rollback release. SQLite binding also
+requires a separate authority/runtime rereader, which returns typed facts from
+a fresh authority, selector, integrity, foreign-key, fencing, and backend
+round-trip inspection. The control adapter validates those facts against the
+operation envelope and constructs release evidence itself. Until a production
+rereader can obtain the exact release-specific authority revision and runtime
+identity, binding fails closed. Git control binding remains unavailable.
+
 The schema and contract tests reject duplicate or non-contiguous phase orders,
 unknown or forward dependencies, missing phase operations, unbounded time or
 resource declarations, and incomplete release identity. Every release binds

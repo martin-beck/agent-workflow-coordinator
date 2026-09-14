@@ -12,11 +12,14 @@ import unittest
 from collections.abc import Callable, Mapping
 from contextlib import closing
 from pathlib import Path
+from typing import cast
 from unittest.mock import MagicMock, patch
 
 from tools.rollback_control_store import (
     IDENTITY_FIELDS,
     ControlStoreError,
+    SQLiteAuthorityRuntimeRereader,
+    SQLiteAuthorityRuntimeState,
     SQLiteControlStoreAdapter,
     SQLiteRollbackControlStore,
     bind_control_store,
@@ -55,6 +58,36 @@ RELEASE_EVIDENCE = {
 }
 
 
+class StaticAuthorityRuntimeRereader:
+    def __init__(self, **changes: object) -> None:
+        self.changes = changes
+
+    def reread_rollback(
+        self, context: Mapping[str, object], _result: Mapping[str, object]
+    ) -> SQLiteAuthorityRuntimeState:
+        values: dict[str, object] = {
+            "backend": context["backend"],
+            "project_id": context["project_id"],
+            "authority_revision": context["authority_revision"],
+            "fencing_token": context["fencing_token"],
+            "target": context["target"],
+            "integrity_check": "ok",
+            "foreign_key_violations": 0,
+            "backend_roundtrip": "sqlite",
+            **self.changes,
+        }
+        return SQLiteAuthorityRuntimeState(
+            backend=cast(str, values["backend"]),
+            project_id=cast(str, values["project_id"]),
+            authority_revision=cast(str, values["authority_revision"]),
+            fencing_token=cast(str, values["fencing_token"]),
+            target=cast(str, values["target"]),
+            integrity_check=cast(str, values["integrity_check"]),
+            foreign_key_violations=cast(int, values["foreign_key_violations"]),
+            backend_roundtrip=cast(str, values["backend_roundtrip"]),
+        )
+
+
 class RollbackControlStoreTests(unittest.TestCase):
     def test_canonical_barrier_digest_is_stable_and_excludes_mutable_fields(self) -> None:
         first = canonical_barrier_digest(RECORD)
@@ -77,33 +110,34 @@ class RollbackControlStoreTests(unittest.TestCase):
             authority = Path(directory) / "authority.sqlite"
             authority.touch()
             bound = SQLiteRollbackControlStore(Path(directory) / "bound.sqlite", PROJECT, authority)
+            with self.assertRaisesRegex(ControlStoreError, "authority/runtime rereader"):
+                bind_control_store("sqlite", Delegate(), bound)
             self.assertIsInstance(
-                bind_control_store("sqlite", Delegate(), bound), SQLiteControlStoreAdapter
+                bind_control_store("sqlite", Delegate(), bound, StaticAuthorityRuntimeRereader()),
+                SQLiteControlStoreAdapter,
             )
             with self.assertRaises(ControlStoreError):
-                bind_control_store("git", Delegate(), None)
+                bind_control_store("git", Delegate(), None, StaticAuthorityRuntimeRereader())
 
     def test_adapter_release_api_fails_closed_without_scope_and_authority_evidence(self) -> None:
-        class MissingVerifier:
+        class Delegate:
             def snapshot(self, _phase: str, _context: Mapping[str, object]) -> Mapping[str, object]:
                 return {}
 
             def execute(self, _phase: str, _context: Mapping[str, object]) -> Mapping[str, object]:
                 return {}
 
-        class InvalidVerifier(MissingVerifier):
-            def revalidate_rollback(
+        class InvalidRereader:
+            def reread_rollback(
                 self, _context: Mapping[str, object], _result: Mapping[str, object]
-            ) -> object:
-                return None
+            ) -> SQLiteAuthorityRuntimeState:
+                return cast(SQLiteAuthorityRuntimeState, None)
 
-        class EvidenceVerifier(MissingVerifier):
-            evidence: object = RELEASE_EVIDENCE
-
-            def revalidate_rollback(
+        class RaisingRereader:
+            def reread_rollback(
                 self, _context: Mapping[str, object], _result: Mapping[str, object]
-            ) -> object:
-                return self.evidence
+            ) -> SQLiteAuthorityRuntimeState:
+                raise RuntimeError("reread failed")
 
         with tempfile.TemporaryDirectory() as directory:
             authority = Path(directory) / "authority.sqlite"
@@ -113,7 +147,9 @@ class RollbackControlStoreTests(unittest.TestCase):
             )
             store.cas(0, RECORD)
             context = {field: RECORD[field] for field in IDENTITY_FIELDS}
-            adapter = SQLiteControlStoreAdapter(MissingVerifier(), store)
+            with self.assertRaisesRegex(ControlStoreError, "authority/runtime rereader"):
+                SQLiteControlStoreAdapter(Delegate(), store)
+            adapter = SQLiteControlStoreAdapter(Delegate(), store, StaticAuthorityRuntimeRereader())
             self.assertEqual({}, adapter.snapshot("discover", context))
             self.assertEqual({}, adapter.execute("discover", context))
             outside_verification = adapter.verify_rollback_context(context)
@@ -134,48 +170,57 @@ class RollbackControlStoreTests(unittest.TestCase):
                 adapter.begin_release_rollback_context(context)
                 with self.assertRaises(ControlStoreError):
                     adapter.complete_release_rollback_context(context)
-                with self.assertRaises(ControlStoreError):
-                    adapter.revalidate_rollback(context, RELEASE_EVIDENCE)
-                invalid = SQLiteControlStoreAdapter(InvalidVerifier(), store)
-                with self.assertRaises(ControlStoreError):
-                    invalid.revalidate_rollback(context, RELEASE_EVIDENCE)
-            with self.assertRaises(ControlStoreError):
-                SQLiteControlStoreAdapter(InvalidVerifier(), store).revalidate_rollback(
-                    context, RELEASE_EVIDENCE
-                )
             with self.assertRaisesRegex(ControlStoreError, "outer operation lock"):
-                SQLiteControlStoreAdapter(EvidenceVerifier(), store).revalidate_rollback(
-                    context, RELEASE_EVIDENCE
-                )
+                adapter.revalidate_rollback(context, RELEASE_EVIDENCE)
 
-            second_store = SQLiteRollbackControlStore(
-                Path(directory) / "second-control.sqlite", PROJECT, authority
+            invalid_states = (
+                {"backend": "git"},
+                {"project_id": "22222222-2222-4222-8222-222222222222"},
+                {"authority_revision": "changed"},
+                {"fencing_token": "stale"},
+                {"target": "new"},
+                {"integrity_check": "failed"},
+                {"foreign_key_violations": 1},
+                {"foreign_key_violations": False},
+                {"backend_roundtrip": "git"},
             )
-            second_store.cas(0, RECORD)
-            verifier = EvidenceVerifier()
-            evidence_adapter = SQLiteControlStoreAdapter(verifier, second_store)
-            with second_store.operation_lock():
-                evidence_adapter.begin_release_rollback_context(context)
+            rereaders: tuple[SQLiteAuthorityRuntimeRereader, ...] = (
+                *(StaticAuthorityRuntimeRereader(**changes) for changes in invalid_states),
+                InvalidRereader(),
+                RaisingRereader(),
+            )
+            for index, rereader in enumerate(rereaders):
+                with self.subTest(rereader=rereader):
+                    invalid_store = SQLiteRollbackControlStore(
+                        Path(directory) / f"invalid-{index}.sqlite", PROJECT, authority
+                    )
+                    invalid_store.cas(0, RECORD)
+                    invalid_adapter = SQLiteControlStoreAdapter(Delegate(), invalid_store, rereader)
+                    with invalid_adapter.operation_lock():
+                        invalid_adapter.begin_release_rollback_context(context)
+                        with self.assertRaises(ControlStoreError):
+                            invalid_adapter.revalidate_rollback(context, RELEASE_EVIDENCE)
+
+            valid_store = SQLiteRollbackControlStore(
+                Path(directory) / "valid.sqlite", PROJECT, authority
+            )
+            valid_store.cas(0, RECORD)
+            valid_adapter = SQLiteControlStoreAdapter(
+                Delegate(), valid_store, StaticAuthorityRuntimeRereader()
+            )
+            with valid_adapter.operation_lock():
+                valid_adapter.begin_release_rollback_context(context)
                 with self.assertRaises(ControlStoreError):
-                    evidence_adapter.revalidate_rollback(
+                    valid_adapter.revalidate_rollback(
                         {**context, "fencing_token": "stale"}, RELEASE_EVIDENCE
                     )
-                for evidence in (
-                    {**RELEASE_EVIDENCE, "runtime_validated": False},
-                    {**RELEASE_EVIDENCE, "unexpected": True},
-                    {**RELEASE_EVIDENCE, "fencing_token": "stale"},
-                ):
-                    verifier.evidence = evidence
-                    with self.subTest(evidence=evidence), self.assertRaises(ControlStoreError):
-                        evidence_adapter.revalidate_rollback(context, RELEASE_EVIDENCE)
-                verifier.evidence = RELEASE_EVIDENCE
                 self.assertEqual(
                     RELEASE_EVIDENCE,
-                    evidence_adapter.revalidate_rollback(context, RELEASE_EVIDENCE),
+                    valid_adapter.revalidate_rollback(context, RELEASE_EVIDENCE),
                 )
                 self.assertEqual(
                     "released",
-                    evidence_adapter.complete_release_rollback_context(context)["status"],
+                    valid_adapter.complete_release_rollback_context(context)["status"],
                 )
 
     def test_wal_cas_and_reload_are_durable(self) -> None:
@@ -615,10 +660,10 @@ class RollbackControlStoreTests(unittest.TestCase):
                 store.cas(0, RECORD)
 
             parent = root / "bound-parent"
-            parent.mkdir()
+            parent.mkdir(mode=0o700)
             parent_store = SQLiteRollbackControlStore(parent / "control.sqlite", PROJECT)
             parent.rename(root / "previous-parent")
-            parent.mkdir()
+            parent.mkdir(mode=0o700)
             with self.assertRaisesRegex(ControlStoreError, "parent identity changed"):
                 parent_store.cas(0, RECORD)
 
@@ -677,25 +722,69 @@ class RollbackControlStoreTests(unittest.TestCase):
             ):
                 fault_store.snapshot("op-1")
 
+    def test_sidecars_require_private_provisioning_and_stable_regular_identities(self) -> None:
+        class SwappingSidecarStore(SQLiteRollbackControlStore):
+            def _cas_connection(
+                self,
+                connection: sqlite3.Connection,
+                expected_revision: int,
+                supplied: dict[str, object],
+            ) -> dict[str, object]:
+                result = super()._cas_connection(connection, expected_revision, supplied)
+                wal = Path(f"{self.path}-wal")
+                wal.rename(Path(f"{self.path}-previous-wal"))
+                wal.touch()
+                return result
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            public_parent = root / "public-control"
+            public_parent.mkdir(mode=0o755)
+            public_parent.chmod(0o755)
+            with self.assertRaisesRegex(ControlStoreError, "owner-only provisioned directory"):
+                SQLiteRollbackControlStore(public_parent / "control.sqlite", PROJECT)
+            self.assertFalse((public_parent / "control.sqlite").exists())
+
+            for suffix in ("-wal", "-shm"):
+                with self.subTest(suffix=suffix):
+                    path = root / f"linked{suffix}.sqlite"
+                    store = SQLiteRollbackControlStore(path, PROJECT)
+                    target = root / f"sidecar-target{suffix}"
+                    target.touch()
+                    Path(f"{path}{suffix}").symlink_to(target.name)
+                    with self.assertRaisesRegex(ControlStoreError, "sidecar descriptor is unsafe"):
+                        store.cas(0, RECORD)
+
+            hardlink_path = root / "hardlink.sqlite"
+            hardlink_store = SQLiteRollbackControlStore(hardlink_path, PROJECT)
+            sidecar_source = root / "sidecar-source"
+            sidecar_source.touch()
+            os.link(sidecar_source, Path(f"{hardlink_path}-wal"))
+            with self.assertRaisesRegex(ControlStoreError, "sidecar is not private and regular"):
+                hardlink_store.cas(0, RECORD)
+
+            swapping_path = root / "swapping.sqlite"
+            swapping_store = SwappingSidecarStore(swapping_path, PROJECT)
+            with self.assertRaisesRegex(ControlStoreError, "WAL sidecar identity changed"):
+                swapping_store.cas(0, RECORD)
+
     def test_release_authorization_rejects_delegate_mutation_and_external_revision_tamper(
         self,
     ) -> None:
-        class EvidenceVerifier:
-            mutate_context = False
-
+        class Delegate:
             def snapshot(self, _phase: str, _context: Mapping[str, object]) -> dict[str, object]:
                 return {}
 
             def execute(self, _phase: str, _context: Mapping[str, object]) -> dict[str, object]:
                 return {}
 
-            def revalidate_rollback(
-                self, context: Mapping[str, object], _result: Mapping[str, object]
-            ) -> Mapping[str, object]:
-                if self.mutate_context:
-                    assert isinstance(context, dict)
-                    context["authority_revision"] = "changed"
-                return RELEASE_EVIDENCE
+        class MutatingRereader(StaticAuthorityRuntimeRereader):
+            def reread_rollback(
+                self, context: Mapping[str, object], result: Mapping[str, object]
+            ) -> SQLiteAuthorityRuntimeState:
+                assert isinstance(context, dict)
+                context["authority_revision"] = "changed"
+                return super().reread_rollback(context, result)
 
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -707,9 +796,9 @@ class RollbackControlStoreTests(unittest.TestCase):
                 root / "mutation-control.sqlite", PROJECT, authority
             )
             mutation_store.cas(0, RECORD)
-            mutation_verifier = EvidenceVerifier()
-            mutation_verifier.mutate_context = True
-            mutation_adapter = SQLiteControlStoreAdapter(mutation_verifier, mutation_store)
+            mutation_adapter = SQLiteControlStoreAdapter(
+                Delegate(), mutation_store, MutatingRereader()
+            )
             mutable_context = dict(context)
             with mutation_adapter.operation_lock():
                 mutation_adapter.begin_release_rollback_context(mutable_context)
@@ -720,7 +809,9 @@ class RollbackControlStoreTests(unittest.TestCase):
             control = root / "tamper-control.sqlite"
             tamper_store = SQLiteRollbackControlStore(control, PROJECT, authority)
             tamper_store.cas(0, RECORD)
-            tamper_adapter = SQLiteControlStoreAdapter(EvidenceVerifier(), tamper_store)
+            tamper_adapter = SQLiteControlStoreAdapter(
+                Delegate(), tamper_store, StaticAuthorityRuntimeRereader()
+            )
             with tamper_adapter.operation_lock():
                 tamper_adapter.begin_release_rollback_context(context)
                 tamper_adapter.revalidate_rollback(context, RELEASE_EVIDENCE)

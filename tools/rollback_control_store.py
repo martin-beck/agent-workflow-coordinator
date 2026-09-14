@@ -29,6 +29,7 @@ from tools.upgrade_identity import (
 )
 
 SCHEMA_VERSION = 2
+SIDECAR_SUFFIXES = ("-wal", "-shm")
 IDENTITY_FIELDS = ENVELOPE_FIELDS
 STATUSES = {"held", "releasing", "released", "ambiguous"}
 STATUS_TRANSITIONS = {
@@ -87,12 +88,42 @@ class UpgradeAdapter(Protocol):
     def execute(self, phase: str, context: Mapping[str, object]) -> Mapping[str, object]: ...
 
 
+@dataclass(frozen=True, slots=True)
+class SQLiteAuthorityRuntimeState:
+    """Facts produced by a fresh authority and runtime reread."""
+
+    backend: str
+    project_id: str
+    authority_revision: str
+    fencing_token: str
+    target: str
+    integrity_check: str
+    foreign_key_violations: int
+    backend_roundtrip: str
+
+
+class SQLiteAuthorityRuntimeRereader(Protocol):
+    """Trusted boundary that rereads authority and runtime instead of echoing claims."""
+
+    def reread_rollback(
+        self, context: Mapping[str, object], result: Mapping[str, object]
+    ) -> SQLiteAuthorityRuntimeState: ...
+
+
 class SQLiteControlStoreAdapter:
     """Bind an engine adapter's rollback authority to a durable SQLite store."""
 
-    def __init__(self, delegate: UpgradeAdapter, store: SQLiteRollbackControlStore) -> None:
+    def __init__(
+        self,
+        delegate: UpgradeAdapter,
+        store: SQLiteRollbackControlStore,
+        authority_runtime: SQLiteAuthorityRuntimeRereader | None = None,
+    ) -> None:
+        if authority_runtime is None:
+            raise ControlStoreError("concrete SQLite authority/runtime rereader is required")
         self._delegate = delegate
         self._store = store
+        self._authority_runtime = authority_runtime
         self._release_authorization: _ReleaseAuthorization | None = None
 
     def snapshot(self, phase: str, context: Mapping[str, object]) -> Mapping[str, object]:
@@ -137,12 +168,30 @@ class SQLiteControlStoreAdapter:
         )
         if durable is None or durable["status"] not in {"releasing", "released"}:
             raise ControlStoreError("rollback control record is not ready for reopen validation")
-        verifier = getattr(self._delegate, "revalidate_rollback", None)
-        if not callable(verifier):
-            raise ControlStoreError("authority rollback revalidation is unavailable")
-        evidence = verifier(context, result)
-        if not isinstance(evidence, Mapping):
-            raise ControlStoreError("authority rollback revalidation is invalid")
+        try:
+            reread = self._authority_runtime.reread_rollback(context, result)
+        except Exception as error:
+            raise ControlStoreError("authority/runtime rollback reread failed") from error
+        if not isinstance(reread, SQLiteAuthorityRuntimeState) or (
+            reread.backend != "sqlite"
+            or reread.backend != context.get("backend")
+            or reread.project_id != context.get("project_id")
+            or reread.authority_revision != context.get("authority_revision")
+            or reread.fencing_token != context.get("fencing_token")
+            or reread.target != context.get("target")
+            or reread.integrity_check != "ok"
+            or type(reread.foreign_key_violations) is not int
+            or reread.foreign_key_violations != 0
+            or reread.backend_roundtrip != "sqlite"
+        ):
+            raise ControlStoreError("authority/runtime rollback reread is invalid")
+        evidence = {
+            "restored_verified": True,
+            "runtime_validated": True,
+            "backend_roundtrip_valid": True,
+            "backend": reread.backend,
+            "fencing_token": reread.fencing_token,
+        }
         if durable["status"] == "releasing":
             if not self._store.operation_owned_by_current_thread:
                 raise ControlStoreError("rollback revalidation requires the outer operation lock")
@@ -154,14 +203,19 @@ class SQLiteControlStoreAdapter:
 
 
 def bind_control_store(
-    backend: str, delegate: UpgradeAdapter, store: SQLiteRollbackControlStore | None
+    backend: str,
+    delegate: UpgradeAdapter,
+    store: SQLiteRollbackControlStore | None,
+    authority_runtime: SQLiteAuthorityRuntimeRereader | None = None,
 ) -> SQLiteControlStoreAdapter:
     """Construct only a proven SQLite adapter; Git is explicitly fail-closed."""
     if backend != "sqlite" or store is None or store.authority_path is None:
         raise ControlStoreError(
             "durable rollback control store or authority binding is unavailable"
         )
-    return SQLiteControlStoreAdapter(delegate, store)
+    if authority_runtime is None:
+        raise ControlStoreError("concrete SQLite authority/runtime rereader is required")
+    return SQLiteControlStoreAdapter(delegate, store, authority_runtime)
 
 
 def _validate(record: Mapping[str, object]) -> dict[str, object]:
@@ -243,11 +297,53 @@ class SQLiteRollbackControlStore:
                 descriptor = child
                 os.close(previous)
             parent_status = os.fstat(descriptor)
+            if parent_status.st_uid != os.geteuid() or stat.S_IMODE(parent_status.st_mode) != 0o700:
+                os.close(descriptor)
+                descriptor = -1
+                raise ControlStoreError(
+                    "control store requires an owner-only provisioned directory"
+                )
         except OSError as error:
             if descriptor >= 0:
                 os.close(descriptor)
             raise ControlStoreError("control store parent descriptor is unsafe") from error
         return descriptor, cls._file_identity(parent_status)
+
+    @classmethod
+    def _sidecar_identities(
+        cls, parent: int, name: str, *, required: bool
+    ) -> dict[str, tuple[int, int] | None]:
+        identities: dict[str, tuple[int, int] | None] = {}
+        for suffix in SIDECAR_SUFFIXES:
+            descriptor = -1
+            try:
+                descriptor = os.open(name + suffix, os.O_RDWR | os.O_NOFOLLOW, dir_fd=parent)
+                status = os.fstat(descriptor)
+                if not stat.S_ISREG(status.st_mode) or status.st_nlink != 1:
+                    raise ControlStoreError("control store sidecar is not private and regular")
+                identities[suffix] = cls._file_identity(status)
+            except FileNotFoundError:
+                if required:
+                    raise ControlStoreError("control store WAL sidecars are unavailable") from None
+                identities[suffix] = None
+            except OSError as error:
+                raise ControlStoreError("control store sidecar descriptor is unsafe") from error
+            finally:
+                if descriptor >= 0:
+                    os.close(descriptor)
+        return identities
+
+    @classmethod
+    def _bind_sidecars(
+        cls,
+        parent: int,
+        name: str,
+        previous: Mapping[str, tuple[int, int] | None],
+    ) -> dict[str, tuple[int, int] | None]:
+        current = cls._sidecar_identities(parent, name, required=True)
+        if any(previous[suffix] not in {None, current[suffix]} for suffix in SIDECAR_SUFFIXES):
+            raise ControlStoreError("control store WAL sidecar identity changed")
+        return current
 
     @classmethod
     def _prepare_regular_file(cls, path: Path) -> tuple[tuple[int, int], tuple[int, int]]:
@@ -332,11 +428,18 @@ class SQLiteRollbackControlStore:
             raise ControlStoreError("authority descriptor identity changed")
 
     @contextmanager
-    def _connection(self) -> Iterator[sqlite3.Connection]:
+    def _connection(self) -> Iterator[sqlite3.Connection]:  # noqa: C901
         self._recheck_authority()
         parent, descriptor = self._open_bound_file(
             self.path, self._parent_identity, self._control_identity
         )
+        try:
+            before_sidecars = self._sidecar_identities(parent, self.path.name, required=False)
+        except Exception:
+            os.close(descriptor)
+            os.close(parent)
+            raise
+        bound_sidecars: dict[str, tuple[int, int] | None] | None = None
         try:
             connection = sqlite3.connect(
                 f"file:/proc/self/fd/{descriptor}?mode=rw",
@@ -404,12 +507,21 @@ class SQLiteRollbackControlStore:
                 )
             elif value[0] != self.project_id:
                 raise ControlStoreError("control store project binding mismatch")
+            bound_sidecars = self._bind_sidecars(parent, self.path.name, before_sidecars)
             yield connection
         except Exception:
             raise
         finally:
-            connection.close()
             try:
+                try:
+                    if bound_sidecars is not None:
+                        current_sidecars = self._sidecar_identities(
+                            parent, self.path.name, required=True
+                        )
+                        if current_sidecars != bound_sidecars:
+                            raise ControlStoreError("control store WAL sidecar identity changed")
+                finally:
+                    connection.close()
                 reopened_parent, reopened = self._open_bound_file(
                     self.path, self._parent_identity, self._control_identity
                 )

@@ -16,6 +16,7 @@ from typing import cast
 from unittest.mock import patch
 
 from tools.rollback_control_store import (
+    SQLiteAuthorityRuntimeState,
     SQLiteControlStoreAdapter,
     SQLiteRollbackControlStore,
     bind_control_store,
@@ -69,6 +70,22 @@ ADMISSION = {
     **CONTEXT,
     "validation_failed": False,
 }
+
+
+class StaticAuthorityRuntimeRereader:
+    def reread_rollback(
+        self, context: Mapping[str, object], _result: Mapping[str, object]
+    ) -> SQLiteAuthorityRuntimeState:
+        return SQLiteAuthorityRuntimeState(
+            backend=cast(str, context["backend"]),
+            project_id=cast(str, context["project_id"]),
+            authority_revision=cast(str, context["authority_revision"]),
+            fencing_token=cast(str, context["fencing_token"]),
+            target=cast(str, context["target"]),
+            integrity_check="ok",
+            foreign_key_violations=0,
+            backend_roundtrip="sqlite",
+        )
 
 
 class FakeAdapter:
@@ -1002,7 +1019,9 @@ class UpgradeEngineTests(unittest.TestCase):
                     child_store = SQLiteRollbackControlStore(
                         control_path, cast(str, rollback_context["project_id"]), authority
                     )
-                    child_adapter = KillAfterBeginAdapter(DurableDelegate(), child_store)
+                    child_adapter = KillAfterBeginAdapter(
+                        DurableDelegate(), child_store, StaticAuthorityRuntimeRereader()
+                    )
                     UpgradeEngine(
                         operation_id,
                         journal,
@@ -1024,7 +1043,12 @@ class UpgradeEngineTests(unittest.TestCase):
             recovery_store = SQLiteRollbackControlStore(
                 control_path, cast(str, rollback_context["project_id"]), authority
             )
-            recovery_adapter = bind_control_store("sqlite", DurableDelegate(), recovery_store)
+            recovery_adapter = bind_control_store(
+                "sqlite",
+                DurableDelegate(),
+                recovery_store,
+                StaticAuthorityRuntimeRereader(),
+            )
             recovered = UpgradeEngine(
                 operation_id,
                 journal,
@@ -1144,7 +1168,9 @@ class UpgradeEngineTests(unittest.TestCase):
                     lock_observations.append(control.operation_owned_by_current_thread)
                     return super().execute(phase, context)
 
-            adapter = bind_control_store("sqlite", ControlDelegate(), control)
+            adapter = bind_control_store(
+                "sqlite", ControlDelegate(), control, StaticAuthorityRuntimeRereader()
+            )
 
             journal = Path(directory) / "journal.json"
             engine = UpgradeEngine(
