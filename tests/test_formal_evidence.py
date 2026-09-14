@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import io
 import json
 import re
 import runpy
@@ -134,13 +135,25 @@ class FormalEvidenceTests(unittest.TestCase):
         )
         self.assertIn("&& 'portable-smoke' || 'pr-publication'", workflow)
         self.assertIn("&& 'full-exhaustive'", workflow)
-        self.assertIn("env.TLC_CGROUP_MODE == 'required'", workflow)
         self.assertIn("timeout-minutes: ${{", workflow)
         self.assertIn("&& 120 || 30", workflow)
-        self.assertIn("TLC_TIMEOUT_SECONDS:", workflow)
+        steps_start = workflow.index("    steps:\n", workflow.index("  verify:\n"))
+        job_environment = workflow[
+            workflow.index("    env:\n", workflow.index("  verify:\n")) : steps_start
+        ]
+        for resource_setting in ("TLC_CGROUP_MODE", "TLC_HEAP", "TLC_TIMEOUT_SECONDS"):
+            self.assertNotIn(resource_setting, job_environment)
+        formal_step = workflow[
+            workflow.index("      - name: Run event-appropriate formal tier\n") : workflow.index(
+                "      - name: Publish exact-head tier attestation\n"
+            )
+        ]
+        for resource_setting in ("TLC_CGROUP_MODE", "TLC_HEAP", "TLC_TIMEOUT_SECONDS"):
+            self.assertIn(resource_setting, formal_step)
 
     def test_attestation_rejects_failed_formal_outcomes(self) -> None:
         script = ROOT / "formal" / "handoffctl" / "attest.py"
+        stderr = io.StringIO()
         with (
             mock.patch.object(
                 sys,
@@ -155,13 +168,17 @@ class FormalEvidenceTests(unittest.TestCase):
                     str(ROOT / "formal" / "_unused.json"),
                     "--jar",
                     str(script),
+                    "--manifest",
+                    str(script),
                     "--models",
                     "HandoffctlBinding",
                 ],
             ),
+            mock.patch.object(sys, "stderr", stderr),
             self.assertRaises(SystemExit),
         ):
             runpy.run_path(str(script), run_name="__main__")
+        self.assertIn("failed or incomplete formal runs", stderr.getvalue())
 
 
 if __name__ == "__main__":
