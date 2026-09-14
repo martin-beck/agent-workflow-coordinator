@@ -530,6 +530,7 @@ class RollbackControlStoreTests(unittest.TestCase):
             self.assertIsNotNone(reopened_final)
             assert reopened_final is not None
             self.assertEqual(final, reopened_final)
+            self.assertEqual(final.identity.authority_revision_at_acquire, "authority-3")
             self.assertEqual(b"authority remains untouched\n", authority_path.read_bytes())
             for _ in range(2):
                 reader = SQLiteBarrierSessionStore(
