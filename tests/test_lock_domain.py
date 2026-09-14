@@ -246,6 +246,13 @@ class LockDomainTests(unittest.TestCase):
         tampered = replace(identity, identity_digest="tampered")
         with self.assertRaisesRegex(LockDomainError, "identity is invalid"):
             captured.assert_session_binding(BarrierSessionState(tampered, "held", 3), lease)
+        revision_drift = replace(identity, state_revision=4)
+        revision_drift = replace(
+            revision_drift,
+            identity_digest=canonical_barrier_session_digest(revision_drift.as_record()),
+        )
+        with self.assertRaisesRegex(LockDomainError, "identity revision"):
+            captured.assert_session_binding(BarrierSessionState(revision_drift, "held", 3), lease)
 
 
 if __name__ == "__main__":
