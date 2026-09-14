@@ -4,22 +4,35 @@
 
 from __future__ import annotations
 
+import importlib
 import json
 import os
 import subprocess
 import tempfile
 from pathlib import Path
-from typing import Any
-
-from tools import handoffctl
+from typing import Any, cast
 
 
 class AuthorityError(RuntimeError):
     """Raised when authority or staged-runtime identity is not proven."""
 
 
+def _handoffctl() -> Any:
+    """Load handoffctl package-safely, without changing import paths."""
+    try:
+        return importlib.import_module("tools.handoffctl")
+    except ModuleNotFoundError:
+        try:
+            return importlib.import_module("handoffctl")
+        except ModuleNotFoundError as fallback_error:
+            raise AuthorityError(
+                "handoffctl authority inspection is unavailable"
+            ) from fallback_error
+
+
 def inspect_authority() -> dict[str, object]:
     """Read and validate the selected backend using handoffctl's contracts."""
+    handoffctl = cast(Any, _handoffctl())
     try:
         selection = handoffctl.backend_selection()
         binding = handoffctl.project_binding()

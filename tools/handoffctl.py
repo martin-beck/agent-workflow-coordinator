@@ -22,8 +22,28 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import Any, cast
 
-from sqlite_storage import Backend, SQLiteBackend, create_database
-from status_renderer import StatusRenderError, graph_errors, render_status
+if __package__:
+    from .sqlite_storage import (
+        Backend,
+        SQLiteBackend,
+        create_database,
+    )
+    from .status_renderer import (
+        StatusRenderError,
+        graph_errors,
+        render_status,
+    )
+else:  # pragma: no cover - direct script execution
+    from sqlite_storage import (  # type: ignore[import-not-found,no-redef]
+        Backend,
+        SQLiteBackend,
+        create_database,
+    )
+    from status_renderer import (  # type: ignore[import-not-found,no-redef]
+        StatusRenderError,
+        graph_errors,
+        render_status,
+    )
 
 ROOT = Path(__file__).resolve().parent.parent
 TASKS = ROOT / "tasks"

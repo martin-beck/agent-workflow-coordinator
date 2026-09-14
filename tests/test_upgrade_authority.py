@@ -4,6 +4,9 @@
 
 from __future__ import annotations
 
+import importlib
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -16,6 +19,21 @@ from tools.upgrade_authority import (
 
 
 class RuntimeSelectorTests(unittest.TestCase):
+    def test_handoffctl_is_package_safe(self) -> None:
+        module = importlib.import_module("tools.handoffctl")
+        self.assertTrue(callable(module.backend_selection))
+
+    def test_handoffctl_script_mode_keeps_fallback(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        result = subprocess.run(  # noqa: S603
+            [sys.executable, str(root / "tools" / "handoffctl.py"), "--help"],
+            cwd=root,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(0, result.returncode, result.stderr)
+
     def test_atomic_selector_round_trip_and_strict_schema(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "runtime-selector.json"
