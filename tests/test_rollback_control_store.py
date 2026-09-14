@@ -2482,6 +2482,7 @@ class RollbackControlStoreTests(unittest.TestCase):
                 raise RuntimeError("body failed")
             with second.operation_lock():
                 self.assertTrue(second.operation_owned_by_current_thread)
+            self.assertFalse(second.operation_owned_by_current_thread)
 
     def test_releasing_barrier_cannot_be_completed_without_authority_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
