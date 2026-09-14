@@ -9,10 +9,10 @@ import sqlite3
 import tempfile
 import threading
 import unittest
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from contextlib import closing
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from tools.rollback_control_store import (
     IDENTITY_FIELDS,
@@ -114,13 +114,23 @@ class RollbackControlStoreTests(unittest.TestCase):
             store.cas(0, RECORD)
             context = {field: RECORD[field] for field in IDENTITY_FIELDS}
             adapter = SQLiteControlStoreAdapter(MissingVerifier(), store)
+            self.assertEqual({}, adapter.snapshot("discover", context))
+            self.assertEqual({}, adapter.execute("discover", context))
+            outside_verification = adapter.verify_rollback_context(context)
+            self.assertIsNotNone(outside_verification)
+            assert outside_verification is not None
+            self.assertEqual("held", outside_verification["status"])
             with self.assertRaises(ControlStoreError):
                 adapter.begin_release_rollback_context(context)
             with self.assertRaises(ControlStoreError):
                 adapter.complete_release_rollback_context(context)
             with self.assertRaises(ControlStoreError):
                 adapter.revalidate_rollback(context, RELEASE_EVIDENCE)
-            with store.operation_lock():
+            with adapter.operation_lock():
+                inside_verification = adapter.verify_rollback_context(context)
+                self.assertIsNotNone(inside_verification)
+                assert inside_verification is not None
+                self.assertEqual("held", inside_verification["status"])
                 adapter.begin_release_rollback_context(context)
                 with self.assertRaises(ControlStoreError):
                     adapter.complete_release_rollback_context(context)
@@ -131,6 +141,10 @@ class RollbackControlStoreTests(unittest.TestCase):
                     invalid.revalidate_rollback(context, RELEASE_EVIDENCE)
             with self.assertRaises(ControlStoreError):
                 SQLiteControlStoreAdapter(InvalidVerifier(), store).revalidate_rollback(
+                    context, RELEASE_EVIDENCE
+                )
+            with self.assertRaisesRegex(ControlStoreError, "outer operation lock"):
+                SQLiteControlStoreAdapter(EvidenceVerifier(), store).revalidate_rollback(
                     context, RELEASE_EVIDENCE
                 )
 
@@ -430,12 +444,13 @@ class RollbackControlStoreTests(unittest.TestCase):
                 first._control_lock(),
                 patch(
                     "tools.rollback_control_store.time.monotonic",
-                    side_effect=(0.0, 0.0, 11.0),
+                    side_effect=(0.0, 0.0, 1.0, 11.0),
                 ),
-                patch("tools.rollback_control_store.time.sleep"),
+                patch("tools.rollback_control_store.time.sleep") as sleep,
                 self.assertRaises(ControlStoreError),
             ):
                 second.cas(0, RECORD)
+            sleep.assert_called_once_with(0.05)
             with self.assertRaises(ControlStoreError):
                 first.snapshot("op-1")
 
@@ -516,6 +531,142 @@ class RollbackControlStoreTests(unittest.TestCase):
                     store.cas(0, {**RECORD, **mutation})
             with self.assertRaises(ControlStoreError):
                 store.snapshot("op-1")
+
+    def test_public_guards_reject_invalid_projects_transitions_and_reentry(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for project_id in ("not-a-uuid", "11111111-1111-1111-8111-111111111111"):
+                with self.subTest(project_id=project_id), self.assertRaises(ControlStoreError):
+                    SQLiteRollbackControlStore(root / f"{project_id}.sqlite", project_id)
+
+            store = SQLiteRollbackControlStore(root / "control.sqlite", PROJECT)
+            with self.assertRaises(ControlStoreError):
+                store.cas(0, {key: value for key, value in RECORD.items() if key != "manifest"})
+            git_record = {**RECORD, "backend": "git"}
+            git_record["barrier_identity_digest"] = canonical_barrier_digest(git_record)
+            git_record["envelope_digest"] = canonical_envelope_digest(git_record)
+            with self.assertRaisesRegex(ControlStoreError, "control backend is invalid"):
+                store.cas(0, git_record)
+            with self.assertRaisesRegex(ControlStoreError, "released status requires"):
+                store.cas(0, {**RECORD, "status": "released"})
+            with self.assertRaisesRegex(ControlStoreError, "must start held"):
+                store.cas(0, {**RECORD, "status": "ambiguous"})
+
+            held = store.cas(0, RECORD)
+            ambiguous = store.cas(1, {**held, "status": "ambiguous", "revision": 2})
+            with self.assertRaisesRegex(ControlStoreError, "barrier is not held"):
+                store.begin_release("op-1")
+            fresh = SQLiteRollbackControlStore(root / "fresh.sqlite", PROJECT)
+            fresh.cas(0, RECORD)
+            with self.assertRaisesRegex(ControlStoreError, "only ambiguous barriers"):
+                fresh.reconcile_ambiguous("op-1", RECORD)
+            with self.assertRaisesRegex(ControlStoreError, "new held operation"):
+                store.reconcile_ambiguous("op-1", ambiguous)
+            old_replacement = {
+                **RECORD,
+                "operation_id": "op-old",
+                "status": "held",
+                "revision": 1,
+            }
+            old_replacement["barrier_identity_digest"] = canonical_barrier_digest(old_replacement)
+            old_replacement["envelope_digest"] = canonical_envelope_digest(old_replacement)
+            with self.assertRaisesRegex(ControlStoreError, "newer project fence"):
+                store.reconcile_ambiguous("op-1", old_replacement)
+
+            with store.operation_lock():
+                actions: tuple[Callable[[], object], ...] = (
+                    lambda: store.cas(2, ambiguous),
+                    lambda: store.begin_release("op-1"),
+                    lambda: store.verify_rollback_context(RECORD),
+                    lambda: store.with_barrier(2, ambiguous, lambda value: value),
+                )
+                for action in actions:
+                    with (
+                        self.subTest(action=action),
+                        self.assertRaisesRegex(ControlStoreError, "non-reentrant"),
+                    ):
+                        action()
+            self.assertIsNone(store.verify_rollback_context({**RECORD, "operation_id": None}))
+
+            other_project = "22222222-2222-4222-8222-222222222222"
+            other_record = {**RECORD, "project_id": other_project}
+            other_record["barrier_identity_digest"] = canonical_barrier_digest(other_record)
+            other_record["envelope_digest"] = canonical_envelope_digest(other_record)
+            other_store = SQLiteRollbackControlStore(root / "other.sqlite", PROJECT)
+            with self.assertRaisesRegex(ControlStoreError, "project binding mismatch"):
+                other_store.with_barrier(0, other_record, lambda value: value)
+
+    def test_bound_parent_authority_and_project_swaps_fail_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            real_authority = root / "real-authority.sqlite"
+            real_authority.touch()
+            authority_link = root / "authority-link.sqlite"
+            authority_link.symlink_to(real_authority.name)
+            with self.assertRaisesRegex(ControlStoreError, "authority descriptor is unsafe"):
+                SQLiteRollbackControlStore(root / "linked-control.sqlite", PROJECT, authority_link)
+
+            authority = root / "authority.sqlite"
+            authority.touch()
+            store = SQLiteRollbackControlStore(root / "control.sqlite", PROJECT, authority)
+            authority.rename(root / "previous-authority.sqlite")
+            authority.touch()
+            with self.assertRaisesRegex(ControlStoreError, "authority descriptor identity changed"):
+                store.cas(0, RECORD)
+
+            parent = root / "bound-parent"
+            parent.mkdir()
+            parent_store = SQLiteRollbackControlStore(parent / "control.sqlite", PROJECT)
+            parent.rename(root / "previous-parent")
+            parent.mkdir()
+            with self.assertRaisesRegex(ControlStoreError, "parent identity changed"):
+                parent_store.cas(0, RECORD)
+
+            project_path = root / "project-bound.sqlite"
+            first = SQLiteRollbackControlStore(project_path, PROJECT)
+            first.cas(0, RECORD)
+            second = SQLiteRollbackControlStore(
+                project_path, "22222222-2222-4222-8222-222222222222"
+            )
+            with self.assertRaisesRegex(ControlStoreError, "project binding mismatch"):
+                second.snapshot("op-1")
+
+    def test_connection_and_durability_refusal_close_resources_and_retry(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "control.sqlite"
+            store = SQLiteRollbackControlStore(path, PROJECT)
+            with (
+                patch(
+                    "tools.rollback_control_store.sqlite3.connect",
+                    side_effect=sqlite3.OperationalError("connect failed"),
+                ),
+                self.assertRaises(sqlite3.OperationalError),
+            ):
+                store.snapshot("op-1")
+            with self.assertRaisesRegex(ControlStoreError, "barrier is missing"):
+                store.snapshot("op-1")
+
+            wal_connection = MagicMock(spec=sqlite3.Connection)
+            wal_connection.execute.return_value.fetchone.return_value = ("delete",)
+            with (
+                patch("tools.rollback_control_store.sqlite3.connect", return_value=wal_connection),
+                self.assertRaisesRegex(ControlStoreError, "WAL is unavailable"),
+            ):
+                store.snapshot("op-1")
+            wal_connection.close.assert_called_once_with()
+
+            full_connection = MagicMock(spec=sqlite3.Connection)
+            wal_cursor = MagicMock()
+            wal_cursor.fetchone.return_value = ("wal",)
+            full_cursor = MagicMock()
+            full_cursor.fetchone.return_value = (1,)
+            full_connection.execute.side_effect = (wal_cursor, MagicMock(), full_cursor)
+            with (
+                patch("tools.rollback_control_store.sqlite3.connect", return_value=full_connection),
+                self.assertRaisesRegex(ControlStoreError, "FULL durability is unavailable"),
+            ):
+                store.snapshot("op-1")
+            full_connection.close.assert_called_once_with()
 
 
 if __name__ == "__main__":
