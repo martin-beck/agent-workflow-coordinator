@@ -9,7 +9,7 @@ import os
 import signal
 import tempfile
 import unittest
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import cast
 
@@ -344,6 +344,180 @@ class UpgradeEngineTests(unittest.TestCase):
             with self.assertRaises(UpgradeError):
                 engine.apply({})
 
+    def test_malformed_journal_cross_products_fail_closed_through_apply(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            operation_id = "op-malformed"
+            journal = Path(directory) / "journal.json"
+            engine = UpgradeEngine(
+                operation_id,
+                journal,
+                make_context(operation_id),
+                backend_adapter=FakeAdapter(),
+            )
+            planned = engine.plan()
+            context = make_context(operation_id)
+
+            def ordinary(outcome: str = "started") -> dict[str, object]:
+                record: dict[str, object] = {
+                    "operation_id": operation_id,
+                    "step_id": f"{operation_id}.discover",
+                    "phase": "discover",
+                    "outcome": outcome,
+                    "context": context,
+                }
+                if outcome == "success":
+                    record["result"] = {}
+                if outcome in {"failed", "ambiguous"}:
+                    record["error"] = "failure"
+                return record
+
+            cases: tuple[tuple[str, Callable[[dict[str, object]], None], str], ...] = (
+                (
+                    "unknown schema",
+                    lambda value: value.update(schema_version=99),
+                    "identity or records",
+                ),
+                (
+                    "extra top-level field",
+                    lambda value: value.update(extra=True),
+                    "identity or records",
+                ),
+                (
+                    "changed operation",
+                    lambda value: value.update(operation_id="other"),
+                    "identity or records",
+                ),
+                (
+                    "unknown status",
+                    lambda value: value.update(status="unknown"),
+                    "identity or records",
+                ),
+                (
+                    "non-mapping context",
+                    lambda value: value.update(context=[]),
+                    "context is invalid or changed",
+                ),
+                (
+                    "non-list records",
+                    lambda value: value.update(records={}),
+                    "records are invalid",
+                ),
+                (
+                    "non-mapping record",
+                    lambda value: value.update(status="running", phase="discover", records=[None]),
+                    "record is invalid",
+                ),
+                (
+                    "missing phase",
+                    lambda value: value.update(
+                        status="running", phase="discover", records=[{"phase": None}]
+                    ),
+                    "record phase is missing",
+                ),
+                (
+                    "out-of-order first phase",
+                    lambda value: value.update(
+                        status="running",
+                        phase="preflight",
+                        records=[
+                            {
+                                **ordinary(),
+                                "phase": "preflight",
+                                "step_id": f"{operation_id}.preflight",
+                            }
+                        ],
+                    ),
+                    "phase identity is invalid",
+                ),
+                (
+                    "unknown outcome",
+                    lambda value: value.update(
+                        status="running",
+                        phase="discover",
+                        records=[{**ordinary(), "outcome": "unknown"}],
+                    ),
+                    "outcome is invalid",
+                ),
+                (
+                    "extra outcome field",
+                    lambda value: value.update(
+                        status="running",
+                        phase="discover",
+                        records=[{**ordinary(), "extra": True}],
+                    ),
+                    "record fields are invalid",
+                ),
+                (
+                    "success without result mapping",
+                    lambda value: value.update(
+                        status="running",
+                        phase="discover",
+                        records=[{**ordinary("success"), "result": None}],
+                    ),
+                    "successful phase lacks result",
+                ),
+                (
+                    "failure without string error",
+                    lambda value: value.update(
+                        status="failed",
+                        phase="discover",
+                        records=[{**ordinary("failed"), "error": None}],
+                    ),
+                    "failed phase lacks error",
+                ),
+                (
+                    "planned with records",
+                    lambda value: value.update(records=[ordinary()]),
+                    "planned journal contains records",
+                ),
+                (
+                    "planned with active phase",
+                    lambda value: value.update(phase="discover"),
+                    "planned journal has an active phase",
+                ),
+                (
+                    "running without records",
+                    lambda value: value.update(status="running", phase="discover"),
+                    "running journal is not recoverable",
+                ),
+                (
+                    "running with inconsistent phase",
+                    lambda value: value.update(
+                        status="running", phase="preflight", records=[ordinary()]
+                    ),
+                    "running journal phase is inconsistent",
+                ),
+                (
+                    "failed without failed phase",
+                    lambda value: value.update(status="failed", phase="discover"),
+                    "failed journal has no failed phase",
+                ),
+                (
+                    "completed without all phases",
+                    lambda value: value.update(
+                        status="completed", phase="discover", records=[ordinary("success")]
+                    ),
+                    "completed journal is incomplete",
+                ),
+                (
+                    "rolled back without completion",
+                    lambda value: value.update(
+                        status="rolled-back", phase="rollback", records=[ordinary("failed")]
+                    ),
+                    "rolled-back journal lacks rollback completion",
+                ),
+            )
+            for name, mutate, expected in cases:
+                value = json.loads(json.dumps(planned))
+                mutate(value)
+                journal.write_text(json.dumps(value))
+                with self.subTest(name=name), self.assertRaisesRegex(UpgradeError, expected):
+                    engine.apply({})
+
+            journal.write_text("not-json")
+            with self.assertRaisesRegex(UpgradeError, "journal is unreadable"):
+                engine.apply({})
+
     def test_schema_v2_journal_is_refused_without_implicit_migration(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             journal = Path(directory) / "journal.json"
@@ -423,6 +597,172 @@ class UpgradeEngineTests(unittest.TestCase):
                 journal.write_text(json.dumps(value))
                 with self.subTest(mutation=mutation), self.assertRaises(UpgradeError):
                     engine._load()
+
+    def test_rollback_record_and_terminal_status_cross_products_fail_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            operation_id = "op-rollback-matrix"
+            journal = Path(directory) / "journal.json"
+            engine = UpgradeEngine(
+                operation_id,
+                journal,
+                make_context(operation_id),
+                backend_adapter=FakeAdapter(),
+            )
+            planned = engine.plan()
+            failed_phase: dict[str, object] = {
+                "operation_id": operation_id,
+                "step_id": f"{operation_id}.discover",
+                "phase": "discover",
+                "outcome": "failed",
+                "error": "failure",
+                "context": make_context(operation_id),
+            }
+            rollback_context = make_context(operation_id, target="rollback")
+            verified_result: dict[str, object] = {
+                "restored_verified": True,
+                "runtime_validated": True,
+                "backend_roundtrip_valid": True,
+                "backend": "sqlite",
+                "fencing_token": rollback_context["fencing_token"],
+            }
+
+            def rollback_record(outcome: str = "started") -> dict[str, object]:
+                record: dict[str, object] = {
+                    "operation_id": operation_id,
+                    "step_id": f"{operation_id}.rollback",
+                    "phase": "rollback",
+                    "outcome": outcome,
+                    "context": rollback_context,
+                }
+                if outcome in {"rollback_verified", "rollback_completed"}:
+                    record["result"] = verified_result
+                if outcome == "ambiguous":
+                    record["error"] = "failure"
+                return record
+
+            mismatched_context = {
+                **rollback_context,
+                "authority_revision": "different-authority",
+            }
+            mismatched_context["barrier_identity_digest"] = canonical_barrier_digest(
+                mismatched_context
+            )
+            mismatched_context["envelope_digest"] = canonical_envelope_digest(mismatched_context)
+            cases: tuple[tuple[str, list[object], str, str, str], ...] = (
+                (
+                    "duplicate rollback",
+                    [failed_phase, rollback_record(), rollback_record()],
+                    "failed",
+                    "discover",
+                    "duplicate rollback record",
+                ),
+                (
+                    "phase after rollback",
+                    [failed_phase, rollback_record(), failed_phase],
+                    "failed",
+                    "discover",
+                    "phase follows rollback record",
+                ),
+                (
+                    "rollback operation mismatch",
+                    [failed_phase, {**rollback_record(), "operation_id": "other"}],
+                    "failed",
+                    "discover",
+                    "rollback identity is invalid",
+                ),
+                (
+                    "unknown rollback outcome",
+                    [failed_phase, {**rollback_record(), "outcome": "unknown"}],
+                    "failed",
+                    "discover",
+                    "rollback outcome is invalid",
+                ),
+                (
+                    "missing rollback context",
+                    [failed_phase, {**rollback_record(), "context": None}],
+                    "failed",
+                    "discover",
+                    "verified rollback context is required",
+                ),
+                (
+                    "new target rollback context",
+                    [
+                        failed_phase,
+                        {**rollback_record(), "context": make_context(operation_id)},
+                    ],
+                    "failed",
+                    "discover",
+                    "rollback context target is invalid",
+                ),
+                (
+                    "changed authority revision",
+                    [failed_phase, {**rollback_record(), "context": mismatched_context}],
+                    "failed",
+                    "discover",
+                    "rollback context mismatch: authority_revision",
+                ),
+                (
+                    "extra rollback field",
+                    [failed_phase, {**rollback_record(), "extra": True}],
+                    "failed",
+                    "discover",
+                    "rollback context is invalid",
+                ),
+                (
+                    "verified rollback without result mapping",
+                    [
+                        failed_phase,
+                        {**rollback_record("rollback_verified"), "result": None},
+                    ],
+                    "failed",
+                    "discover",
+                    "verified rollback lacks result evidence",
+                ),
+                (
+                    "ambiguous rollback without error string",
+                    [failed_phase, {**rollback_record("ambiguous"), "error": None}],
+                    "safe-mode",
+                    "discover",
+                    "ambiguous rollback lacks error evidence",
+                ),
+                (
+                    "incomplete verified result",
+                    [
+                        failed_phase,
+                        {**rollback_record("rollback_verified"), "result": {}},
+                    ],
+                    "failed",
+                    "discover",
+                    "rollback result schema is invalid",
+                ),
+                (
+                    "failed status with rollback completion",
+                    [failed_phase, rollback_record("rollback_completed")],
+                    "failed",
+                    "discover",
+                    "failed journal has rollback completion",
+                ),
+                (
+                    "safe mode discards verified rollback",
+                    [failed_phase, rollback_record("rollback_verified")],
+                    "safe-mode",
+                    "discover",
+                    "safe-mode journal cannot discard verified rollback recovery",
+                ),
+                (
+                    "rolled back with wrong phase",
+                    [failed_phase, rollback_record("rollback_completed")],
+                    "rolled-back",
+                    "discover",
+                    "rolled-back journal phase is inconsistent",
+                ),
+            )
+            for name, records, status, phase, expected in cases:
+                value = json.loads(json.dumps(planned))
+                value.update(status=status, phase=phase, records=records)
+                journal.write_text(json.dumps(value))
+                with self.subTest(name=name), self.assertRaisesRegex(UpgradeError, expected):
+                    engine.apply({})
 
     def test_successful_rollback_requires_and_writes_terminal_record(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
