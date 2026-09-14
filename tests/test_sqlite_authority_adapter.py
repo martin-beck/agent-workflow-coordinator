@@ -117,6 +117,21 @@ class SQLiteAuthorityAdapterTests(unittest.TestCase):
             ]
         )
 
+    def test_new_or_replaced_wal_sidecar_fails_old_reader_closed(self) -> None:
+        sidecar = self.authority.with_name(self.authority.name + "-wal")
+        sidecar.write_bytes(b"wal")
+        sidecar.chmod(0o600)
+        with self.assertRaisesRegex(SQLiteAuthorityError, "identity changed"):
+            self.adapter.snapshot("discover", CONTEXT)
+        sidecar.unlink()
+
+    def test_unsafe_sidecar_is_rejected_at_construction(self) -> None:
+        sidecar = self.authority.with_name(self.authority.name + "-shm")
+        sidecar.write_bytes(b"shm")
+        sidecar.chmod(0o644)
+        with self.assertRaisesRegex(SQLiteAuthorityError, "sidecar is unsafe"):
+            SQLiteAuthorityAdapter(self.authority)
+
     def test_unavailable_and_unsafe_descriptors_fail_closed(self) -> None:
         with self.assertRaisesRegex(SQLiteAuthorityError, "unavailable"):
             SQLiteAuthorityAdapter(self.root / "missing.sqlite")

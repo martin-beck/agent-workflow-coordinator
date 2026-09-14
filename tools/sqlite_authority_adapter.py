@@ -44,6 +44,33 @@ class SQLiteAuthorityAdapter:
             descriptor.st_uid,
             descriptor.st_nlink,
         )
+        self._sidecar_identities = {
+            suffix: self._optional_identity(resolved.with_name(resolved.name + suffix))
+            for suffix in ("-wal", "-shm")
+        }
+
+    @staticmethod
+    def _optional_identity(path: Path) -> tuple[int, int, int, int, int] | None:
+        try:
+            value = path.stat()
+        except FileNotFoundError:
+            return None
+        except OSError as error:
+            raise SQLiteAuthorityError("SQLite authority sidecar is unavailable") from error
+        if (
+            not stat.S_ISREG(value.st_mode)
+            or value.st_uid != os.geteuid()
+            or value.st_nlink != 1
+            or stat.S_IMODE(value.st_mode) != 0o600
+        ):
+            raise SQLiteAuthorityError("SQLite authority sidecar is unsafe")
+        return (
+            value.st_dev,
+            value.st_ino,
+            stat.S_IMODE(value.st_mode),
+            value.st_uid,
+            value.st_nlink,
+        )
 
     def _check_identity(self) -> None:
         try:
@@ -62,6 +89,13 @@ class SQLiteAuthorityAdapter:
         if (
             current_parent != self._parent_identity
             or current_descriptor != self._descriptor_identity
+            or self._sidecar_identities
+            != {
+                suffix: self._optional_identity(
+                    self._authority.with_name(self._authority.name + suffix)
+                )
+                for suffix in ("-wal", "-shm")
+            }
         ):
             raise SQLiteAuthorityError("SQLite authority identity changed")
 
