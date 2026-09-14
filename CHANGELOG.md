@@ -10,6 +10,11 @@
 - Fence wrapped commands started from a product checkout to the active task's declared worktree
   and branch.
 
+## v0.3.6 - 2026-09-14
+
+- Allow a `superseded` dependency to satisfy readiness only through an explicit,
+  validated `superseded_by` chain ending in a completed task, with Git and SQLite parity.
+
 ## v0.3.5 - 2026-09-09
 
 - Keep the non-CLI SQLite storage module non-executable and remove its misleading shebang.
