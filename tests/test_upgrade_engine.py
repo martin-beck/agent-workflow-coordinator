@@ -418,6 +418,15 @@ class UpgradeEngineTests(unittest.TestCase):
             with self.assertRaises(UpgradeError):
                 reloaded._load()
 
+            tampered = json.loads(journal.read_text())
+            tampered["records"][-1]["context"]["envelope_digest"] = ROLLBACK_CONTEXT[
+                "envelope_digest"
+            ]
+            tampered["rollback_verified"] = False
+            journal.write_text(json.dumps(tampered))
+            with self.assertRaises(UpgradeError):
+                reloaded._load()
+
     def test_rollback_requires_adapter_verified_context_and_cannot_forge_evidence(self) -> None:
         class UnverifiedAdapter(FakeAdapter):
             def snapshot(self, phase: str, context: object) -> dict[str, object]:

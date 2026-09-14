@@ -77,7 +77,15 @@ REQUIRED_EVIDENCE = {
 }
 PHASE_MUTATION = {phase: phase == "commit" for phase in PHASES}
 STATUSES = {"planned", "running", "failed", "completed", "rolled-back", "safe-mode"}
-TOP_LEVEL_FIELDS = {"schema_version", "operation_id", "status", "phase", "context", "records"}
+TOP_LEVEL_FIELDS = {
+    "schema_version",
+    "operation_id",
+    "status",
+    "phase",
+    "context",
+    "records",
+    "rollback_verified",
+}
 RECORD_FIELDS = {"operation_id", "step_id", "phase", "outcome", "result", "error", "context"}
 CONTEXT_FIELDS = (
     "operation_id",
@@ -252,6 +260,7 @@ class UpgradeEngine:
                 "phase": None,
                 "context": asdict(self.context),
                 "records": [],
+                "rollback_verified": False,
             }
             _write(self.journal, value)
             return value
@@ -268,6 +277,8 @@ class UpgradeEngine:
             or value.get("status") not in STATUSES
         ):
             raise UpgradeError("upgrade journal identity or records are invalid")
+        if type(value.get("rollback_verified")) is not bool:
+            raise UpgradeError("upgrade journal rollback verification is invalid")
         context = value.get("context")
         if not isinstance(context, dict) or context != asdict(self.context):
             raise UpgradeError("upgrade journal context is invalid or changed")
@@ -426,6 +437,10 @@ class UpgradeEngine:
             )
         ):
             raise UpgradeError("rolled-back journal lacks rollback completion")
+        if status == "rolled-back" and value["rollback_verified"] is not True:
+            raise UpgradeError("rolled-back journal lacks durable verification")
+        if status != "rolled-back" and value["rollback_verified"] is True:
+            raise UpgradeError("rollback verification is inconsistent")
         if status == "rolled-back" and value.get("phase") != "rollback":
             raise UpgradeError("rolled-back journal phase is inconsistent")
         return cast(dict[str, Any], value)
@@ -652,6 +667,7 @@ class UpgradeEngine:
             record["result"] = result
             value["status"] = "rolled-back"
             value["phase"] = "rollback"
+            value["rollback_verified"] = True
         except Exception as error:
             record.update(outcome="ambiguous", error=type(error).__name__)
             value["status"] = "safe-mode"

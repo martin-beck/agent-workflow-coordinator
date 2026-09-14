@@ -251,7 +251,13 @@ class SQLiteRollbackControlStore:
             )
         except (ControlStoreError, TypeError):
             return None
-        return durable if supplied == durable and supplied["target"] == "rollback" else None
+        return (
+            durable
+            if supplied == durable
+            and supplied["target"] == "rollback"
+            and durable["status"] in {"held", "releasing", "released"}
+            else None
+        )
 
     def cas(self, expected_revision: int, record: Mapping[str, object]) -> dict[str, object]:
         supplied = _validate(record)
