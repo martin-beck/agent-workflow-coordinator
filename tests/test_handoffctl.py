@@ -10,6 +10,7 @@ import json
 import multiprocessing
 import subprocess
 import sys
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -1024,6 +1025,51 @@ class HandoffTest(unittest.TestCase):
             raise RuntimeError("body failure")
         with CORE.locked(timeout=0.1):
             pass
+
+    def test_lock_yields_capability_and_invalidates_after_scope(self) -> None:
+        with CORE.locked(timeout=0.1) as guard:
+            self.assertEqual(CORE.coordinator_lock_path().resolve(), guard.path)
+            guard.assert_owned()
+        with self.assertRaisesRegex(CORE.LockOwnershipError, "inactive"):
+            guard.assert_owned()
+
+    def test_lock_guard_rejects_use_from_another_thread(self) -> None:
+        errors: list[BaseException] = []
+        with CORE.locked(timeout=0.1) as guard:
+            thread = threading.Thread(
+                target=lambda: self._assert_guard_rejected(guard, errors), daemon=True
+            )
+            thread.start()
+            thread.join(5)
+        self.assertEqual(1, len(errors))
+        self.assertIsInstance(errors[0], CORE.LockOwnershipError)
+
+    def test_shared_lock_guard_cannot_authorize_exclusive_operation(self) -> None:
+        with CORE.locked(exclusive=False, timeout=0.1) as guard, self.assertRaisesRegex(
+            CORE.LockOwnershipError, "not exclusive"
+        ):
+            guard.assert_owned()
+
+    def test_lock_guard_rejects_replaced_path_inode(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            with (
+                patch.object(CORE, "ROOT", root),
+                patch.object(CORE, "RUNTIME", root / ".runtime"),
+                patch.object(CORE, "LOCK", root / ".runtime" / "state.lock"),
+                CORE.locked(timeout=0.1) as guard,
+            ):
+                guard.path.replace(guard.path.with_name("state.lock.old"))
+                guard.path.touch()
+                with self.assertRaisesRegex(CORE.LockOwnershipError, "path identity"):
+                    guard.assert_owned()
+
+    @staticmethod
+    def _assert_guard_rejected(guard: Any, errors: list[BaseException]) -> None:
+        try:
+            guard.assert_owned()
+        except BaseException as error:
+            errors.append(error)
 
     def test_subprocess_timeout_is_classified(self) -> None:
         with (

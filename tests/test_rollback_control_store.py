@@ -21,6 +21,7 @@ from typing import Any, cast
 from unittest.mock import MagicMock, patch
 
 from tools import upgrade_authority
+from tools.handoffctl import LockOwnershipError, locked
 from tools.rollback_control_store import (
     IDENTITY_FIELDS,
     AuthorityRuntimeRereader,
@@ -435,6 +436,52 @@ class RollbackControlStoreTests(unittest.TestCase):
             invalid.create(self._session_identity())
             with self.assertRaisesRegex(ControlStoreError, "revision is invalid"):
                 invalid.recheck_held(1)
+
+    def test_v10_caller_owned_recheck_requires_guard_and_is_read_only(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            store = SQLiteBarrierSessionStore(
+                SQLiteRollbackControlStore(Path(directory) / "control.sqlite", PROJECT),
+                lambda: "authority-3",
+            )
+            identity = self._session_identity()
+            held = store.create(identity)
+            with self.assertRaisesRegex(
+                LockOwnershipError, "guard is required"
+            ), store.lock_owned_by_caller(None):  # type: ignore[arg-type]
+                pass
+            with self.assertRaisesRegex(TypeError, "missing"):
+                store.recheck_held_locked(identity, held.revision)  # type: ignore[call-arg]
+            with locked() as guard, store.lock_owned_by_caller(guard):
+                reread = store.recheck_held_locked(guard, identity, held.revision)
+                self.assertEqual(held, reread)
+                with self.assertRaisesRegex(
+                    ControlStoreError, "non-reentrant"
+                ), store.lock_owned_by_caller(guard):
+                    pass
+            self.assertEqual(held, store.snapshot())
+
+    def test_v10_caller_owned_recheck_rejects_stale_identity_and_authority(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            authority = ["authority-3"]
+            store = SQLiteBarrierSessionStore(
+                SQLiteRollbackControlStore(Path(directory) / "control.sqlite", PROJECT),
+                lambda: authority[0],
+            )
+            identity = self._session_identity()
+            held = store.create(identity)
+            changed = dict(identity.as_record())
+            changed["attempt_id"] = "other-attempt"
+            from tools.upgrade_identity import canonical_barrier_session_digest
+
+            changed["identity_digest"] = canonical_barrier_session_digest(changed)
+            with locked() as guard, store.lock_owned_by_caller(guard):
+                with self.assertRaisesRegex(ControlStoreError, "identity changed"):
+                    store.recheck_held_locked(
+                        guard, BarrierSessionIdentity.from_record(changed), held.revision
+                    )
+                authority[0] = "authority-new"
+                with self.assertRaisesRegex(ControlStoreError, "authority revision changed"):
+                    store.recheck_held_locked(guard, identity, held.revision)
 
     def test_v10_commit_failure_is_durably_ambiguous(self) -> None:
         class FlakyConnection:

@@ -23,7 +23,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol, cast
 
-from tools.handoffctl import locked
+from tools.handoffctl import (
+    CoordinatorLockGuard,
+    LockOwnershipError,
+    coordinator_lock_path,
+    locked,
+)
 from tools.upgrade_authority import inspect_sqlite_release_authority
 from tools.upgrade_identity import (
     ENVELOPE_FIELDS,
@@ -785,6 +790,27 @@ class SQLiteRollbackControlStore:
             finally:
                 self._operation_owner = None
 
+    @contextmanager
+    def lock_owned_by_caller(self, common_guard: CoordinatorLockGuard) -> Iterator[None]:
+        """Hold the control lock under a caller-owned common-lock capability."""
+        if not isinstance(common_guard, CoordinatorLockGuard):
+            raise LockOwnershipError("caller-owned coordinator lock guard is required")
+        common_guard.assert_owned()
+        if common_guard.path != coordinator_lock_path().resolve():
+            raise ControlStoreError("coordinator lock guard path mismatch")
+        if self._operation_owner == threading.get_ident():
+            raise ControlStoreError("control store lock is non-reentrant")
+        with self._control_lock():
+            if self._operation_owner is not None:
+                raise ControlStoreError("control store operation is already active")
+            self._operation_owner = threading.get_ident()
+            try:
+                common_guard.assert_owned()
+                yield
+                common_guard.assert_owned()
+            finally:
+                self._operation_owner = None
+
     @property
     def operation_owned_by_current_thread(self) -> bool:
         return self._operation_owner == threading.get_ident()
@@ -1114,6 +1140,12 @@ class SQLiteBarrierSessionStore:
         """Acquire the common lock, then this control store's lock."""
         return self._control.operation_lock()
 
+    def lock_owned_by_caller(
+        self, common_guard: CoordinatorLockGuard
+    ) -> AbstractContextManager[None]:
+        """Hold the control lock under a caller-owned common-lock capability."""
+        return self._control.lock_owned_by_caller(common_guard)
+
     def snapshot(self) -> BarrierSessionState | None:
         if self.operation_owned_by_current_thread:
             raise ControlStoreError("control store lock is non-reentrant")
@@ -1285,6 +1317,45 @@ class SQLiteBarrierSessionStore:
             ):
                 raise ControlStoreError("barrier session authority revision changed")
             return current
+
+    def recheck_held_locked(  # noqa: C901
+        self,
+        common_guard: CoordinatorLockGuard,
+        expected_identity: BarrierSessionIdentity,
+        expected_revision: int,
+    ) -> BarrierSessionState:
+        """Read-only held-session recheck while the caller owns both locks."""
+        if not isinstance(common_guard, CoordinatorLockGuard):
+            raise LockOwnershipError("caller-owned coordinator lock guard is required")
+        common_guard.assert_owned()
+        if common_guard.path != coordinator_lock_path().resolve():
+            raise ControlStoreError("coordinator lock guard path mismatch")
+        if not isinstance(expected_identity, BarrierSessionIdentity):
+            raise ControlStoreError("barrier session identity is required")
+        if type(expected_revision) is not int or expected_revision < 1:
+            raise ControlStoreError("barrier session expected revision is invalid")
+        self._control._require_operation_lock()
+        if self._authority_revision_reader is None:
+            raise ControlStoreError("fresh authority rereader is required")
+        try:
+            fresh_authority_revision = self._authority_revision_reader()
+        except Exception as error:
+            raise ControlStoreError("fresh authority reread failed") from error
+        if not isinstance(fresh_authority_revision, str) or not fresh_authority_revision:
+            raise ControlStoreError("fresh authority revision is invalid")
+        current = self._snapshot_locked()
+        if current is None:
+            raise ControlStoreError("barrier session is absent")
+        if current.revision != expected_revision:
+            raise ControlStoreError("barrier session CAS conflict")
+        if current.identity != expected_identity:
+            raise ControlStoreError("barrier session identity changed")
+        if current.status != "held":
+            raise ControlStoreError("barrier session is not held")
+        if current.identity.authority_revision_at_acquire != fresh_authority_revision:
+            raise ControlStoreError("barrier session authority revision changed")
+        common_guard.assert_owned()
+        return current
 
     def cas(self, expected_revision: int, state: BarrierSessionState) -> BarrierSessionState:
         if type(expected_revision) is not int or expected_revision < 0:
