@@ -12,7 +12,8 @@ Provisioning is project-scoped and one-time. It must run from the permanent
 project binding and create the following owner-only objects in a fixed,
 versioned runtime directory:
 
-- the authority database, which remains the source of coordination state;
+- the existing, project-bound authority database, which remains the source of
+  coordination state and is verified rather than created or replaced;
 - the control database, containing the barrier/session schema and its WAL and
   SHM sidecars; and
 - an `upgrade-control-required` marker containing the project ID, schema
