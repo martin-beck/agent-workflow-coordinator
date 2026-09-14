@@ -13,9 +13,10 @@ import secrets
 import sqlite3
 import stat
 import subprocess
+from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal, cast
+from typing import Any, Literal, Protocol, cast, runtime_checkable
 
 from tools.sqlite_storage import SCHEMA_VERSION as SQLITE_SCHEMA_VERSION
 
@@ -26,6 +27,17 @@ class AuthorityError(RuntimeError):
 
 class SelectorPublicationAmbiguousError(AuthorityError):
     """The selector rename occurred but its directory durability is uncertain."""
+
+
+@runtime_checkable
+class SelectorAdmissionLease(Protocol):
+    """Caller-owned ordered admission scope for selector publication."""
+
+    def hold(self) -> AbstractContextManager[object]:
+        """Return the already-defined common/control/authority scope."""
+
+    def assert_ordered(self) -> None:
+        """Verify that the caller acquired the required lock order."""
 
 
 _AUTHORITY_TABLES = {
@@ -583,6 +595,30 @@ def commit_runtime_selector(  # noqa: C901
             else "runtime selector publication failed"
         )
         raise AuthorityError(message) from cause
+
+
+def commit_runtime_selector_admitted(
+    path: Path,
+    active_release: str,
+    previous_release: str,
+    admission_lease: SelectorAdmissionLease,
+) -> None:
+    """Publish a selector only inside a caller-owned ordered admission lease.
+
+    This is an uncalled adapter contract. The existing low-level helper remains
+    available for provisioning and rejection-only paths; production upgrade
+    execution must bind this adapter to the concrete barrier implementation
+    before selector mutation is enabled.
+    """
+    if not isinstance(admission_lease, SelectorAdmissionLease):
+        raise AuthorityError("selector admission lease is required")
+    try:
+        scope = admission_lease.hold()
+        with scope:
+            admission_lease.assert_ordered()
+            commit_runtime_selector(path, active_release, previous_release)
+    except (AttributeError, TypeError) as error:
+        raise AuthorityError("selector admission lease is invalid") from error
 
 
 def reconcile_runtime_selector(
