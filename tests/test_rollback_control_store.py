@@ -542,6 +542,7 @@ class RollbackControlStoreTests(unittest.TestCase):
             self.assertEqual(PROJECT, reopened_final.identity.project_id)
             self.assertEqual("attempt-2", reopened_final.identity.attempt_id)
             self.assertIsNone(reopened_final.forward_child)
+            self.assertIsNone(reopened_final.rollback_child)
             self.assertEqual(64, len(reopened_final.identity.identity_digest))
             self.assertNotEqual("0" * 64, reopened_final.identity.identity_digest)
             self.assertTrue(reopened_final.identity.identity_digest.isalnum())
