@@ -233,6 +233,37 @@ class TLCAdmissionTests(unittest.TestCase):
             self.assertEqual(len(outcomes), 1)
             self.assertEqual(json.loads(outcomes[0].read_text())["state"], "completed")
 
+    def test_parser_keeps_canonical_lock_default_and_accepts_explicit_isolated_lock(self) -> None:
+        isolated_lock = "isolated-admission.lock"
+        args = parser().parse_args(
+            [
+                "--jar",
+                "tla.jar",
+                "--model",
+                "Model.tla",
+                "--config",
+                "Model.cfg",
+                "--metadir",
+                "states",
+            ]
+        )
+        self.assertEqual(args.admission_lock, _runner.DEFAULT_ADMISSION_LOCK)
+        args = parser().parse_args(
+            [
+                "--jar",
+                "tla.jar",
+                "--model",
+                "Model.tla",
+                "--config",
+                "Model.cfg",
+                "--metadir",
+                "states",
+                "--admission-lock",
+                isolated_lock,
+            ]
+        )
+        self.assertEqual(args.admission_lock, isolated_lock)
+
     def test_stale_queue_records_are_pruned(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             record = Path(directory) / "stale.job.json"

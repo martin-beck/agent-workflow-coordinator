@@ -178,3 +178,17 @@ multiple formal jobs from competing for memory while leaving coordinator worker
 processes and leases untouched. A durable per-job queue record survives caller
 death for stale-job recovery; completed, failed, and canceled outcomes retain
 the exact resource bounds and exit classification. `systemd-run` owns the process group (`KillMode=control-group`) on hosts with a user systemd bus. Hosted CI selects an explicit `portable` containment mode: GNU `timeout` and `prlimit` enforce aggregate address-space, process-count, CPU-time, and wall-clock limits; the runner fails closed if either tool is unavailable.
+
+The runner retains `/tmp/agent-workflow-coordinator-tlc-admission.lock` as the canonical
+publication lock. For an authorized local run on a host where that shared lock is inaccessible,
+the lower-level runner accepts an explicit private lock together with a private queue:
+
+```bash
+python3 tools/tlc_runner.py --queue ./private-tlc-queue \\
+  --admission-lock ./private-tlc-admission.lock ...
+```
+
+This option is intentionally CLI-only; there is no environment override. The checked-in
+`formal/handoffctl/verify.sh` workflow never supplies it and therefore cannot silently replace
+canonical publication admission. An isolated run is local diagnostic evidence only and must not be
+reported as a canonical publication or weekly full attestation.
