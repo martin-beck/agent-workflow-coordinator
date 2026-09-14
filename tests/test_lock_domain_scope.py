@@ -198,6 +198,44 @@ class LockDomainScopeTests(unittest.TestCase):
             self.fail("replaced durable session identity must be rejected")
         self.assertFalse(self.session.operation_owned_by_current_thread)
 
+    def test_process_death_then_replaced_session_rejects_fresh_handoff(self) -> None:
+        """A fresh process cannot inherit a dead caller's replaced session lease."""
+        context = multiprocessing.get_context("fork")
+        start = context.Event()
+        starts = context.Array("q", [0], lock=False)
+        ends = context.Array("q", [0], lock=False)
+        crashed = context.Process(
+            target=_scope_process,
+            args=(self.directory.name, start, starts, ends, 0, True),
+        )
+        crashed.start()
+        start.set()
+        crashed.join(5)
+        self.assertEqual(17, crashed.exitcode)
+
+        changed_record = replace(
+            identity(), authority_revision_at_acquire="authority-after-crash", state_revision=2
+        ).as_record()
+        changed_record["identity_digest"] = canonical_barrier_session_digest(changed_record)
+        with sqlite3.connect(self.store.control_store_path) as connection:
+            connection.execute(
+                "UPDATE barrier_session SET authority_revision_at_acquire=?, "
+                "state_revision=?, identity_digest=?, revision=? WHERE project_id=?",
+                (
+                    changed_record["authority_revision_at_acquire"],
+                    changed_record["state_revision"],
+                    changed_record["identity_digest"],
+                    2,
+                    PROJECT,
+                ),
+            )
+            connection.commit()
+
+        scope = LockDomainScope(self.domain, self.session, self.fence, self.lease, locked)
+        with self.assertRaisesRegex(LockDomainError, "do not match"), scope.hold():
+            self.fail("fresh handoff must reject replaced durable session")
+        self.assertFalse(self.session.operation_owned_by_current_thread)
+
     def test_two_process_scopes_never_overlap(self) -> None:
         context = multiprocessing.get_context("fork")
         start = context.Event()
