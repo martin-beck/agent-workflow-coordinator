@@ -16,6 +16,7 @@ from tools.rollback_control_store import (
     SQLiteRollbackControlStore,
     bind_control_store,
     canonical_barrier_digest,
+    canonical_envelope_digest,
 )
 
 PROJECT = "11111111-1111-4111-8111-111111111111"
@@ -34,6 +35,8 @@ RECORD = {
     "status": "held",
     "revision": 1,
 }
+RECORD["barrier_identity_digest"] = canonical_barrier_digest(RECORD)
+RECORD["envelope_digest"] = canonical_envelope_digest(RECORD)
 
 
 class RollbackControlStoreTests(unittest.TestCase):
@@ -100,6 +103,8 @@ class RollbackControlStoreTests(unittest.TestCase):
                 "state_revision": 2,
                 "fencing_token": "fence-2",
             }
+            replacement["barrier_identity_digest"] = canonical_barrier_digest(replacement)
+            replacement["envelope_digest"] = canonical_envelope_digest(replacement)
             recovered = store.reconcile_ambiguous("op-1", replacement)
             self.assertEqual("held", recovered["status"])
 

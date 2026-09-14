@@ -68,6 +68,13 @@ def canonical_barrier_digest(record: Mapping[str, object]) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
+def canonical_envelope_digest(record: Mapping[str, object]) -> str:
+    """Return the stable full identity envelope digest."""
+    payload = {field: record[field] for field in IDENTITY_FIELDS if field != "envelope_digest"}
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    return hashlib.sha256(encoded).hexdigest()
+
+
 class ControlStoreError(RuntimeError):
     """Control-store data is unavailable or failed validation."""
 
@@ -153,6 +160,10 @@ def _validate(record: Mapping[str, object]) -> dict[str, object]:  # noqa: C901
         value = record[field]
         if not isinstance(value, str) or not _DIGEST.fullmatch(value):
             raise ControlStoreError(f"control {field} is invalid")
+    if record["barrier_identity_digest"] != canonical_barrier_digest(record):
+        raise ControlStoreError("control barrier identity digest is invalid")
+    if record["envelope_digest"] != canonical_envelope_digest(record):
+        raise ControlStoreError("control envelope digest is invalid")
     if record["status"] not in STATUSES:
         raise ControlStoreError("control status is invalid")
     return dict(record)

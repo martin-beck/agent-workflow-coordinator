@@ -11,7 +11,11 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import cast
 
-from tools.rollback_control_store import SQLiteRollbackControlStore
+from tools.rollback_control_store import (
+    SQLiteRollbackControlStore,
+    canonical_barrier_digest,
+    canonical_envelope_digest,
+)
 from tools.upgrade_admission import (
     PREFLIGHT_PREDICATES,
     QUIESCENCE_PREDICATES,
@@ -38,6 +42,12 @@ ROLLBACK_CONTEXT = {
     "barrier_identity_digest": "c" * 64,
     "envelope_digest": "d" * 64,
 }
+ROLLBACK_CONTEXT["barrier_identity_digest"] = canonical_barrier_digest(
+    {**ROLLBACK_CONTEXT, "status": "held", "revision": 1}
+)
+ROLLBACK_CONTEXT["envelope_digest"] = canonical_envelope_digest(
+    {**ROLLBACK_CONTEXT, "status": "held", "revision": 1}
+)
 ADMISSION = {
     **dict.fromkeys(PREFLIGHT_PREDICATES, True),
     **dict.fromkeys(QUIESCENCE_PREDICATES, True),
@@ -512,17 +522,22 @@ class UpgradeEngineTests(unittest.TestCase):
             control = SQLiteRollbackControlStore(
                 Path(directory) / "control.sqlite", cast(str, CONTEXT["project_id"])
             )
-            control.cas(
-                0,
-                {
-                    **ROLLBACK_CONTEXT,
-                    "operation_id": operation_id,
-                    "status": "held",
-                    "revision": 1,
-                },
-            )
+            control_record = {
+                **ROLLBACK_CONTEXT,
+                "operation_id": operation_id,
+                "status": "held",
+                "revision": 1,
+            }
+            control_record["barrier_identity_digest"] = canonical_barrier_digest(control_record)
+            control_record["envelope_digest"] = canonical_envelope_digest(control_record)
+            control.cas(0, control_record)
 
             class ControlAdapter(FakeAdapter):
+                def snapshot(self, phase: str, context: object) -> dict[str, object]:
+                    if phase == "rollback":
+                        return {**control_record, "rollback_context_verified": True}
+                    return super().snapshot(phase, context)
+
                 def verify_rollback_context(
                     self, context: Mapping[str, object]
                 ) -> dict[str, object] | None:
