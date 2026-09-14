@@ -59,6 +59,8 @@ class ScopedBackendAdapter:
             result = self._backend.execute(phase, context)
         if not isinstance(result, dict):
             raise TypeError("backend execution result must be an object")
+        if result.get("mutates_authority") is not False:
+            raise TypeError("scoped backend execution must be non-mutating")
         return result
 
     def verify_rollback_context(self, context: Mapping[str, object]) -> dict[str, Any] | None:
