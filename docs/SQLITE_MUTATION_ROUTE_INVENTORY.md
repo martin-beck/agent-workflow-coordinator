@@ -39,7 +39,7 @@ WAL/SHM survives arbitrary process death, or that the control-store fence is a
 complete implementation refinement of the formal model. Authority mutation,
 upgrade apply, and upgrade rollback remain disabled.
 
-## Constructor binding gap (AR-0007)
+## Constructor binding gap (AR-0007; future adapter owned by AR-0013)
 
 `SQLiteRollbackControlStore(path, project_id, authority_path=None)` binds the
 control database and descriptor identities, but does not accept a
@@ -50,8 +50,9 @@ the rejection-only upgrade paths rely on these compatible constructors.
 
 Requiring a scope in either constructor would be a breaking change; silently
 adding an optional scope would not be a fail-closed proof. The exact remaining
-route gap is a future adapter that binds the already-tested
-`MutationFence.mutation_scope` around every authoritative write while keeping
-these control-plane constructors compatible. Until that adapter and its
-multiprocess evidence exist, this is an explicit nonclaim rather than an
-acceptance gate.
+route gap is a future typed adapter, owned by AR-0013, that binds the
+already-tested `MutationFence.mutation_scope` around every authoritative write
+while keeping these control-plane constructors compatible. AR-0007 remains
+incomplete until its required fencing/correspondence evidence is accepted; this
+PR records the gap but does not satisfy that implementation gate. Until the
+adapter and its multiprocess evidence exist, this is an explicit nonclaim.
