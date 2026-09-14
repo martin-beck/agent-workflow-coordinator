@@ -104,6 +104,16 @@ SQLite schemas, invalid project/backend binding, malformed task projections,
 or a release-selector mismatch fail closed. Git control binding remains
 unavailable.
 
+Runtime-selector publication requires a pre-provisioned owner-only directory
+and a retained descriptor through temporary-file fsync, atomic rename, target
+identity verification, and directory fsync. A failure before rename is an
+ordinary non-publication failure. A failure after rename is explicitly
+ambiguous: the caller must retain the old and new release pairs and invoke the
+selector reconciliation API after restart. Reconciliation accepts only the
+exact old pair (`not-committed`) or exact new pair (`committed`); a missing or
+third identity remains in safe mode. Release identities use a bounded ASCII
+token grammar and cannot contain whitespace, path separators, or controls.
+
 The schema and contract tests reject duplicate or non-contiguous phase orders,
 unknown or forward dependencies, missing phase operations, unbounded time or
 resource declarations, and incomplete release identity. Every release binds

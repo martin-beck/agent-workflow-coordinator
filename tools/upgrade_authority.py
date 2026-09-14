@@ -8,19 +8,24 @@ import hashlib
 import importlib
 import json
 import os
+import re
 import secrets
 import sqlite3
 import stat
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 from tools.sqlite_storage import SCHEMA_VERSION as SQLITE_SCHEMA_VERSION
 
 
 class AuthorityError(RuntimeError):
     """Raised when authority or staged-runtime identity is not proven."""
+
+
+class SelectorPublicationAmbiguousError(AuthorityError):
+    """The selector rename occurred but its directory durability is uncertain."""
 
 
 _AUTHORITY_TABLES = {
@@ -70,6 +75,7 @@ _AUTHORITY_ORDER = {
     "sqlite_sequence": "name",
 }
 _SQLITE_SIDECARS = ("-wal", "-shm")
+_RELEASE_IDENTITY = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
 
 
 @dataclass(frozen=True, slots=True)
@@ -247,7 +253,8 @@ def _read_runtime_selector_bound(path: Path) -> dict[str, Any]:
     if set(value) != {"schema_version", "active_release", "previous_release"}:
         raise AuthorityError("runtime selector schema is invalid")
     if value["schema_version"] != 1 or not all(
-        isinstance(value[key], str) and value[key] for key in ("active_release", "previous_release")
+        isinstance(value[key], str) and _RELEASE_IDENTITY.fullmatch(value[key]) is not None
+        for key in ("active_release", "previous_release")
     ):
         raise AuthorityError("runtime selector identity is invalid")
     return value
@@ -295,8 +302,13 @@ def inspect_sqlite_release_authority(  # noqa: C901
     previous_release: str,
 ) -> SQLiteReleaseAuthoritySnapshot:
     """Reread and canonically hash an exact SQLite authority/runtime release pair."""
-    if not all(
-        isinstance(value, str) and value for value in (project_id, active_release, previous_release)
+    if (
+        not isinstance(project_id, str)
+        or not project_id
+        or not all(
+            isinstance(value, str) and _RELEASE_IDENTITY.fullmatch(value) is not None
+            for value in (active_release, previous_release)
+        )
     ):
         raise AuthorityError("release-specific authority identity is invalid")
     project_binding = _read_project_binding(project_binding_path, project_id)
@@ -473,7 +485,10 @@ def read_runtime_selector(path: Path) -> dict[str, Any]:
 
 def commit_runtime_selector(path: Path, active_release: str, previous_release: str) -> None:
     """Atomically publish through a retained, owner-only parent descriptor."""
-    if not active_release or not previous_release:
+    if not all(
+        isinstance(value, str) and _RELEASE_IDENTITY.fullmatch(value) is not None
+        for value in (active_release, previous_release)
+    ):
         raise AuthorityError("runtime selector identity is invalid")
     parent, parent_identity = _open_parent(path)
     status = os.fstat(parent)
@@ -483,6 +498,7 @@ def commit_runtime_selector(path: Path, active_release: str, previous_release: s
     _existing_regular_identity(parent, path.name)
     descriptor = -1
     temporary = f".{path.name}.{secrets.token_hex(16)}"
+    replaced = False
     try:
         descriptor = os.open(
             temporary,
@@ -508,6 +524,7 @@ def commit_runtime_selector(path: Path, active_release: str, previous_release: s
             os.fsync(stream.fileno())
         _recheck_parent(path, parent_identity)
         os.replace(temporary, path.name, src_dir_fd=parent, dst_dir_fd=parent)
+        replaced = True
         published = os.open(path.name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=parent)
         try:
             published_status = os.fstat(published)
@@ -522,6 +539,10 @@ def commit_runtime_selector(path: Path, active_release: str, previous_release: s
         os.fsync(parent)
         _recheck_parent(path, parent_identity)
     except (OSError, AuthorityError) as error:
+        if replaced:
+            raise SelectorPublicationAmbiguousError(
+                "runtime selector publication is ambiguous; reconcile the exact release pair"
+            ) from error
         raise AuthorityError("runtime selector publication failed") from error
     finally:
         if descriptor >= 0:
@@ -532,3 +553,35 @@ def commit_runtime_selector(path: Path, active_release: str, previous_release: s
             pass
         finally:
             os.close(parent)
+
+
+def reconcile_runtime_selector(
+    path: Path,
+    *,
+    before_active_release: str,
+    before_previous_release: str,
+    after_active_release: str,
+    after_previous_release: str,
+) -> Literal["committed", "not-committed"]:
+    """Resolve an ambiguous rename by accepting only the exact old or new selector."""
+    identities = (
+        before_active_release,
+        before_previous_release,
+        after_active_release,
+        after_previous_release,
+    )
+    if not all(
+        isinstance(value, str) and _RELEASE_IDENTITY.fullmatch(value) is not None
+        for value in identities
+    ) or (before_active_release, before_previous_release) == (
+        after_active_release,
+        after_previous_release,
+    ):
+        raise AuthorityError("selector reconciliation identities are invalid")
+    current = read_runtime_selector(path)
+    pair = (current["active_release"], current["previous_release"])
+    if pair == (after_active_release, after_previous_release):
+        return "committed"
+    if pair == (before_active_release, before_previous_release):
+        return "not-committed"
+    raise AuthorityError("selector reconciliation found an unknown release identity")

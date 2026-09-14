@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import importlib
+import os
 import subprocess
 import sys
 import tempfile
@@ -15,8 +16,10 @@ from unittest.mock import patch
 from tools import upgrade_authority
 from tools.upgrade_authority import (
     AuthorityError,
+    SelectorPublicationAmbiguousError,
     commit_runtime_selector,
     read_runtime_selector,
+    reconcile_runtime_selector,
 )
 
 
@@ -56,6 +59,76 @@ class RuntimeSelectorTests(unittest.TestCase):
             path.symlink_to(target)
             with self.assertRaises(AuthorityError):
                 commit_runtime_selector(path, "new", "old")
+
+    def test_selector_rejects_control_characters_and_unbounded_release_ids(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "selector.json"
+            for release in ("with space", "with\nnewline", "with/slash", "x" * 129, 1):
+                with self.subTest(release=release), self.assertRaises(AuthorityError):
+                    commit_runtime_selector(path, release, "old")  # type: ignore[arg-type]
+            path.write_text(
+                '{"schema_version":1,"active_release":"bad\\nvalue","previous_release":"old"}\n'
+            )
+            with self.assertRaisesRegex(AuthorityError, "selector identity"):
+                read_runtime_selector(path)
+
+    def test_postrename_fsync_failure_requires_exact_reconciliation(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "selector.json"
+            commit_runtime_selector(path, "old", "older")
+            real_fsync = os.fsync
+            calls = 0
+
+            def fail_directory_fsync(descriptor: int) -> None:
+                nonlocal calls
+                calls += 1
+                if calls == 2:
+                    raise OSError("directory fsync failed")
+                real_fsync(descriptor)
+
+            with (
+                patch("tools.upgrade_authority.os.fsync", side_effect=fail_directory_fsync),
+                self.assertRaisesRegex(SelectorPublicationAmbiguousError, "reconcile"),
+            ):
+                commit_runtime_selector(path, "new", "old")
+            self.assertEqual(
+                "committed",
+                reconcile_runtime_selector(
+                    path,
+                    before_active_release="old",
+                    before_previous_release="older",
+                    after_active_release="new",
+                    after_previous_release="old",
+                ),
+            )
+            commit_runtime_selector(path, "old", "older")
+            self.assertEqual(
+                "not-committed",
+                reconcile_runtime_selector(
+                    path,
+                    before_active_release="old",
+                    before_previous_release="older",
+                    after_active_release="new",
+                    after_previous_release="old",
+                ),
+            )
+            commit_runtime_selector(path, "unexpected", "pair")
+            with self.assertRaisesRegex(AuthorityError, "unknown release identity"):
+                reconcile_runtime_selector(
+                    path,
+                    before_active_release="old",
+                    before_previous_release="older",
+                    after_active_release="new",
+                    after_previous_release="old",
+                )
+            with self.assertRaisesRegex(AuthorityError, "identities are invalid"):
+                reconcile_runtime_selector(
+                    path,
+                    before_active_release="same",
+                    before_previous_release="pair",
+                    after_active_release="same",
+                    after_previous_release="pair",
+                )
 
     def test_selector_publication_requires_private_real_ancestors(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
