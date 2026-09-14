@@ -2496,6 +2496,7 @@ class RollbackControlStoreTests(unittest.TestCase):
                 guard.assert_owned()
                 with store.lock_owned_by_caller(guard):
                     self.assertTrue(store.operation_owned_by_current_thread)
+                guard.assert_owned()
                 self.assertFalse(store.operation_owned_by_current_thread)
 
     def test_releasing_barrier_cannot_be_completed_without_authority_evidence(self) -> None:
