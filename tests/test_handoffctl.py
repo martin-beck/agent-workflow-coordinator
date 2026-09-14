@@ -720,6 +720,20 @@ class HandoffTest(unittest.TestCase):
         self.refresh_views()
         self.assertIn("missing superseded_by task", "\n".join(CORE.validate()))
 
+    def test_supersession_validation_rejects_invalid_status_self_and_cycle(self) -> None:
+        self.make_task("AR-0001", status="open", superseded_by="AR-0002")
+        self.make_task("AR-0002", status="superseded", superseded_by="bad")
+        self.make_task("AR-0003", status="superseded", superseded_by="AR-0003")
+        self.make_task("AR-0004", status="superseded", superseded_by="AR-0005")
+        self.make_task("AR-0005", status="superseded", superseded_by="AR-0004")
+
+        errors = "\n".join(CORE.validate())
+        self.assertIn("AR-0001: superseded_by requires superseded status", errors)
+        self.assertIn("AR-0002: invalid superseded_by", errors)
+        self.assertIn("AR-0003: superseded_by self reference", errors)
+        self.assertIn("AR-0004: superseded_by chain does not end in done task", errors)
+        self.assertIn("AR-0005: superseded_by chain does not end in done task", errors)
+
     def test_promote_is_dependency_revision_and_state_aware(self) -> None:
         dependency = self.make_task("AR-0001", status="done")
         target = self.make_task(
