@@ -186,12 +186,17 @@ class UpgradeEngineTests(unittest.TestCase):
                 UpgradeEngine("op-1", journal, CONTEXT)._load()["status"],
             )
 
-            drifted = make_context()
-            drifted["authority_revision"] = "authority-2"
-            drifted["barrier_identity_digest"] = canonical_barrier_digest(drifted)
-            drifted["envelope_digest"] = canonical_envelope_digest(drifted)
-            with self.assertRaisesRegex(UpgradeError, "context is invalid or changed"):
-                UpgradeEngine("op-1", journal, drifted)._load()
+            for field, replacement in (
+                ("authority_revision", "authority-2"),
+                ("fencing_token", "fence-2"),
+            ):
+                with self.subTest(field=field):
+                    drifted = make_context()
+                    drifted[field] = replacement
+                    drifted["barrier_identity_digest"] = canonical_barrier_digest(drifted)
+                    drifted["envelope_digest"] = canonical_envelope_digest(drifted)
+                    with self.assertRaisesRegex(UpgradeError, "context is invalid or changed"):
+                        UpgradeEngine("op-1", journal, drifted)._load()
 
     @staticmethod
     def _prepare_failed_journal(
