@@ -81,6 +81,9 @@ class LockDomainTests(unittest.TestCase):
             captured = LockDomainContract.capture(guard, self.session, self.fence)
             captured.assert_current(guard, self.session, self.fence)
             self.assertEqual(captured, LockDomainContract.capture(guard, self.session, self.fence))
+            captured.assert_descriptor_binding(captured)
+            with self.assertRaisesRegex(LockDomainError, "identity is required"):
+                captured.assert_descriptor_binding(None)
 
     def test_split_control_lock_is_rejected_before_opening_it(self) -> None:
         split = MutationFence(

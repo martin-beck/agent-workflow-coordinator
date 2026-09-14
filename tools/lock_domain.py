@@ -98,6 +98,12 @@ class LockDomainIdentity:
     ) -> None:
         """Reject any path or descriptor replacement since capture."""
         current = LockDomainContract.capture(common_guard, session_store, authority_fence)
+        self.assert_descriptor_binding(current)
+
+    def assert_descriptor_binding(self, current: object) -> None:
+        """Require a freshly captured, typed identity to match exactly."""
+        if not isinstance(current, LockDomainIdentity):
+            raise LockDomainError("lock-domain identity is required")
         if current != self:
             raise LockDomainError("lock-domain identity changed")
 
