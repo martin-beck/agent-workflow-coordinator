@@ -13,7 +13,7 @@ from contextlib import AbstractContextManager, contextmanager, nullcontext
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any, Protocol, cast
+from typing import Any, Protocol, cast, runtime_checkable
 
 from tools.upgrade_admission import (
     admit_preflight,
@@ -40,6 +40,7 @@ class UpgradeError(RuntimeError):
 Handler = Callable[[str, Mapping[str, Any]], Mapping[str, Any] | None]
 
 
+@runtime_checkable
 class BackendAdapter(Protocol):
     """Concrete authority adapter for Git or SQLite upgrade operations."""
 
