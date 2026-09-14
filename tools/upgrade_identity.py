@@ -13,6 +13,20 @@ from collections.abc import Mapping
 from pathlib import PurePosixPath
 
 ENVELOPE_SCHEMA_VERSION = 2
+# The v10 barrier is a target-neutral session.  Child envelopes continue to
+# carry ``target`` (``new`` or ``rollback``), but that mutable operation choice
+# must never change the identity of the shared barrier session.
+BARRIER_SESSION_SCHEMA_VERSION = 1
+BARRIER_SESSION_IDENTITY_FIELDS = (
+    "schema_version",
+    "project_id",
+    "attempt_id",
+    "state_revision",
+    "authority_revision_at_acquire",
+    "durable_barrier_id",
+    "fencing_token",
+    "fencing_owner",
+)
 BARRIER_IDENTITY_FIELDS = (
     "schema_version",
     "project_id",
@@ -48,6 +62,58 @@ _DIGEST = re.compile(r"[0-9a-f]{64}")
 
 class UpgradeIdentityError(ValueError):
     """An upgrade envelope is incomplete, non-canonical, or inconsistent."""
+
+
+def canonical_barrier_session_digest(record: Mapping[str, object]) -> str:
+    """Hash the immutable, target-neutral v10 barrier-session identity."""
+    return hashlib.sha256(
+        _canonical_bytes(_select(record, BARRIER_SESSION_IDENTITY_FIELDS))
+    ).hexdigest()
+
+
+def validate_barrier_session_identity(  # noqa: C901
+    record: Mapping[str, object],
+) -> dict[str, object]:
+    """Validate one immutable v10 barrier-session identity.
+
+    This helper is intentionally separate from :func:`validate_envelope`.
+    Existing upgrade commands use the v9 envelope and remain fail-closed; the
+    v10 session identity is only a contract primitive until its durable
+    control-store adapter is implemented and independently reviewed.
+    """
+    if set(record) != set(BARRIER_SESSION_IDENTITY_FIELDS) | {"identity_digest"}:
+        raise UpgradeIdentityError("barrier session identity fields are invalid")
+    if record["schema_version"] != BARRIER_SESSION_SCHEMA_VERSION:
+        raise UpgradeIdentityError("barrier session schema version is invalid")
+    project_id = record["project_id"]
+    if not isinstance(project_id, str):
+        raise UpgradeIdentityError("barrier session project identity is invalid")
+    try:
+        project = uuid.UUID(project_id)
+    except ValueError as error:
+        raise UpgradeIdentityError("barrier session project identity is invalid") from error
+    if project.version != 4:
+        raise UpgradeIdentityError("barrier session project identity must be UUIDv4")
+    for field in (
+        "attempt_id",
+        "authority_revision_at_acquire",
+        "durable_barrier_id",
+        "fencing_token",
+        "fencing_owner",
+    ):
+        value = record[field]
+        if not isinstance(value, str) or _TOKEN.fullmatch(value) is None:
+            raise UpgradeIdentityError(f"barrier session {field} is invalid")
+    for field in ("state_revision",):
+        value = record[field]
+        if not isinstance(value, int) or isinstance(value, bool) or value < 1:
+            raise UpgradeIdentityError(f"barrier session {field} is invalid")
+    digest = record["identity_digest"]
+    if not isinstance(digest, str) or _DIGEST.fullmatch(digest) is None:
+        raise UpgradeIdentityError("barrier session identity digest is invalid")
+    if digest != canonical_barrier_session_digest(record):
+        raise UpgradeIdentityError("barrier session identity digest does not match")
+    return dict(record)
 
 
 def _canonical_bytes(value: Mapping[str, object]) -> bytes:

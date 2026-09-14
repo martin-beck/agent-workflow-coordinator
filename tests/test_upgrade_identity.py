@@ -7,10 +7,13 @@ from __future__ import annotations
 import unittest
 
 from tools.upgrade_identity import (
+    BARRIER_SESSION_IDENTITY_FIELDS,
     ENVELOPE_FIELDS,
     UpgradeIdentityError,
     canonical_barrier_digest,
+    canonical_barrier_session_digest,
     canonical_envelope_digest,
+    validate_barrier_session_identity,
     validate_envelope,
 )
 
@@ -39,7 +42,51 @@ def envelope() -> dict[str, object]:
     return value
 
 
+def barrier_session() -> dict[str, object]:
+    value: dict[str, object] = {
+        "schema_version": 1,
+        "project_id": "11111111-1111-4111-8111-111111111111",
+        "attempt_id": "attempt-1",
+        "state_revision": 3,
+        "authority_revision_at_acquire": "authority-3",
+        "durable_barrier_id": "barrier-1",
+        "fencing_token": "fence-1",
+        "fencing_owner": "owner-1",
+        "identity_digest": "0" * 64,
+    }
+    value["identity_digest"] = canonical_barrier_session_digest(value)
+    return value
+
+
 class UpgradeIdentityTests(unittest.TestCase):
+    def test_v10_barrier_session_is_target_neutral(self) -> None:
+        value = barrier_session()
+        self.assertEqual(set(BARRIER_SESSION_IDENTITY_FIELDS) | {"identity_digest"}, set(value))
+        self.assertEqual(value, validate_barrier_session_identity(value))
+        self.assertEqual(value["identity_digest"], canonical_barrier_session_digest(value))
+
+    def test_v10_barrier_session_digest_excludes_child_operation_fields(self) -> None:
+        value = barrier_session()
+        self.assertEqual(
+            value["identity_digest"],
+            canonical_barrier_session_digest({**value, "child_target": "new"}),
+        )
+        for field in BARRIER_SESSION_IDENTITY_FIELDS:
+            changed = dict(value)
+            changed[field] = (
+                9 if field == "schema_version" else (0 if field == "state_revision" else "!")
+            )
+            with self.subTest(field=field), self.assertRaises(UpgradeIdentityError):
+                changed["identity_digest"] = canonical_barrier_session_digest(changed)
+                validate_barrier_session_identity(changed)
+
+    def test_v10_barrier_session_rejects_mutable_or_unknown_fields(self) -> None:
+        value = barrier_session()
+        with self.assertRaises(UpgradeIdentityError):
+            validate_barrier_session_identity({**value, "status": "held"})
+        with self.assertRaises(UpgradeIdentityError):
+            validate_barrier_session_identity({**value, "identity_digest": "f" * 64})
+
     def test_exact_v9_canonical_digests_are_stable(self) -> None:
         value = envelope()
         self.assertEqual(
