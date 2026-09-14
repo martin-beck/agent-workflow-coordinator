@@ -2136,6 +2136,11 @@ class RollbackControlStoreTests(unittest.TestCase):
                 recovered,
                 SQLiteRollbackControlStore(control_path, PROJECT).snapshot("op-2"),
             )
+            fresh = SQLiteRollbackControlStore(control_path, PROJECT)
+            self.assertEqual("ambiguous", fresh.snapshot("op-1")["status"])
+            with self.assertRaisesRegex(ControlStoreError, "CAS conflict"):
+                fresh.reconcile_ambiguous("op-1", replacement)
+            self.assertEqual(recovered, fresh.snapshot("op-2"))
 
     def test_schema_corruption_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
