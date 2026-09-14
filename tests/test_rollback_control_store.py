@@ -175,6 +175,12 @@ class RollbackControlStoreTests(unittest.TestCase):
                 store.with_barrier(0, RECORD, reenter)
             self.assertEqual("held", store.snapshot("op-1")["status"])
 
+    def test_operation_lock_is_single_nonreentrant_outer_scope(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            store = SQLiteRollbackControlStore(Path(directory) / "control.sqlite", PROJECT)
+            with store.operation_lock(), self.assertRaises(ControlStoreError):
+                store.operation_lock().__enter__()
+
     def test_cas_conflict_and_binding_mismatch_fail_closed(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             store = SQLiteRollbackControlStore(Path(directory) / "control.sqlite", PROJECT)

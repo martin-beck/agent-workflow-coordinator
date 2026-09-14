@@ -15,8 +15,8 @@ import os
 import re
 import sqlite3
 import uuid
-from collections.abc import Callable, Mapping
-from contextlib import closing
+from collections.abc import Callable, Iterator, Mapping
+from contextlib import closing, contextmanager
 from pathlib import Path
 from typing import Protocol, cast
 
@@ -276,6 +276,18 @@ class SQLiteRollbackControlStore:
         except Exception:
             connection.close()
             raise
+
+    @contextmanager
+    def operation_lock(self) -> Iterator[None]:
+        """Hold the coordinator lock once for a complete authority operation."""
+        if self._critical:
+            raise ControlStoreError("control store lock is non-reentrant")
+        with locked():
+            self._critical = True
+            try:
+                yield
+            finally:
+                self._critical = False
 
     def snapshot(self, operation_id: str) -> dict[str, object]:
         if self._critical:
