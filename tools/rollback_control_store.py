@@ -1659,6 +1659,8 @@ class SQLiteBarrierSessionStore:
             if (
                 replacement.identity.attempt_id == current.identity.attempt_id
                 or replacement.identity.state_revision <= current.identity.state_revision
+                or replacement.identity.durable_barrier_id == current.identity.durable_barrier_id
+                or replacement.identity.fencing_token == current.identity.fencing_token
             ):
                 raise ControlStoreError("ambiguous reconciliation requires a distinct newer fence")
             if self._prepared_intents_locked(connection):

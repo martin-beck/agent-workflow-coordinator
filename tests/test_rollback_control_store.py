@@ -701,6 +701,8 @@ class RollbackControlStoreTests(unittest.TestCase):
             replacement_record = dict(identity.as_record())
             replacement_record["attempt_id"] = "attempt-new"
             replacement_record["state_revision"] = identity.state_revision + 1
+            replacement_record["durable_barrier_id"] = "barrier-new"
+            replacement_record["fencing_token"] = "fence-new"  # noqa: S105
             from tools.upgrade_identity import canonical_barrier_session_digest
 
             replacement_record["identity_digest"] = canonical_barrier_session_digest(
@@ -709,6 +711,17 @@ class RollbackControlStoreTests(unittest.TestCase):
             replacement = BarrierSessionState(
                 BarrierSessionIdentity.from_record(replacement_record), "held", 1
             )
+            reused_fence_record = dict(replacement_record)
+            reused_fence_record["durable_barrier_id"] = identity.durable_barrier_id
+            reused_fence_record["fencing_token"] = identity.fencing_token
+            reused_fence_record["identity_digest"] = canonical_barrier_session_digest(
+                reused_fence_record
+            )
+            reused_fence = BarrierSessionState(
+                BarrierSessionIdentity.from_record(reused_fence_record), "held", 1
+            )
+            with self.assertRaisesRegex(ControlStoreError, "distinct newer fence"):
+                store.reconcile_ambiguous(recovered.revision, reused_fence)
             mismatch_store = SQLiteBarrierSessionStore(
                 SQLiteRollbackControlStore(path, PROJECT), lambda: "authority-other"
             )
