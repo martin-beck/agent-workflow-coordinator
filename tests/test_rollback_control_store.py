@@ -25,6 +25,7 @@ from tools.rollback_control_store import (
     ControlStoreError,
     SQLiteAuthorityRuntimeRereader,
     SQLiteAuthorityRuntimeState,
+    SQLiteBarrierSessionStore,
     SQLiteControlStoreAdapter,
     SQLiteRollbackControlStore,
     bind_control_store,
@@ -36,7 +37,11 @@ from tools.upgrade_authority import (
     inspect_sqlite_release_authority,
     read_runtime_selector,
 )
-from tools.upgrade_identity import canonical_barrier_digest, canonical_envelope_digest
+from tools.upgrade_identity import (
+    BarrierSessionIdentity,
+    canonical_barrier_digest,
+    canonical_envelope_digest,
+)
 
 PROJECT = "11111111-1111-4111-8111-111111111111"
 RECORD = {
@@ -151,6 +156,163 @@ class StaticAuthorityRuntimeRereader:
 
 
 class RollbackControlStoreTests(unittest.TestCase):
+    def _session_identity(self) -> BarrierSessionIdentity:
+        from tools.upgrade_identity import BarrierSessionIdentity, canonical_barrier_session_digest
+
+        record = {
+            "schema_version": 1,
+            "project_id": PROJECT,
+            "attempt_id": "attempt-1",
+            "state_revision": 3,
+            "authority_revision_at_acquire": "authority-3",
+            "durable_barrier_id": "barrier-1",
+            "fencing_token": "fence-1",
+            "fencing_owner": "owner-1",
+            "identity_digest": "0" * 64,
+        }
+        record["identity_digest"] = canonical_barrier_session_digest(record)
+        return BarrierSessionIdentity.from_record(record)
+
+    def test_v10_durable_session_persists_children_and_reopen(self) -> None:
+        from tools.upgrade_identity import BarrierChildIdentity
+
+        with tempfile.TemporaryDirectory() as directory:
+            store = SQLiteBarrierSessionStore(
+                SQLiteRollbackControlStore(Path(directory) / "control.sqlite", PROJECT)
+            )
+            identity = self._session_identity()
+            held = store.create(identity)
+            self.assertEqual(("held", 1), (held.status, held.revision))
+            held = store.bind_child(1, BarrierChildIdentity.bind(identity, "forward-1", "new"))
+            held = store.bind_child(
+                2, BarrierChildIdentity.bind(identity, "rollback-1", "rollback")
+            )
+            releasing = store.begin_reopen(3, "rollback")
+            released = store.complete_reopen(4, True)
+            self.assertEqual(("released", 5), (released.status, released.revision))
+            reread = store.snapshot()
+            self.assertIsNotNone(reread)
+            assert reread is not None
+            self.assertEqual(held.identity, reread.identity)
+            assert reread.rollback_child is not None
+            self.assertEqual("rollback-1", reread.rollback_child.operation_id)
+            self.assertEqual(releasing.revision + 1, reread.revision)
+
+    def test_v10_durable_session_rejects_stale_identity_and_ambiguous_reopen(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            store = SQLiteBarrierSessionStore(
+                SQLiteRollbackControlStore(Path(directory) / "control.sqlite", PROJECT)
+            )
+            identity = self._session_identity()
+            held = store.create(identity)
+            with self.assertRaisesRegex(ControlStoreError, "CAS conflict"):
+                store.cas(0, held)
+            ambiguous = store.mark_ambiguous(1, "io-failure")
+            self.assertEqual("ambiguous", ambiguous.status)
+            with self.assertRaisesRegex(ControlStoreError, "illegal barrier session transition"):
+                store.cas(2, BarrierSessionState(identity, "held", 3))
+            changed = dict(identity.as_record())
+            changed["fencing_token"] = "different-fence"  # noqa: S105
+            from tools.upgrade_identity import canonical_barrier_session_digest
+
+            changed["identity_digest"] = canonical_barrier_session_digest(changed)
+            replacement = identity.__class__.from_record(changed)
+            with self.assertRaisesRegex(ControlStoreError, "identity changed"):
+                store.cas(2, BarrierSessionState(replacement, "ambiguous", 3))
+
+    def test_v10_durable_session_requires_runtime_evidence_before_release(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            store = SQLiteBarrierSessionStore(
+                SQLiteRollbackControlStore(Path(directory) / "control.sqlite", PROJECT)
+            )
+            identity = self._session_identity()
+            store.create(identity)
+            from tools.upgrade_identity import BarrierChildIdentity
+
+            store.bind_child(1, BarrierChildIdentity.bind(identity, "forward-1", "new"))
+            store.begin_reopen(2, "new")
+            with self.assertRaisesRegex(ControlStoreError, "runtime evidence"):
+                store.complete_reopen(3, False)
+
+    def test_v10_durable_session_uses_common_then_control_lock(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            control = SQLiteRollbackControlStore(Path(directory) / "control.sqlite", PROJECT)
+            store = SQLiteBarrierSessionStore(control)
+            with (
+                control.operation_lock(),
+                self.assertRaisesRegex(ControlStoreError, "non-reentrant"),
+            ):
+                store.snapshot()
+
+    def test_v10_durable_session_rejects_invalid_public_and_durable_inputs(self) -> None:
+        from tools.upgrade_identity import BarrierChildIdentity
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "control.sqlite"
+            control = SQLiteRollbackControlStore(path, PROJECT)
+            store = SQLiteBarrierSessionStore(control)
+            identity = self._session_identity()
+            with self.assertRaisesRegex(ControlStoreError, "expected revision"):
+                store.cas(False, BarrierSessionState(identity, "held", 1))
+            with self.assertRaisesRegex(ControlStoreError, "must start held"):
+                store.cas(0, BarrierSessionState(identity, "released", 1))
+            with self.assertRaisesRegex(ControlStoreError, "does not exist"):
+                store.cas(1, BarrierSessionState(identity, "held", 1))
+            with self.assertRaisesRegex(ControlStoreError, "absent"):
+                store.bind_child(1, BarrierChildIdentity.bind(identity, "forward-1", "new"))
+            with self.assertRaisesRegex(ControlStoreError, "absent"):
+                store.begin_reopen(1, "new")
+            with self.assertRaisesRegex(ControlStoreError, "absent"):
+                store.mark_ambiguous(1, "io-failure")
+            self.assertIsNone(store.snapshot())
+
+            held = store.create(identity)
+            with self.assertRaisesRegex(ControlStoreError, "revision is not monotonic"):
+                store.cas(1, BarrierSessionState(identity, "held", 7))
+            with self.assertRaisesRegex(ControlStoreError, "revision is not monotonic"):
+                store.cas(1, BarrierSessionState(identity, "held", 1))
+            child = BarrierChildIdentity.bind(identity, "forward-1", "new")
+            with self.assertRaisesRegex(ControlStoreError, "revision conflict"):
+                store.bind_child(0, child)
+            with self.assertRaisesRegex(ControlStoreError, "invalid"):
+                SQLiteBarrierSessionStore._child(17)
+            with self.assertRaisesRegex(ControlStoreError, "invalid"):
+                SQLiteBarrierSessionStore._child("{")
+            with self.assertRaisesRegex(ControlStoreError, "invalid"):
+                SQLiteBarrierSessionStore._child("[]")
+            with self.assertRaisesRegex(ControlStoreError, "invalid"):
+                SQLiteBarrierSessionStore._child('{"operation_id":1}')
+
+            with closing(sqlite3.connect(path)) as connection:
+                connection.execute(
+                    "UPDATE barrier_session SET forward_child=? WHERE project_id=?",
+                    ("[]", PROJECT),
+                )
+                connection.commit()
+            with self.assertRaisesRegex(ControlStoreError, "state is invalid"):
+                store.snapshot()
+            self.assertEqual(1, held.revision)
+
+    def test_v10_durable_session_rejects_identity_and_lock_conflicts(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            control = SQLiteRollbackControlStore(Path(directory) / "control.sqlite", PROJECT)
+            store = SQLiteBarrierSessionStore(control)
+            identity = self._session_identity()
+            held = store.create(identity)
+            changed = dict(identity.as_record())
+            changed["attempt_id"] = "different-attempt"
+            from tools.upgrade_identity import canonical_barrier_session_digest
+
+            changed["identity_digest"] = canonical_barrier_session_digest(changed)
+            other = BarrierSessionIdentity.from_record(changed)
+            with self.assertRaisesRegex(ControlStoreError, "identity changed"):
+                store.cas(1, BarrierSessionState(other, "held", 2))
+            with (
+                control.operation_lock(),
+                self.assertRaisesRegex(ControlStoreError, "non-reentrant"),
+            ):
+                store.cas(1, held)
+
     def test_v10_barrier_session_contract_keeps_forward_and_rollback_under_one_fence(self) -> None:
         from tools.upgrade_identity import BarrierChildIdentity, BarrierSessionIdentity
 
