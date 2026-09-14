@@ -29,11 +29,13 @@ replace an existing object or silently create a replacement after a failure.
 The marker is valid only when all of these values match the permanent project
 binding: project ID, state repository, product repository, backend (`sqlite`),
 control schema version, and the control database device/inode identity. Its
-identity digest binds the authority database, authority `-wal` and `-shm`,
-control database, control `-wal` and `-shm`, control lock file, and fixed
-runtime selector identities. It also records the expected runtime-directory
-device/inode identity and an opaque, privacy-safe project identifier. The
-control database must contain the same project ID and schema version, a valid
+immutable identity digest binds the authority and control database identities,
+the concrete lock-file identity, fixed runtime selector identities, and the
+runtime-directory identity. It does not bind ephemeral WAL/SHM inode values.
+Those values are recorded in a separate durable, fsynced WAL lifecycle record
+described below. The marker also records an opaque, privacy-safe project
+identifier. The control database must contain the same project ID and schema
+version, a valid
 schema digest, and a valid WAL configuration. The marker and control record
 are immutable identity evidence; mutable barrier state is protected by the
 control database's revision/CAS protocol.
@@ -91,21 +93,31 @@ fencing token. `held`, `releasing`, and `ambiguous` reject the authority write
 with stable fail-closed errors. A missing required barrier or an unreadable
 control record also rejects the write; absence is not interpreted as
 `released`. For an already-provisioned installation, an absent authority,
-control database, lock file, or required sidecar is corruption or loss and
-must reject every mutation. Before provisioning, absent control objects are
+control database, lock file, or sidecar required by its lifecycle record is
+corruption or loss and must reject every mutation. Before provisioning, absent control objects are
 the sole allowed unprovisioned state; absence of the authority or a mismatch
 in an existing authority is always an error.
 
 WAL/SHM have an explicit lifecycle. Before the first WAL open, both may be
 absent. During an active WAL connection, SQLite may create or retain both;
-their no-follow descriptor identities and digest are bound while the full
-scope is held. A normal, explicitly requested checkpoint/truncate followed by
-connection close may remove sidecars; the implementation records the clean
-closed state and rebinds newly created sidecars on the next controlled WAL
-open. Any sidecar replacement, deletion during an active connection,
-unexpected recreation, or lifecycle transition without the retained
-authority lock is corruption and fails closed. Normal SQLite checkpoint
-lifecycle is therefore distinguishable from an attack or torn replacement.
+their no-follow descriptor identities are recorded in a durable lifecycle
+record while the full scope is held. The lifecycle record contains the
+authority/control database stable identities, WAL mode, lifecycle state
+(`absent`, `active`, or `clean_checkpointed`), sidecar device/inode and size
+when present, a generation, and a checksum. It is fsynced before the
+corresponding sidecar transition is acknowledged.
+
+A normal, explicitly requested checkpoint/truncate followed by connection
+close writes and fsyncs `clean_checkpointed`; sidecars may then disappear.
+The next controlled WAL open records a new generation and rebinds the newly
+created sidecars under the retained authority lock. Crash reconciliation
+accepts only a fully fsynced old or new lifecycle record whose stable database
+identity still matches. A torn record, impossible transition, sidecar
+replacement/deletion during an active connection, unexpected recreation, or
+lifecycle transition without the retained authority lock is corruption and
+fails closed. Normal SQLite checkpoint lifecycle is therefore distinguishable
+from an attack or torn replacement without putting ephemeral inode values in
+the immutable marker digest.
 
 ## Initialization and migration
 
