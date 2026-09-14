@@ -27,6 +27,10 @@
   "claim_boundary": {
     "class": "bounded-model",
     "implementation_refinement": "not-proven",
+    "model_limitations": [
+      "backend is a bounded scenario parameter, not backend-specific behavior",
+      "fence is typed but stale-fence/CAS evolution is not modeled"
+    ],
     "excluded": [
       "Python implementation equivalence",
       "Git refs and archive semantics",
