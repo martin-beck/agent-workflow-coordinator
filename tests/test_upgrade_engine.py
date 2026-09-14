@@ -57,8 +57,14 @@ ADMISSION = {
 
 
 class FakeAdapter:
-    def snapshot(self, _phase: str, context: object) -> dict[str, object]:
+    def snapshot(self, phase: str, context: object) -> dict[str, object]:
         identity = dict(context) if isinstance(context, Mapping) else CONTEXT
+        if phase == "rollback":
+            return {
+                **ROLLBACK_CONTEXT,
+                "operation_id": identity["operation_id"],
+                "rollback_context_verified": True,
+            }
         return {
             **ADMISSION,
             **{
@@ -191,7 +197,7 @@ class UpgradeEngineTests(unittest.TestCase):
             with self.assertRaises(UpgradeError):
                 engine.apply(handlers)
             with self.assertRaises(UpgradeError):
-                engine.rollback(fail, {**ROLLBACK_CONTEXT, "operation_id": "op-2"})
+                engine.rollback(fail)
             self.assertEqual(engine._load()["status"], "safe-mode")
 
     def test_commit_validate_and_reopen_require_safety_evidence(self) -> None:  # noqa: C901
@@ -378,12 +384,38 @@ class UpgradeEngineTests(unittest.TestCase):
                 }
             ]
             journal.write_text(json.dumps(value))
-            result = engine.rollback(
-                lambda _step, _state: {},
-                {**ROLLBACK_CONTEXT, "operation_id": "op-success-rollback"},
-            )
+            result = engine.rollback(lambda _step, _state: {})
             self.assertEqual("rolled-back", result["status"])
             self.assertEqual("rollback_completed", result["records"][-1]["outcome"])
+
+            reloaded = UpgradeEngine(
+                "op-success-rollback",
+                journal,
+                {**CONTEXT, "operation_id": "op-success-rollback"},
+                backend_adapter=FakeAdapter(),
+            )
+            self.assertEqual("rollback", reloaded._load()["phase"])
+
+    def test_rollback_requires_adapter_verified_context_and_cannot_forge_evidence(self) -> None:
+        class UnverifiedAdapter(FakeAdapter):
+            def snapshot(self, phase: str, context: object) -> dict[str, object]:
+                result = super().snapshot(phase, context)
+                if phase == "rollback":
+                    result["rollback_context_verified"] = False
+                return result
+
+        with tempfile.TemporaryDirectory() as directory:
+            journal = Path(directory) / "journal.json"
+            engine = UpgradeEngine(
+                "op-unverified",
+                journal,
+                {**CONTEXT, "operation_id": "op-unverified"},
+                backend_adapter=UnverifiedAdapter(),
+            )
+            engine.plan()
+            with self.assertRaises(UpgradeError):
+                engine.rollback(lambda _step, _state: {})
+            self.assertEqual([], json.loads(journal.read_text())["records"])
 
     def test_started_phase_requires_explicit_recovery(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

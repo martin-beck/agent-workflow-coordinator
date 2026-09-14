@@ -288,9 +288,18 @@ class UpgradeEngine:
                     raise UpgradeError("upgrade journal rollback identity is invalid")
                 if record.get("outcome") not in {"started", "rollback_completed", "ambiguous"}:
                     raise UpgradeError("upgrade journal rollback outcome is invalid")
-                rollback_context = self._verified_rollback_context
-                if rollback_context is None or record.get("context") != rollback_context:
+                rollback_context = record.get("context")
+                if not isinstance(rollback_context, dict):
                     raise UpgradeError("verified rollback context is required")
+                rollback_context = dict(rollback_context)
+                _validate_context(rollback_context, self.operation_id)
+                if rollback_context["target"] != "rollback":
+                    raise UpgradeError("rollback context target is invalid")
+                for field in CONTEXT_FIELDS:
+                    if field not in {"target", "barrier_identity_digest", "envelope_digest"} and (
+                        rollback_context[field] != asdict(self.context)[field]
+                    ):
+                        raise UpgradeError(f"rollback context mismatch: {field}")
                 if set(record) - RECORD_FIELDS:
                     raise UpgradeError("upgrade journal rollback context is invalid")
                 outcome = record["outcome"]
@@ -400,6 +409,8 @@ class UpgradeEngine:
             )
         ):
             raise UpgradeError("rolled-back journal lacks rollback completion")
+        if status == "rolled-back" and value.get("phase") != "rollback":
+            raise UpgradeError("rolled-back journal phase is inconsistent")
         return cast(dict[str, Any], value)
 
     @staticmethod
@@ -538,13 +549,16 @@ class UpgradeEngine:
         _write(self.journal, value)
         return value
 
-    def rollback(
-        self, handler: Handler, rollback_context: Mapping[str, object] | None = None
-    ) -> dict[str, Any]:
+    def rollback(self, handler: Handler) -> dict[str, Any]:
         with self._exclusive():
-            if rollback_context is None:
-                raise UpgradeError("verified rollback context is required")
-            supplied = dict(rollback_context)
+            if self.backend_adapter is None:
+                raise UpgradeError("backend adapter is required for rollback")
+            snapshot = self.backend_adapter.snapshot(
+                "rollback", cast(Mapping[str, object], _freeze(asdict(self.context)))
+            )
+            if snapshot.get("rollback_context_verified") is not True:
+                raise UpgradeError("backend did not verify rollback context")
+            supplied = {field: snapshot.get(field) for field in CONTEXT_FIELDS}
             _validate_context(supplied, self.operation_id)
             if supplied["target"] != "rollback":
                 raise UpgradeError("rollback context target is invalid")
@@ -577,24 +591,29 @@ class UpgradeEngine:
         value["records"].append(record)
         _write(self.journal, value)
         try:
-            result = dict(
+            adapter_result = dict(
                 self.backend_adapter.execute(
                     "rollback", cast(Mapping[str, object], _freeze(self._verified_rollback_context))
                 )
             )
-            result.update(handler(step_id, cast(Mapping[str, Any], _freeze(value))) or {})
             required = ("restored_verified", "runtime_validated", "backend_roundtrip_valid")
             if any(
-                type(result.get(field)) is not bool or result.get(field) is not True
+                type(adapter_result.get(field)) is not bool or adapter_result.get(field) is not True
                 for field in required
             ):
-                record["outcome"] = "ambiguous"
-                value["status"] = "safe-mode"
-                _write(self.journal, value)
-                raise UpgradeError("rollback did not verify known-good runtime")
+                raise UpgradeError("backend did not verify known-good runtime")
+            result = dict(adapter_result)
+            handler_result = handler(step_id, cast(Mapping[str, Any], _freeze(value))) or {}
+            for key in set(result).intersection(handler_result):
+                if result[key] != handler_result[key]:
+                    raise UpgradeError("handler cannot override backend evidence")
+            if set(handler_result).intersection(required):
+                raise UpgradeError("handler cannot provide backend rollback evidence")
+            result.update(handler_result)
             record["outcome"] = "rollback_completed"
             record["result"] = result
             value["status"] = "rolled-back"
+            value["phase"] = "rollback"
         except Exception as error:
             record.update(outcome="ambiguous", error=type(error).__name__)
             value["status"] = "safe-mode"
