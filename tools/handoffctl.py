@@ -97,6 +97,7 @@ FIELDS = set(REQ) | {
     "observed_branch",
     "observed_head",
     "observed_dirty",
+    "superseded_by",
 }
 type Meta = dict[str, Any]
 type Task = tuple[Path, Meta, str]
@@ -862,6 +863,32 @@ def reference_errors(path: Path, meta: Meta) -> list[str]:
     return errors
 
 
+def supersession_errors(tasks: list[Task]) -> list[str]:
+    """Validate explicitly recorded supersession pointers without weakening old data."""
+    by_id = {meta.get("id"): meta for _, meta, _ in tasks}
+    errors: list[str] = []
+    for _, meta, _ in tasks:
+        successor = meta.get("superseded_by")
+        if successor is None:
+            continue
+        task_id = str(meta.get("id", ""))
+        if meta.get("status") != "superseded":
+            errors.append(f"{task_id}: superseded_by requires superseded status")
+            continue
+        if not isinstance(successor, str) or not re.fullmatch(r"AR-\d{4}", successor):
+            errors.append(f"{task_id}: invalid superseded_by")
+            continue
+        if successor == task_id:
+            errors.append(f"{task_id}: superseded_by self reference")
+            continue
+        if successor not in by_id:
+            errors.append(f"{task_id}: missing superseded_by task {successor}")
+            continue
+        if not dependency_satisfied(successor, tasks):
+            errors.append(f"{task_id}: superseded_by chain does not end in done task")
+    return errors
+
+
 def basic_task_errors(path: Path, meta: Meta) -> list[str]:
     return [*field_errors(path, meta), *value_errors(path, meta), *reference_errors(path, meta)]
 
@@ -939,6 +966,7 @@ def mutation_global_errors(tasks: list[Task]) -> list[str]:
             elif value:
                 seen[value] = task_id
     errors.extend(graph_errors(tasks))
+    errors.extend(supersession_errors(tasks))
     return errors
 
 
@@ -997,6 +1025,7 @@ def validate(*, live: bool = False) -> list[str]:
         errors.extend(basic_task_errors(path, meta))
         errors.extend(claim_errors(meta, active_owners, active_worktrees, active_branches))
     errors.extend(graph_errors(tasks))
+    errors.extend(supersession_errors(tasks))
     errors.extend(generated_view_errors(tasks))
     errors.extend(privacy_errors())
     if live:
@@ -1268,13 +1297,42 @@ def locate(task_id: str) -> Task:
     raise RuntimeError(f"unknown task {task_id}")
 
 
+def dependency_satisfied(dependency_id: str, tasks: list[Task]) -> bool:
+    """Return whether one dependency is complete or explicitly superseded.
+
+    A superseded task is not completion by itself. It satisfies a dependency
+    only when its ``superseded_by`` field names an existing task that is done,
+    or a finite chain of explicitly superseding tasks ending in one that is
+    done. Malformed, missing, self-referential, cyclic, or unfinished
+    successors therefore remain fail-closed and block the transition.
+    """
+    by_id = {meta.get("id"): meta for _, meta, _ in tasks}
+    seen: set[str] = set()
+    current = dependency_id
+    while True:
+        if current in seen:
+            return False
+        seen.add(current)
+        dependency = by_id.get(current)
+        if dependency is None:
+            return False
+        status = dependency.get("status")
+        if status == "done":
+            return True
+        if status != "superseded":
+            return False
+        successor = dependency.get("superseded_by")
+        if not isinstance(successor, str) or not re.fullmatch(r"AR-\d{4}", successor):
+            return False
+        current = successor
+
+
 def apply_claim(args: argparse.Namespace, meta: Meta, tasks: list[Task]) -> str:
     if args.lease_minutes <= 0:
         raise RuntimeError("lease must be positive")
     if meta.get("status") != "open":
         raise RuntimeError(f"{args.task} is not open")
-    states = {item["id"]: item["status"] for _, item, _ in tasks}
-    pending = [item for item in meta.get("depends_on", []) if states.get(item) != "done"]
+    pending = [item for item in meta.get("depends_on", []) if not dependency_satisfied(item, tasks)]
     if pending:
         raise RuntimeError("unfinished dependencies: " + ", ".join(pending))
     held = [
@@ -1321,8 +1379,7 @@ def apply_promote(args: argparse.Namespace, meta: Meta, tasks: list[Task]) -> st
         raise RuntimeError(f"{args.task} is not planned")
     if meta.get("owner") or meta.get("claim_expires"):
         raise RuntimeError(f"{args.task} has active claim metadata")
-    states = {item["id"]: item["status"] for _, item, _ in tasks}
-    pending = [item for item in meta.get("depends_on", []) if states.get(item) != "done"]
+    pending = [item for item in meta.get("depends_on", []) if not dependency_satisfied(item, tasks)]
     if pending:
         raise RuntimeError("unfinished dependencies: " + ", ".join(pending))
     if not args.note.strip():
@@ -1527,7 +1584,11 @@ def mutate_sqlite(args: argparse.Namespace, kind: str) -> None:
         candidate = [
             (path, meta if item["id"] == args.task else item, text) for path, item, text in tasks
         ]
-        errors = basic_task_errors(selected[0], meta) + graph_errors(candidate)
+        errors = (
+            basic_task_errors(selected[0], meta)
+            + graph_errors(candidate)
+            + supersession_errors(candidate)
+        )
         if errors:
             raise RuntimeError("transition validation failed:\n" + "\n".join(errors))
         return note, _transition_note(selected[2], note, at)

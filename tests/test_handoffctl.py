@@ -692,6 +692,34 @@ class HandoffTest(unittest.TestCase):
                     "claim",
                 )
 
+    def test_superseded_dependency_requires_done_successor_chain(self) -> None:
+        self.make_task("AR-0003", status="done")
+        self.make_task("AR-0002", status="superseded", superseded_by="AR-0003")
+        self.make_task("AR-0001", status="superseded", superseded_by="AR-0002")
+        self.make_task("AR-0004", depends_on=["AR-0001"])
+        with patch.object(CORE, "commit", return_value=True):
+            CORE.mutate(
+                argparse.Namespace(task="AR-0004", owner="worker-a", lease_minutes=10),
+                "claim",
+            )
+        self.assertEqual("in_progress", CORE.read_task(CORE.TASKS / "AR-0004-test.md")[0]["status"])
+
+    def test_superseded_dependency_fails_closed_for_missing_or_unfinished_successor(self) -> None:
+        self.make_task("AR-0003", status="open")
+        self.make_task("AR-0002", status="superseded", superseded_by="AR-0003")
+        self.make_task("AR-0001", depends_on=["AR-0002"])
+        with self.assertRaisesRegex(RuntimeError, "unfinished dependencies"):
+            CORE.mutate(
+                argparse.Namespace(task="AR-0001", owner="worker-a", lease_minutes=10),
+                "claim",
+            )
+
+        dependency, body = CORE.read_task(CORE.TASKS / "AR-0002-test.md")
+        dependency["superseded_by"] = "AR-9999"
+        CORE.write_task(CORE.TASKS / "AR-0002-test.md", dependency, body)
+        self.refresh_views()
+        self.assertIn("missing superseded_by task", "\n".join(CORE.validate()))
+
     def test_promote_is_dependency_revision_and_state_aware(self) -> None:
         dependency = self.make_task("AR-0001", status="done")
         target = self.make_task(
