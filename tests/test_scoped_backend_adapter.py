@@ -111,6 +111,15 @@ class ScopedBackendAdapterTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "recheck failed"):
             adapter.verify_rollback_context({})
 
+    def test_execute_rejects_authority_mutation_at_uncalled_boundary(self) -> None:
+        class MutatingBackend(Backend):
+            def execute(self, _phase: str, _context: Mapping[str, object]) -> dict[str, object]:
+                return {"mutates_authority": True}
+
+        adapter = ScopedBackendAdapter(MutatingBackend(), Scope())
+        with self.assertRaisesRegex(TypeError, "non-mutating"):
+            adapter.execute("commit", {})
+
     def test_invalid_scope_is_rejected_before_engine_binding(self) -> None:
         with self.assertRaisesRegex(TypeError, "scope"):
             ScopedBackendAdapter(Backend(), object())  # type: ignore[arg-type]
