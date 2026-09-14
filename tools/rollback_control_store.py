@@ -16,7 +16,7 @@ import re
 import sqlite3
 import uuid
 from collections.abc import Callable, Iterator, Mapping
-from contextlib import closing, contextmanager
+from contextlib import AbstractContextManager, closing, contextmanager
 from pathlib import Path
 from typing import Protocol, cast
 
@@ -114,6 +114,9 @@ class SQLiteControlStoreAdapter:
         if durable is None or durable["status"] != "released":
             raise ControlStoreError("rollback control record is not released")
         return dict(result)
+
+    def operation_lock(self) -> AbstractContextManager[None]:
+        return self._store.operation_lock()
 
 
 def bind_control_store(

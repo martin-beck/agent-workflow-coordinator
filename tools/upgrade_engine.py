@@ -512,6 +512,10 @@ class UpgradeEngine:
 
     def apply(self, handlers: Mapping[str, Handler]) -> dict[str, Any]:
         with self._exclusive():
+            operation_lock = getattr(self.backend_adapter, "operation_lock", None)
+            if callable(operation_lock):
+                with operation_lock():
+                    return self._apply_locked(handlers)
             return self._apply_locked(handlers)
 
     def _apply_locked(self, handlers: Mapping[str, Handler]) -> dict[str, Any]:  # noqa: C901
