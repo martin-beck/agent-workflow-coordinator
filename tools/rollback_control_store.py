@@ -984,9 +984,12 @@ class SQLiteRollbackControlStore:
         columns = (*IDENTITY_FIELDS, "status", "revision")
         values = tuple(supplied[field] for field in columns)
         if current is None:
-            connection.execute(_INSERT_SQL, values)
+            cursor = connection.execute(_INSERT_SQL, values)
+            if cursor.rowcount != 1:
+                connection.rollback()
+                raise ControlStoreError("control barrier CAS insert lost its fence")
         else:
-            connection.execute(
+            cursor = connection.execute(
                 _UPDATE_SQL,
                 (
                     *(supplied[field] for field in columns if field != "operation_id"),
@@ -994,8 +997,58 @@ class SQLiteRollbackControlStore:
                     expected_revision,
                 ),
             )
-        connection.commit()
+            if cursor.rowcount != 1:
+                connection.rollback()
+                raise ControlStoreError("control barrier CAS update lost its fence")
+        try:
+            connection.commit()
+        except Exception as error:
+            # A commit exception does not establish whether SQLite reached the
+            # durable boundary.  Never turn that uncertainty into a success or
+            # blindly retry a transition.  Fence the record into the terminal
+            # ambiguous state using a fresh transaction instead.
+            raise ControlStoreError(
+                "control barrier commit outcome is ambiguous; durable state must be rechecked"
+            ) from self._mark_ambiguous_after_commit_failure(
+                connection, supplied, expected_revision, error
+            )
         return dict(supplied)
+
+    @staticmethod
+    def _mark_ambiguous_after_commit_failure(
+        connection: sqlite3.Connection,
+        supplied: Mapping[str, object],
+        expected_revision: int,
+        commit_error: Exception,
+    ) -> Exception:
+        """Attempt to durably fence an uncertain CAS outcome as ambiguous."""
+        try:
+            connection.rollback()
+            connection.execute("BEGIN IMMEDIATE")
+            current = connection.execute(_SELECT_SQL, (supplied["operation_id"],)).fetchone()
+            if current is None:
+                values = dict(supplied)
+                values["status"] = "ambiguous"
+                values["revision"] = expected_revision + 1
+                connection.execute(
+                    _INSERT_SQL,
+                    tuple(values[field] for field in (*IDENTITY_FIELDS, "status", "revision")),
+                )
+            else:
+                current_revision = int(current[-1])
+                cursor = connection.execute(
+                    "UPDATE barrier SET status='ambiguous',revision=? "
+                    "WHERE operation_id=? AND revision=?",
+                    (current_revision + 1, supplied["operation_id"], current_revision),
+                )
+                if cursor.rowcount != 1:
+                    raise ControlStoreError("ambiguous barrier fencing lost its row fence")
+            connection.commit()
+        except Exception as recovery_error:
+            raise ControlStoreError(
+                "control barrier commit outcome is ambiguous and could not be durably fenced"
+            ) from recovery_error
+        return commit_error
 
     def with_barrier(
         self,
@@ -1044,9 +1097,14 @@ class SQLiteBarrierSessionStore:
         "FROM barrier_session WHERE project_id=?"
     )
 
-    def __init__(self, control: SQLiteRollbackControlStore) -> None:
+    def __init__(
+        self,
+        control: SQLiteRollbackControlStore,
+        authority_revision_reader: Callable[[], str] | None = None,
+    ) -> None:
         self._control = control
         self.project_id = control.project_id
+        self._authority_revision_reader = authority_revision_reader
 
     @property
     def operation_owned_by_current_thread(self) -> bool:
@@ -1077,8 +1135,20 @@ class SQLiteBarrierSessionStore:
                 status TEXT NOT NULL,
                 revision INTEGER NOT NULL,
                 forward_child TEXT,
-                rollback_child TEXT
-            )"""
+                    rollback_child TEXT
+                )"""
+        )
+        # Released sessions are immutable audit records.  The current-row
+        # table remains one row per project for cheap admission checks, but
+        # a subsequent attempt must not overwrite the released session.
+        connection.execute(
+            """CREATE TABLE IF NOT EXISTS barrier_session_history (
+                    project_id TEXT NOT NULL,
+                    attempt_id TEXT NOT NULL,
+                    revision INTEGER NOT NULL,
+                    record_json TEXT NOT NULL,
+                    PRIMARY KEY(project_id, attempt_id)
+                )"""
         )
 
     @staticmethod
@@ -1169,6 +1239,53 @@ class SQLiteBarrierSessionStore:
         """Persist the initial held state; a second attempt is rejected."""
         return self.cas(0, BarrierSessionState(identity, "held", 1))
 
+    def recheck_held(  # noqa: C901
+        self,
+        expected_revision: int | BarrierSessionState,
+        fresh_authority_revision: str | None = None,
+    ) -> BarrierSessionState:
+        """Durably reread a held session before each fenced operation.
+
+        This is intentionally read-only: the project fence and session
+        revision are not advanced by a recheck.  A caller may additionally
+        provide the freshly observed authority revision; a mismatch rejects
+        admission instead of treating stale evidence as a held barrier.
+        """
+        expected_identity: BarrierSessionIdentity | None = None
+        if isinstance(expected_revision, BarrierSessionState):
+            expected_identity = expected_revision.identity
+            expected_revision = expected_revision.revision
+        if type(expected_revision) is not int or expected_revision < 1:
+            raise ControlStoreError("barrier session expected revision is invalid")
+        if fresh_authority_revision is not None:
+            raise ControlStoreError("fresh authority revision must come from the trusted rereader")
+        if self._authority_revision_reader is None:
+            raise ControlStoreError("fresh authority rereader is required")
+        try:
+            fresh_authority_revision = self._authority_revision_reader()
+        except Exception as error:
+            raise ControlStoreError("fresh authority reread failed") from error
+        if not isinstance(fresh_authority_revision, str) or not fresh_authority_revision:
+            raise ControlStoreError("fresh authority revision is invalid")
+        if self.operation_owned_by_current_thread:
+            raise ControlStoreError("control store lock is non-reentrant")
+        with self.operation_lock():
+            current = self._snapshot_locked()
+            if current is None:
+                raise ControlStoreError("barrier session is absent")
+            if current.revision != expected_revision:
+                raise ControlStoreError("barrier session CAS conflict")
+            if expected_identity is not None and expected_identity != current.identity:
+                raise ControlStoreError("barrier session identity changed")
+            if current.status != "held":
+                raise ControlStoreError("barrier session is not held")
+            if (
+                fresh_authority_revision is not None
+                and current.identity.authority_revision_at_acquire != fresh_authority_revision
+            ):
+                raise ControlStoreError("barrier session authority revision changed")
+            return current
+
     def cas(self, expected_revision: int, state: BarrierSessionState) -> BarrierSessionState:
         if type(expected_revision) is not int or expected_revision < 0:
             raise ControlStoreError("barrier session expected revision is invalid")
@@ -1189,6 +1306,7 @@ class SQLiteBarrierSessionStore:
             self._ensure_table(connection)
             connection.execute("BEGIN IMMEDIATE")
             current_row = connection.execute(self._SELECT, (self.project_id,)).fetchone()
+            replacing_released = False
             if current_row is None:
                 if expected_revision != 0:
                     connection.rollback()
@@ -1199,19 +1317,63 @@ class SQLiteBarrierSessionStore:
                     raise ControlStoreError("new barrier session must start held")
             else:
                 current = self._row_state(current_row)
-                if current.revision != expected_revision:
+                # A released session is terminal, but a new attempt may be
+                # admitted with CAS(0).  Preserve the old terminal record in
+                # history before replacing the current-session pointer.
+                replacing_released = (
+                    expected_revision == 0
+                    and current.status == "released"
+                    and supplied.status == "held"
+                    and supplied.identity != current.identity
+                )
+                if replacing_released and (
+                    supplied.identity.attempt_id == current.identity.attempt_id
+                    or supplied.identity.state_revision <= current.identity.state_revision
+                ):
+                    connection.rollback()
+                    raise ControlStoreError(
+                        "fresh barrier session requires a distinct newer project fence"
+                    )
+                if not replacing_released and current.revision != expected_revision:
                     connection.rollback()
                     raise ControlStoreError("barrier session CAS conflict")
-                if supplied.identity != current.identity:
+                if not replacing_released and supplied.identity != current.identity:
                     connection.rollback()
                     raise ControlStoreError("barrier session identity changed")
-                if supplied.status not in STATUS_TRANSITIONS[current.status]:
+                if (
+                    not replacing_released
+                    and supplied.status not in STATUS_TRANSITIONS[current.status]
+                ):
                     connection.rollback()
                     raise ControlStoreError("illegal barrier session transition")
-                if supplied.revision != expected_revision + 1:
+                if not replacing_released and supplied.revision != expected_revision + 1:
                     connection.rollback()
                     raise ControlStoreError("barrier session revision is not monotonic")
-                next_revision = supplied.revision
+                next_revision = 1 if replacing_released else supplied.revision
+                if replacing_released:
+                    connection.execute(
+                        "INSERT OR REPLACE INTO barrier_session_history "
+                        "(project_id,attempt_id,revision,record_json) VALUES (?,?,?,?)",
+                        (
+                            self.project_id,
+                            current.identity.attempt_id,
+                            current.revision,
+                            json.dumps(
+                                {
+                                    **current.identity.as_record(),
+                                    "status": current.status,
+                                    "revision": current.revision,
+                                    "forward_child": self._child_json(current.forward_child),
+                                    "rollback_child": self._child_json(current.rollback_child),
+                                },
+                                sort_keys=True,
+                                separators=(",", ":"),
+                            ),
+                        ),
+                    )
+                    connection.execute(
+                        "DELETE FROM barrier_session WHERE project_id=?", (self.project_id,)
+                    )
             if supplied.revision != next_revision:
                 connection.rollback()
                 raise ControlStoreError("barrier session revision is invalid")
@@ -1223,7 +1385,7 @@ class SQLiteBarrierSessionStore:
                 self._child_json(supplied.rollback_child),
             )
             if current_row is None:
-                connection.execute(
+                cursor = connection.execute(
                     "INSERT INTO barrier_session "
                     "(schema_version,project_id,attempt_id,state_revision,"
                     "authority_revision_at_acquire,durable_barrier_id,fencing_token,"
@@ -1232,20 +1394,92 @@ class SQLiteBarrierSessionStore:
                     values,
                 )
             else:
-                connection.execute(
-                    "UPDATE barrier_session SET status=?,revision=?,forward_child=?,"
-                    "rollback_child=? WHERE project_id=? AND revision=?",
-                    (
-                        supplied.status,
-                        supplied.revision,
-                        values[-2],
-                        values[-1],
-                        self.project_id,
-                        expected_revision,
-                    ),
+                if replacing_released:
+                    cursor = connection.execute(
+                        "INSERT INTO barrier_session "
+                        "(schema_version,project_id,attempt_id,state_revision,"
+                        "authority_revision_at_acquire,durable_barrier_id,fencing_token,"
+                        "fencing_owner,identity_digest,status,revision,forward_child,"
+                        "rollback_child) "
+                        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                        values,
+                    )
+                else:
+                    cursor = connection.execute(
+                        "UPDATE barrier_session SET status=?,revision=?,forward_child=?,"
+                        "rollback_child=? WHERE project_id=? AND revision=?",
+                        (
+                            supplied.status,
+                            supplied.revision,
+                            values[-2],
+                            values[-1],
+                            self.project_id,
+                            expected_revision,
+                        ),
+                    )
+            if cursor.rowcount != 1:
+                connection.rollback()
+                raise ControlStoreError("barrier session CAS update lost its fence")
+            try:
+                connection.commit()
+            except Exception as error:
+                raise ControlStoreError(
+                    "barrier session commit outcome is ambiguous; durable state must be rechecked"
+                ) from self._mark_ambiguous_after_commit_failure(
+                    connection, supplied, expected_revision, error
                 )
-            connection.commit()
             return supplied
+
+    def _mark_ambiguous_after_commit_failure(
+        self,
+        connection: sqlite3.Connection,
+        supplied: BarrierSessionState,
+        expected_revision: int,
+        commit_error: Exception,
+    ) -> Exception:
+        """Fence an uncertain session CAS outcome into durable ambiguity."""
+        try:
+            connection.rollback()
+            connection.execute("BEGIN IMMEDIATE")
+            current_row = connection.execute(self._SELECT, (self.project_id,)).fetchone()
+            if current_row is None:
+                ambiguous = BarrierSessionState(
+                    supplied.identity,
+                    "ambiguous",
+                    expected_revision + 1,
+                    supplied.forward_child,
+                    supplied.rollback_child,
+                )
+                values = (
+                    *ambiguous.identity.as_record().values(),
+                    ambiguous.status,
+                    ambiguous.revision,
+                    self._child_json(ambiguous.forward_child),
+                    self._child_json(ambiguous.rollback_child),
+                )
+                cursor = connection.execute(
+                    "INSERT INTO barrier_session "
+                    "(schema_version,project_id,attempt_id,state_revision,"
+                    "authority_revision_at_acquire,durable_barrier_id,fencing_token,"
+                    "fencing_owner,identity_digest,status,revision,forward_child,rollback_child) "
+                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    values,
+                )
+            else:
+                current = self._row_state(current_row)
+                cursor = connection.execute(
+                    "UPDATE barrier_session SET status='ambiguous',revision=? "
+                    "WHERE project_id=? AND revision=?",
+                    (current.revision + 1, self.project_id, current.revision),
+                )
+            if cursor.rowcount != 1:
+                raise ControlStoreError("ambiguous session fencing lost its row fence")
+            connection.commit()
+        except Exception as recovery_error:
+            raise ControlStoreError(
+                "barrier session commit outcome is ambiguous and could not be durably fenced"
+            ) from recovery_error
+        return commit_error
 
     def bind_child(
         self, expected_revision: int, child: BarrierChildIdentity
