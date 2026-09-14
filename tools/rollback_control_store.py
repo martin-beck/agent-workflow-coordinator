@@ -14,11 +14,12 @@ import json
 import os
 import re
 import sqlite3
+import stat
 import threading
 import time
 import uuid
 from collections.abc import Callable, Iterator, Mapping
-from contextlib import AbstractContextManager, closing, contextmanager
+from contextlib import AbstractContextManager, contextmanager
 from pathlib import Path
 from typing import Protocol, cast
 
@@ -188,54 +189,156 @@ class SQLiteRollbackControlStore:
     """WAL-backed control store with coordinator-common locking and CAS."""
 
     def __init__(self, path: Path, project_id: str, authority_path: Path | None = None) -> None:
-        self._check_paths(path, authority_path)
-        self.path = path
-        self.authority_path = authority_path
-        self._operation_owner: int | None = None
-        self.project_id = project_id
         try:
             project = uuid.UUID(project_id)
         except ValueError as error:
             raise ControlStoreError("control project_id must be UUIDv4") from error
         if project.version != 4:
             raise ControlStoreError("control project_id must be UUIDv4")
+        self.path = path.absolute()
+        self.authority_path = authority_path.absolute() if authority_path is not None else None
+        if self.authority_path == self.path:
+            raise ControlStoreError("control store aliases authority")
+        self._authority_identity = (
+            self._existing_regular_identity(self.authority_path)
+            if self.authority_path is not None
+            else None
+        )
+        self._parent_identity, self._control_identity = self._prepare_regular_file(self.path)
+        if self._authority_identity == self._control_identity:
+            raise ControlStoreError("control store aliases authority")
+        self._lock_path = self.path.parent / f".{self.path.name}.lock"
+        lock_parent, self._lock_identity = self._prepare_regular_file(self._lock_path)
+        if lock_parent != self._parent_identity:
+            raise ControlStoreError("control store lock parent identity changed")
+        self._operation_owner: int | None = None
+        self.project_id = project_id
 
     @staticmethod
-    def _check_paths(path: Path, authority_path: Path | None) -> None:  # noqa: C901
-        if path.exists() and path.is_symlink():
-            raise ControlStoreError("control store path must not be a symlink")
-        if any(parent.exists() and parent.is_symlink() for parent in path.parents):
-            raise ControlStoreError("control store parent must not be a symlink")
-        if path.exists():
+    def _file_identity(value: os.stat_result) -> tuple[int, int]:
+        return value.st_dev, value.st_ino
+
+    @classmethod
+    def _open_parent(cls, path: Path) -> tuple[int, tuple[int, int]]:
+        if not path.is_absolute() or path.name in {"", ".", ".."}:
+            raise ControlStoreError("control store path is invalid")
+        descriptor = -1
+        try:
+            descriptor = os.open("/", os.O_RDONLY | os.O_DIRECTORY)
+            for component in path.parent.parts[1:]:
+                child = os.open(
+                    component,
+                    os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                    dir_fd=descriptor,
+                )
+                previous = descriptor
+                descriptor = child
+                os.close(previous)
+        except OSError as error:
+            if descriptor >= 0:
+                os.close(descriptor)
+            raise ControlStoreError("control store parent descriptor is unsafe") from error
+        return descriptor, cls._file_identity(os.fstat(descriptor))
+
+    @classmethod
+    def _prepare_regular_file(cls, path: Path) -> tuple[tuple[int, int], tuple[int, int]]:
+        parent, parent_identity = cls._open_parent(path)
+        created = False
+        try:
             try:
-                descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+                descriptor = os.open(path.name, os.O_RDWR | os.O_NOFOLLOW, dir_fd=parent)
+            except FileNotFoundError:
                 try:
-                    if not os.fstat(descriptor).st_mode & 0o100000:
-                        raise ControlStoreError("control store is not a regular file")
-                finally:
-                    os.close(descriptor)
+                    descriptor = os.open(
+                        path.name,
+                        os.O_CREAT | os.O_EXCL | os.O_RDWR | os.O_NOFOLLOW,
+                        0o600,
+                        dir_fd=parent,
+                    )
+                    created = True
+                except OSError as error:
+                    raise ControlStoreError("control store creation is unsafe") from error
             except OSError as error:
                 raise ControlStoreError("control store descriptor is unsafe") from error
-        if authority_path is None:
-            return
-        if authority_path.exists() and authority_path.is_symlink():
-            raise ControlStoreError("authority path must not be a symlink")
-        if authority_path.exists():
             try:
-                descriptor = os.open(authority_path, os.O_RDONLY | os.O_NOFOLLOW)
+                status = os.fstat(descriptor)
+                if not stat.S_ISREG(status.st_mode):
+                    raise ControlStoreError("control store is not a regular file")
+                if created:
+                    os.fsync(descriptor)
+                    os.fsync(parent)
+                return parent_identity, cls._file_identity(status)
+            finally:
                 os.close(descriptor)
+        finally:
+            os.close(parent)
+
+    @classmethod
+    def _existing_regular_identity(cls, path: Path) -> tuple[int, int]:
+        parent, _ = cls._open_parent(path)
+        try:
+            try:
+                descriptor = os.open(path.name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=parent)
             except OSError as error:
                 raise ControlStoreError("authority descriptor is unsafe") from error
-        try:
-            if path.exists() and authority_path.exists() and path.samefile(authority_path):
-                raise ControlStoreError("control store aliases authority")
-        except OSError as error:
-            raise ControlStoreError("control and authority identity is unavailable") from error
+            try:
+                status = os.fstat(descriptor)
+                if not stat.S_ISREG(status.st_mode):
+                    raise ControlStoreError("authority is not a regular file")
+                return cls._file_identity(status)
+            finally:
+                os.close(descriptor)
+        finally:
+            os.close(parent)
 
-    def _connect(self) -> sqlite3.Connection:
-        self._check_paths(self.path, self.authority_path)
-        self.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-        connection = sqlite3.connect(self.path, isolation_level=None, timeout=10)
+    def _open_bound_file(
+        self, path: Path, expected_parent: tuple[int, int], expected_file: tuple[int, int]
+    ) -> tuple[int, int]:
+        parent, parent_identity = self._open_parent(path)
+        if parent_identity != expected_parent:
+            os.close(parent)
+            raise ControlStoreError("control store parent identity changed")
+        try:
+            descriptor = os.open(path.name, os.O_RDWR | os.O_NOFOLLOW, dir_fd=parent)
+        except OSError as error:
+            os.close(parent)
+            raise ControlStoreError("control store descriptor is unsafe") from error
+        try:
+            status = os.fstat(descriptor)
+        except OSError as error:
+            os.close(descriptor)
+            os.close(parent)
+            raise ControlStoreError("control store descriptor is unreadable") from error
+        if not stat.S_ISREG(status.st_mode) or self._file_identity(status) != expected_file:
+            os.close(descriptor)
+            os.close(parent)
+            raise ControlStoreError("control store descriptor identity changed")
+        return parent, descriptor
+
+    def _recheck_authority(self) -> None:
+        if self.authority_path is None or self._authority_identity is None:
+            return
+        current = self._existing_regular_identity(self.authority_path)
+        if current != self._authority_identity or current == self._control_identity:
+            raise ControlStoreError("authority descriptor identity changed")
+
+    @contextmanager
+    def _connection(self) -> Iterator[sqlite3.Connection]:
+        self._recheck_authority()
+        parent, descriptor = self._open_bound_file(
+            self.path, self._parent_identity, self._control_identity
+        )
+        try:
+            connection = sqlite3.connect(
+                f"file:/proc/self/fd/{descriptor}?mode=rw",
+                isolation_level=None,
+                timeout=10,
+                uri=True,
+            )
+        except Exception:
+            os.close(descriptor)
+            os.close(parent)
+            raise
         try:
             mode = str(connection.execute("PRAGMA journal_mode=WAL").fetchone()[0]).lower()
             if mode != "wal":
@@ -286,28 +389,33 @@ class SQLiteRollbackControlStore:
                 )
             elif value[0] != self.project_id:
                 raise ControlStoreError("control store project binding mismatch")
-            return connection
+            yield connection
         except Exception:
-            connection.close()
             raise
+        finally:
+            connection.close()
+            try:
+                reopened_parent, reopened = self._open_bound_file(
+                    self.path, self._parent_identity, self._control_identity
+                )
+                os.close(reopened)
+                os.close(reopened_parent)
+                self._recheck_authority()
+            finally:
+                os.close(descriptor)
+                os.close(parent)
 
     @contextmanager
     def _control_lock(self) -> Iterator[None]:
         """Hold the store-specific lock after the coordinator-common lock."""
-        lock_path = self.path.parent / f".{self.path.name}.lock"
-        lock_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-        try:
-            descriptor = os.open(
-                lock_path,
-                os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW,
-                0o600,
-            )
-        except OSError as error:
-            raise ControlStoreError("control store lock is unavailable") from error
+        parent, descriptor = self._open_bound_file(
+            self._lock_path, self._parent_identity, self._lock_identity
+        )
         try:
             import fcntl
         except ImportError as error:  # pragma: no cover - coordinator is POSIX-only
             os.close(descriptor)
+            os.close(parent)
             raise ControlStoreError("control store locking is unavailable") from error
         try:
             deadline = time.monotonic() + 10.0
@@ -328,6 +436,7 @@ class SQLiteRollbackControlStore:
                 fcntl.flock(descriptor, fcntl.LOCK_UN)
             finally:
                 os.close(descriptor)
+                os.close(parent)
 
     @contextmanager
     def operation_lock(self) -> Iterator[None]:
@@ -359,7 +468,7 @@ class SQLiteRollbackControlStore:
 
     def _snapshot_locked(self, operation_id: str) -> dict[str, object]:
         self._require_operation_lock()
-        with closing(self._connect()) as connection:
+        with self._connection() as connection:
             row = connection.execute(
                 "SELECT operation_id,project_id,state_revision,fencing_token,fencing_owner,backend,"
                 "authority_revision,durable_barrier_id,barrier_identity_digest,envelope_digest,"
@@ -414,7 +523,7 @@ class SQLiteRollbackControlStore:
 
     def _cas_locked(self, expected_revision: int, supplied: dict[str, object]) -> dict[str, object]:
         self._require_operation_lock()
-        with closing(self._connect()) as connection:
+        with self._connection() as connection:
             return self._cas_connection(connection, expected_revision, supplied)
 
     def release(self, operation_id: str) -> dict[str, object]:
@@ -537,7 +646,7 @@ class SQLiteRollbackControlStore:
             raise ControlStoreError("control project binding mismatch")
         if self._operation_owner is not None:
             raise ControlStoreError("control store lock is non-reentrant")
-        with self.operation_lock(), closing(self._connect()) as connection:
+        with self.operation_lock(), self._connection() as connection:
             held = self._cas_connection(connection, expected_revision, supplied)
             result = dict(authority(dict(held)))
             return self._cas_connection(connection, cast(int, held["revision"]), _validate(result))

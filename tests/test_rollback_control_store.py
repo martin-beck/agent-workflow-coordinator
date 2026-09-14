@@ -82,6 +82,8 @@ class RollbackControlStoreTests(unittest.TestCase):
             released = store.cas(2, {**releasing, "status": "released", "revision": 3})
             self.assertEqual("released", released["status"])
             self.assertEqual(3, store.snapshot("op-1")["revision"])
+            with sqlite3.connect(Path(directory) / "control.sqlite") as connection:
+                self.assertEqual("wal", connection.execute("PRAGMA journal_mode").fetchone()[0])
 
     def test_status_transition_is_fail_closed(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -130,6 +132,80 @@ class RollbackControlStoreTests(unittest.TestCase):
                 SQLiteRollbackControlStore(link, PROJECT)
             with self.assertRaises(ControlStoreError):
                 SQLiteRollbackControlStore(authority, PROJECT, authority)
+
+            dangling_target = root / "missing.sqlite"
+            dangling = root / "dangling.sqlite"
+            dangling.symlink_to(dangling_target.name)
+            with self.assertRaises(ControlStoreError):
+                SQLiteRollbackControlStore(dangling, PROJECT, authority)
+
+            absent_alias = root / "absent-alias.sqlite"
+            with self.assertRaises(ControlStoreError):
+                SQLiteRollbackControlStore(absent_alias, PROJECT, absent_alias)
+
+            linked_parent = root / "linked-parent"
+            linked_parent.symlink_to(root)
+            with self.assertRaises(ControlStoreError):
+                SQLiteRollbackControlStore(linked_parent / "control.sqlite", PROJECT)
+
+    def test_control_path_swap_after_binding_fails_without_authority_mutation(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            authority = root / "authority.sqlite"
+            with sqlite3.connect(authority) as connection:
+                connection.execute("CREATE TABLE authority_payload(value TEXT)")
+            control = root / "control.sqlite"
+            store = SQLiteRollbackControlStore(control, PROJECT, authority)
+            original = root / "original-control.sqlite"
+            control.rename(original)
+            control.symlink_to(authority.name)
+
+            with self.assertRaises(ControlStoreError):
+                store.cas(0, RECORD)
+            with sqlite3.connect(authority) as connection:
+                tables = {
+                    row[0]
+                    for row in connection.execute(
+                        "SELECT name FROM sqlite_master WHERE type='table'"
+                    )
+                }
+            self.assertEqual({"authority_payload"}, tables)
+
+    def test_control_swap_between_descriptor_validation_and_sqlite_open_fails_closed(self) -> None:
+        class SwappingStore(SQLiteRollbackControlStore):
+            swapped = False
+
+            def _open_bound_file(
+                self,
+                path: Path,
+                expected_parent: tuple[int, int],
+                expected_file: tuple[int, int],
+            ) -> tuple[int, int]:
+                parent, descriptor = super()._open_bound_file(path, expected_parent, expected_file)
+                if path == self.path and not self.swapped:
+                    self.swapped = True
+                    self.path.rename(self.path.with_suffix(".original"))
+                    assert self.authority_path is not None
+                    self.path.symlink_to(self.authority_path.name)
+                return parent, descriptor
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            authority = root / "authority.sqlite"
+            with sqlite3.connect(authority) as connection:
+                connection.execute("CREATE TABLE authority_payload(value TEXT)")
+            store = SwappingStore(root / "control.sqlite", PROJECT, authority)
+
+            with self.assertRaises(ControlStoreError):
+                store.cas(0, RECORD)
+            with sqlite3.connect(authority) as connection:
+                tables = {
+                    row[0]
+                    for row in connection.execute(
+                        "SELECT name FROM sqlite_master WHERE type='table'"
+                    )
+                }
+            self.assertEqual({"authority_payload"}, tables)
 
     def test_with_barrier_holds_coordinator_lock_through_authority_callback(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
