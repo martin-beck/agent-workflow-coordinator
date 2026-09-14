@@ -65,7 +65,7 @@
       "status": "pass",
       "states_generated": 12575081,
       "distinct_states": 2518656,
-      "depth": 44,
+      "depth": 43,
       "invariants": [
         "TypeOK",
         "OneActiveSession",
