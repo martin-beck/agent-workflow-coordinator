@@ -27,35 +27,65 @@ replace an existing object or silently create a replacement after a failure.
 
 The marker is valid only when all of these values match the permanent project
 binding: project ID, state repository, product repository, backend (`sqlite`),
-control schema version, and the control database device/inode identity. The
+control schema version, and the control database device/inode identity. Its
+identity digest binds the authority database, authority `-wal` and `-shm`,
+control database, control `-wal` and `-shm`, control lock file, and fixed
+runtime selector identities. It also records the expected runtime-directory
+device/inode identity and an opaque, privacy-safe project identifier. The
 control database must contain the same project ID and schema version, a valid
 schema digest, and a valid WAL configuration. The marker and control record
 are immutable identity evidence; mutable barrier state is protected by the
 control database's revision/CAS protocol.
+
+Provisioning must bind and verify an existing authority database before it
+creates a control store. It must open the authority and every existing
+sidecar with no-follow descriptors, verify regular-file type, owner, link
+count, device/inode, WAL mode, schema, project binding, and integrity, then
+retain those descriptors (or re-open and compare them under the common lock)
+for the operation. It must never create, replace, rename, or repair the
+authority database or its sidecars as a provisioning side effect.
 
 ## Lock and transaction order
 
 Every authority mutation uses one fixed order and holds the scope through the
 final commit or rollback:
 
-1. coordinator common lock;
-2. project control lock;
-3. authority descriptor/transaction lock; and
+1. coordinator common lock and its retained directory descriptor;
+2. project control lock and its retained lock-file descriptor;
+3. authority descriptor/transaction lock and retained authority/sidecar
+   descriptors; and
 4. durable control read and authority transaction, with the barrier reread
    immediately before the authority transaction opens and immediately before
    commit where SQLite permits it.
 
-No path may acquire the common lock after the control lock, acquire the
-authority lock before the control lock, or call a non-reentrant operation
-scope. Read-only inspection must be explicitly classified and may not repair
-projections, migrate schemas, change selectors, or create files.
+Each lock object has an identity tuple (device, inode, regular-file type,
+owner, link count, and expected parent-directory identity). Before every
+critical read and before commit, the implementation compares retained
+descriptor identities and the no-follow parent/ancestor chain. A path-name
+recheck alone is insufficient: replacement of an ancestor directory,
+database, sidecar, lock file, or runtime selector must fail closed. No path
+may acquire the common lock after the control lock, acquire the authority lock
+before the control lock, or call a non-reentrant operation scope. Read-only
+inspection must be explicitly classified and may not repair projections,
+migrate schemas, change selectors, or create files.
 
 The control read must verify the marker, descriptor identities, WAL/SHM
 sidecar identities, project binding, barrier identity, status, revision, and
 fencing token. `held`, `releasing`, and `ambiguous` reject the authority write
 with stable fail-closed errors. A missing required barrier or an unreadable
 control record also rejects the write; absence is not interpreted as
-`released`.
+`released`. For an already-provisioned installation, an absent authority,
+control database, lock file, or required sidecar is corruption or loss and
+must reject every mutation. Before provisioning, absent control objects are
+the sole allowed unprovisioned state; absence of the authority or a mismatch
+in an existing authority is always an error.
+
+The absence of a WAL/SHM sidecar is accepted only at the documented
+pre-WAL/opening point, when SQLite proves that the file is not currently
+using that sidecar and provisioning records that fact. Once WAL is enabled,
+both sidecars are required for identity verification; disappearance,
+replacement, or unexpected recreation is corruption, not a fresh optional
+sidecar.
 
 ## Initialization and migration
 
@@ -64,9 +94,20 @@ but cannot start an upgrade. A reviewed provisioning command must first prove
 that no upgrade is active, no mutating reconciliation is in flight, and the
 authority passes integrity and binding checks. It then creates the control
 store, writes and verifies the schema/digest, fsyncs all objects, and commits
-the marker atomically under the same common lock. Re-running provisioning is
-idempotent only when every identity and digest matches; otherwise it fails
-closed.
+the marker atomically under the same common lock. Marker publication uses a
+private temporary marker in the same directory, exclusive creation, file
+fsync, atomic rename, and directory fsync. An absent temporary file before
+rename is unprovisioned; a leftover temporary file, invalid marker digest, or
+marker/control mismatch is incomplete or corrupt provisioning and blocks
+mutation until a reviewed reconcile removes the temporary artifact or
+completes provisioning. Reconcile may classify these states but must not
+guess or replace authority/control objects.
+
+Re-running provisioning is idempotent only when every identity and digest
+matches; otherwise it fails closed. A marker rename or control commit whose
+outcome is uncertain is not treated as success: the next process must verify
+both durable objects and either establish the exact same committed identity or
+enter safe mode.
 
 Schema migration is a planned, versioned operation under the common-to-control
 lock order. It must write a migration journal and backup, validate the new
@@ -85,7 +126,13 @@ establishes fresh authority/runtime evidence and commits a valid release. WAL
 or SHM disappearance, replacement, inode/device changes, checksum or schema
 mismatch, failed fsync, SQLite busy/IO/corruption errors, and uncertain commit
 outcomes all fail closed. They must not be converted to a successful release
-or a retry that bypasses the barrier.
+or a retry that bypasses the barrier. Immediately before the authority commit,
+the implementation must reread the barrier and perform the authority commit
+under the same ordered scope. If either the barrier reread or SQLite commit
+returns an error, times out, or has an unknown outcome, the operation is
+ambiguous: it must not report success, release the barrier, or retry a write
+without fresh evidence. Durable control state remains held or becomes
+ambiguous, and recovery is required.
 
 Recovery and rollback retain the barrier until validation is complete. No
 rollback binding may be created after terminal verification, and no new
@@ -97,9 +144,10 @@ tests demonstrate the complete contract.
 
 The marker and control records may contain only stable project identities,
 schema/digest values, revisions, fencing tokens, release identifiers, and
-sanitized status/error codes. They must not contain user names, absolute home
-paths, command arguments, prompts, credentials, environment values, raw
+sanitized status/error codes. Public project identifiers must be opaque,
+stable digests or repository-scoped IDs that cannot disclose local paths,
+usernames, hostnames, or private URLs. They must not contain user names,
+absolute home paths, command arguments, prompts, credentials, environment values, raw
 subprocess output, or private repository URLs. Public evidence may report
 hashes, schema versions, invariant names, and pass/fail classifications, but
 not the private control database contents or filesystem layout.
-
