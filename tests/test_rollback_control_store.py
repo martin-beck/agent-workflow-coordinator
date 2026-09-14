@@ -6,9 +6,13 @@ from __future__ import annotations
 
 import json
 import os
+import signal
 import sqlite3
+import subprocess
+import sys
 import tempfile
 import threading
+import time
 import unittest
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import closing, contextmanager
@@ -17,6 +21,7 @@ from typing import Any, cast
 from unittest.mock import MagicMock, patch
 
 from tools import upgrade_authority
+from tools.handoffctl import LockOwnershipError, locked
 from tools.rollback_control_store import (
     IDENTITY_FIELDS,
     AuthorityRuntimeRereader,
@@ -81,6 +86,70 @@ AUTHORITY_BINDING = {
     "state_repository": "owner/state",
     "product_repository": "owner/product",
 }
+
+
+# These subprocess fixtures cover only WAL/SHM rollback after process death and
+# clean control-plane reopen. They do not prove caller-owned admission,
+# ambiguous recovery, mutation fencing, or authority integration.
+_SUBPROCESS_SESSION_SCRIPT = r"""
+import os
+import signal
+import sqlite3
+import sys
+from pathlib import Path
+
+from tools.rollback_control_store import SQLiteBarrierSessionStore, SQLiteRollbackControlStore
+from tools.upgrade_identity import BarrierChildIdentity, BarrierSessionIdentity
+
+
+control_path = Path(sys.argv[1])
+authority_path = Path(sys.argv[2])
+project_id = sys.argv[3]
+mode = sys.argv[4]
+ready_path = Path(sys.argv[5])
+identity_record = {
+    "schema_version": 1,
+    "project_id": project_id,
+    "attempt_id": "subprocess-attempt",
+    "state_revision": 3,
+    "authority_revision_at_acquire": "authority-3",
+    "durable_barrier_id": "barrier-subprocess",
+    "fencing_token": "fence-subprocess",
+    "fencing_owner": "owner-subprocess",
+    "identity_digest": "0" * 64,
+}
+from tools.upgrade_identity import canonical_barrier_session_digest
+
+identity_record["identity_digest"] = canonical_barrier_session_digest(identity_record)
+identity = BarrierSessionIdentity.from_record(identity_record)
+control = SQLiteRollbackControlStore(control_path, project_id, authority_path)
+store = SQLiteBarrierSessionStore(control, lambda: "authority-3")
+store.create(identity)
+store.bind_child(1, BarrierChildIdentity.bind(identity, "subprocess-forward", "new"))
+
+if mode == "clean":
+    with sqlite3.connect(control_path) as connection:
+        journal_mode = str(connection.execute("PRAGMA journal_mode").fetchone()[0]).lower()
+    ready_path.write_text(journal_mode + "\n", encoding="utf-8")
+    with ready_path.open("rb") as ready:
+        os.fsync(ready.fileno())
+    raise SystemExit(0)
+
+if mode != "kill-during-transaction":
+    raise SystemExit("unknown test mode")
+
+with control.operation_lock(), control._connection() as connection:
+    connection.execute("BEGIN IMMEDIATE")
+    connection.execute(
+        "UPDATE barrier_session SET status='releasing', revision=revision+1 WHERE project_id=?",
+        (project_id,),
+    )
+    journal_mode = str(connection.execute("PRAGMA journal_mode").fetchone()[0]).lower()
+    ready_path.write_text(journal_mode + "\n", encoding="utf-8")
+    with ready_path.open("rb") as ready:
+        os.fsync(ready.fileno())
+    os.kill(os.getpid(), signal.SIGKILL)
+"""
 
 
 def authority_task() -> tuple[Path, dict[str, object], str]:
@@ -173,6 +242,104 @@ class RollbackControlStoreTests(unittest.TestCase):
         }
         record["identity_digest"] = canonical_barrier_session_digest(record)
         return BarrierSessionIdentity.from_record(record)
+
+    def _run_session_process(
+        self, control_path: Path, authority_path: Path, mode: str, ready_path: Path
+    ) -> subprocess.Popen[str]:
+        return subprocess.Popen(  # noqa: S603 - fixed interpreter and in-test script
+            [
+                sys.executable,
+                "-c",
+                _SUBPROCESS_SESSION_SCRIPT,
+                str(control_path),
+                str(authority_path),
+                PROJECT,
+                mode,
+                str(ready_path),
+            ],
+            cwd=Path(__file__).parents[1],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+
+    @staticmethod
+    def _wait_for_file(path: Path, process: subprocess.Popen[str]) -> None:
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline and not path.exists():
+            if process.poll() is not None:
+                stdout, stderr = process.communicate()
+                raise AssertionError(
+                    f"session subprocess exited early: {process.returncode}; "
+                    f"stdout={stdout!r}; stderr={stderr!r}"
+                )
+            time.sleep(0.01)
+        if not path.exists():
+            process.kill()
+            stdout, stderr = process.communicate(timeout=5)
+            raise AssertionError(
+                "session subprocess did not reach its checkpoint: "
+                f"stdout={stdout!r}; stderr={stderr!r}"
+            )
+
+    def test_v10_subprocess_reopens_wal_session_without_authority_change(self) -> None:
+        """Cover clean subprocess reopen only; no admission or fencing claim."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            control_path = root / "control.sqlite"
+            authority_path = root / "authority.sqlite"
+            authority_bytes = b"authority remains untouched\n"
+            authority_path.write_bytes(authority_bytes)
+            ready_path = root / "ready"
+            process = self._run_session_process(control_path, authority_path, "clean", ready_path)
+            stdout, stderr = process.communicate(timeout=10)
+            self.assertEqual(0, process.returncode, msg=f"stdout={stdout}; stderr={stderr}")
+            self.assertEqual("wal", ready_path.read_text(encoding="utf-8").strip())
+
+            store = SQLiteBarrierSessionStore(
+                SQLiteRollbackControlStore(control_path, PROJECT, authority_path),
+                lambda: "authority-3",
+            )
+            state = store.snapshot()
+            self.assertIsNotNone(state)
+            assert state is not None
+            self.assertEqual(("held", 2), (state.status, state.revision))
+            self.assertIsNotNone(state.forward_child)
+            self.assertEqual(authority_bytes, authority_path.read_bytes())
+
+    def test_v10_subprocess_death_rolls_back_uncommitted_wal_change(self) -> None:
+        """Cover uncommitted WAL rollback only; no ambiguous-recovery claim."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            control_path = root / "control.sqlite"
+            authority_path = root / "authority.sqlite"
+            authority_bytes = b"authority remains untouched after crash\n"
+            authority_path.write_bytes(authority_bytes)
+            ready_path = root / "ready"
+            process = self._run_session_process(
+                control_path, authority_path, "kill-during-transaction", ready_path
+            )
+            self._wait_for_file(ready_path, process)
+            self.assertEqual("wal", ready_path.read_text(encoding="utf-8").strip())
+            self.assertTrue((root / "control.sqlite-wal").exists())
+            self.assertTrue((root / "control.sqlite-shm").exists())
+            returncode = process.wait(timeout=10)
+            stdout, stderr = process.communicate()
+            self.assertEqual(
+                -signal.SIGKILL,
+                returncode,
+                msg=f"stdout={stdout}; stderr={stderr}",
+            )
+
+            store = SQLiteBarrierSessionStore(
+                SQLiteRollbackControlStore(control_path, PROJECT, authority_path),
+                lambda: "authority-3",
+            )
+            state = store.snapshot()
+            self.assertIsNotNone(state)
+            assert state is not None
+            self.assertEqual(("held", 2), (state.status, state.revision))
+            self.assertEqual(authority_bytes, authority_path.read_bytes())
 
     def test_v10_durable_session_persists_children_and_reopen(self) -> None:
         from tools.upgrade_identity import BarrierChildIdentity
@@ -269,6 +436,54 @@ class RollbackControlStoreTests(unittest.TestCase):
             invalid.create(self._session_identity())
             with self.assertRaisesRegex(ControlStoreError, "revision is invalid"):
                 invalid.recheck_held(1)
+
+    def test_v10_caller_owned_recheck_requires_guard_and_is_read_only(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            store = SQLiteBarrierSessionStore(
+                SQLiteRollbackControlStore(Path(directory) / "control.sqlite", PROJECT),
+                lambda: "authority-3",
+            )
+            identity = self._session_identity()
+            held = store.create(identity)
+            with (
+                self.assertRaisesRegex(LockOwnershipError, "guard is required"),
+                store.lock_owned_by_caller(None),
+            ):  # type: ignore[arg-type]
+                pass
+            with self.assertRaisesRegex(TypeError, "missing"):
+                store.recheck_held_locked(identity, held.revision)  # type: ignore[call-arg]
+            with locked() as guard, store.lock_owned_by_caller(guard):
+                reread = store.recheck_held_locked(guard, identity, held.revision)
+                self.assertEqual(held, reread)
+                with (
+                    self.assertRaisesRegex(ControlStoreError, "non-reentrant"),
+                    store.lock_owned_by_caller(guard),
+                ):
+                    pass
+            self.assertEqual(held, store.snapshot())
+
+    def test_v10_caller_owned_recheck_rejects_stale_identity_and_authority(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            authority = ["authority-3"]
+            store = SQLiteBarrierSessionStore(
+                SQLiteRollbackControlStore(Path(directory) / "control.sqlite", PROJECT),
+                lambda: authority[0],
+            )
+            identity = self._session_identity()
+            held = store.create(identity)
+            changed = dict(identity.as_record())
+            changed["attempt_id"] = "other-attempt"
+            from tools.upgrade_identity import canonical_barrier_session_digest
+
+            changed["identity_digest"] = canonical_barrier_session_digest(changed)
+            with locked() as guard, store.lock_owned_by_caller(guard):
+                with self.assertRaisesRegex(ControlStoreError, "identity changed"):
+                    store.recheck_held_locked(
+                        guard, BarrierSessionIdentity.from_record(changed), held.revision
+                    )
+                authority[0] = "authority-new"
+                with self.assertRaisesRegex(ControlStoreError, "authority revision changed"):
+                    store.recheck_held_locked(guard, identity, held.revision)
 
     def test_v10_commit_failure_is_durably_ambiguous(self) -> None:
         class FlakyConnection:

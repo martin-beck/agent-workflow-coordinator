@@ -15,6 +15,7 @@ import subprocess
 import sys
 import tempfile
 import textwrap
+import threading
 import time
 import uuid
 from collections import Counter
@@ -58,6 +59,7 @@ DATABASE = RUNTIME / "coordinator.sqlite3"
 BACKENDS = ("sqlite", "git")
 LOCK_TIMEOUT_SECONDS = 10.0
 LOCK_POLL_SECONDS = 0.05
+_GUARD_CREATION_TOKEN = object()
 SUBPROCESS_TIMEOUT_SECONDS = 30.0
 COMMAND_TIMEOUT_SECONDS = 1800.0
 OBSERVATION_ATTEMPTS = 3
@@ -294,6 +296,73 @@ class LockTimeoutError(RuntimeError):
     """The coordinator lock could not be acquired within its bounded deadline."""
 
 
+class LockOwnershipError(RuntimeError):
+    """A coordinator lock capability is missing, stale, or used incorrectly."""
+
+
+class CoordinatorLockGuard:
+    """Capability proving that this process and thread hold one lock inode."""
+
+    __slots__ = (
+        "_active",
+        "_exclusive",
+        "_fd",
+        "_identity",
+        "_owner_pid",
+        "_owner_thread",
+        "_path",
+        "_path_identity",
+    )
+
+    def __init__(self, path: Path, fd: int, *, exclusive: bool, _creation_token: object) -> None:
+        if _creation_token is not _GUARD_CREATION_TOKEN:
+            raise TypeError("CoordinatorLockGuard construction is private")
+        status = path.stat()
+        self._fd = fd
+        self._identity = (status.st_dev, status.st_ino)
+        self._path_identity = (status.st_dev, status.st_ino)
+        self._exclusive = exclusive
+        self._owner_pid = os.getpid()
+        self._owner_thread = threading.get_ident()
+        self._path = path.resolve()
+        self._active = True
+
+    @classmethod
+    def _create(cls, path: Path, fd: int, *, exclusive: bool) -> "CoordinatorLockGuard":
+        return cls(path, fd, exclusive=exclusive, _creation_token=_GUARD_CREATION_TOKEN)
+
+    @property
+    def path(self) -> Path:
+        return self._path
+
+    def assert_owned(self) -> None:
+        """Fail closed unless the original owner still holds the same inode."""
+        if not self._active:
+            raise LockOwnershipError("coordinator lock guard is inactive")
+        if not self._exclusive:
+            raise LockOwnershipError("coordinator lock guard is not exclusive")
+        if self._owner_pid != os.getpid() or self._owner_thread != threading.get_ident():
+            raise LockOwnershipError("coordinator lock guard has a different owner")
+        try:
+            status = os.fstat(self._fd)
+        except OSError as error:
+            raise LockOwnershipError("coordinator lock guard descriptor is unavailable") from error
+        if (status.st_dev, status.st_ino) != self._identity:
+            raise LockOwnershipError("coordinator lock guard descriptor identity changed")
+        current_path = coordinator_lock_path().resolve()
+        if self._path != current_path:
+            raise LockOwnershipError("coordinator lock guard path changed")
+        try:
+            path_status = current_path.stat()
+        except OSError as error:
+            raise LockOwnershipError("coordinator lock guard path is unavailable") from error
+        if (path_status.st_dev, path_status.st_ino) != self._path_identity:
+            raise LockOwnershipError("coordinator lock guard path identity changed")
+
+    def _invalidate(self) -> None:
+        self._active = False
+
+
 class SubprocessTimeoutError(RuntimeError):
     """A Git/GitHub or coordinator command exceeded its bounded deadline."""
 
@@ -419,7 +488,9 @@ def coordinator_lock_path() -> Path:
 
 
 @contextlib.contextmanager
-def locked(*, exclusive: bool = True, timeout: float = LOCK_TIMEOUT_SECONDS) -> Iterator[None]:
+def locked(
+    *, exclusive: bool = True, timeout: float = LOCK_TIMEOUT_SECONDS
+) -> Iterator[CoordinatorLockGuard]:
     lock_path = coordinator_lock_path()
     lock_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
@@ -438,8 +509,11 @@ def locked(*, exclusive: bool = True, timeout: float = LOCK_TIMEOUT_SECONDS) -> 
                         f"LOCK_TIMEOUT after {timeout:.1f}s acquiring {mode} coordinator lock"
                     ) from error
                 time.sleep(min(LOCK_POLL_SECONDS, remaining))
-        yield
+        guard = CoordinatorLockGuard._create(lock_path, fd, exclusive=exclusive)
+        yield guard
     finally:
+        if "guard" in locals():
+            guard._invalidate()
         fcntl.flock(fd, fcntl.LOCK_UN)
         os.close(fd)
 
