@@ -85,6 +85,18 @@ class RollbackControlStoreTests(unittest.TestCase):
             with self.assertRaises(ControlStoreError):
                 store.snapshot("op-1")
 
+    def test_symlink_and_authority_alias_are_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            authority = root / "authority.sqlite"
+            authority.touch()
+            link = root / "control-link.sqlite"
+            link.symlink_to(authority)
+            with self.assertRaises(ControlStoreError):
+                SQLiteRollbackControlStore(link, PROJECT)
+            with self.assertRaises(ControlStoreError):
+                SQLiteRollbackControlStore(authority, PROJECT, authority)
+
     def test_with_barrier_holds_coordinator_lock_through_authority_callback(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             store = SQLiteRollbackControlStore(Path(directory) / "control.sqlite", PROJECT)
@@ -97,6 +109,17 @@ class RollbackControlStoreTests(unittest.TestCase):
             result = store.with_barrier(0, RECORD, authority)
             self.assertEqual(["held"], seen)
             self.assertEqual("releasing", result["status"])
+
+    def test_with_barrier_failure_leaves_durable_held_barrier(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            store = SQLiteRollbackControlStore(Path(directory) / "control.sqlite", PROJECT)
+
+            def fail(_record: Mapping[str, object]) -> Mapping[str, object]:
+                raise RuntimeError("authority failed")
+
+            with self.assertRaises(RuntimeError):
+                store.with_barrier(0, RECORD, fail)
+            self.assertEqual("held", store.snapshot("op-1")["status"])
 
     def test_cas_conflict_and_binding_mismatch_fail_closed(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

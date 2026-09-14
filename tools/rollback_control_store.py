@@ -138,7 +138,8 @@ def _validate(record: Mapping[str, object]) -> dict[str, object]:  # noqa: C901
 class SQLiteRollbackControlStore:
     """WAL-backed control store with coordinator-common locking and CAS."""
 
-    def __init__(self, path: Path, project_id: str) -> None:
+    def __init__(self, path: Path, project_id: str, authority_path: Path | None = None) -> None:
+        self._check_paths(path, authority_path)
         self.path = path
         self.project_id = project_id
         try:
@@ -147,6 +148,22 @@ class SQLiteRollbackControlStore:
             raise ControlStoreError("control project_id must be UUIDv4") from error
         if project.version != 4:
             raise ControlStoreError("control project_id must be UUIDv4")
+
+    @staticmethod
+    def _check_paths(path: Path, authority_path: Path | None) -> None:
+        if path.exists() and path.is_symlink():
+            raise ControlStoreError("control store path must not be a symlink")
+        if any(parent.exists() and parent.is_symlink() for parent in path.parents):
+            raise ControlStoreError("control store parent must not be a symlink")
+        if authority_path is None:
+            return
+        if authority_path.exists() and authority_path.is_symlink():
+            raise ControlStoreError("authority path must not be a symlink")
+        try:
+            if path.exists() and authority_path.exists() and path.samefile(authority_path):
+                raise ControlStoreError("control store aliases authority")
+        except OSError as error:
+            raise ControlStoreError("control and authority identity is unavailable") from error
 
     def _connect(self) -> sqlite3.Connection:
         self.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
