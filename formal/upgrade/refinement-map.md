@@ -30,6 +30,13 @@ The final product snapshot also contains the fail-closed `upgrade check` and
 reject before mutation; no opcode is dispatched by this snapshot. Therefore
 the model remains bounded design evidence, not execution or refinement proof.
 
+The proposed v10 redesign at the exact design snapshot in `evidence.json`
+introduces a target-neutral barrier session, distinct forward/rollback child
+operations, explicit acquire/recheck/reopen transitions, SQLite write fencing,
+and a selector-aware launcher. None of those v10 transitions are claimed by
+the current model or implementation snapshot; a new model and exact-head
+refinement run is required after the executable adapter lands.
+
 The model abstracts these mechanisms. A passing TLC run must not be reported
 as proof that any row is implemented until the corresponding executable
 evidence is independently recorded at the exact product revision.

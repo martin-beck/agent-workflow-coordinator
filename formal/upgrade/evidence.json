@@ -16,6 +16,14 @@
       "tests/test_upgrade_contract.py": "a7e99dc8b7af5a117245999bd09911af00f25f22e46aba51007939b07ace0570"
     }
   },
+  "design_snapshot": {
+    "revision": "bbbef2053bad329e85a8d257493cd642e20e06d2",
+    "files": {
+      "docs/UPGRADE_PROTOCOL.md": "8b3a1e5600165919e9cf4a3943237abfec064c6cc4286ad727b463cf2ddbfc62",
+      "docs/UPGRADE_EXECUTION_REDESIGN.md": "610e937d47cb5b793f684626c139ca1c8b460bedcd3b8f1f4dbdf5cde0c67954"
+    },
+    "status": "design-only-v10; no executable refinement"
+  },
   "verifier": {
     "name": "TLC",
     "version": "2.19 (08 August 2024, rev 5a47802)",
