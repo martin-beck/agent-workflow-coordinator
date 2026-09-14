@@ -64,6 +64,22 @@ class ScopedBackendAdapter:
         identity.assert_session_binding(session_state, lease)
         return cls(backend, scope)
 
+    @classmethod
+    def from_rechecked_session(
+        cls,
+        backend: BackendAdapter,
+        scope: CallerTraceScope,
+        identity: LockDomainIdentity,
+        current_identity: object,
+        session_state: BarrierSessionState,
+        lease: AdmissionLease,
+    ) -> ScopedBackendAdapter:
+        """Recheck the live scope immediately before creating the seam object."""
+        with scope.hold():
+            return cls.from_validated_session(
+                backend, scope, identity, current_identity, session_state, lease
+            )
+
     def snapshot(self, phase: str, context: Mapping[str, object]) -> dict[str, Any]:
         """Read backend evidence only while the scope is held."""
         self._scope.assert_context(context)

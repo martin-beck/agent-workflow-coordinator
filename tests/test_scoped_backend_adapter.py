@@ -164,6 +164,19 @@ class ScopedBackendAdapterTests(unittest.TestCase):
                 cast(Any, object()),
             )
 
+    def test_rechecked_entry_holds_scope_before_identity_validation(self) -> None:
+        scope = Scope()
+        with self.assertRaisesRegex(TypeError, "identity"):
+            ScopedBackendAdapter.from_rechecked_session(
+                Backend(),
+                scope,
+                cast(LockDomainIdentity, object()),
+                object(),
+                cast(BarrierSessionState, object()),
+                cast(Any, object()),
+            )
+        self.assertEqual(["held", "released"], scope.events)
+
 
 if __name__ == "__main__":
     unittest.main()
