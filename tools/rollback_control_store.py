@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Protocol, cast
 
 from tools.handoffctl import locked
+from tools.upgrade_authority import inspect_sqlite_release_authority
 from tools.upgrade_identity import (
     ENVELOPE_FIELDS,
     UpgradeIdentityError,
@@ -102,12 +103,78 @@ class SQLiteAuthorityRuntimeState:
     backend_roundtrip: str
 
 
-class SQLiteAuthorityRuntimeRereader(Protocol):
+class AuthorityRuntimeRereader(Protocol):
     """Trusted boundary that rereads authority and runtime instead of echoing claims."""
 
     def reread_rollback(
         self, context: Mapping[str, object], result: Mapping[str, object]
     ) -> SQLiteAuthorityRuntimeState: ...
+
+
+class SQLiteAuthorityRuntimeRereader:
+    """Release-specific rereader backed by the restored authority and selectors."""
+
+    def __init__(
+        self,
+        authority_path: Path,
+        project_binding_path: Path,
+        backend_selector_path: Path,
+        runtime_selector_path: Path,
+        *,
+        active_release: str,
+        previous_release: str,
+    ) -> None:
+        if not active_release or not previous_release:
+            raise ControlStoreError("release-specific runtime selector identity is required")
+        self._authority_path = authority_path
+        self._project_binding_path = project_binding_path
+        self._backend_selector_path = backend_selector_path
+        self._runtime_selector_path = runtime_selector_path
+        self._active_release = active_release
+        self._previous_release = previous_release
+
+    def reread_rollback(
+        self, context: Mapping[str, object], result: Mapping[str, object]
+    ) -> SQLiteAuthorityRuntimeState:
+        project_id = context.get("project_id")
+        fencing_token = context.get("fencing_token")
+        if (
+            context.get("backend") != "sqlite"
+            or context.get("target") != "rollback"
+            or not isinstance(project_id, str)
+            or not isinstance(fencing_token, str)
+            or set(result) != _RELEASE_EVIDENCE_FIELDS
+            or any(
+                result.get(field) is not True
+                for field in (
+                    "restored_verified",
+                    "runtime_validated",
+                    "backend_roundtrip_valid",
+                )
+            )
+            or result.get("backend") != "sqlite"
+            or result.get("fencing_token") != fencing_token
+        ):
+            raise ControlStoreError("rollback reread inputs are not release-specific")
+        snapshot = inspect_sqlite_release_authority(
+            self._authority_path,
+            self._project_binding_path,
+            self._backend_selector_path,
+            self._runtime_selector_path,
+            project_id,
+            self._active_release,
+            self._previous_release,
+        )
+        return SQLiteAuthorityRuntimeState(
+            backend="sqlite",
+            project_id=snapshot.project_id,
+            authority_revision=snapshot.authority_revision,
+            fencing_token=fencing_token,
+            target="rollback",
+            integrity_check=snapshot.integrity_check,
+            foreign_key_violations=snapshot.foreign_key_violations,
+            backend_roundtrip="sqlite",
+        )
 
 
 class SQLiteControlStoreAdapter:
@@ -117,7 +184,7 @@ class SQLiteControlStoreAdapter:
         self,
         delegate: UpgradeAdapter,
         store: SQLiteRollbackControlStore,
-        authority_runtime: SQLiteAuthorityRuntimeRereader | None = None,
+        authority_runtime: AuthorityRuntimeRereader | None = None,
     ) -> None:
         if authority_runtime is None:
             raise ControlStoreError("concrete SQLite authority/runtime rereader is required")
@@ -206,7 +273,7 @@ def bind_control_store(
     backend: str,
     delegate: UpgradeAdapter,
     store: SQLiteRollbackControlStore | None,
-    authority_runtime: SQLiteAuthorityRuntimeRereader | None = None,
+    authority_runtime: AuthorityRuntimeRereader | None = None,
 ) -> SQLiteControlStoreAdapter:
     """Construct only a proven SQLite adapter; Git is explicitly fail-closed."""
     if backend != "sqlite" or store is None or store.authority_path is None:

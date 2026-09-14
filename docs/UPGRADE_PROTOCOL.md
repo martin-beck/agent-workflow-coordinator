@@ -87,10 +87,22 @@ or sidecar checks.
 The upgrade delegate cannot authorize rollback release. SQLite binding also
 requires a separate authority/runtime rereader, which returns typed facts from
 a fresh authority, selector, integrity, foreign-key, fencing, and backend
-round-trip inspection. The control adapter validates those facts against the
-operation envelope and constructs release evidence itself. Until a production
-rereader can obtain the exact release-specific authority revision and runtime
-identity, binding fails closed. Git control binding remains unavailable.
+round-trip inspection. The production SQLite rereader requires explicit paths
+for the authority, immutable project binding, backend selector, and runtime
+selector, plus the expected active and previous release identities. It derives
+`authority_revision` as canonical SHA-256 over those selector identities, the
+SQLite schema, metadata, task records and projections, dependency graph,
+events, command evidence, migrations, checkpoints, and sequence state. The
+same derivation must populate the operation envelope before the barrier is
+acquired; after restore, any logical authority or release-selector difference
+fails revalidation. File and WAL/SHM identities are retained and rechecked
+across the read transaction.
+
+The control adapter validates the reread facts against the operation envelope
+and constructs release evidence itself. Missing revision inputs, unknown
+SQLite schemas, invalid project/backend binding, malformed task projections,
+or a release-selector mismatch fail closed. Git control binding remains
+unavailable.
 
 The schema and contract tests reject duplicate or non-contiguous phase orders,
 unknown or forward dependencies, missing phase operations, unbounded time or

@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import sqlite3
 import tempfile
@@ -15,14 +16,23 @@ from pathlib import Path
 from typing import cast
 from unittest.mock import MagicMock, patch
 
+from tools import upgrade_authority
 from tools.rollback_control_store import (
     IDENTITY_FIELDS,
+    AuthorityRuntimeRereader,
     ControlStoreError,
     SQLiteAuthorityRuntimeRereader,
     SQLiteAuthorityRuntimeState,
     SQLiteControlStoreAdapter,
     SQLiteRollbackControlStore,
     bind_control_store,
+)
+from tools.sqlite_storage import SQLiteBackend, create_database
+from tools.upgrade_authority import (
+    AuthorityError,
+    commit_runtime_selector,
+    inspect_sqlite_release_authority,
+    read_runtime_selector,
 )
 from tools.upgrade_identity import canonical_barrier_digest, canonical_envelope_digest
 
@@ -56,6 +66,56 @@ RELEASE_EVIDENCE = {
     "backend": "sqlite",
     "fencing_token": "fence-1",
 }
+
+AUTHORITY_BINDING = {
+    "schema_version": 1,
+    "project_id": PROJECT,
+    "state_repository": "owner/state",
+    "product_repository": "owner/product",
+}
+
+
+def authority_task() -> tuple[Path, dict[str, object], str]:
+    meta: dict[str, object] = {
+        "schema_version": 1,
+        "id": "AR-0001",
+        "title": "Release authority test",
+        "status": "open",
+        "priority": "P1",
+        "summary": "Ready.",
+        "next_action": "Test.",
+        "task_revision": 1,
+        "updated_at": "2026-09-14T00:00:00+00:00",
+        "owner": "",
+        "claim_expires": "",
+        "worktree_key": "",
+        "branch": "",
+        "checkpoint_commit": "",
+        "plan": "",
+        "depends_on": [],
+    }
+    return Path("AR-0001-release.md"), meta, "# Release authority test\n"
+
+
+def create_release_authority(root: Path) -> tuple[Path, Path, Path, Path]:
+    authority = root / ".runtime" / "coordinator.sqlite3"
+    create_database(
+        authority,
+        AUTHORITY_BINDING,
+        [authority_task()],
+        imported_at="2026-09-14T00:00:00+00:00",
+        source_backend="git",
+        source_checkpoint="a" * 40,
+    )
+    project_binding = root / "coordinator.binding.json"
+    project_binding.write_text(json.dumps(AUTHORITY_BINDING) + "\n")
+    backend_selector = root / "coordinator.backend.json"
+    backend_selector.write_text(
+        json.dumps({"schema_version": 1, "project_id": PROJECT, "backend": "sqlite"}) + "\n"
+    )
+    runtime_selector = root / ".runtime" / "runtime-selector.json"
+    commit_runtime_selector(runtime_selector, "release-old", "release-older")
+    return authority, project_binding, backend_selector, runtime_selector
 
 
 class StaticAuthorityRuntimeRereader:
@@ -118,6 +178,361 @@ class RollbackControlStoreTests(unittest.TestCase):
             )
             with self.assertRaises(ControlStoreError):
                 bind_control_store("git", Delegate(), None, StaticAuthorityRuntimeRereader())
+
+    def test_concrete_release_rereader_derives_and_rechecks_actual_authority(self) -> None:
+        class Delegate:
+            def snapshot(self, _phase: str, _context: Mapping[str, object]) -> Mapping[str, object]:
+                return {}
+
+            def execute(self, _phase: str, _context: Mapping[str, object]) -> Mapping[str, object]:
+                return {}
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            authority, project_binding, backend_selector, runtime_selector = (
+                create_release_authority(root)
+            )
+            first = inspect_sqlite_release_authority(
+                authority,
+                project_binding,
+                backend_selector,
+                runtime_selector,
+                PROJECT,
+                "release-old",
+                "release-older",
+            )
+            second = inspect_sqlite_release_authority(
+                authority,
+                project_binding,
+                backend_selector,
+                runtime_selector,
+                PROJECT,
+                "release-old",
+                "release-older",
+            )
+            self.assertEqual(first.authority_revision, second.authority_revision)
+            self.assertEqual("ok", first.integrity_check)
+            self.assertEqual(0, first.foreign_key_violations)
+
+            record = dict(RECORD)
+            record["authority_revision"] = first.authority_revision
+            record["barrier_identity_digest"] = canonical_barrier_digest(record)
+            record["envelope_digest"] = canonical_envelope_digest(record)
+            control_root = root / "control"
+            control_root.mkdir(mode=0o700)
+            store = SQLiteRollbackControlStore(control_root / "barrier.sqlite", PROJECT, authority)
+            store.cas(0, record)
+            rereader = SQLiteAuthorityRuntimeRereader(
+                authority,
+                project_binding,
+                backend_selector,
+                runtime_selector,
+                active_release="release-old",
+                previous_release="release-older",
+            )
+            with self.assertRaisesRegex(ControlStoreError, "release-specific"):
+                SQLiteAuthorityRuntimeRereader(
+                    authority,
+                    project_binding,
+                    backend_selector,
+                    runtime_selector,
+                    active_release="",
+                    previous_release="release-older",
+                )
+            adapter = SQLiteControlStoreAdapter(Delegate(), store, rereader)
+            context = {field: record[field] for field in IDENTITY_FIELDS}
+            with adapter.operation_lock():
+                adapter.begin_release_rollback_context(context)
+                self.assertEqual(
+                    RELEASE_EVIDENCE, adapter.revalidate_rollback(context, RELEASE_EVIDENCE)
+                )
+                self.assertEqual(
+                    "released", adapter.complete_release_rollback_context(context)["status"]
+                )
+
+            backend = SQLiteBackend(authority, AUTHORITY_BINDING, root / "tasks")
+            backend.append_command_result(
+                "AR-0001",
+                "worker",
+                "b" * 64,
+                0,
+                "completed",
+                "2026-09-14T00:01:00+00:00",
+            )
+            changed = inspect_sqlite_release_authority(
+                authority,
+                project_binding,
+                backend_selector,
+                runtime_selector,
+                PROJECT,
+                "release-old",
+                "release-older",
+            )
+            self.assertNotEqual(first.authority_revision, changed.authority_revision)
+            stale_store = SQLiteRollbackControlStore(
+                control_root / "stale.sqlite", PROJECT, authority
+            )
+            stale_store.cas(0, record)
+            stale_adapter = SQLiteControlStoreAdapter(Delegate(), stale_store, rereader)
+            with stale_adapter.operation_lock():
+                stale_adapter.begin_release_rollback_context(context)
+                with self.assertRaisesRegex(ControlStoreError, "reread is invalid"):
+                    stale_adapter.revalidate_rollback(context, RELEASE_EVIDENCE)
+
+    def test_concrete_release_rereader_rejects_selector_and_projection_tamper(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            authority, project_binding, backend_selector, runtime_selector = (
+                create_release_authority(root)
+            )
+            for path, value, message in (
+                (
+                    backend_selector,
+                    {"schema_version": 1, "project_id": PROJECT, "backend": "git"},
+                    "backend selector identity",
+                ),
+                (
+                    runtime_selector,
+                    {
+                        "schema_version": 1,
+                        "active_release": "release-new",
+                        "previous_release": "release-old",
+                    },
+                    "runtime selector release identity",
+                ),
+            ):
+                original = path.read_text()
+                path.write_text(json.dumps(value) + "\n")
+                with self.subTest(path=path), self.assertRaisesRegex(AuthorityError, message):
+                    inspect_sqlite_release_authority(
+                        authority,
+                        project_binding,
+                        backend_selector,
+                        runtime_selector,
+                        PROJECT,
+                        "release-old",
+                        "release-older",
+                    )
+                path.write_text(original)
+
+            connection = sqlite3.connect(authority)
+            connection.execute("PRAGMA ignore_check_constraints=ON")
+            connection.execute("UPDATE tasks SET revision=2 WHERE id='AR-0001'")
+            connection.commit()
+            connection.close()
+            with self.assertRaisesRegex(AuthorityError, "task projections disagree"):
+                inspect_sqlite_release_authority(
+                    authority,
+                    project_binding,
+                    backend_selector,
+                    runtime_selector,
+                    PROJECT,
+                    "release-old",
+                    "release-older",
+                )
+
+    def test_concrete_release_rereader_rejects_selector_alias(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            authority, project_binding, backend_selector, runtime_selector = (
+                create_release_authority(root)
+            )
+            selector_target = root / "selector-target.json"
+            selector_target.write_text(runtime_selector.read_text())
+            runtime_selector.unlink()
+            runtime_selector.symlink_to(selector_target)
+            with self.assertRaises(AuthorityError):
+                inspect_sqlite_release_authority(
+                    authority,
+                    project_binding,
+                    backend_selector,
+                    runtime_selector,
+                    PROJECT,
+                    "release-old",
+                    "release-older",
+                )
+
+    def test_release_authority_refuses_missing_nonregular_and_oversized_inputs(self) -> None:
+        with self.assertRaisesRegex(AuthorityError, "canonical and absolute"):
+            read_runtime_selector(Path("relative-selector.json"))
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with self.assertRaisesRegex(AuthorityError, "parent descriptor"):
+                read_runtime_selector(root / "missing" / "selector.json")
+
+            authority, project_binding, backend_selector, runtime_selector = (
+                create_release_authority(root)
+            )
+            project_binding.write_bytes(b"x" * (64 * 1024 + 1))
+            with self.assertRaisesRegex(AuthorityError, "project binding is too large"):
+                inspect_sqlite_release_authority(
+                    authority,
+                    project_binding,
+                    backend_selector,
+                    runtime_selector,
+                    PROJECT,
+                    "release-old",
+                    "release-older",
+                )
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            authority, project_binding, backend_selector, runtime_selector = (
+                create_release_authority(root)
+            )
+            target = root / "binding-target"
+            target.write_text(project_binding.read_text())
+            project_binding.unlink()
+            os.link(target, project_binding)
+            with self.assertRaisesRegex(AuthorityError, "private regular file"):
+                inspect_sqlite_release_authority(
+                    authority,
+                    project_binding,
+                    backend_selector,
+                    runtime_selector,
+                    PROJECT,
+                    "release-old",
+                    "release-older",
+                )
+
+    def test_release_authority_refuses_binding_schema_and_database_corruption(self) -> None:
+        corruptions: tuple[Callable[[Path, Path, Path, Path], object], ...] = (
+            lambda _authority, binding, _backend, _runtime: binding.write_text("[]\n"),
+            lambda _authority, binding, _backend, _runtime: binding.write_text("not-json\n"),
+            lambda _authority, binding, _backend, _runtime: binding.write_text(
+                json.dumps({**AUTHORITY_BINDING, "project_id": "foreign"}) + "\n"
+            ),
+            lambda _authority, _binding, _backend, runtime: runtime.write_text(
+                json.dumps(
+                    {"schema_version": 2, "active_release": "old", "previous_release": "older"}
+                )
+                + "\n"
+            ),
+            lambda authority, _binding, _backend, _runtime: authority.write_bytes(b"not-sqlite"),
+        )
+        for index, corrupt in enumerate(corruptions):
+            with self.subTest(index=index), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                paths = create_release_authority(root)
+                corrupt(*paths)
+                with self.assertRaises(AuthorityError):
+                    inspect_sqlite_release_authority(
+                        paths[0],
+                        paths[1],
+                        paths[2],
+                        paths[3],
+                        PROJECT,
+                        "release-old",
+                        "release-older",
+                    )
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            authority, project_binding, backend_selector, runtime_selector = (
+                create_release_authority(root)
+            )
+            connection = sqlite3.connect(authority)
+            connection.execute("CREATE TABLE unexpected(value TEXT)")
+            connection.commit()
+            connection.close()
+            with self.assertRaisesRegex(AuthorityError, "authority schema"):
+                inspect_sqlite_release_authority(
+                    authority,
+                    project_binding,
+                    backend_selector,
+                    runtime_selector,
+                    PROJECT,
+                    "release-old",
+                    "release-older",
+                )
+
+    def test_release_authority_detects_authority_selector_and_sidecar_swaps(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            authority, project_binding, backend_selector, runtime_selector = (
+                create_release_authority(root)
+            )
+            original_rows = upgrade_authority._authority_rows
+
+            def swap_selector(connection: sqlite3.Connection) -> dict[str, object]:
+                rows = original_rows(connection)
+                commit_runtime_selector(runtime_selector, "release-new", "release-old")
+                return rows
+
+            with (
+                patch.object(upgrade_authority, "_authority_rows", side_effect=swap_selector),
+                self.assertRaisesRegex(AuthorityError, "selector identity changed"),
+            ):
+                inspect_sqlite_release_authority(
+                    authority,
+                    project_binding,
+                    backend_selector,
+                    runtime_selector,
+                    PROJECT,
+                    "release-old",
+                    "release-older",
+                )
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            authority, project_binding, backend_selector, runtime_selector = (
+                create_release_authority(root)
+            )
+            original_sidecars = upgrade_authority._sidecar_identities
+            calls = 0
+
+            def swap_sidecar(parent: int, name: str) -> dict[str, tuple[int, int] | None]:
+                nonlocal calls
+                identities = original_sidecars(parent, name)
+                calls += 1
+                if calls == 2:
+                    wal = Path(f"{authority}-wal")
+                    wal.rename(Path(f"{authority}-previous-wal"))
+                    wal.touch()
+                return identities
+
+            with (
+                patch.object(upgrade_authority, "_sidecar_identities", side_effect=swap_sidecar),
+                self.assertRaisesRegex(AuthorityError, "sidecar identity changed"),
+            ):
+                inspect_sqlite_release_authority(
+                    authority,
+                    project_binding,
+                    backend_selector,
+                    runtime_selector,
+                    PROJECT,
+                    "release-old",
+                    "release-older",
+                )
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            authority, project_binding, backend_selector, runtime_selector = (
+                create_release_authority(root)
+            )
+            replacement = root / ".runtime" / "replacement.sqlite3"
+            replacement.write_bytes(authority.read_bytes())
+            original_rows = upgrade_authority._authority_rows
+
+            def swap_after_read(connection: sqlite3.Connection) -> dict[str, object]:
+                rows = original_rows(connection)
+                authority.rename(root / ".runtime" / "previous.sqlite3")
+                replacement.rename(authority)
+                return rows
+
+            with (
+                patch.object(upgrade_authority, "_authority_rows", side_effect=swap_after_read),
+                self.assertRaisesRegex(AuthorityError, "authority file identity changed"),
+            ):
+                inspect_sqlite_release_authority(
+                    authority,
+                    project_binding,
+                    backend_selector,
+                    runtime_selector,
+                    PROJECT,
+                    "release-old",
+                    "release-older",
+                )
 
     def test_adapter_release_api_fails_closed_without_scope_and_authority_evidence(self) -> None:
         class Delegate:
@@ -184,7 +599,7 @@ class RollbackControlStoreTests(unittest.TestCase):
                 {"foreign_key_violations": False},
                 {"backend_roundtrip": "git"},
             )
-            rereaders: tuple[SQLiteAuthorityRuntimeRereader, ...] = (
+            rereaders: tuple[AuthorityRuntimeRereader, ...] = (
                 *(StaticAuthorityRuntimeRereader(**changes) for changes in invalid_states),
                 InvalidRereader(),
                 RaisingRereader(),
