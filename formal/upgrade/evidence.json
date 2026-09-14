@@ -4,13 +4,16 @@
   "model_sha256": "bf31b544b87038cf2d9a50dc389caa34b8f3a2d9fe6d966908b4ecfc4b76fb3e",
   "config_sha256": "920eef41219ab0c9eba7b11ed334618fd97a89900a6942d1e0087c950861462f",
   "implementation_snapshot": {
-    "revision": "7934a6051503bc0be31119f8bb37cf67710c8ea3",
+    "revision": "685bad763d89ba7a6f7f536cde1eb9198aafef7b",
     "files": {
-      "tools/rollback_control_store.py": "2c73e5bb1f7f0f860a7021d6144733e90d7714942ec9ae6432dc6cb74ffca4f1",
-      "tools/upgrade_authority.py": "aabca871e7bc46d516a6a563d771f881a6aa2e1775289504f498f6cc4cb9cf12",
-      "tools/upgrade_engine.py": "86cf445ce072e01ead36bef84f7d82b5cadafde53bc9a589b36e4a6efd7873ae",
-      "tests/test_rollback_control_store.py": "b80ff39fe3118015317bad43d1a0e4c84199e5a1fc76a0d32d8a885142bf64b0",
-      "tests/test_upgrade_engine.py": "d1ed4d1feec8aa037def024a1b5661c7634282ab2ad4b1379e170517a8e3c1ae"
+      "schema/upgrade-contract.schema.json": "6ef2362107a0c3ff895e6dc96e35899e19b367bebd549b6acee42a680d7a442b",
+      "tools/generate_upgrade_contract.py": "b3db939912bed549eaba17a2e064e776ff9119b82287218016100e25e5ad9ba4",
+      "tools/validate_upgrade_contract.py": "6c264c4775e4ee1a778181d7e127d9f256c56abd4bfebb02c624e13c289dbc4a",
+      "tools/upgrade_contract_runtime.py": "caeb45260b790e7fdf8118ce370558bd26b04035407679df8e9845775e197119",
+      "tools/upgrade_commands.py": "5b6360c39fa10979a77a0c6180968598593f56b9ea0c59de60b59c8017e37071",
+      "tools/handoffctl.py": "dcdfa4be613ce5e059329644b0bf1874a499896e30a8b2b6f79b6e5b68611e3e",
+      "tests/test_upgrade_commands.py": "4eaa65ac1730c9149156ba76e345dcb1f8e2c44a51042e27f2d4a4b4e7634f32",
+      "tests/test_upgrade_contract.py": "a7e99dc8b7af5a117245999bd09911af00f25f22e46aba51007939b07ace0570"
     }
   },
   "verifier": {

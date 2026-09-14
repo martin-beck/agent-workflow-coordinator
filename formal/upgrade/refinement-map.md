@@ -25,6 +25,11 @@ transition, and Git remains fail-closed. The model's fence increment is an
 abstract admission token only; it is not evidence of implementation CAS or
 stale-owner rejection.
 
+The final product snapshot also contains the fail-closed `upgrade check` and
+`upgrade plan` commands. Their `apply` and `rollback` paths intentionally
+reject before mutation; no opcode is dispatched by this snapshot. Therefore
+the model remains bounded design evidence, not execution or refinement proof.
+
 The model abstracts these mechanisms. A passing TLC run must not be reported
 as proof that any row is implemented until the corresponding executable
 evidence is independently recorded at the exact product revision.
