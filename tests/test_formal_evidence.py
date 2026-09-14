@@ -5,11 +5,15 @@
 
 from __future__ import annotations
 
+import io
 import json
 import re
+import runpy
+import sys
 import unittest
 from pathlib import Path
 from typing import Any
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 FORMAL_ROOT = ROOT / "formal" / "handoffctl"
@@ -73,13 +77,108 @@ class FormalEvidenceTests(unittest.TestCase):
             self.assertEqual(len(values), len(set(values)))
 
     def test_evidence_bounds_and_runner_match_tracked_models(self) -> None:
-        configs = sorted(FORMAL_ROOT.glob("*.cfg"))
-        models = {config.stem for config in configs}
+        tier_manifest = json.loads((ROOT / "formal" / "tier-evidence.json").read_text())
+        full_models = tier_manifest["profiles"]["full-exhaustive"]["models"]
+        configs = [FORMAL_ROOT / f"{model}.cfg" for model in full_models]
+        models = {config.stem for config in FORMAL_ROOT.glob("*.cfg")}
         runner = (FORMAL_ROOT / "verify.sh").read_text(encoding="utf-8")
-        invoked = set(re.findall(r"^run_model\s+(\w+)\s*$", runner, re.MULTILINE))
+        invoked = set(re.findall(r"^\s*run_model\s+(\w+)(?:\s+\w+)?\s*$", runner, re.MULTILINE))
 
         self.assertEqual(models, invoked)
-        self.assertEqual(configured_bounds(configs), load_evidence()["bounds"])
+        bounds = load_evidence()["bounds"]
+        model_bounds = configured_bounds(configs)
+        self.assertEqual(model_bounds, {name: bounds[name] for name in model_bounds})
+        for name in (
+            "tlc_workers",
+            "jvm_heap_mb",
+            "hosted_portable_jvm_heap_mb",
+            "memory_max_mb",
+            "swap_max_mb",
+            "cpu_quota_percent",
+            "tasks_max",
+            "runtime_max_seconds",
+            "pr_runtime_max_seconds",
+        ):
+            self.assertIsInstance(bounds[name], int)
+            self.assertGreater(bounds[name], 0)
+
+    def test_formal_tiers_require_explicit_non_ambiguous_selection(self) -> None:
+        verify = (FORMAL_ROOT / "verify.sh").read_text(encoding="utf-8")
+        self.assertIn("--tier", verify)
+        self.assertIn("portable-smoke", verify)
+        self.assertIn("pr-publication", verify)
+        self.assertIn("full-exhaustive", verify)
+        manifest = json.loads((ROOT / "formal" / "tier-evidence.json").read_text())
+        self.assertFalse(manifest["profiles"]["portable-smoke"]["exhaustive"])
+        self.assertFalse(manifest["profiles"]["pr-publication"]["exhaustive"])
+        self.assertTrue(manifest["profiles"]["full-exhaustive"]["exhaustive"])
+        self.assertNotEqual(
+            manifest["profiles"]["portable-smoke"]["models"],
+            manifest["profiles"]["full-exhaustive"]["models"],
+        )
+        self.assertEqual(6, len(manifest["profiles"]["full-exhaustive"]["models"]))
+        self.assertEqual(6, len(manifest["profiles"]["pr-publication"]["models"]))
+        pr_config = (FORMAL_ROOT / "HandoffctlPR.cfg").read_text()
+        self.assertIn("Processes = {p1}", pr_config)
+        self.assertIn("EventualCompletion", pr_config)
+        attest = (ROOT / "formal" / "handoffctl" / "attest.py").read_text(encoding="utf-8")
+        self.assertIn("state_counts", attest)
+        self.assertIn("state_counts are unavailable", attest)
+        self.assertIn("of exhaustive exploration", attest)
+        self.assertIn("attestation requires TLC_CGROUP_MODE=required", attest)
+        self.assertIn("runner-produced outcome manifest", attest)
+
+    def test_workflow_separates_fork_pr_publication_and_weekly_tiers(self) -> None:
+        workflow = (ROOT / ".github" / "workflows" / "verify.yml").read_text()
+        self.assertIn(
+            "github.event.pull_request.head.repo.full_name != github.repository", workflow
+        )
+        self.assertIn("&& 'portable-smoke' || 'pr-publication'", workflow)
+        self.assertIn("&& 'full-exhaustive'", workflow)
+        self.assertIn("timeout-minutes: ${{", workflow)
+        self.assertIn("&& 120 || 30", workflow)
+        steps_start = workflow.index("    steps:\n", workflow.index("  verify:\n"))
+        job_environment = workflow[
+            workflow.index("    env:\n", workflow.index("  verify:\n")) : steps_start
+        ]
+        for resource_setting in ("TLC_CGROUP_MODE", "TLC_HEAP", "TLC_TIMEOUT_SECONDS"):
+            self.assertNotIn(resource_setting, job_environment)
+        formal_step = workflow[
+            workflow.index("      - name: Run event-appropriate formal tier\n") : workflow.index(
+                "      - name: Publish exact-head tier attestation\n"
+            )
+        ]
+        for resource_setting in ("TLC_CGROUP_MODE", "TLC_HEAP", "TLC_TIMEOUT_SECONDS"):
+            self.assertIn(resource_setting, formal_step)
+
+    def test_attestation_rejects_failed_formal_outcomes(self) -> None:
+        script = ROOT / "formal" / "handoffctl" / "attest.py"
+        stderr = io.StringIO()
+        with (
+            mock.patch.object(
+                sys,
+                "argv",
+                [
+                    str(script),
+                    "--tier",
+                    "portable-smoke",
+                    "--status",
+                    "oom",
+                    "--output",
+                    str(ROOT / "formal" / "_unused.json"),
+                    "--jar",
+                    str(script),
+                    "--manifest",
+                    str(script),
+                    "--models",
+                    "HandoffctlBinding",
+                ],
+            ),
+            mock.patch.object(sys, "stderr", stderr),
+            self.assertRaises(SystemExit),
+        ):
+            runpy.run_path(str(script), run_name="__main__")
+        self.assertIn("failed or incomplete formal runs", stderr.getvalue())
 
 
 if __name__ == "__main__":

@@ -5,12 +5,14 @@ name: Verify
     branches: [main]
   pull_request:
   workflow_dispatch:
+  schedule:
+    - cron: "17 3 * * 0"
 
 permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -46,10 +48,35 @@ jobs:
           uv run --directory quality-runtime --frozen python -m awq --root .. onboarding --format json
           uv run --directory quality-runtime --frozen python -m awq --root .. check --tier pr --format json
 
+  scope:
+    runs-on: ubuntu-24.04
+    outputs:
+      formal_changed: ${{ steps.scope.outputs.formal_changed }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - id: scope
+        shell: bash
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          if [[ "$EVENT" != "pull_request" ]] || git diff --name-only "$BASE...$HEAD" | grep -Eq "^(formal/|tools/tlc_runner.py|\\.github/workflows/verify\\.yml)"; then
+            echo "formal_changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "formal_changed=false" >> "$GITHUB_OUTPUT"
+          fi
+
   verify:
-    needs: awq
+    needs: [awq, scope]
+    if: ${{ github.event_name != 'pull_request' || needs.scope.outputs.formal_changed == 'true' }}
     runs-on: ${{ fromJSON((github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && '["self-hosted","Linux","X64","agent-workflow-coordinator-ci"]' || '["ubuntu-24.04"]') }}
-    timeout-minutes: 30
+    timeout-minutes: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && 120 || 30 }}
+    env:
+      TLC_TIER: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && 'full-exhaustive' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && 'portable-smoke' || 'pr-publication' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -95,8 +122,32 @@ jobs:
               backend_schema, format_checker=jsonschema.FormatChecker()
           ).validate(backend)
           PY
-      - name: Formal safety and liveness models
-        run: formal/handoffctl/verify.sh
+      - name: Establish existing runner user bus and cgroup prerequisite
+        if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+        shell: bash
+        run: |
+          runner_uid=$(id -u)
+          runtime_dir="/run/user/${runner_uid}"
+          bus_address="unix:path=${runtime_dir}/bus"
+          echo "XDG_RUNTIME_DIR=${runtime_dir}" >> "$GITHUB_ENV"
+          echo "DBUS_SESSION_BUS_ADDRESS=${bus_address}" >> "$GITHUB_ENV"
+          test -S "${runtime_dir}/bus"
+          test "$(stat -fc %T /sys/fs/cgroup)" = cgroup2fs
+          XDG_RUNTIME_DIR="${runtime_dir}" DBUS_SESSION_BUS_ADDRESS="${bus_address}" \
+            systemd-run --user --wait --pipe --quiet true
+      - name: Run event-appropriate formal tier
+        env:
+          TLC_CGROUP_MODE: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && 'portable' || 'required' }}
+          TLC_HEAP: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && '512m' || '2048m' }}
+          TLC_TIMEOUT_SECONDS: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && '6000' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && '600' || '1200' }}
+          TLC_ATTESTATION_PATH: ${{ runner.temp }}/formal-attestation.json
+        run: formal/handoffctl/verify.sh --tier "$TLC_TIER"
+      - name: Publish exact-head tier attestation
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08
+        with:
+          name: handoffctl-${{ env.TLC_TIER }}-${{ github.sha }}
+          path: ${{ runner.temp }}/formal-attestation.json
+          if-no-files-found: error
       - name: DCO certification
         if: github.event_name == 'pull_request'
         env:
@@ -107,3 +158,29 @@ jobs:
             expected=$(git show -s --format='Signed-off-by: %an <%ae>' "$revision")
             git show -s --format=%B "$revision" | grep -Fx -- "$expected"
           done < <(git rev-list "$BASE..$HEAD")
+
+  smoke:
+    needs: [awq, scope]
+    if: ${{ github.event_name == 'pull_request' && needs.scope.outputs.formal_changed == 'false' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961
+        with:
+          distribution: temurin
+          java-version: "17"
+      - name: Portable smoke model (non-exhaustive)
+        env:
+          TLC_CGROUP_MODE: portable
+          TLC_HEAP: 512m
+          TLC_ATTESTATION_PATH: ${{ runner.temp }}/portable-smoke-attestation.json
+        run: formal/handoffctl/verify.sh --tier portable-smoke
+      - name: Publish non-exhaustive smoke attestation
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08
+        with:
+          name: handoffctl-portable-smoke-${{ github.sha }}
+          path: ${{ runner.temp }}/portable-smoke-attestation.json
+          if-no-files-found: error
