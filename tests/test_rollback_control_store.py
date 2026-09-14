@@ -47,6 +47,7 @@ from tools.upgrade_identity import (
     BarrierChildIdentity,
     BarrierSessionIdentity,
     canonical_barrier_digest,
+    canonical_barrier_session_digest,
     canonical_envelope_digest,
 )
 
@@ -537,6 +538,10 @@ class RollbackControlStoreTests(unittest.TestCase):
             self.assertEqual(PROJECT, reopened_final.identity.project_id)
             self.assertEqual("attempt-2", reopened_final.identity.attempt_id)
             self.assertEqual(64, len(reopened_final.identity.identity_digest))
+            self.assertEqual(
+                canonical_barrier_session_digest(reopened_final.identity.as_record()),
+                reopened_final.identity.identity_digest,
+            )
             self.assertEqual(final.identity.authority_revision_at_acquire, "authority-3")
             self.assertEqual(b"authority remains untouched\n", authority_path.read_bytes())
             for _ in range(2):
