@@ -13,6 +13,47 @@ shape and required fields; the validator additionally proves dependency
 references and ordering, operation-ID binding, non-no-op release identity,
 backend coverage, and backend-specific rollback integrity.
 
+Contract schema v2 replaces descriptive phase placeholders with a closed
+opcode set: `release.inspect`, `admission.check`, `barrier.acquire`,
+`backend.backup`, `runtime.stage`, `authority.atomic_replace`,
+`runtime.validate`, and `barrier.reopen`, plus the rollback-only
+`backend.restore`. Every operation binds the selected backend, runtime-selector
+reference, expected state revision, barrier and fencing identities, and exact
+backup operation ID. The validator rejects unknown inputs, opcode/phase
+mismatches, identity changes between phases, and restore outside the rollback
+record. Only `authority.atomic_replace` maps to the forward commit mutation;
+`backend.restore` is the explicit rollback counterpart.
+
+This typed data contract is necessary but not execution evidence. Git and
+SQLite contracts may both be generated and validated, but neither becomes
+executable until a reviewed backend phase adapter implements every opcode and
+its evidence contract. In particular, generated Git contracts do not enable
+Git upgrade execution.
+
+`handoffctl upgrade check --contract FILE` and `handoffctl upgrade plan
+--contract FILE` expose only a deterministic, sanitized projection of a valid
+typed contract. They do not write an engine journal, acquire a barrier, stage
+a runtime, or claim executability. The matching `apply` and `rollback`
+commands intentionally reject before mutation while the executable protocol
+is incomplete. This boundary covers both backends: Git is not accidentally
+enabled, and SQLite is not enabled by fabricated admission evidence.
+
+Production execution remains blocked on four linked corrections: quiescence
+must acquire a barrier before quiesced admission; a forward barrier needs a
+complete acquire/recheck/reopen lifecycle; forward `target=new` and rollback
+`target=rollback` must have a non-conflicting durable identity model; and the
+selected runtime must actually be consumed by a verified launcher. SQLite
+coordination writes must also participate in the upgrade fence. Until those
+contracts, their formal refinement, and hostile tests are reviewed, no typed
+opcode is dispatched to a mutating implementation.
+
+The normative redesign needed to close those blockers is specified in
+[Upgrade execution redesign](UPGRADE_EXECUTION_REDESIGN.md). It is a design
+checkpoint, not an executable capability. Where the redesign conflicts with
+the earlier v9 identity model, the redesign is the proposed v10 replacement;
+the current fail-closed command boundary remains authoritative until v10 is
+implemented and independently verified.
+
 ## Safety contract
 
 The coordinator remains usable at every externally observable point. Before
@@ -51,6 +92,68 @@ Every generated contract contains these ordered phases:
 No phase may silently skip its predecessor. `commit` is the only phase
 allowed to replace the selected runtime, and it is never allowed before
 verified backup and quiescence.
+
+## Journal schema compatibility
+
+The exact-v9 engine writes journal schema v3. Schema-v2 journals are detected
+and refused before mutation because they do not contain the complete v9
+envelope or the durable `rollback_verified` release boundary. The engine never
+infers those fields, rewrites an in-flight schema-v2 journal, or treats its
+top-level rollback boolean as release evidence.
+
+An operator encountering schema v2 must retain the journal and backup, use the
+known-good coordinator runtime that created it to reconcile the operation to a
+terminal state, and independently verify the authority before starting a new
+schema-v3 operation with a new operation ID and fencing token. An unresolved
+or unavailable originating runtime remains in safe mode; there is no automatic
+in-place migration path.
+
+## SQLite control-store provisioning boundary
+
+The rollback control database must live in a dedicated directory owned by the
+coordinator process effective user with mode `0700`. The main database, lock,
+and SQLite `-wal`/`-shm` sidecars are opened without following symlinks. Any
+pre-existing sidecar must be a single-link regular file; its device/inode
+identity is bound after WAL activation and rechecked before the connection is
+closed. A missing, aliased, replaced, or unreadable sidecar fails closed.
+
+This is an explicit deployment trust boundary for the standard-library SQLite
+VFS: unrelated code running as the same operating-system user can bypass
+advisory locks and replace files in an owner-writable directory. Such code is
+trusted to the same extent as the coordinator process. Deployments that need
+protection from mutually hostile same-UID processes require separate OS users
+or a reviewed descriptor-native custom VFS; they must not weaken the directory
+or sidecar checks.
+
+The upgrade delegate cannot authorize rollback release. SQLite binding also
+requires a separate authority/runtime rereader, which returns typed facts from
+a fresh authority, selector, integrity, foreign-key, fencing, and backend
+round-trip inspection. The production SQLite rereader requires explicit paths
+for the authority, immutable project binding, backend selector, and runtime
+selector, plus the expected active and previous release identities. It derives
+`authority_revision` as canonical SHA-256 over those selector identities, the
+SQLite schema, metadata, task records and projections, dependency graph,
+events, command evidence, migrations, checkpoints, and sequence state. The
+same derivation must populate the operation envelope before the barrier is
+acquired; after restore, any logical authority or release-selector difference
+fails revalidation. File and WAL/SHM identities are retained and rechecked
+across the read transaction.
+
+The control adapter validates the reread facts against the operation envelope
+and constructs release evidence itself. Missing revision inputs, unknown
+SQLite schemas, invalid project/backend binding, malformed task projections,
+or a release-selector mismatch fail closed. Git control binding remains
+unavailable.
+
+Runtime-selector publication requires a pre-provisioned owner-only directory
+and a retained descriptor through temporary-file fsync, atomic rename, target
+identity verification, and directory fsync. A failure before rename is an
+ordinary non-publication failure. A failure after rename is explicitly
+ambiguous: the caller must retain the old and new release pairs and invoke the
+selector reconciliation API after restart. Reconciliation accepts only the
+exact old pair (`not-committed`) or exact new pair (`committed`); a missing or
+third identity remains in safe mode. Release identities use a bounded ASCII
+token grammar and cannot contain whitespace, path separators, or controls.
 
 The schema and contract tests reject duplicate or non-contiguous phase orders,
 unknown or forward dependencies, missing phase operations, unbounded time or

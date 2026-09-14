@@ -22,8 +22,28 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import Any, cast
 
-from sqlite_storage import Backend, SQLiteBackend, create_database
-from status_renderer import StatusRenderError, graph_errors, render_status
+if __package__:
+    from .sqlite_storage import (
+        Backend,
+        SQLiteBackend,
+        create_database,
+    )
+    from .status_renderer import (
+        StatusRenderError,
+        graph_errors,
+        render_status,
+    )
+else:  # pragma: no cover - direct script execution
+    from sqlite_storage import (  # type: ignore[import-not-found,no-redef]
+        Backend,
+        SQLiteBackend,
+        create_database,
+    )
+    from status_renderer import (  # type: ignore[import-not-found,no-redef]
+        StatusRenderError,
+        graph_errors,
+        render_status,
+    )
 
 ROOT = Path(__file__).resolve().parent.parent
 TASKS = ROOT / "tasks"
@@ -1804,7 +1824,21 @@ def cmd_migrate(args: argparse.Namespace) -> None:
     print(f"Migrated authoritative storage from {current} to {args.to}")
 
 
-def dispatch_bound_command(args: argparse.Namespace) -> int:
+def cmd_upgrade(args: argparse.Namespace) -> int:
+    """Dispatch only the reviewed, fail-closed upgrade command boundary."""
+    if __package__:
+        from .upgrade_commands import execute_upgrade_command
+    else:
+        from upgrade_commands import (  # type: ignore[import-not-found,no-redef]
+            execute_upgrade_command,
+        )
+
+    return execute_upgrade_command(
+        str(args.upgrade_action), Path(args.contract), str(backend_selection()["backend"])
+    )
+
+
+def dispatch_bound_command(args: argparse.Namespace) -> int:  # noqa: C901
     """Dispatch a command only after the permanent project binding has passed."""
     if args.cmd == "reconcile":
         reconcile(do_commit=args.commit, push=args.push)
@@ -1830,6 +1864,8 @@ def dispatch_bound_command(args: argparse.Namespace) -> int:
         return cmd_run(args)
     elif args.cmd == "migrate":
         cmd_migrate(args)
+    elif args.cmd == "upgrade":
+        return cmd_upgrade(args)
     return 0
 
 
@@ -1846,6 +1882,11 @@ def main() -> int:
     item.add_argument("--backend", choices=BACKENDS, default="sqlite")
     item = commands.add_parser("migrate")
     item.add_argument("--to", choices=BACKENDS, required=True)
+    item = commands.add_parser("upgrade")
+    upgrade_actions = item.add_subparsers(dest="upgrade_action", required=True)
+    for action in ("check", "plan", "apply", "rollback"):
+        upgrade_action = upgrade_actions.add_parser(action)
+        upgrade_action.add_argument("--contract", type=Path, required=True)
     item = commands.add_parser("reconcile")
     item.add_argument("--commit", action="store_true")
     item.add_argument("--push", action="store_true")

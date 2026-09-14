@@ -16,16 +16,17 @@ from tempfile import TemporaryDirectory
 from typing import Any
 from unittest.mock import patch
 
-ROOT = Path(__file__).resolve().parent.parent
-TOOLS = ROOT / "tools"
-sys.path.insert(0, str(TOOLS))
-from sqlite_storage import (  # noqa: E402
+from tools.sqlite_storage import (
     SQLiteBackend,
     StorageContentionError,
     _translate,
     create_database,
     require_local_filesystem,
 )
+
+ROOT = Path(__file__).resolve().parent.parent
+TOOLS = ROOT / "tools"
+sys.path.insert(0, str(TOOLS))
 
 SPEC = importlib.util.spec_from_file_location("handoffctl_sqlite_test", TOOLS / "handoffctl.py")
 if SPEC is None or SPEC.loader is None:

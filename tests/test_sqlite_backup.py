@@ -8,6 +8,7 @@ from __future__ import annotations
 import importlib.util
 import sqlite3
 import unittest
+from contextlib import closing
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
@@ -69,7 +70,7 @@ class SQLiteBackupTests(unittest.TestCase):
         self.assertTrue(manifest["wal_consistent"])
         destination = self.root / "restored.sqlite3"
         restore_database(backup, destination, manifest, BINDING, quiesced=True)
-        with sqlite3.connect(destination) as connection:
+        with closing(sqlite3.connect(destination)) as connection:
             self.assertEqual("before", connection.execute("SELECT body FROM records").fetchone()[0])
         manifest_path = self.root / "backup-manifest.json"
         write_manifest(manifest_path, manifest)
@@ -113,7 +114,7 @@ class SQLiteBackupTests(unittest.TestCase):
             self.assertRaises(BackupError),
         ):
             restore_database(backup, destination, manifest, BINDING, quiesced=True)
-        with sqlite3.connect(destination) as connection:
+        with closing(sqlite3.connect(destination)) as connection:
             self.assertEqual(
                 "known-good", connection.execute("SELECT body FROM records").fetchone()[0]
             )
@@ -128,7 +129,7 @@ class SQLiteBackupTests(unittest.TestCase):
             self.assertRaises(BackupError),
         ):
             restore_database(backup, destination, manifest, BINDING, quiesced=True)
-        with sqlite3.connect(destination) as connection:
+        with closing(sqlite3.connect(destination)) as connection:
             self.assertEqual(
                 "known-good", connection.execute("SELECT body FROM records").fetchone()[0]
             )
@@ -181,7 +182,7 @@ class SQLiteBackupTests(unittest.TestCase):
 
     def test_foreign_key_integrity_failure_is_rejected(self) -> None:
         invalid = self.root / "invalid.sqlite3"
-        with sqlite3.connect(invalid) as connection:
+        with closing(sqlite3.connect(invalid)) as connection, connection:
             connection.executescript(
                 "CREATE TABLE metadata(key TEXT PRIMARY KEY, value TEXT NOT NULL);"
                 "CREATE TABLE parent(id INTEGER PRIMARY KEY);"

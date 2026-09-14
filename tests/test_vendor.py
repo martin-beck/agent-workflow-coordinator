@@ -15,6 +15,8 @@ from tempfile import TemporaryDirectory
 from typing import Any
 from unittest.mock import patch
 
+from tools.generate_upgrade_contract import generate
+
 ROOT = Path(__file__).resolve().parent.parent
 SOURCE = ROOT / "tools/vendor.py"
 SPEC = importlib.util.spec_from_file_location("handoffctl_vendor", SOURCE)
@@ -22,6 +24,32 @@ if SPEC is None or SPEC.loader is None:
     raise RuntimeError("cannot load vendor tool")
 VENDOR: Any = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(VENDOR)
+
+
+def upgrade_contract(backend: str) -> dict[str, Any]:
+    def release(version: str, seed: str) -> dict[str, str]:
+        return {
+            "version": version,
+            "source_commit": seed * 40,
+            "tag_ref": f"refs/tags/{version}",
+            "tag_object": chr(ord(seed) + 1) * 40,
+            "signature_sha256": chr(ord(seed) + 2) * 64,
+            "trust_policy_sha256": chr(ord(seed) + 3) * 64,
+            "vendor_manifest_sha256": chr(ord(seed) + 4) * 64,
+        }
+
+    return generate(
+        {
+            "operation_id": "upgrade:v0.3.5-to-v0.3.6:001",
+            "backend": backend,
+            "selector_ref": ".runtime/runtime-selector.json",
+            "expected_state_revision": 7,
+            "barrier_id": "barrier-7",
+            "fencing_token": "fence-7",
+            "from": release("v0.3.5", "a"),
+            "to": release("v0.3.6", "b"),
+        }
+    )
 
 
 class VendorTest(unittest.TestCase):
@@ -47,7 +75,7 @@ class VendorTest(unittest.TestCase):
             )
         with patch("builtins.print"):
             VENDOR.sync(ROOT, self.target, "v0.3.6", "e" * 40)
-        command = [
+        initialization_command = [
             sys.executable,
             str(self.target / "tools/handoffctl.py"),
             "init",
@@ -63,7 +91,7 @@ class VendorTest(unittest.TestCase):
             "git",
         ]
         initialized = subprocess.run(  # noqa: S603
-            command, cwd=self.target, check=False, capture_output=True, text=True
+            initialization_command, cwd=self.target, check=False, capture_output=True, text=True
         )
         self.assertEqual(initialized.returncode, 0, initialized.stderr)
         runtime = self.target / ".runtime"
@@ -87,6 +115,62 @@ class VendorTest(unittest.TestCase):
         )
         self.assertEqual(doctor.returncode, 0, doctor.stdout + doctor.stderr)
         self.assertIn("privacy", doctor.stdout)
+
+        document = upgrade_contract("git")
+        contract_path = Path(self.temporary.name) / "upgrade-contract.json"
+        contract_path.write_text(json.dumps(document), encoding="utf-8")
+        environment = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1"}
+
+        def state_bytes() -> dict[str, bytes]:
+            return {
+                str(path.relative_to(self.target)): path.read_bytes()
+                for path in self.target.rglob("*")
+                if path.is_file() and "__pycache__" not in path.parts
+            }
+
+        before = state_bytes()
+        for action in ("check", "plan"):
+            upgrade_result = subprocess.run(  # noqa: S603
+                [
+                    sys.executable,
+                    "-S",
+                    str(self.target / "tools/handoffctl.py"),
+                    "upgrade",
+                    action,
+                    "--contract",
+                    str(contract_path),
+                ],
+                cwd=self.target,
+                check=False,
+                capture_output=True,
+                text=True,
+                env=environment,
+            )
+            self.assertEqual(0, upgrade_result.returncode, upgrade_result.stderr)
+            report = json.loads(upgrade_result.stdout)
+            self.assertFalse(report["executable"])
+            self.assertEqual("git", report["backend"])
+            self.assertEqual(before, state_bytes())
+        for action in ("apply", "rollback"):
+            upgrade_result = subprocess.run(  # noqa: S603
+                [
+                    sys.executable,
+                    "-S",
+                    str(self.target / "tools/handoffctl.py"),
+                    "upgrade",
+                    action,
+                    "--contract",
+                    str(contract_path),
+                ],
+                cwd=self.target,
+                check=False,
+                capture_output=True,
+                text=True,
+                env=environment,
+            )
+            self.assertEqual(1, upgrade_result.returncode)
+            self.assertIn("no coordinator state was mutated", upgrade_result.stderr)
+            self.assertEqual(before, state_bytes())
 
     def test_synced_snapshot_obeys_shebang_and_executable_mode_policy(self) -> None:
         with patch("builtins.print"):

@@ -1,0 +1,1778 @@
+# Copyright (C) Huawei Technologies Co., Ltd. 2026. All rights reserved.
+# SPDX-License-Identifier: MIT
+"""Failure-path tests for the durable upgrade phase journal."""
+
+from __future__ import annotations
+
+import fcntl
+import json
+import os
+import signal
+import tempfile
+import unittest
+from collections.abc import Callable, Mapping
+from pathlib import Path
+from typing import cast
+from unittest.mock import patch
+
+from tools.rollback_control_store import (
+    SQLiteAuthorityRuntimeState,
+    SQLiteControlStoreAdapter,
+    SQLiteRollbackControlStore,
+    bind_control_store,
+)
+from tools.upgrade_admission import (
+    PREFLIGHT_PREDICATES,
+    QUIESCENCE_PREDICATES,
+    REOPEN_PREDICATES,
+)
+from tools.upgrade_engine import (
+    CONTEXT_FIELDS,
+    PHASES,
+    BackendAdapter,
+    Handler,
+    UpgradeEngine,
+    UpgradeError,
+)
+from tools.upgrade_identity import canonical_barrier_digest, canonical_envelope_digest
+
+
+def make_context(operation_id: str = "op-1", target: str = "new") -> dict[str, object]:
+    context: dict[str, object] = {
+        "schema_version": 2,
+        "backend": "sqlite",
+        "project_id": "11111111-1111-4111-8111-111111111111",
+        "operation_id": operation_id,
+        "state_revision": 1,
+        "authority_revision": "authority-1",
+        "fencing_token": "fence-1",
+        "fencing_owner": "worker-1",
+        "durable_barrier_id": "barrier-1",
+        "artifact_root": "/artifacts",
+        "source": "/authority.sqlite",
+        "destination": "/artifacts/backup.sqlite",
+        "manifest": "/artifacts/manifest.json",
+        "barrier_identity_digest": "0" * 64,
+        "target": target,
+        "envelope_digest": "0" * 64,
+    }
+    context["barrier_identity_digest"] = canonical_barrier_digest(context)
+    context["envelope_digest"] = canonical_envelope_digest(context)
+    return context
+
+
+CONTEXT = make_context()
+ROLLBACK_CONTEXT = make_context(target="rollback")
+ADMISSION = {
+    **dict.fromkeys(PREFLIGHT_PREDICATES, True),
+    **dict.fromkeys(QUIESCENCE_PREDICATES, True),
+    **dict.fromkeys(REOPEN_PREDICATES, True),
+    **CONTEXT,
+    "validation_failed": False,
+}
+
+
+class StaticAuthorityRuntimeRereader:
+    def reread_rollback(
+        self, context: Mapping[str, object], _result: Mapping[str, object]
+    ) -> SQLiteAuthorityRuntimeState:
+        return SQLiteAuthorityRuntimeState(
+            backend=cast(str, context["backend"]),
+            project_id=cast(str, context["project_id"]),
+            authority_revision=cast(str, context["authority_revision"]),
+            fencing_token=cast(str, context["fencing_token"]),
+            target=cast(str, context["target"]),
+            integrity_check="ok",
+            foreign_key_violations=0,
+            backend_roundtrip="sqlite",
+        )
+
+
+class FakeAdapter:
+    def __init__(self) -> None:
+        self.rollback_status = "held"
+
+    def verify_rollback_context(self, context: Mapping[str, object]) -> dict[str, object] | None:
+        expected = make_context(str(context.get("operation_id")), target="rollback")
+        if all(context.get(field) == expected[field] for field in CONTEXT_FIELDS):
+            return {**context, "status": self.rollback_status}
+        return None
+
+    def snapshot(self, phase: str, context: object) -> dict[str, object]:
+        identity = dict(context) if isinstance(context, Mapping) else CONTEXT
+        if phase == "rollback":
+            return {
+                **make_context(str(identity["operation_id"]), target="rollback"),
+                "rollback_context_verified": True,
+            }
+        return {
+            **ADMISSION,
+            **{field: identity[field] for field in CONTEXT_FIELDS},
+        }
+
+    def execute(self, phase: str, _context: object) -> dict[str, object]:
+        result: dict[str, object] = {"backend": "sqlite", "fencing_token": "fence-1"}
+        if phase == "rollback":
+            result.update(
+                restored_verified=True,
+                runtime_validated=True,
+                backend_roundtrip_valid=True,
+            )
+        return result
+
+    def begin_release_rollback_context(self, _context: Mapping[str, object]) -> dict[str, object]:
+        if self.rollback_status != "held":
+            raise RuntimeError("barrier is not held")
+        self.rollback_status = "releasing"
+        return {"status": "releasing"}
+
+    def complete_release_rollback_context(
+        self, _context: Mapping[str, object]
+    ) -> dict[str, object]:
+        if self.rollback_status != "releasing":
+            raise RuntimeError("barrier is not releasing")
+        self.rollback_status = "released"
+        return {"status": "released"}
+
+    def revalidate_rollback(
+        self, _context: Mapping[str, object], result: Mapping[str, object]
+    ) -> dict[str, object]:
+        return dict(result)
+
+
+class FailingAdapter(FakeAdapter):
+    def snapshot(self, _phase: str, _context: object) -> dict[str, object]:
+        raise RuntimeError("authority probe failed")
+
+
+class UpgradeEngineTests(unittest.TestCase):
+    @staticmethod
+    def _prepare_failed_journal(
+        directory: str, operation_id: str, adapter: BackendAdapter
+    ) -> tuple[Path, UpgradeEngine]:
+        journal = Path(directory) / "journal.json"
+        engine = UpgradeEngine(
+            operation_id,
+            journal,
+            make_context(operation_id),
+            backend_adapter=adapter,
+        )
+        engine.plan()
+        value = json.loads(journal.read_text())
+        value["status"] = "failed"
+        value["phase"] = "discover"
+        value["records"] = [
+            {
+                "operation_id": operation_id,
+                "step_id": f"{operation_id}.discover",
+                "phase": "discover",
+                "outcome": "failed",
+                "error": "failed",
+                "context": make_context(operation_id),
+            }
+        ]
+        journal.write_text(json.dumps(value))
+        return journal, engine
+
+    def test_apply_is_ordered_and_idempotent(self) -> None:  # noqa: C901
+        with tempfile.TemporaryDirectory() as directory:
+            engine = UpgradeEngine(
+                "op-1", Path(directory) / "journal.json", CONTEXT, backend_adapter=FakeAdapter()
+            )
+            engine.plan()
+            seen: list[str] = []
+
+            def handler(  # noqa: C901
+                _operation: str, _state: object, phase: str = ""
+            ) -> dict[str, object]:
+                seen.append(phase)
+                result: dict[str, object] = {
+                    "phase": phase,
+                    "backend": "sqlite",
+                    "fencing_token": "fence-1",
+                    "backend_identity_verified": True,
+                }
+                if phase == "discover":
+                    result.update(release_authentic=True, runtime_supported=True)
+                if phase == "preflight":
+                    result.update(preflight_admitted=True, capacity_verified=True)
+                if phase == "quiesce":
+                    result.update(
+                        barrier_acquired=True,
+                        workers_drained=True,
+                        leases_fenced=True,
+                        fencing_verified=True,
+                    )
+                if phase == "backup":
+                    result.update(backup_verified=True, restore_roundtrip_verified=True)
+                if phase == "stage":
+                    result.update(staged_verified=True, manifest_verified=True)
+                if phase == "commit":
+                    result.update(
+                        quiesced=True,
+                        backup_verified=True,
+                        selector_verified=True,
+                        selector_commit_atomic=True,
+                        fencing_verified=True,
+                        selector_before_verified=True,
+                        selector_after_verified=True,
+                    )
+                if phase == "validate":
+                    result.update(
+                        runtime_validated=True,
+                        backend_roundtrip_valid=True,
+                        projections_valid=True,
+                        binding_valid=True,
+                    )
+                if phase == "reopen":
+                    result.update(validated=True, barrier_held=True)
+                if phase == "preflight":
+                    result["preflight_snapshot"] = ADMISSION
+                if phase == "quiesce":
+                    result["quiescence_snapshot"] = ADMISSION
+                if phase == "commit":
+                    result.update(admitted_snapshot=ADMISSION, current_snapshot=ADMISSION)
+                if phase == "reopen":
+                    result["reopen_snapshot"] = ADMISSION
+                result["mutates_authority"] = phase == "commit"
+                return result
+
+            def make_handler(phase: str) -> Handler:
+                def run(operation: str, state: object) -> dict[str, object]:
+                    return handler(operation, state, phase)
+
+                return run
+
+            handlers: dict[str, Handler] = {phase: make_handler(phase) for phase in PHASES}
+            result = engine.apply(handlers)
+            self.assertEqual(seen, list(PHASES))
+            self.assertEqual(result["status"], "completed")
+            engine.apply(handlers)
+            self.assertEqual(seen, list(PHASES))
+
+    def test_failure_is_durable_and_rollback_can_enter_safe_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            engine = UpgradeEngine(
+                "op-2",
+                Path(directory) / "journal.json",
+                make_context("op-2"),
+                backend_adapter=FakeAdapter(),
+            )
+            engine.plan()
+
+            def fail(_operation: str, _state: object) -> None:
+                raise OSError("ambiguous")
+
+            handlers: dict[str, Handler] = {
+                phase: (fail if phase == "commit" else lambda _operation, _state: {})
+                for phase in PHASES
+            }
+            with self.assertRaises(UpgradeError):
+                engine.apply(handlers)
+            with self.assertRaises(UpgradeError):
+                engine.rollback(fail)
+            self.assertEqual(engine._load()["status"], "safe-mode")
+
+    def test_commit_validate_and_reopen_require_safety_evidence(self) -> None:  # noqa: C901
+        with tempfile.TemporaryDirectory() as directory:
+            engine = UpgradeEngine(
+                "op-evidence",
+                Path(directory) / "journal.json",
+                make_context("op-evidence"),
+                backend_adapter=FakeAdapter(),
+            )
+            engine.plan()
+
+            def evidence_handler(phase: str) -> Handler:  # noqa: C901
+                def run(  # noqa: C901
+                    _operation: str, _state: object
+                ) -> dict[str, object]:
+                    result: dict[str, object] = {
+                        "backend": "sqlite",
+                        "fencing_token": "fence-1",
+                        "backend_identity_verified": True,
+                        "mutates_authority": phase == "commit",
+                    }
+                    if phase == "discover":
+                        result.update(release_authentic=True, runtime_supported=True)
+                    if phase == "preflight":
+                        result.update(preflight_admitted=True, capacity_verified=True)
+                    if phase == "quiesce":
+                        result.update(
+                            barrier_acquired=True,
+                            workers_drained=True,
+                            leases_fenced=True,
+                            fencing_verified=True,
+                        )
+                    if phase == "backup":
+                        result.update(backup_verified=True, restore_roundtrip_verified=True)
+                    if phase == "stage":
+                        result.update(staged_verified=True, manifest_verified=True)
+                    if phase == "preflight":
+                        result["preflight_snapshot"] = ADMISSION
+                    if phase == "quiesce":
+                        result["quiescence_snapshot"] = ADMISSION
+                    if phase == "commit":
+                        result.update(admitted_snapshot=ADMISSION, current_snapshot=ADMISSION)
+                    if phase == "reopen":
+                        result["reopen_snapshot"] = ADMISSION
+                    return result
+
+                return run
+
+            handlers: dict[str, Handler] = {phase: evidence_handler(phase) for phase in PHASES}
+            with self.assertRaises(UpgradeError):
+                engine.apply(handlers)
+            journal = engine._load()
+            self.assertEqual(journal["phase"], "commit")
+            self.assertEqual(journal["status"], "failed")
+
+    def test_missing_plan_and_duplicate_plan_fail_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            journal = Path(directory) / "journal.json"
+            engine = UpgradeEngine(
+                "op-3", journal, make_context("op-3"), backend_adapter=FakeAdapter()
+            )
+            with self.assertRaises(UpgradeError):
+                engine.apply({})
+            engine.plan()
+            with self.assertRaises(UpgradeError):
+                engine.plan()
+
+    def test_context_digest_and_target_shapes_are_strict(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            for field, value in (
+                ("backend", "unknown"),
+                ("target", "upgrade"),
+                ("barrier_identity_digest", "not-a-digest"),
+                ("envelope_digest", "not-a-digest"),
+            ):
+                with self.subTest(field=field), self.assertRaises(UpgradeError):
+                    UpgradeEngine(
+                        "op-shape",
+                        Path(directory) / f"{field}.json",
+                        {**CONTEXT, field: value},
+                        backend_adapter=FakeAdapter(),
+                    )
+
+    def test_context_and_journal_tampering_fail_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            journal = Path(directory) / "journal.json"
+            engine = UpgradeEngine(
+                "op-4", journal, make_context("op-4"), backend_adapter=FakeAdapter()
+            )
+            engine.plan()
+            with self.assertRaises(UpgradeError):
+                engine.rollback(lambda _step, _state: {})
+            value = json.loads(journal.read_text())
+            value["context"]["backend"] = "git"
+            journal.write_text(json.dumps(value))
+            with self.assertRaises(UpgradeError):
+                engine.apply({})
+
+    def test_malformed_journal_cross_products_fail_closed_through_apply(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            operation_id = "op-malformed"
+            journal = Path(directory) / "journal.json"
+            engine = UpgradeEngine(
+                operation_id,
+                journal,
+                make_context(operation_id),
+                backend_adapter=FakeAdapter(),
+            )
+            planned = engine.plan()
+            context = make_context(operation_id)
+
+            def ordinary(outcome: str = "started") -> dict[str, object]:
+                record: dict[str, object] = {
+                    "operation_id": operation_id,
+                    "step_id": f"{operation_id}.discover",
+                    "phase": "discover",
+                    "outcome": outcome,
+                    "context": context,
+                }
+                if outcome == "success":
+                    record["result"] = {}
+                if outcome in {"failed", "ambiguous"}:
+                    record["error"] = "failure"
+                return record
+
+            cases: tuple[tuple[str, Callable[[dict[str, object]], None], str], ...] = (
+                (
+                    "unknown schema",
+                    lambda value: value.update(schema_version=99),
+                    "identity or records",
+                ),
+                (
+                    "extra top-level field",
+                    lambda value: value.update(extra=True),
+                    "identity or records",
+                ),
+                (
+                    "changed operation",
+                    lambda value: value.update(operation_id="other"),
+                    "identity or records",
+                ),
+                (
+                    "unknown status",
+                    lambda value: value.update(status="unknown"),
+                    "identity or records",
+                ),
+                (
+                    "non-mapping context",
+                    lambda value: value.update(context=[]),
+                    "context is invalid or changed",
+                ),
+                (
+                    "non-list records",
+                    lambda value: value.update(records={}),
+                    "records are invalid",
+                ),
+                (
+                    "non-mapping record",
+                    lambda value: value.update(status="running", phase="discover", records=[None]),
+                    "record is invalid",
+                ),
+                (
+                    "missing phase",
+                    lambda value: value.update(
+                        status="running", phase="discover", records=[{"phase": None}]
+                    ),
+                    "record phase is missing",
+                ),
+                (
+                    "out-of-order first phase",
+                    lambda value: value.update(
+                        status="running",
+                        phase="preflight",
+                        records=[
+                            {
+                                **ordinary(),
+                                "phase": "preflight",
+                                "step_id": f"{operation_id}.preflight",
+                            }
+                        ],
+                    ),
+                    "phase identity is invalid",
+                ),
+                (
+                    "unknown outcome",
+                    lambda value: value.update(
+                        status="running",
+                        phase="discover",
+                        records=[{**ordinary(), "outcome": "unknown"}],
+                    ),
+                    "outcome is invalid",
+                ),
+                (
+                    "extra outcome field",
+                    lambda value: value.update(
+                        status="running",
+                        phase="discover",
+                        records=[{**ordinary(), "extra": True}],
+                    ),
+                    "record fields are invalid",
+                ),
+                (
+                    "success without result mapping",
+                    lambda value: value.update(
+                        status="running",
+                        phase="discover",
+                        records=[{**ordinary("success"), "result": None}],
+                    ),
+                    "successful phase lacks result",
+                ),
+                (
+                    "success without result field",
+                    lambda value: value.update(
+                        status="running",
+                        phase="discover",
+                        records=[
+                            {
+                                key: item
+                                for key, item in ordinary("success").items()
+                                if key != "result"
+                            }
+                        ],
+                    ),
+                    "phase outcome fields are invalid",
+                ),
+                (
+                    "failure without string error",
+                    lambda value: value.update(
+                        status="failed",
+                        phase="discover",
+                        records=[{**ordinary("failed"), "error": None}],
+                    ),
+                    "failed phase lacks error",
+                ),
+                (
+                    "planned with records",
+                    lambda value: value.update(records=[ordinary()]),
+                    "planned journal contains records",
+                ),
+                (
+                    "planned with active phase",
+                    lambda value: value.update(phase="discover"),
+                    "planned journal has an active phase",
+                ),
+                (
+                    "running without records",
+                    lambda value: value.update(status="running", phase="discover"),
+                    "running journal is not recoverable",
+                ),
+                (
+                    "running with inconsistent phase",
+                    lambda value: value.update(
+                        status="running", phase="preflight", records=[ordinary()]
+                    ),
+                    "running journal phase is inconsistent",
+                ),
+                (
+                    "failed without failed phase",
+                    lambda value: value.update(status="failed", phase="discover"),
+                    "failed journal has no failed phase",
+                ),
+                (
+                    "completed without all phases",
+                    lambda value: value.update(
+                        status="completed", phase="discover", records=[ordinary("success")]
+                    ),
+                    "completed journal is incomplete",
+                ),
+                (
+                    "rolled back without completion",
+                    lambda value: value.update(
+                        status="rolled-back", phase="rollback", records=[ordinary("failed")]
+                    ),
+                    "rolled-back journal lacks rollback completion",
+                ),
+            )
+            for name, mutate, expected in cases:
+                value = json.loads(json.dumps(planned))
+                mutate(value)
+                journal.write_text(json.dumps(value))
+                with self.subTest(name=name), self.assertRaisesRegex(UpgradeError, expected):
+                    engine.apply({})
+
+            journal.write_text("not-json")
+            with self.assertRaisesRegex(UpgradeError, "journal is unreadable"):
+                engine.apply({})
+
+    def test_schema_v2_journal_is_refused_without_implicit_migration(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            journal = Path(directory) / "journal.json"
+            engine = UpgradeEngine(
+                "op-schema-v2",
+                journal,
+                make_context("op-schema-v2"),
+                backend_adapter=FakeAdapter(),
+            )
+            current = engine.plan()
+            legacy = {**current, "schema_version": 2, "rollback_verified": False}
+            journal.write_text(json.dumps(legacy))
+            before = journal.read_bytes()
+            with self.assertRaisesRegex(UpgradeError, "schema v2 requires recovery"):
+                engine._load()
+            self.assertEqual(before, journal.read_bytes())
+
+    def test_every_journal_record_context_field_is_bound(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            journal = Path(directory) / "journal.json"
+            engine = UpgradeEngine(
+                "op-record",
+                journal,
+                make_context("op-record"),
+                backend_adapter=FakeAdapter(),
+            )
+            engine.plan()
+            base = json.loads(journal.read_text())
+            base["status"] = "running"
+            base["phase"] = "discover"
+            base["records"] = [
+                {
+                    "operation_id": "op-record",
+                    "step_id": "op-record.discover",
+                    "phase": "discover",
+                    "outcome": "started",
+                    "context": make_context("op-record"),
+                }
+            ]
+            for field in CONTEXT:
+                tampered = json.loads(json.dumps(base))
+                tampered["records"][0]["context"][field] = "tampered"
+                journal.write_text(json.dumps(tampered))
+                with self.subTest(field=field), self.assertRaises(UpgradeError):
+                    engine._load()
+
+    def test_rollback_record_schema_and_target_are_strict(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            journal = Path(directory) / "journal.json"
+            engine = UpgradeEngine(
+                "op-rollback",
+                journal,
+                make_context("op-rollback"),
+                backend_adapter=FakeAdapter(),
+            )
+            engine.plan()
+            base = json.loads(journal.read_text())
+            record = {
+                "operation_id": "op-rollback",
+                "step_id": "op-rollback.rollback",
+                "phase": "rollback",
+                "outcome": "started",
+                "context": make_context("op-rollback", target="rollback"),
+            }
+            for mutation in (
+                {
+                    "context": {
+                        **cast(dict[str, object], record["context"]),
+                        "target": "new",
+                    }
+                },
+                {"extra": True},
+                {"phase": None},
+            ):
+                value = json.loads(json.dumps(base))
+                value["records"] = [{**record, **mutation}]
+                journal.write_text(json.dumps(value))
+                with self.subTest(mutation=mutation), self.assertRaises(UpgradeError):
+                    engine._load()
+
+    def test_rollback_record_and_terminal_status_cross_products_fail_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            operation_id = "op-rollback-matrix"
+            journal = Path(directory) / "journal.json"
+            engine = UpgradeEngine(
+                operation_id,
+                journal,
+                make_context(operation_id),
+                backend_adapter=FakeAdapter(),
+            )
+            planned = engine.plan()
+            failed_phase: dict[str, object] = {
+                "operation_id": operation_id,
+                "step_id": f"{operation_id}.discover",
+                "phase": "discover",
+                "outcome": "failed",
+                "error": "failure",
+                "context": make_context(operation_id),
+            }
+            rollback_context = make_context(operation_id, target="rollback")
+            verified_result: dict[str, object] = {
+                "restored_verified": True,
+                "runtime_validated": True,
+                "backend_roundtrip_valid": True,
+                "backend": "sqlite",
+                "fencing_token": rollback_context["fencing_token"],
+            }
+
+            def rollback_record(outcome: str = "started") -> dict[str, object]:
+                record: dict[str, object] = {
+                    "operation_id": operation_id,
+                    "step_id": f"{operation_id}.rollback",
+                    "phase": "rollback",
+                    "outcome": outcome,
+                    "context": rollback_context,
+                }
+                if outcome in {"rollback_verified", "rollback_completed"}:
+                    record["result"] = verified_result
+                if outcome == "ambiguous":
+                    record["error"] = "failure"
+                return record
+
+            mismatched_context = {
+                **rollback_context,
+                "authority_revision": "different-authority",
+            }
+            mismatched_context["barrier_identity_digest"] = canonical_barrier_digest(
+                mismatched_context
+            )
+            mismatched_context["envelope_digest"] = canonical_envelope_digest(mismatched_context)
+            cases: tuple[tuple[str, list[object], str, str, str], ...] = (
+                (
+                    "duplicate rollback",
+                    [failed_phase, rollback_record(), rollback_record()],
+                    "failed",
+                    "discover",
+                    "duplicate rollback record",
+                ),
+                (
+                    "phase after rollback",
+                    [failed_phase, rollback_record(), failed_phase],
+                    "failed",
+                    "discover",
+                    "phase follows rollback record",
+                ),
+                (
+                    "rollback operation mismatch",
+                    [failed_phase, {**rollback_record(), "operation_id": "other"}],
+                    "failed",
+                    "discover",
+                    "rollback identity is invalid",
+                ),
+                (
+                    "unknown rollback outcome",
+                    [failed_phase, {**rollback_record(), "outcome": "unknown"}],
+                    "failed",
+                    "discover",
+                    "rollback outcome is invalid",
+                ),
+                (
+                    "missing rollback context",
+                    [failed_phase, {**rollback_record(), "context": None}],
+                    "failed",
+                    "discover",
+                    "verified rollback context is required",
+                ),
+                (
+                    "new target rollback context",
+                    [
+                        failed_phase,
+                        {**rollback_record(), "context": make_context(operation_id)},
+                    ],
+                    "failed",
+                    "discover",
+                    "rollback context target is invalid",
+                ),
+                (
+                    "changed authority revision",
+                    [failed_phase, {**rollback_record(), "context": mismatched_context}],
+                    "failed",
+                    "discover",
+                    "rollback context mismatch: authority_revision",
+                ),
+                (
+                    "extra rollback field",
+                    [failed_phase, {**rollback_record(), "extra": True}],
+                    "failed",
+                    "discover",
+                    "rollback context is invalid",
+                ),
+                (
+                    "verified rollback without result mapping",
+                    [
+                        failed_phase,
+                        {**rollback_record("rollback_verified"), "result": None},
+                    ],
+                    "failed",
+                    "discover",
+                    "verified rollback lacks result evidence",
+                ),
+                (
+                    "verified rollback without result field",
+                    [
+                        failed_phase,
+                        {
+                            key: item
+                            for key, item in rollback_record("rollback_verified").items()
+                            if key != "result"
+                        },
+                    ],
+                    "failed",
+                    "discover",
+                    "rollback record fields are invalid",
+                ),
+                (
+                    "ambiguous rollback without error string",
+                    [failed_phase, {**rollback_record("ambiguous"), "error": None}],
+                    "safe-mode",
+                    "discover",
+                    "ambiguous rollback lacks error evidence",
+                ),
+                (
+                    "incomplete verified result",
+                    [
+                        failed_phase,
+                        {**rollback_record("rollback_verified"), "result": {}},
+                    ],
+                    "failed",
+                    "discover",
+                    "rollback result schema is invalid",
+                ),
+                (
+                    "failed status with rollback completion",
+                    [failed_phase, rollback_record("rollback_completed")],
+                    "failed",
+                    "discover",
+                    "failed journal has rollback completion",
+                ),
+                (
+                    "safe mode discards verified rollback",
+                    [failed_phase, rollback_record("rollback_verified")],
+                    "safe-mode",
+                    "discover",
+                    "safe-mode journal cannot discard verified rollback recovery",
+                ),
+                (
+                    "rolled back with wrong phase",
+                    [failed_phase, rollback_record("rollback_completed")],
+                    "rolled-back",
+                    "discover",
+                    "rolled-back journal phase is inconsistent",
+                ),
+            )
+            for name, records, status, phase, expected in cases:
+                value = json.loads(json.dumps(planned))
+                value.update(status=status, phase=phase, records=records)
+                journal.write_text(json.dumps(value))
+                with self.subTest(name=name), self.assertRaisesRegex(UpgradeError, expected):
+                    engine.apply({})
+
+    def test_successful_rollback_requires_and_writes_terminal_record(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            journal = Path(directory) / "journal.json"
+            engine = UpgradeEngine(
+                "op-success-rollback",
+                journal,
+                make_context("op-success-rollback"),
+                backend_adapter=FakeAdapter(),
+            )
+            engine.plan()
+            value = json.loads(journal.read_text())
+            value["status"] = "failed"
+            value["phase"] = "discover"
+            value["records"] = [
+                {
+                    "operation_id": "op-success-rollback",
+                    "step_id": "op-success-rollback.discover",
+                    "phase": "discover",
+                    "outcome": "failed",
+                    "error": "failed",
+                    "context": make_context("op-success-rollback"),
+                }
+            ]
+            journal.write_text(json.dumps(value))
+            result = engine.rollback(lambda _step, _state: {})
+            self.assertEqual("rolled-back", result["status"])
+            self.assertEqual("rollback_completed", result["records"][-1]["outcome"])
+
+            reloaded = UpgradeEngine(
+                "op-success-rollback",
+                journal,
+                make_context("op-success-rollback"),
+                backend_adapter=FakeAdapter(),
+            )
+            self.assertEqual("rollback", reloaded._load()["phase"])
+
+            valid = json.loads(journal.read_text())
+            tampered = json.loads(json.dumps(valid))
+            tampered["records"][-1]["context"]["envelope_digest"] = "e" * 64
+            journal.write_text(json.dumps(tampered))
+            with self.assertRaises(UpgradeError):
+                reloaded._load()
+
+            tampered = json.loads(json.dumps(valid))
+            tampered["records"][-1]["outcome"] = "rollback_verified"
+            journal.write_text(json.dumps(tampered))
+            with self.assertRaises(UpgradeError):
+                reloaded._load()
+
+    def test_rollback_verified_is_durable_before_release_and_revalidated(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            events: list[str] = []
+            journal = Path(directory) / "journal.json"
+
+            class OrderingAdapter(FakeAdapter):
+                def execute(self, phase: str, context: object) -> dict[str, object]:
+                    if phase == "rollback":
+                        events.append("restore")
+                    return super().execute(phase, context)
+
+                def begin_release_rollback_context(
+                    self, context: Mapping[str, object]
+                ) -> dict[str, object]:
+                    durable = json.loads(journal.read_text())
+                    self.assert_verified(durable)
+                    events.append("begin_release")
+                    return super().begin_release_rollback_context(context)
+
+                @staticmethod
+                def assert_verified(durable: Mapping[str, object]) -> None:
+                    records = cast(list[dict[str, object]], durable["records"])
+                    if records[-1]["outcome"] != "rollback_verified":
+                        raise AssertionError("rollback verification was not durable before release")
+
+                def revalidate_rollback(
+                    self, context: Mapping[str, object], result: Mapping[str, object]
+                ) -> dict[str, object]:
+                    events.append(f"revalidate:{self.rollback_status}")
+                    return super().revalidate_rollback(context, result)
+
+                def complete_release_rollback_context(
+                    self, context: Mapping[str, object]
+                ) -> dict[str, object]:
+                    events.append("complete_release")
+                    return super().complete_release_rollback_context(context)
+
+            adapter = OrderingAdapter()
+            _, engine = self._prepare_failed_journal(directory, "op-order", adapter)
+            result = engine.rollback(lambda _step, _state: {})
+            self.assertEqual(
+                [
+                    "restore",
+                    "begin_release",
+                    "revalidate:releasing",
+                    "complete_release",
+                    "revalidate:released",
+                ],
+                events,
+            )
+            self.assertEqual("rollback_completed", result["records"][-1]["outcome"])
+
+    def test_crash_during_release_resumes_without_repeating_restore(self) -> None:
+        for crash_point in ("begin", "complete"):
+            with self.subTest(crash_point=crash_point), tempfile.TemporaryDirectory() as directory:
+
+                class CrashAdapter(FakeAdapter):
+                    def __init__(self, point: str) -> None:
+                        super().__init__()
+                        self.crash_point = point
+                        self.crashed = False
+                        self.restore_calls = 0
+
+                    def execute(self, phase: str, context: object) -> dict[str, object]:
+                        if phase == "rollback":
+                            self.restore_calls += 1
+                        return super().execute(phase, context)
+
+                    def begin_release_rollback_context(
+                        self, context: Mapping[str, object]
+                    ) -> dict[str, object]:
+                        result = super().begin_release_rollback_context(context)
+                        if self.crash_point == "begin" and not self.crashed:
+                            self.crashed = True
+                            raise SystemExit("crash after durable releasing")
+                        return result
+
+                    def complete_release_rollback_context(
+                        self, context: Mapping[str, object]
+                    ) -> dict[str, object]:
+                        result = super().complete_release_rollback_context(context)
+                        if self.crash_point == "complete" and not self.crashed:
+                            self.crashed = True
+                            raise SystemExit("crash after durable released")
+                        return result
+
+                adapter = CrashAdapter(crash_point)
+                operation_id = f"op-crash-{crash_point}"
+                journal, engine = self._prepare_failed_journal(directory, operation_id, adapter)
+                with self.assertRaises(SystemExit):
+                    engine.rollback(lambda _step, _state: {})
+                interrupted = json.loads(journal.read_text())
+                self.assertEqual("rollback_verified", interrupted["records"][-1]["outcome"])
+                self.assertEqual(1, adapter.restore_calls)
+                recovered = UpgradeEngine(
+                    operation_id,
+                    journal,
+                    make_context(operation_id),
+                    backend_adapter=adapter,
+                ).rollback(lambda _step, _state: self.fail("restore handler was repeated"))
+                self.assertEqual("rolled-back", recovered["status"])
+                self.assertEqual("rollback_completed", recovered["records"][-1]["outcome"])
+                self.assertEqual("released", adapter.rollback_status)
+                self.assertEqual(1, adapter.restore_calls)
+
+    def test_sigkill_after_durable_releasing_recovers_without_second_restore(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            operation_id = "op-sigkill"
+            root = Path(directory)
+            journal, _ = self._prepare_failed_journal(directory, operation_id, FakeAdapter())
+            marker = root / "restore.marker"
+            authority = root / "authority.sqlite"
+            authority.touch()
+            control_path = root / "control.sqlite"
+            rollback_context = make_context(operation_id, target="rollback")
+            store = SQLiteRollbackControlStore(
+                control_path, cast(str, rollback_context["project_id"]), authority
+            )
+            control_record = {**rollback_context, "status": "held", "revision": 1}
+            store.cas(0, control_record)
+
+            class DurableDelegate(FakeAdapter):
+                def snapshot(self, phase: str, context: object) -> dict[str, object]:
+                    if phase == "rollback":
+                        return {**rollback_context, "rollback_context_verified": True}
+                    return super().snapshot(phase, context)
+
+                def execute(self, phase: str, context: object) -> dict[str, object]:
+                    if phase == "rollback":
+                        descriptor = os.open(marker, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+                        try:
+                            os.write(descriptor, b"restore\n")
+                            os.fsync(descriptor)
+                        finally:
+                            os.close(descriptor)
+                    return super().execute(phase, context)
+
+            class KillAfterBeginAdapter(SQLiteControlStoreAdapter):
+                def begin_release_rollback_context(
+                    self, context: Mapping[str, object]
+                ) -> Mapping[str, object]:
+                    super().begin_release_rollback_context(context)
+                    os.kill(os.getpid(), signal.SIGKILL)
+                    raise AssertionError("SIGKILL returned")
+
+            child = os.fork()
+            if child == 0:  # pragma: no branch - child is terminated by SIGKILL
+                try:
+                    child_store = SQLiteRollbackControlStore(
+                        control_path, cast(str, rollback_context["project_id"]), authority
+                    )
+                    child_adapter = KillAfterBeginAdapter(
+                        DurableDelegate(), child_store, StaticAuthorityRuntimeRereader()
+                    )
+                    UpgradeEngine(
+                        operation_id,
+                        journal,
+                        make_context(operation_id),
+                        backend_adapter=child_adapter,
+                    ).rollback(lambda _step, _state: {})
+                except BaseException:
+                    os._exit(91)
+                os._exit(92)
+            waited, status = os.waitpid(child, 0)
+            self.assertEqual(child, waited)
+            self.assertTrue(os.WIFSIGNALED(status))
+            self.assertEqual(signal.SIGKILL, os.WTERMSIG(status))
+            self.assertEqual(
+                "rollback_verified", json.loads(journal.read_text())["records"][-1]["outcome"]
+            )
+            self.assertEqual(["restore"], marker.read_text().splitlines())
+
+            recovery_store = SQLiteRollbackControlStore(
+                control_path, cast(str, rollback_context["project_id"]), authority
+            )
+            recovery_adapter = bind_control_store(
+                "sqlite",
+                DurableDelegate(),
+                recovery_store,
+                StaticAuthorityRuntimeRereader(),
+            )
+            recovered = UpgradeEngine(
+                operation_id,
+                journal,
+                make_context(operation_id),
+                backend_adapter=recovery_adapter,
+            ).rollback(lambda _step, _state: self.fail("restore handler was repeated"))
+            self.assertEqual("rolled-back", recovered["status"])
+            self.assertEqual("released", recovery_store.snapshot(operation_id)["status"])
+            self.assertEqual(["restore"], marker.read_text().splitlines())
+
+    def test_rollback_requires_adapter_verified_context_and_cannot_forge_evidence(self) -> None:
+        class UnverifiedAdapter(FakeAdapter):
+            def snapshot(self, phase: str, context: object) -> dict[str, object]:
+                result = super().snapshot(phase, context)
+                if phase == "rollback":
+                    result["rollback_context_verified"] = False
+                return result
+
+        with tempfile.TemporaryDirectory() as directory:
+            journal = Path(directory) / "journal.json"
+            engine = UpgradeEngine(
+                "op-unverified",
+                journal,
+                make_context("op-unverified"),
+                backend_adapter=UnverifiedAdapter(),
+            )
+            engine.plan()
+            with self.assertRaises(UpgradeError):
+                engine.rollback(lambda _step, _state: {})
+            self.assertEqual([], json.loads(journal.read_text())["records"])
+
+    def test_rollback_rejects_unbound_adapter_context_before_journal(self) -> None:
+        class MismatchedAdapter(FakeAdapter):
+            def snapshot(self, phase: str, context: object) -> dict[str, object]:
+                result = super().snapshot(phase, context)
+                if phase == "rollback":
+                    result["authority_revision"] = "different-authority"
+                    result["barrier_identity_digest"] = canonical_barrier_digest(result)
+                    result["envelope_digest"] = canonical_envelope_digest(result)
+                return result
+
+        with tempfile.TemporaryDirectory() as directory:
+            journal = Path(directory) / "journal.json"
+            engine = UpgradeEngine(
+                "op-mismatched",
+                journal,
+                make_context("op-mismatched"),
+                backend_adapter=MismatchedAdapter(),
+            )
+            engine.plan()
+            with self.assertRaises(UpgradeError):
+                engine.rollback(lambda _step, _state: {})
+            self.assertEqual([], json.loads(journal.read_text())["records"])
+
+    def test_rollback_handler_cannot_override_adapter_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            journal = Path(directory) / "journal.json"
+            engine = UpgradeEngine(
+                "op-handler-evidence",
+                journal,
+                make_context("op-handler-evidence"),
+                backend_adapter=FakeAdapter(),
+            )
+            engine.plan()
+            value = json.loads(journal.read_text())
+            value["status"] = "failed"
+            value["phase"] = "discover"
+            value["records"] = [
+                {
+                    "operation_id": "op-handler-evidence",
+                    "step_id": "op-handler-evidence.discover",
+                    "phase": "discover",
+                    "outcome": "failed",
+                    "error": "failed",
+                    "context": make_context("op-handler-evidence"),
+                }
+            ]
+            journal.write_text(json.dumps(value))
+
+            def forge(_step: str, _state: Mapping[str, object]) -> dict[str, object]:
+                return {"restored_verified": False}
+
+            with self.assertRaises(UpgradeError):
+                engine.rollback(forge)
+            self.assertEqual("safe-mode", engine._load()["status"])
+
+    def test_rollback_uses_durable_sqlite_control_record(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            operation_id = "op-control-store"
+            authority = Path(directory) / "authority.sqlite"
+            authority.touch()
+            control = SQLiteRollbackControlStore(
+                Path(directory) / "control.sqlite",
+                cast(str, CONTEXT["project_id"]),
+                authority,
+            )
+            control_record = {
+                **ROLLBACK_CONTEXT,
+                "operation_id": operation_id,
+                "status": "held",
+                "revision": 1,
+            }
+            control_record["barrier_identity_digest"] = canonical_barrier_digest(control_record)
+            control_record["envelope_digest"] = canonical_envelope_digest(control_record)
+            control.cas(0, control_record)
+
+            lock_observations: list[bool] = []
+
+            class ControlDelegate(FakeAdapter):
+                def snapshot(self, phase: str, context: object) -> dict[str, object]:
+                    lock_observations.append(control.operation_owned_by_current_thread)
+                    if phase == "rollback":
+                        return {**control_record, "rollback_context_verified": True}
+                    return super().snapshot(phase, context)
+
+                def execute(self, phase: str, context: object) -> dict[str, object]:
+                    lock_observations.append(control.operation_owned_by_current_thread)
+                    return super().execute(phase, context)
+
+            adapter = bind_control_store(
+                "sqlite", ControlDelegate(), control, StaticAuthorityRuntimeRereader()
+            )
+
+            journal = Path(directory) / "journal.json"
+            engine = UpgradeEngine(
+                operation_id,
+                journal,
+                make_context(operation_id),
+                backend_adapter=adapter,
+            )
+            engine.plan()
+            value = json.loads(journal.read_text())
+            value["status"] = "failed"
+            value["phase"] = "discover"
+            value["records"] = [
+                {
+                    "operation_id": operation_id,
+                    "step_id": f"{operation_id}.discover",
+                    "phase": "discover",
+                    "outcome": "failed",
+                    "error": "failed",
+                    "context": make_context(operation_id),
+                }
+            ]
+            journal.write_text(json.dumps(value))
+            result = engine.rollback(lambda _step, _state: {})
+            self.assertEqual("rolled-back", result["status"])
+            self.assertEqual("released", control.snapshot(operation_id)["status"])
+            self.assertTrue(lock_observations)
+            self.assertTrue(all(lock_observations))
+            reloaded = UpgradeEngine(
+                operation_id,
+                journal,
+                make_context(operation_id),
+                backend_adapter=adapter,
+            )
+            self.assertEqual("rolled-back", reloaded._load()["status"])
+
+    def test_apply_adapter_fault_boundaries_are_durable_and_fail_closed(self) -> None:  # noqa: C901
+        class CompleteAdapter(FakeAdapter):
+            def __init__(self, fault: str) -> None:
+                super().__init__()
+                self.fault = fault
+
+            def snapshot(self, phase: str, context: object) -> dict[str, object]:
+                result = super().snapshot(phase, context)
+                if self.fault == f"{phase}-snapshot-shape":
+                    key = {
+                        "preflight": "preflight_snapshot",
+                        "quiesce": "quiescence_snapshot",
+                        "commit": "admitted_snapshot",
+                        "reopen": "reopen_snapshot",
+                    }[phase]
+                    result[key] = []
+                if self.fault == "snapshot-identity" and phase == "discover":
+                    result["authority_revision"] = "changed"
+                return result
+
+            def execute(self, phase: str, _context: object) -> dict[str, object]:  # noqa: C901
+                result: dict[str, object] = {
+                    "backend": "sqlite",
+                    "fencing_token": "fence-1",
+                    "backend_identity_verified": True,
+                    "mutates_authority": phase == "commit",
+                }
+                if phase == "discover":
+                    result.update(release_authentic=True, runtime_supported=True)
+                elif phase == "preflight":
+                    result.update(
+                        preflight_admitted=True,
+                        capacity_verified=True,
+                        preflight_snapshot=ADMISSION,
+                    )
+                elif phase == "quiesce":
+                    result.update(
+                        barrier_acquired=True,
+                        workers_drained=True,
+                        leases_fenced=True,
+                        fencing_verified=True,
+                        quiescence_snapshot=ADMISSION,
+                    )
+                elif phase == "backup":
+                    result.update(backup_verified=True, restore_roundtrip_verified=True)
+                elif phase == "stage":
+                    result.update(staged_verified=True, manifest_verified=True)
+                elif phase == "commit":
+                    result.update(
+                        quiesced=True,
+                        backup_verified=True,
+                        selector_verified=True,
+                        selector_commit_atomic=True,
+                        fencing_verified=True,
+                        selector_before_verified=True,
+                        selector_after_verified=True,
+                        admitted_snapshot=ADMISSION,
+                        current_snapshot=ADMISSION,
+                    )
+                elif phase == "validate":
+                    result.update(
+                        runtime_validated=True,
+                        backend_roundtrip_valid=True,
+                        projections_valid=True,
+                        binding_valid=True,
+                    )
+                elif phase == "reopen":
+                    result.update(
+                        validated=True,
+                        barrier_held=True,
+                        reopen_snapshot=ADMISSION,
+                    )
+                if self.fault == f"{phase}-result-shape":
+                    key = {
+                        "preflight": "preflight_snapshot",
+                        "quiesce": "quiescence_snapshot",
+                        "commit": "current_snapshot",
+                        "reopen": "reopen_snapshot",
+                    }[phase]
+                    result[key] = []
+                if self.fault == "missing-evidence" and phase == "discover":
+                    result.pop("release_authentic")
+                if self.fault == "backend-mismatch" and phase == "discover":
+                    result["backend"] = "git"
+                if self.fault == "stale-fence" and phase == "quiesce":
+                    result["fencing_token"] = f"{result['fencing_token']}-stale"
+                if self.fault == "ambiguous" and phase == "discover":
+                    result["ambiguous"] = True
+                return result
+
+        cases = (
+            ("snapshot-identity", "discover", "phase failed"),
+            ("missing-evidence", "discover", "phase evidence incomplete"),
+            ("backend-mismatch", "discover", "phase backend mismatch"),
+            ("stale-fence", "quiesce", "phase fencing mismatch"),
+            ("ambiguous", "discover", "phase outcome is ambiguous"),
+            ("preflight-snapshot-shape", "preflight", "phase failed"),
+            ("quiesce-snapshot-shape", "quiesce", "phase failed"),
+            ("commit-snapshot-shape", "commit", "phase failed"),
+            ("reopen-snapshot-shape", "reopen", "phase failed"),
+            ("preflight-result-shape", "preflight", "phase admission denied"),
+            ("quiesce-result-shape", "quiesce", "phase admission denied"),
+            ("commit-result-shape", "commit", "phase admission denied"),
+            ("reopen-result-shape", "reopen", "phase admission denied"),
+        )
+        for fault, failed_phase, expected in cases:
+            with self.subTest(fault=fault), tempfile.TemporaryDirectory() as directory:
+                engine = UpgradeEngine(
+                    f"op-{fault}",
+                    Path(directory) / "journal.json",
+                    make_context(f"op-{fault}"),
+                    backend_adapter=CompleteAdapter(fault),
+                )
+                engine.plan()
+                with self.assertRaisesRegex(UpgradeError, expected):
+                    engine.apply(dict.fromkeys(PHASES, lambda _step, _state: {}))
+                durable = json.loads(engine.journal.read_text())
+                self.assertEqual(failed_phase, durable["phase"])
+                self.assertEqual(
+                    "safe-mode" if fault == "ambiguous" else "failed",
+                    durable["status"],
+                )
+
+        with tempfile.TemporaryDirectory() as directory:
+            operation_id = "op-handler-conflict"
+            engine = UpgradeEngine(
+                operation_id,
+                Path(directory) / "journal.json",
+                make_context(operation_id),
+                backend_adapter=CompleteAdapter("handler-conflict"),
+            )
+            engine.plan()
+
+            def conflict(_step: str, _state: object) -> dict[str, object]:
+                return {"backend": "git"}
+
+            with self.assertRaisesRegex(UpgradeError, "phase failed"):
+                engine.apply(
+                    {**dict.fromkeys(PHASES, lambda _step, _state: {}), "discover": conflict}
+                )
+            self.assertEqual("failed", json.loads(engine.journal.read_text())["status"])
+
+    def test_public_operation_guards_reject_invalid_and_unbound_operations(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for operation_id in ("", "contains:separator"):
+                with self.subTest(operation_id=operation_id), self.assertRaises(UpgradeError):
+                    UpgradeEngine(operation_id, root / "invalid.json", CONTEXT)
+
+            long_operation = "o" * 120
+            with self.assertRaisesRegex(UpgradeError, "invalid operation_id"):
+                UpgradeEngine(
+                    long_operation,
+                    root / "long.json",
+                    make_context(long_operation),
+                )
+
+            operation_id = "op-unbound"
+            engine = UpgradeEngine(operation_id, root / "journal.json", make_context(operation_id))
+            self.assertEqual(
+                {"operation_id": operation_id, "phases": list(PHASES), "checked": True},
+                engine.check(),
+            )
+            engine.plan()
+            with self.assertRaisesRegex(UpgradeError, "backend adapter is required"):
+                engine.apply({})
+            with self.assertRaisesRegex(UpgradeError, "backend adapter is required"):
+                engine.rollback(lambda _step, _state: {})
+
+            missing_handler = UpgradeEngine(
+                "op-missing-handler",
+                root / "missing-handler.json",
+                make_context("op-missing-handler"),
+                backend_adapter=FakeAdapter(),
+            )
+            missing_handler.plan()
+            with self.assertRaisesRegex(UpgradeError, "missing phase handler: discover"):
+                missing_handler.apply({})
+
+    def test_rollback_authority_and_release_faults_preserve_recovery_state(self) -> None:  # noqa: C901
+        class FaultAdapter(FakeAdapter):
+            def __init__(self, fault: str) -> None:
+                super().__init__()
+                self.fault = fault
+                self.verifications = 0
+
+            def snapshot(self, phase: str, context: object) -> dict[str, object]:
+                if self.fault == "new-target" and phase == "rollback":
+                    operation_id = str(cast(Mapping[str, object], context)["operation_id"])
+                    return {
+                        **make_context(operation_id),
+                        "rollback_context_verified": True,
+                    }
+                return super().snapshot(phase, context)
+
+            def verify_rollback_context(
+                self, context: Mapping[str, object]
+            ) -> dict[str, object] | None:
+                self.verifications += 1
+                if self.fault == "verify-raises":
+                    raise RuntimeError("authority unavailable")
+                if self.fault == "verify-missing":
+                    return None
+                durable = super().verify_rollback_context(context)
+                if durable is not None and self.verifications >= 2:
+                    if self.fault == "identity-changed":
+                        durable["authority_revision"] = "changed"
+                    if self.fault == "barrier-state":
+                        durable["status"] = "ambiguous"
+                return durable
+
+            def execute(self, phase: str, context: object) -> dict[str, object]:
+                result = super().execute(phase, context)
+                if phase == "rollback" and self.fault == "runtime-unverified":
+                    result["runtime_validated"] = False
+                if phase == "rollback" and self.fault == "result-incomplete":
+                    result.pop("backend")
+                return result
+
+            def begin_release_rollback_context(
+                self, context: Mapping[str, object]
+            ) -> dict[str, object]:
+                result = super().begin_release_rollback_context(context)
+                if self.fault == "begin-not-durable":
+                    return {"status": "held"}
+                return result
+
+            def complete_release_rollback_context(
+                self, context: Mapping[str, object]
+            ) -> dict[str, object]:
+                result = super().complete_release_rollback_context(context)
+                if self.fault == "complete-not-durable":
+                    return {"status": "releasing"}
+                return result
+
+            def revalidate_rollback(
+                self, context: Mapping[str, object], result: Mapping[str, object]
+            ) -> dict[str, object]:
+                if self.fault == "revalidation-invalid":
+                    return cast(dict[str, object], None)
+                evidence = super().revalidate_rollback(context, result)
+                if self.fault == "revalidation-changed":
+                    evidence["runtime_validated"] = False
+                return evidence
+
+        cases = (
+            ("new-target", "failed", None),
+            ("verify-raises", "failed", None),
+            ("verify-missing", "failed", None),
+            ("runtime-unverified", "safe-mode", "ambiguous"),
+            ("result-incomplete", "safe-mode", "ambiguous"),
+            ("handler-conflict", "safe-mode", "ambiguous"),
+            ("handler-evidence", "safe-mode", "ambiguous"),
+            ("identity-changed", "failed", "rollback_verified"),
+            ("barrier-state", "failed", "rollback_verified"),
+            ("begin-not-durable", "failed", "rollback_verified"),
+            ("complete-not-durable", "failed", "rollback_verified"),
+            ("revalidation-invalid", "failed", "rollback_verified"),
+            ("revalidation-changed", "failed", "rollback_verified"),
+        )
+        for fault, expected_status, expected_outcome in cases:
+            with self.subTest(fault=fault), tempfile.TemporaryDirectory() as directory:
+                adapter = FaultAdapter(fault)
+                journal, engine = self._prepare_failed_journal(directory, f"op-{fault}", adapter)
+
+                def handler(
+                    _step: str, _state: object, current_fault: str = fault
+                ) -> dict[str, object]:
+                    if current_fault == "handler-conflict":
+                        return {"backend": "git"}
+                    if current_fault == "handler-evidence":
+                        return {"restored_verified": True}
+                    return {}
+
+                with self.assertRaises(UpgradeError):
+                    engine.rollback(handler)
+                durable = json.loads(journal.read_text())
+                self.assertEqual(expected_status, durable["status"])
+                rollback_records = [
+                    record for record in durable["records"] if record["phase"] == "rollback"
+                ]
+                if expected_outcome is None:
+                    self.assertEqual([], rollback_records)
+                else:
+                    self.assertEqual(expected_outcome, rollback_records[-1]["outcome"])
+
+    def test_missing_release_api_keeps_verified_rollback_durable(self) -> None:
+        class RestoreOnlyAdapter:
+            def snapshot(self, phase: str, context: Mapping[str, object]) -> dict[str, object]:
+                if phase == "rollback":
+                    return {
+                        **make_context(str(context["operation_id"]), target="rollback"),
+                        "rollback_context_verified": True,
+                    }
+                return {**ADMISSION, **context}
+
+            def verify_rollback_context(self, context: Mapping[str, object]) -> dict[str, object]:
+                return {**context, "status": "held"}
+
+            def execute(self, phase: str, _context: Mapping[str, object]) -> dict[str, object]:
+                if phase != "rollback":
+                    return {}
+                return {
+                    "restored_verified": True,
+                    "runtime_validated": True,
+                    "backend_roundtrip_valid": True,
+                    "backend": "sqlite",
+                    "fencing_token": "fence-1",
+                }
+
+        with tempfile.TemporaryDirectory() as directory:
+            journal, engine = self._prepare_failed_journal(
+                directory,
+                "op-missing-release",
+                RestoreOnlyAdapter(),
+            )
+            with self.assertRaisesRegex(UpgradeError, "release recovery API is unavailable"):
+                engine.rollback(lambda _step, _state: {})
+            durable = json.loads(journal.read_text())
+            self.assertEqual("failed", durable["status"])
+            self.assertEqual("rollback_verified", durable["records"][-1]["outcome"])
+
+    def test_durable_journal_write_and_lock_faults_fail_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            operation_id = "op-write-fault"
+
+            with patch("tools.upgrade_engine.os.fsync", side_effect=OSError("fsync failed")):
+                engine = UpgradeEngine(
+                    operation_id,
+                    root / "write.json",
+                    make_context(operation_id),
+                    backend_adapter=FakeAdapter(),
+                )
+                with self.assertRaisesRegex(UpgradeError, "journal write failed"):
+                    engine.plan()
+                self.assertFalse(engine.journal.exists())
+
+            with (
+                patch("tools.upgrade_engine.os.fsync", side_effect=OSError("fsync failed")),
+                patch.object(Path, "unlink", side_effect=OSError("cleanup failed")),
+            ):
+                engine = UpgradeEngine(
+                    operation_id,
+                    root / "cleanup.json",
+                    make_context(operation_id),
+                    backend_adapter=FakeAdapter(),
+                )
+                with self.assertRaisesRegex(UpgradeError, "journal cleanup failed"):
+                    engine.plan()
+
+            with patch("tools.upgrade_engine.fcntl", None):
+                engine = UpgradeEngine(
+                    operation_id,
+                    root / "unavailable.json",
+                    make_context(operation_id),
+                    backend_adapter=FakeAdapter(),
+                )
+                with self.assertRaisesRegex(UpgradeError, "lock is unavailable"):
+                    engine.plan()
+
+            lock_path = root / "contended.lock"
+            lock_path.touch()
+            with lock_path.open("a+") as stream:
+                fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                engine = UpgradeEngine(
+                    operation_id,
+                    root / "timeout.json",
+                    make_context(operation_id),
+                    lock_path=lock_path,
+                    backend_adapter=FakeAdapter(),
+                )
+                with (
+                    patch(
+                        "tools.upgrade_engine.time.monotonic",
+                        side_effect=(0.0, 1.0, 31.0),
+                    ),
+                    patch("tools.upgrade_engine.time.sleep") as sleep,
+                    self.assertRaisesRegex(UpgradeError, "lock acquisition timed out"),
+                ):
+                    engine.plan()
+                sleep.assert_called_once_with(0.01)
+                fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
+
+            engine = UpgradeEngine(
+                operation_id,
+                root / "lock-error.json",
+                make_context(operation_id),
+                backend_adapter=FakeAdapter(),
+            )
+            with (
+                patch("tools.upgrade_engine.fcntl.flock", side_effect=OSError("lock failed")),
+                self.assertRaisesRegex(UpgradeError, "lock acquisition failed"),
+            ):
+                engine.plan()
+
+    def test_loaded_rollback_requires_authority_and_runtime_revalidation(self) -> None:
+        class MissingAuthority(FakeAdapter):
+            def verify_rollback_context(
+                self, _context: Mapping[str, object]
+            ) -> dict[str, object] | None:
+                return None
+
+        class RaisingAuthority(FakeAdapter):
+            def verify_rollback_context(
+                self, _context: Mapping[str, object]
+            ) -> dict[str, object] | None:
+                raise RuntimeError("authority unavailable")
+
+        class RaisingRuntime(FakeAdapter):
+            def revalidate_rollback(
+                self, _context: Mapping[str, object], _result: Mapping[str, object]
+            ) -> dict[str, object]:
+                raise RuntimeError("runtime unavailable")
+
+        class ChangedRuntime(FakeAdapter):
+            def revalidate_rollback(
+                self, context: Mapping[str, object], result: Mapping[str, object]
+            ) -> dict[str, object]:
+                evidence = super().revalidate_rollback(context, result)
+                evidence["runtime_validated"] = False
+                return evidence
+
+        class RestoreOnlyAdapter:
+            def snapshot(self, _phase: str, _context: Mapping[str, object]) -> dict[str, object]:
+                return {}
+
+            def verify_rollback_context(self, context: Mapping[str, object]) -> dict[str, object]:
+                return dict(context)
+
+            def execute(self, _phase: str, _context: Mapping[str, object]) -> dict[str, object]:
+                return {}
+
+        with tempfile.TemporaryDirectory() as directory:
+            operation_id = "op-reload-rollback"
+            journal, engine = self._prepare_failed_journal(directory, operation_id, FakeAdapter())
+            completed = engine.rollback(lambda _step, _state: {})
+            self.assertEqual("rolled-back", completed["status"])
+            durable = journal.read_text()
+            cases: tuple[tuple[str, BackendAdapter, str], ...] = (
+                ("authority missing", MissingAuthority(), "not verified by authority"),
+                ("authority raises", RaisingAuthority(), "authority verification failed"),
+                (
+                    "runtime API missing",
+                    RestoreOnlyAdapter(),
+                    "rollback revalidation is unavailable",
+                ),
+                ("runtime raises", RaisingRuntime(), "rollback revalidation failed"),
+                ("runtime changed", ChangedRuntime(), "runtime is not revalidated"),
+            )
+            for name, adapter, expected in cases:
+                journal.write_text(durable)
+                reloaded = UpgradeEngine(
+                    operation_id,
+                    journal,
+                    make_context(operation_id),
+                    backend_adapter=adapter,
+                )
+                with self.subTest(name=name), self.assertRaisesRegex(UpgradeError, expected):
+                    reloaded.apply({})
+
+    def test_apply_rejects_failed_state_and_unreconciled_rollback_record(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            journal, failed = self._prepare_failed_journal(
+                directory, "op-explicit-recovery", FakeAdapter()
+            )
+            with self.assertRaisesRegex(UpgradeError, "requires explicit recovery"):
+                failed.apply({})
+
+            value = json.loads(journal.read_text())
+            value["records"].append(
+                {
+                    "operation_id": "op-explicit-recovery",
+                    "step_id": "op-explicit-recovery.rollback",
+                    "phase": "rollback",
+                    "outcome": "started",
+                    "context": make_context("op-explicit-recovery", target="rollback"),
+                }
+            )
+            journal.write_text(json.dumps(value))
+            with self.assertRaisesRegex(UpgradeError, "requires explicit reconciliation"):
+                failed.rollback(lambda _step, _state: {})
+
+    def test_apply_resumes_after_a_durable_success_without_repeating_it(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            operation_id = "op-resume-success"
+            journal = Path(directory) / "journal.json"
+            engine = UpgradeEngine(
+                operation_id,
+                journal,
+                make_context(operation_id),
+                backend_adapter=FakeAdapter(),
+            )
+            value = engine.plan()
+            value.update(
+                status="running",
+                phase="discover",
+                records=[
+                    {
+                        "operation_id": operation_id,
+                        "step_id": f"{operation_id}.discover",
+                        "phase": "discover",
+                        "outcome": "success",
+                        "context": make_context(operation_id),
+                        "result": {"durably_completed": True},
+                    }
+                ],
+            )
+            journal.write_text(json.dumps(value))
+            called: list[str] = []
+
+            def preflight(step_id: str, _state: object) -> dict[str, object]:
+                called.append(step_id)
+                return {}
+
+            with self.assertRaisesRegex(UpgradeError, "phase evidence incomplete: preflight"):
+                engine.apply({"preflight": preflight})
+            self.assertEqual([f"{operation_id}.preflight"], called)
+            durable = json.loads(journal.read_text())
+            self.assertEqual(
+                ["discover", "preflight"], [item["phase"] for item in durable["records"]]
+            )
+
+    def test_started_phase_requires_explicit_recovery(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            journal = Path(directory) / "journal.json"
+            engine = UpgradeEngine(
+                "op-5", journal, make_context("op-5"), backend_adapter=FakeAdapter()
+            )
+            engine.plan()
+            value = json.loads(journal.read_text())
+            value["status"] = "running"
+            value["phase"] = "discover"
+            value["records"] = [
+                {
+                    "operation_id": "op-5",
+                    "step_id": "op-5.discover",
+                    "phase": "discover",
+                    "outcome": "started",
+                    "context": make_context("op-5"),
+                }
+            ]
+            journal.write_text(json.dumps(value))
+            with self.assertRaises(UpgradeError):
+                engine.apply({})
+
+    def test_authority_probe_failure_precedes_handler(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            engine = UpgradeEngine(
+                "op-probe",
+                Path(directory) / "journal.json",
+                make_context("op-probe"),
+                backend_adapter=FailingAdapter(),
+            )
+            engine.plan()
+            called = False
+
+            def handler(_operation: str, _state: object) -> dict[str, object]:
+                nonlocal called
+                called = True
+                return {"mutates_authority": False}
+
+            with self.assertRaises(UpgradeError):
+                engine.apply(dict.fromkeys(PHASES, handler))
+            self.assertFalse(called)
+
+
+if __name__ == "__main__":
+    unittest.main()
