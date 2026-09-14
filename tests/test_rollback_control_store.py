@@ -9,6 +9,7 @@ import tempfile
 import threading
 import unittest
 from collections.abc import Mapping
+from contextlib import closing
 from pathlib import Path
 
 from tools.rollback_control_store import (
@@ -42,6 +43,13 @@ RECORD = {
 }
 RECORD["barrier_identity_digest"] = canonical_barrier_digest(RECORD)
 RECORD["envelope_digest"] = canonical_envelope_digest(RECORD)
+RELEASE_EVIDENCE = {
+    "restored_verified": True,
+    "runtime_validated": True,
+    "backend_roundtrip_valid": True,
+    "backend": "sqlite",
+    "fencing_token": "fence-1",
+}
 
 
 class RollbackControlStoreTests(unittest.TestCase):
@@ -82,11 +90,13 @@ class RollbackControlStoreTests(unittest.TestCase):
             self.assertFalse(
                 store.verify_rollback_context({**created, "envelope_digest": "e" * 64})
             )
-            releasing = store.cas(1, {**created, "status": "releasing", "revision": 2})
-            released = store.cas(2, {**releasing, "status": "released", "revision": 3})
+            with store.operation_lock():
+                store._begin_release_locked("op-1")
+                authorization = store._authorize_release_locked(created, RELEASE_EVIDENCE)
+                released = store._complete_release_locked("op-1", authorization)
             self.assertEqual("released", released["status"])
             self.assertEqual(3, store.snapshot("op-1")["revision"])
-            with sqlite3.connect(Path(directory) / "control.sqlite") as connection:
+            with closing(sqlite3.connect(Path(directory) / "control.sqlite")) as connection:
                 self.assertEqual("wal", connection.execute("PRAGMA journal_mode").fetchone()[0])
 
     def test_status_transition_is_fail_closed(self) -> None:
@@ -96,6 +106,18 @@ class RollbackControlStoreTests(unittest.TestCase):
             releasing = store.cas(1, {**RECORD, "status": "releasing", "revision": 2})
             with self.assertRaises(ControlStoreError):
                 store.cas(2, {**releasing, "status": "held", "revision": 3})
+
+    def test_released_barrier_is_terminal_and_cannot_be_made_ambiguous(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            store = SQLiteRollbackControlStore(Path(directory) / "control.sqlite", PROJECT)
+            store.cas(0, RECORD)
+            with store.operation_lock():
+                store._begin_release_locked("op-1")
+                authorization = store._authorize_release_locked(RECORD, RELEASE_EVIDENCE)
+                released = store._complete_release_locked("op-1", authorization)
+            self.assertEqual("released", released["status"])
+            with self.assertRaises(ControlStoreError):
+                store.cas(3, {**released, "status": "ambiguous", "revision": 4})
 
     def test_ambiguous_requires_explicit_newer_reconciliation(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -120,8 +142,9 @@ class RollbackControlStoreTests(unittest.TestCase):
             path = Path(directory) / "control.sqlite"
             store = SQLiteRollbackControlStore(path, PROJECT)
             store.cas(0, RECORD)
-            with sqlite3.connect(path) as connection:
+            with closing(sqlite3.connect(path)) as connection:
                 connection.execute("UPDATE control_meta SET value='99' WHERE key='schema_version'")
+                connection.commit()
             with self.assertRaises(ControlStoreError):
                 store.snapshot("op-1")
 
@@ -156,8 +179,9 @@ class RollbackControlStoreTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             authority = root / "authority.sqlite"
-            with sqlite3.connect(authority) as connection:
+            with closing(sqlite3.connect(authority)) as connection:
                 connection.execute("CREATE TABLE authority_payload(value TEXT)")
+                connection.commit()
             control = root / "control.sqlite"
             store = SQLiteRollbackControlStore(control, PROJECT, authority)
             original = root / "original-control.sqlite"
@@ -166,7 +190,7 @@ class RollbackControlStoreTests(unittest.TestCase):
 
             with self.assertRaises(ControlStoreError):
                 store.cas(0, RECORD)
-            with sqlite3.connect(authority) as connection:
+            with closing(sqlite3.connect(authority)) as connection:
                 tables = {
                     row[0]
                     for row in connection.execute(
@@ -196,13 +220,14 @@ class RollbackControlStoreTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             authority = root / "authority.sqlite"
-            with sqlite3.connect(authority) as connection:
+            with closing(sqlite3.connect(authority)) as connection:
                 connection.execute("CREATE TABLE authority_payload(value TEXT)")
+                connection.commit()
             store = SwappingStore(root / "control.sqlite", PROJECT, authority)
 
             with self.assertRaises(ControlStoreError):
                 store.cas(0, RECORD)
-            with sqlite3.connect(authority) as connection:
+            with closing(sqlite3.connect(authority)) as connection:
                 tables = {
                     row[0]
                     for row in connection.execute(
@@ -235,13 +260,14 @@ class RollbackControlStoreTests(unittest.TestCase):
                 store.with_barrier(0, RECORD, fail)
             self.assertEqual("held", store.snapshot("op-1")["status"])
 
-    def test_release_reconciliation_completes_releasing_barrier(self) -> None:
+    def test_release_reconciliation_requires_verified_engine_recovery(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             store = SQLiteRollbackControlStore(Path(directory) / "control.sqlite", PROJECT)
             held = store.cas(0, RECORD)
             releasing = store.cas(1, {**held, "status": "releasing", "revision": 2})
-            self.assertEqual("released", store.reconcile_release("op-1")["status"])
-            self.assertEqual(3, store.snapshot("op-1")["revision"])
+            with self.assertRaises(ControlStoreError):
+                store.reconcile_release("op-1")
+            self.assertEqual(2, store.snapshot("op-1")["revision"])
             self.assertEqual("releasing", releasing["status"])
 
     def test_with_barrier_rejects_reentrant_store_access(self) -> None:
@@ -291,26 +317,13 @@ class RollbackControlStoreTests(unittest.TestCase):
             worker.join()
             self.assertEqual(["control barrier is missing"], errors)
 
-    def test_release_fault_leaves_durable_releasing_barrier(self) -> None:
-        class FaultingStore(SQLiteRollbackControlStore):
-            fail_on_cas: int | None = None
-            cas_calls = 0
-
-            def _cas_locked(
-                self, expected_revision: int, supplied: dict[str, object]
-            ) -> dict[str, object]:
-                self.cas_calls += 1
-                if self.cas_calls == self.fail_on_cas:
-                    raise OSError("injected release fault")
-                return super()._cas_locked(expected_revision, supplied)
-
+    def test_releasing_barrier_cannot_be_completed_without_authority_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            store = FaultingStore(Path(directory) / "control.sqlite", PROJECT)
+            store = SQLiteRollbackControlStore(Path(directory) / "control.sqlite", PROJECT)
             store.cas(0, RECORD)
-            store.cas_calls = 0
-            store.fail_on_cas = 2
-            with self.assertRaises(OSError):
-                store.release("op-1")
+            store.begin_release("op-1")
+            with self.assertRaises(ControlStoreError):
+                store.reconcile_release("op-1")
             self.assertEqual("releasing", store.snapshot("op-1")["status"])
 
     def test_cas_conflict_and_binding_mismatch_fail_closed(self) -> None:

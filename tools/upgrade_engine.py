@@ -29,7 +29,7 @@ except ImportError:  # pragma: no cover - the coordinator is POSIX-only
     fcntl = None  # type: ignore[assignment]
 
 PHASES = ("discover", "preflight", "quiesce", "backup", "stage", "commit", "validate", "reopen")
-JOURNAL_SCHEMA_VERSION = 2
+JOURNAL_SCHEMA_VERSION = 3
 MAX_OPERATION_ID_LENGTH = 128 - max(len(f".{phase}") for phase in (*PHASES, "rollback"))
 
 
@@ -91,7 +91,6 @@ TOP_LEVEL_FIELDS = {
     "phase",
     "context",
     "records",
-    "rollback_verified",
 }
 RECORD_FIELDS = {"operation_id", "step_id", "phase", "outcome", "result", "error", "context"}
 CONTEXT_FIELDS = ENVELOPE_FIELDS
@@ -229,7 +228,6 @@ class UpgradeEngine:
                 "phase": None,
                 "context": asdict(self.context),
                 "records": [],
-                "rollback_verified": False,
             }
             _write(self.journal, value)
             return value
@@ -246,8 +244,6 @@ class UpgradeEngine:
             or value.get("status") not in STATUSES
         ):
             raise UpgradeError("upgrade journal identity or records are invalid")
-        if type(value.get("rollback_verified")) is not bool:
-            raise UpgradeError("upgrade journal rollback verification is invalid")
         context = value.get("context")
         if not isinstance(context, dict) or context != asdict(self.context):
             raise UpgradeError("upgrade journal context is invalid or changed")
@@ -270,7 +266,12 @@ class UpgradeEngine:
                     or record.get("step_id") != f"{self.operation_id}.rollback"
                 ):
                     raise UpgradeError("upgrade journal rollback identity is invalid")
-                if record.get("outcome") not in {"started", "rollback_completed", "ambiguous"}:
+                if record.get("outcome") not in {
+                    "started",
+                    "rollback_verified",
+                    "rollback_completed",
+                    "ambiguous",
+                }:
                     raise UpgradeError("upgrade journal rollback outcome is invalid")
                 rollback_context = record.get("context")
                 if not isinstance(rollback_context, dict):
@@ -310,6 +311,14 @@ class UpgradeEngine:
                         "context",
                         "result",
                     },
+                    "rollback_verified": {
+                        "operation_id",
+                        "step_id",
+                        "phase",
+                        "outcome",
+                        "context",
+                        "result",
+                    },
                     "ambiguous": {
                         "operation_id",
                         "step_id",
@@ -321,8 +330,10 @@ class UpgradeEngine:
                 }[outcome]
                 if set(record) != expected_fields:
                     raise UpgradeError("rollback record fields are invalid")
-                if outcome == "rollback_completed" and not isinstance(record["result"], dict):
-                    raise UpgradeError("successful rollback lacks result evidence")
+                if outcome in {"rollback_verified", "rollback_completed"} and not isinstance(
+                    record["result"], dict
+                ):
+                    raise UpgradeError("verified rollback lacks result evidence")
                 if outcome == "ambiguous" and not isinstance(record["error"], str):
                     raise UpgradeError("ambiguous rollback lacks error evidence")
                 continue
@@ -391,12 +402,34 @@ class UpgradeEngine:
         rollback_completed = [
             record for record in rollback_records if record.get("outcome") == "rollback_completed"
         ]
+        rollback_verified = [
+            record for record in rollback_records if record.get("outcome") == "rollback_verified"
+        ]
+        for rollback_record in (*rollback_verified, *rollback_completed):
+            result = rollback_record.get("result")
+            if (
+                not isinstance(result, dict)
+                or set(result) != ROLLBACK_RESULT_FIELDS
+                or any(
+                    result.get(field) is not True
+                    for field in (
+                        "restored_verified",
+                        "runtime_validated",
+                        "backend_roundtrip_valid",
+                    )
+                )
+                or result.get("backend") != self.context.backend
+                or result.get("fencing_token") != rollback_record["context"]["fencing_token"]
+            ):
+                raise UpgradeError("rollback result schema is invalid")
         if status == "completed" and (
             phase_outcomes != ["success"] * len(PHASES) or rollback_records
         ):
             raise UpgradeError("completed journal is incomplete")
         if status in {"failed", "safe-mode"} and rollback_completed:
             raise UpgradeError("failed journal has rollback completion")
+        if status == "safe-mode" and rollback_verified:
+            raise UpgradeError("safe-mode journal cannot discard verified rollback recovery")
         if status == "rolled-back" and (
             len(rollback_completed) != 1
             or not isinstance(rollback_completed[0].get("result"), dict)
@@ -408,11 +441,6 @@ class UpgradeEngine:
             raise UpgradeError("rolled-back journal lacks rollback completion")
         if status == "rolled-back":
             result = rollback_completed[0]["result"]
-            if (
-                set(result) - ROLLBACK_RESULT_FIELDS
-                or result.get("backend") != self.context.backend
-            ):
-                raise UpgradeError("rollback result schema is invalid")
             revalidate = getattr(self.backend_adapter, "revalidate_rollback", None)
             if not callable(revalidate):
                 raise UpgradeError("rollback revalidation is unavailable")
@@ -432,10 +460,6 @@ class UpgradeEngine:
                 )
             ):
                 raise UpgradeError("rollback runtime is not revalidated")
-        if status == "rolled-back" and value["rollback_verified"] is not True:
-            raise UpgradeError("rolled-back journal lacks durable verification")
-        if status != "rolled-back" and value["rollback_verified"] is True:
-            raise UpgradeError("rollback verification is inconsistent")
         if status == "rolled-back" and value.get("phase") != "rollback":
             raise UpgradeError("rolled-back journal phase is inconsistent")
         return cast(dict[str, Any], value)
@@ -623,8 +647,14 @@ class UpgradeEngine:
             raise UpgradeError("backend adapter is required for rollback")
         if value["status"] not in {"failed", "running", "safe-mode"}:
             raise UpgradeError("rollback requires failed, running, or safe-mode operation")
-        if any(record.get("phase") == "rollback" for record in value["records"]):
-            raise UpgradeError("rollback outcome requires explicit reconciliation")
+        rollback_records = [
+            record for record in value["records"] if record.get("phase") == "rollback"
+        ]
+        if rollback_records:
+            verified_record = rollback_records[0]
+            if verified_record.get("outcome") != "rollback_verified":
+                raise UpgradeError("rollback outcome requires explicit reconciliation")
+            return self._finish_verified_rollback(value, verified_record)
         operation = self.operation_id
         step_id = f"{self.operation_id}.rollback"
         record: dict[str, Any] = {
@@ -656,24 +686,73 @@ class UpgradeEngine:
             if set(handler_result).intersection(required):
                 raise UpgradeError("handler cannot provide backend rollback evidence")
             result.update(handler_result)
-            releaser = getattr(self.backend_adapter, "release_rollback_context", None)
-            if not callable(releaser):
-                raise UpgradeError("rollback barrier release is unavailable")
-            released = releaser(
-                cast(Mapping[str, object], _freeze(self._verified_rollback_context))
-            )
-            if not isinstance(released, Mapping) or released.get("status") != "released":
-                raise UpgradeError("rollback barrier was not durably released")
             result = {key: result[key] for key in ROLLBACK_RESULT_FIELDS if key in result}
-            record["outcome"] = "rollback_completed"
+            if set(result) != ROLLBACK_RESULT_FIELDS:
+                raise UpgradeError("backend rollback result identity is incomplete")
+            record["outcome"] = "rollback_verified"
             record["result"] = result
-            value["status"] = "rolled-back"
-            value["phase"] = "rollback"
-            value["rollback_verified"] = True
         except Exception as error:
             record.update(outcome="ambiguous", error=type(error).__name__)
             value["status"] = "safe-mode"
             _write(self.journal, value)
             raise UpgradeError("rollback ambiguous; safe mode required") from error
         _write(self.journal, value)
+        return self._finish_verified_rollback(value, record)
+
+    def _finish_verified_rollback(  # noqa: C901
+        self, value: dict[str, Any], record: dict[str, Any]
+    ) -> dict[str, Any]:
+        if self.backend_adapter is None or self._verified_rollback_context is None:
+            raise UpgradeError("verified rollback recovery context is unavailable")
+        context = cast(Mapping[str, object], _freeze(self._verified_rollback_context))
+        result = cast(Mapping[str, object], _freeze(record["result"]))
+        verifier = getattr(self.backend_adapter, "verify_rollback_context", None)
+        begin_release = getattr(self.backend_adapter, "begin_release_rollback_context", None)
+        complete_release = getattr(self.backend_adapter, "complete_release_rollback_context", None)
+        revalidate = getattr(self.backend_adapter, "revalidate_rollback", None)
+        methods = (verifier, begin_release, complete_release, revalidate)
+        if not all(callable(method) for method in methods):
+            raise UpgradeError("rollback release recovery API is unavailable")
+        verifier_call = cast(Callable[[Mapping[str, object]], object], verifier)
+        begin_release_call = cast(Callable[[Mapping[str, object]], object], begin_release)
+        complete_release_call = cast(Callable[[Mapping[str, object]], object], complete_release)
+        revalidate_call = cast(
+            Callable[[Mapping[str, object], Mapping[str, object]], object], revalidate
+        )
+        try:
+            durable = verifier_call(context)
+            if not isinstance(durable, Mapping) or any(
+                durable.get(field) != self._verified_rollback_context[field]
+                for field in CONTEXT_FIELDS
+            ):
+                raise UpgradeError("rollback release identity changed")
+            status = durable.get("status")
+            if status == "held":
+                durable = begin_release_call(context)
+                if not isinstance(durable, Mapping) or durable.get("status") != "releasing":
+                    raise UpgradeError("rollback barrier did not enter releasing")
+                status = "releasing"
+            if status not in {"releasing", "released"}:
+                raise UpgradeError("rollback barrier state is not recoverable")
+            self._require_rollback_revalidation(revalidate_call(context, result), record)
+            if status == "releasing":
+                durable = complete_release_call(context)
+                if not isinstance(durable, Mapping) or durable.get("status") != "released":
+                    raise UpgradeError("rollback barrier was not durably released")
+            self._require_rollback_revalidation(revalidate_call(context, result), record)
+        except Exception as error:
+            raise UpgradeError("verified rollback release requires reconciliation") from error
+        record["outcome"] = "rollback_completed"
+        value["status"] = "rolled-back"
+        value["phase"] = "rollback"
+        _write(self.journal, value)
         return value
+
+    def _require_rollback_revalidation(
+        self, evidence: object, record: Mapping[str, object]
+    ) -> None:
+        if not isinstance(evidence, Mapping):
+            raise UpgradeError("rollback runtime revalidation is invalid")
+        result = cast(Mapping[str, object], record["result"])
+        if any(evidence.get(field) != result[field] for field in ROLLBACK_RESULT_FIELDS):
+            raise UpgradeError("rollback runtime revalidation changed")

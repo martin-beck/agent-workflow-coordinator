@@ -17,6 +17,7 @@ import time
 import uuid
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import AbstractContextManager, contextmanager
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol, cast
 
@@ -33,7 +34,7 @@ STATUSES = {"held", "releasing", "released", "ambiguous"}
 STATUS_TRANSITIONS = {
     "held": {"held", "releasing", "ambiguous"},
     "releasing": {"releasing", "released", "ambiguous"},
-    "released": {"released", "ambiguous"},
+    "released": {"released"},
     "ambiguous": set(),
 }
 _COLUMNS = (*IDENTITY_FIELDS, "status", "revision")
@@ -57,6 +58,21 @@ _UPDATE_SQL = (
     "status=?,revision=? "
     "WHERE operation_id=? AND revision=?"
 )
+_RELEASE_EVIDENCE_FIELDS = {
+    "restored_verified",
+    "runtime_validated",
+    "backend_roundtrip_valid",
+    "backend",
+    "fencing_token",
+}
+
+
+@dataclass(frozen=True)
+class _ReleaseAuthorization:
+    operation_id: str
+    envelope_digest: str
+    fencing_token: str
+    revision: int
 
 
 class ControlStoreError(RuntimeError):
@@ -77,6 +93,7 @@ class SQLiteControlStoreAdapter:
     def __init__(self, delegate: UpgradeAdapter, store: SQLiteRollbackControlStore) -> None:
         self._delegate = delegate
         self._store = store
+        self._release_authorization: _ReleaseAuthorization | None = None
 
     def snapshot(self, phase: str, context: Mapping[str, object]) -> Mapping[str, object]:
         return self._delegate.snapshot(phase, context)
@@ -89,11 +106,26 @@ class SQLiteControlStoreAdapter:
             return self._store._verify_rollback_context_locked(context)
         return self._store.verify_rollback_context(context)
 
-    def release_rollback_context(self, context: Mapping[str, object]) -> Mapping[str, object]:
+    def begin_release_rollback_context(self, context: Mapping[str, object]) -> Mapping[str, object]:
         operation_id = str(context["operation_id"])
-        if self._store.operation_owned_by_current_thread:
-            return self._store._release_locked(operation_id)
-        return self._store.release(operation_id)
+        if not self._store.operation_owned_by_current_thread:
+            raise ControlStoreError("rollback release requires the outer operation lock")
+        self._release_authorization = None
+        return self._store._begin_release_locked(operation_id)
+
+    def complete_release_rollback_context(
+        self, context: Mapping[str, object]
+    ) -> Mapping[str, object]:
+        operation_id = str(context["operation_id"])
+        if not self._store.operation_owned_by_current_thread:
+            raise ControlStoreError("rollback release requires the outer operation lock")
+        authorization = self._release_authorization
+        if authorization is None:
+            raise ControlStoreError("rollback release lacks authority revalidation")
+        try:
+            return self._store._complete_release_locked(operation_id, authorization)
+        finally:
+            self._release_authorization = None
 
     def revalidate_rollback(
         self, context: Mapping[str, object], result: Mapping[str, object]
@@ -103,9 +135,19 @@ class SQLiteControlStoreAdapter:
             if self._store.operation_owned_by_current_thread
             else self._store.verify_rollback_context(context)
         )
-        if durable is None or durable["status"] != "released":
-            raise ControlStoreError("rollback control record is not released")
-        return dict(result)
+        if durable is None or durable["status"] not in {"releasing", "released"}:
+            raise ControlStoreError("rollback control record is not ready for reopen validation")
+        verifier = getattr(self._delegate, "revalidate_rollback", None)
+        if not callable(verifier):
+            raise ControlStoreError("authority rollback revalidation is unavailable")
+        evidence = verifier(context, result)
+        if not isinstance(evidence, Mapping):
+            raise ControlStoreError("authority rollback revalidation is invalid")
+        if durable["status"] == "releasing":
+            if not self._store.operation_owned_by_current_thread:
+                raise ControlStoreError("rollback revalidation requires the outer operation lock")
+            self._release_authorization = self._store._authorize_release_locked(context, evidence)
+        return dict(evidence)
 
     def operation_lock(self) -> AbstractContextManager[None]:
         return self._store.operation_lock()
@@ -475,6 +517,8 @@ class SQLiteRollbackControlStore:
 
     def cas(self, expected_revision: int, record: Mapping[str, object]) -> dict[str, object]:
         supplied = _validate(record)
+        if supplied["status"] == "released":
+            raise ControlStoreError("released status requires authority revalidation")
         if supplied["project_id"] != self.project_id:
             raise ControlStoreError("control project binding mismatch")
         if self._operation_owner is not None:
@@ -487,31 +531,70 @@ class SQLiteRollbackControlStore:
         with self._connection() as connection:
             return self._cas_connection(connection, expected_revision, supplied)
 
-    def release(self, operation_id: str) -> dict[str, object]:
-        """Durably release a held barrier through the releasing state."""
+    def begin_release(self, operation_id: str) -> dict[str, object]:
+        """Commit the held-to-releasing transition without reopening authority."""
         if self._operation_owner is not None:
             raise ControlStoreError("control store lock is non-reentrant")
         with self.operation_lock():
-            return self._release_locked(operation_id)
+            return self._begin_release_locked(operation_id)
 
-    def _release_locked(self, operation_id: str) -> dict[str, object]:
+    def _begin_release_locked(self, operation_id: str) -> dict[str, object]:
         self._require_operation_lock()
         current = self._snapshot_locked(operation_id)
         if current["status"] != "held":
             raise ControlStoreError("barrier is not held")
-        releasing = self._cas_locked(
-            cast(int, current["revision"]), {**current, "status": "releasing"}
-        )
-        return self._cas_locked(
-            cast(int, releasing["revision"]), {**releasing, "status": "released"}
+        return self._cas_locked(cast(int, current["revision"]), {**current, "status": "releasing"})
+
+    def _authorize_release_locked(
+        self, context: Mapping[str, object], evidence: Mapping[str, object]
+    ) -> _ReleaseAuthorization:
+        self._require_operation_lock()
+        current = self._snapshot_locked(str(context.get("operation_id", "")))
+        if current["status"] != "releasing" or any(
+            current[field] != context.get(field) for field in IDENTITY_FIELDS
+        ):
+            raise ControlStoreError("release authorization identity changed")
+        if (
+            set(evidence) != _RELEASE_EVIDENCE_FIELDS
+            or any(
+                evidence.get(field) is not True
+                for field in (
+                    "restored_verified",
+                    "runtime_validated",
+                    "backend_roundtrip_valid",
+                )
+            )
+            or evidence.get("backend") != current["backend"]
+            or evidence.get("fencing_token") != current["fencing_token"]
+        ):
+            raise ControlStoreError("release authority evidence is invalid")
+        return _ReleaseAuthorization(
+            operation_id=str(current["operation_id"]),
+            envelope_digest=str(current["envelope_digest"]),
+            fencing_token=str(current["fencing_token"]),
+            revision=cast(int, current["revision"]),
         )
 
+    def _complete_release_locked(
+        self, operation_id: str, authorization: _ReleaseAuthorization
+    ) -> dict[str, object]:
+        self._require_operation_lock()
+        releasing = self._snapshot_locked(operation_id)
+        if (
+            releasing["status"] != "releasing"
+            or authorization.operation_id != operation_id
+            or authorization.envelope_digest != releasing["envelope_digest"]
+            or authorization.fencing_token != releasing["fencing_token"]
+            or authorization.revision != releasing["revision"]
+        ):
+            raise ControlStoreError("barrier release authorization is stale")
+        return self._cas_locked(releasing["revision"], {**releasing, "status": "released"})
+
     def reconcile_release(self, operation_id: str) -> dict[str, object]:
-        """Complete a release interrupted after its durable releasing transition."""
-        current = self.snapshot(operation_id)
-        if current["status"] != "releasing":
-            raise ControlStoreError("barrier is not awaiting release reconciliation")
-        return self.cas(cast(int, current["revision"]), {**current, "status": "released"})
+        """Reject blind release; engine recovery must revalidate authority and journal."""
+        raise ControlStoreError(
+            f"release reconciliation for {operation_id!r} requires verified engine recovery"
+        )
 
     def reconcile_ambiguous(
         self, operation_id: str, replacement: Mapping[str, object]

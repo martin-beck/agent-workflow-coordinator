@@ -60,10 +60,13 @@ ADMISSION = {
 
 
 class FakeAdapter:
+    def __init__(self) -> None:
+        self.rollback_status = "held"
+
     def verify_rollback_context(self, context: Mapping[str, object]) -> dict[str, object] | None:
         expected = make_context(str(context.get("operation_id")), target="rollback")
         if all(context.get(field) == expected[field] for field in CONTEXT_FIELDS):
-            return dict(context)
+            return {**context, "status": self.rollback_status}
         return None
 
     def snapshot(self, phase: str, context: object) -> dict[str, object]:
@@ -88,7 +91,18 @@ class FakeAdapter:
             )
         return result
 
-    def release_rollback_context(self, _context: Mapping[str, object]) -> dict[str, object]:
+    def begin_release_rollback_context(self, _context: Mapping[str, object]) -> dict[str, object]:
+        if self.rollback_status != "held":
+            raise RuntimeError("barrier is not held")
+        self.rollback_status = "releasing"
+        return {"status": "releasing"}
+
+    def complete_release_rollback_context(
+        self, _context: Mapping[str, object]
+    ) -> dict[str, object]:
+        if self.rollback_status != "releasing":
+            raise RuntimeError("barrier is not releasing")
+        self.rollback_status = "released"
         return {"status": "released"}
 
     def revalidate_rollback(
@@ -103,6 +117,34 @@ class FailingAdapter(FakeAdapter):
 
 
 class UpgradeEngineTests(unittest.TestCase):
+    @staticmethod
+    def _prepare_failed_journal(
+        directory: str, operation_id: str, adapter: FakeAdapter
+    ) -> tuple[Path, UpgradeEngine]:
+        journal = Path(directory) / "journal.json"
+        engine = UpgradeEngine(
+            operation_id,
+            journal,
+            make_context(operation_id),
+            backend_adapter=adapter,
+        )
+        engine.plan()
+        value = json.loads(journal.read_text())
+        value["status"] = "failed"
+        value["phase"] = "discover"
+        value["records"] = [
+            {
+                "operation_id": operation_id,
+                "step_id": f"{operation_id}.discover",
+                "phase": "discover",
+                "outcome": "failed",
+                "error": "failed",
+                "context": make_context(operation_id),
+            }
+        ]
+        journal.write_text(json.dumps(value))
+        return journal, engine
+
     def test_apply_is_ordered_and_idempotent(self) -> None:  # noqa: C901
         with tempfile.TemporaryDirectory() as directory:
             engine = UpgradeEngine(
@@ -398,20 +440,123 @@ class UpgradeEngineTests(unittest.TestCase):
             )
             self.assertEqual("rollback", reloaded._load()["phase"])
 
-            tampered = json.loads(journal.read_text())
+            valid = json.loads(journal.read_text())
+            tampered = json.loads(json.dumps(valid))
             tampered["records"][-1]["context"]["envelope_digest"] = "e" * 64
             journal.write_text(json.dumps(tampered))
             with self.assertRaises(UpgradeError):
                 reloaded._load()
 
-            tampered = json.loads(journal.read_text())
-            tampered["records"][-1]["context"]["envelope_digest"] = ROLLBACK_CONTEXT[
-                "envelope_digest"
-            ]
-            tampered["rollback_verified"] = False
+            tampered = json.loads(json.dumps(valid))
+            tampered["records"][-1]["outcome"] = "rollback_verified"
             journal.write_text(json.dumps(tampered))
             with self.assertRaises(UpgradeError):
                 reloaded._load()
+
+    def test_rollback_verified_is_durable_before_release_and_revalidated(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            events: list[str] = []
+            journal = Path(directory) / "journal.json"
+
+            class OrderingAdapter(FakeAdapter):
+                def execute(self, phase: str, context: object) -> dict[str, object]:
+                    if phase == "rollback":
+                        events.append("restore")
+                    return super().execute(phase, context)
+
+                def begin_release_rollback_context(
+                    self, context: Mapping[str, object]
+                ) -> dict[str, object]:
+                    durable = json.loads(journal.read_text())
+                    self.assert_verified(durable)
+                    events.append("begin_release")
+                    return super().begin_release_rollback_context(context)
+
+                @staticmethod
+                def assert_verified(durable: Mapping[str, object]) -> None:
+                    records = cast(list[dict[str, object]], durable["records"])
+                    if records[-1]["outcome"] != "rollback_verified":
+                        raise AssertionError("rollback verification was not durable before release")
+
+                def revalidate_rollback(
+                    self, context: Mapping[str, object], result: Mapping[str, object]
+                ) -> dict[str, object]:
+                    events.append(f"revalidate:{self.rollback_status}")
+                    return super().revalidate_rollback(context, result)
+
+                def complete_release_rollback_context(
+                    self, context: Mapping[str, object]
+                ) -> dict[str, object]:
+                    events.append("complete_release")
+                    return super().complete_release_rollback_context(context)
+
+            adapter = OrderingAdapter()
+            _, engine = self._prepare_failed_journal(directory, "op-order", adapter)
+            result = engine.rollback(lambda _step, _state: {})
+            self.assertEqual(
+                [
+                    "restore",
+                    "begin_release",
+                    "revalidate:releasing",
+                    "complete_release",
+                    "revalidate:released",
+                ],
+                events,
+            )
+            self.assertEqual("rollback_completed", result["records"][-1]["outcome"])
+
+    def test_crash_during_release_resumes_without_repeating_restore(self) -> None:
+        for crash_point in ("begin", "complete"):
+            with self.subTest(crash_point=crash_point), tempfile.TemporaryDirectory() as directory:
+
+                class CrashAdapter(FakeAdapter):
+                    def __init__(self, point: str) -> None:
+                        super().__init__()
+                        self.crash_point = point
+                        self.crashed = False
+                        self.restore_calls = 0
+
+                    def execute(self, phase: str, context: object) -> dict[str, object]:
+                        if phase == "rollback":
+                            self.restore_calls += 1
+                        return super().execute(phase, context)
+
+                    def begin_release_rollback_context(
+                        self, context: Mapping[str, object]
+                    ) -> dict[str, object]:
+                        result = super().begin_release_rollback_context(context)
+                        if self.crash_point == "begin" and not self.crashed:
+                            self.crashed = True
+                            raise SystemExit("crash after durable releasing")
+                        return result
+
+                    def complete_release_rollback_context(
+                        self, context: Mapping[str, object]
+                    ) -> dict[str, object]:
+                        result = super().complete_release_rollback_context(context)
+                        if self.crash_point == "complete" and not self.crashed:
+                            self.crashed = True
+                            raise SystemExit("crash after durable released")
+                        return result
+
+                adapter = CrashAdapter(crash_point)
+                operation_id = f"op-crash-{crash_point}"
+                journal, engine = self._prepare_failed_journal(directory, operation_id, adapter)
+                with self.assertRaises(SystemExit):
+                    engine.rollback(lambda _step, _state: {})
+                interrupted = json.loads(journal.read_text())
+                self.assertEqual("rollback_verified", interrupted["records"][-1]["outcome"])
+                self.assertEqual(1, adapter.restore_calls)
+                recovered = UpgradeEngine(
+                    operation_id,
+                    journal,
+                    make_context(operation_id),
+                    backend_adapter=adapter,
+                ).rollback(lambda _step, _state: self.fail("restore handler was repeated"))
+                self.assertEqual("rolled-back", recovered["status"])
+                self.assertEqual("rollback_completed", recovered["records"][-1]["outcome"])
+                self.assertEqual("released", adapter.rollback_status)
+                self.assertEqual(1, adapter.restore_calls)
 
     def test_rollback_requires_adapter_verified_context_and_cannot_forge_evidence(self) -> None:
         class UnverifiedAdapter(FakeAdapter):
