@@ -73,16 +73,24 @@ class UpgradeIdentityTests(unittest.TestCase):
             BarrierChildIdentity.bind(identity, "child-1", "other")
         with self.assertRaises(UpgradeIdentityError):
             BarrierChildIdentity("child-1", "new", "0" * 64).validate_for(identity)
+        with self.assertRaisesRegex(UpgradeIdentityError, "operation identity"):
+            BarrierChildIdentity("!invalid", "new", identity.identity_digest).validate_for(identity)
+        with self.assertRaisesRegex(UpgradeIdentityError, "target"):
+            BarrierChildIdentity("child-1", "other", identity.identity_digest).validate_for(
+                identity
+            )
 
     def test_v10_typed_identity_rejects_noncanonical_records(self) -> None:
         value = barrier_session()
         identity_errors = (
             {**value, "schema_version": 2},
+            {**value, "project_id": 42},
             {**value, "project_id": "not-a-uuid"},
             {**value, "project_id": "11111111-1111-1111-8111-111111111111"},
             {**value, "attempt_id": ""},
             {**value, "state_revision": 0},
             {**value, "state_revision": True},
+            {**value, "identity_digest": "x" * 64},
             {**value, "identity_digest": "f" * 64},
         )
         for invalid in identity_errors:

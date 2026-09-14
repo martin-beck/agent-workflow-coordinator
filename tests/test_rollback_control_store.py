@@ -259,6 +259,43 @@ class RollbackControlStoreTests(unittest.TestCase):
         with self.assertRaisesRegex(ControlStoreError, "revision"):
             BarrierSessionState(identity, "held", 0)
 
+    def test_v10_barrier_session_rejects_duplicate_children_and_reopen_edges(self) -> None:
+        from tools.upgrade_identity import BarrierChildIdentity, BarrierSessionIdentity
+
+        record = {
+            "schema_version": 1,
+            "project_id": PROJECT,
+            "attempt_id": "attempt-4",
+            "state_revision": 1,
+            "authority_revision_at_acquire": "authority-4",
+            "durable_barrier_id": "barrier-4",
+            "fencing_token": "fence-4",
+            "fencing_owner": "owner-4",
+            "identity_digest": "0" * 64,
+        }
+        from tools.upgrade_identity import canonical_barrier_session_digest
+
+        record["identity_digest"] = canonical_barrier_session_digest(record)
+        identity = BarrierSessionIdentity.from_record(record)
+        forward = BarrierChildIdentity.bind(identity, "same-child", "new")
+        rollback = BarrierChildIdentity.bind(identity, "same-child", "rollback")
+        with self.assertRaisesRegex(ControlStoreError, "distinct"):
+            BarrierSessionState(identity, "held", 1, forward, rollback)
+
+        contract = BarrierSessionContract(identity)
+        with self.assertRaisesRegex(ControlStoreError, "target"):
+            contract.begin_reopen(1, "invalid")
+        with self.assertRaisesRegex(ControlStoreError, "not bound"):
+            contract.begin_reopen(1, "new")
+        held = contract.bind_child(1, forward)
+        rollback = BarrierChildIdentity.bind(identity, "rollback-child", "rollback")
+        releasing = contract.bind_child(held.revision, rollback)
+        with self.assertRaisesRegex(ControlStoreError, "already bound"):
+            contract.bind_child(
+                releasing.revision,
+                BarrierChildIdentity.bind(identity, "rollback-2", "rollback"),
+            )
+
     def test_canonical_barrier_digest_is_stable_and_excludes_mutable_fields(self) -> None:
         first = canonical_barrier_digest(RECORD)
         second = canonical_barrier_digest({**RECORD, "status": "ambiguous", "revision": 99})
