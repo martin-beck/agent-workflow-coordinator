@@ -181,6 +181,80 @@ with control.operation_lock(), control._connection() as connection:
 """
 
 
+# Two independent interpreters exercise the stale-writer boundary: one
+# replaces a released session with a distinct newer fence, while the other
+# attempts to commit using the old session identity and revision.
+_STALE_FENCE_SCRIPT = r"""
+import sys
+import time
+from pathlib import Path
+
+from tools.rollback_control_store import (
+    BarrierSessionState,
+    ControlStoreError,
+    SQLiteBarrierSessionStore,
+    SQLiteRollbackControlStore,
+)
+from tools.upgrade_identity import BarrierSessionIdentity, canonical_barrier_session_digest
+
+control_path = Path(sys.argv[1])
+authority_path = Path(sys.argv[2])
+ready_path = Path(sys.argv[3])
+role = sys.argv[4]
+project_id = sys.argv[5]
+
+def identity(attempt_id: str, revision: int, barrier_id: str, token: str) -> BarrierSessionIdentity:
+    record = {
+        "schema_version": 1,
+        "project_id": project_id,
+        "attempt_id": attempt_id,
+        "state_revision": revision,
+        "authority_revision_at_acquire": "authority-3",
+        "durable_barrier_id": barrier_id,
+        "fencing_token": token,
+        "fencing_owner": "owner-1",
+        "identity_digest": "0" * 64,
+    }
+    record["identity_digest"] = canonical_barrier_session_digest(record)
+    return BarrierSessionIdentity.from_record(record)
+
+store = SQLiteBarrierSessionStore(
+    SQLiteRollbackControlStore(control_path, project_id, authority_path),
+    lambda: "authority-3",
+)
+
+if role == "replace":
+    current = store.snapshot()
+    assert current is not None
+    releasing = BarrierSessionState(current.identity, "releasing", current.revision + 1)
+    store.cas(current.revision, releasing)
+    store.cas(
+        releasing.revision,
+        BarrierSessionState(current.identity, "released", releasing.revision + 1),
+    )
+    newer = identity("attempt-2", 4, "barrier-2", "fence-2")
+    store.cas(0, BarrierSessionState(newer, "held", 1))
+    ready_path.write_text("replaced\n", encoding="utf-8")
+    raise SystemExit(0)
+
+if role != "stale":
+    raise SystemExit("unknown role")
+deadline = time.monotonic() + 10
+while not ready_path.exists() and time.monotonic() < deadline:
+    time.sleep(0.01)
+if not ready_path.exists():
+    raise SystemExit("replacement checkpoint timeout")
+stale = identity("attempt-1", 3, "barrier-1", "fence-1")
+try:
+    store.cas(1, BarrierSessionState(stale, "releasing", 2))
+except ControlStoreError as error:
+    if "identity changed" not in str(error):
+        raise
+    raise SystemExit(0)
+raise SystemExit("stale writer was accepted")
+"""
+
+
 def authority_task() -> tuple[Path, dict[str, object], str]:
     meta: dict[str, object] = {
         "schema_version": 1,
@@ -292,6 +366,26 @@ class RollbackControlStoreTests(unittest.TestCase):
             text=True,
         )
 
+    def _run_stale_fence_process(
+        self, control_path: Path, authority_path: Path, ready_path: Path, role: str
+    ) -> subprocess.Popen[str]:
+        return subprocess.Popen(  # noqa: S603 - fixed interpreter and in-test script
+            [
+                sys.executable,
+                "-c",
+                _STALE_FENCE_SCRIPT,
+                str(control_path),
+                str(authority_path),
+                str(ready_path),
+                role,
+                PROJECT,
+            ],
+            cwd=Path(__file__).parents[1],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+
     @staticmethod
     def _wait_for_file(path: Path, process: subprocess.Popen[str]) -> None:
         deadline = time.monotonic() + 10
@@ -335,6 +429,56 @@ class RollbackControlStoreTests(unittest.TestCase):
             self.assertEqual(("held", 2), (state.status, state.revision))
             self.assertIsNotNone(state.forward_child)
             self.assertEqual(authority_bytes, authority_path.read_bytes())
+
+    def test_v10_multiprocess_stale_fence_writer_is_rejected(self) -> None:
+        """A stale process cannot write after a newer fence replaces its session."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            control_path = root / "control.sqlite"
+            authority_path = root / "authority.sqlite"
+            authority_path.write_bytes(b"authority remains untouched\n")
+            ready_path = root / "replaced"
+
+            seed = SQLiteBarrierSessionStore(
+                SQLiteRollbackControlStore(control_path, PROJECT, authority_path),
+                lambda: "authority-3",
+            )
+            seed.create(self._session_identity())
+
+            replace = self._run_stale_fence_process(
+                control_path, authority_path, ready_path, "replace"
+            )
+            stale = self._run_stale_fence_process(control_path, authority_path, ready_path, "stale")
+            try:
+                replace_stdout, replace_stderr = replace.communicate(timeout=10)
+                stale_stdout, stale_stderr = stale.communicate(timeout=10)
+            finally:
+                for process in (replace, stale):
+                    if process.poll() is None:
+                        process.kill()
+                    process.communicate(timeout=5)
+            self.assertEqual(
+                0,
+                replace.returncode,
+                msg=f"replace stdout={replace_stdout}; stderr={replace_stderr}",
+            )
+            self.assertEqual(
+                0,
+                stale.returncode,
+                msg=f"stale stdout={stale_stdout}; stderr={stale_stderr}",
+            )
+            final = seed.snapshot()
+            self.assertIsNotNone(final)
+            assert final is not None
+            self.assertEqual(
+                ("attempt-2", "fence-2", "held", 1),
+                (
+                    final.identity.attempt_id,
+                    final.identity.fencing_token,
+                    final.status,
+                    final.revision,
+                ),
+            )
 
     def test_v10_subprocess_death_rolls_back_uncommitted_wal_change(self) -> None:
         """Cover uncommitted WAL rollback only; no ambiguous-recovery claim."""
