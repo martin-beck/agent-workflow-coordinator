@@ -202,6 +202,29 @@ def _atomic_json(path: Path, value: dict[str, object]) -> None:
         os.close(parent_fd)
 
 
+def provision_control_binding(
+    control_store: Path, descriptor: Path, control_lock: Path, project_id: str
+) -> dict[str, object]:
+    """Bind an existing control store and publish its separate descriptor."""
+    if _PROJECT_ID.fullmatch(project_id) is None:
+        raise MutationFenceError("project identifier is not canonical and opaque")
+    store_identity = _existing(control_store, "control store")
+    lock_identity = _create_lock(control_lock)
+    record: dict[str, object] = {
+        "schema_version": SCHEMA_VERSION,
+        "project_id": project_id,
+        "control_store": asdict(store_identity),
+        "control_lock": asdict(lock_identity),
+    }
+    record["identity_digest"] = _digest(record)
+    if descriptor.exists():
+        if _read_json(descriptor, "control binding") != record:
+            raise MutationFenceError("control binding is already provisioned with another identity")
+        return record
+    _atomic_json(descriptor, record)
+    return record
+
+
 def provision(
     authority: Path,
     marker: Path,
@@ -250,7 +273,13 @@ def provision(
 class MutationFence:
     """Concrete authority.lock seam for a future barrier-aware writer."""
 
-    def __init__(self, authority: Path, marker: Path, lifecycle: Path, authority_lock: Path):
+    def __init__(
+        self,
+        authority: Path,
+        marker: Path,
+        lifecycle: Path,
+        authority_lock: Path,
+    ):
         self.authority = authority
         self.marker = marker
         self.lifecycle = lifecycle
@@ -258,15 +287,7 @@ class MutationFence:
 
     def _verify(self) -> dict[str, object]:
         record = _read_json(self.marker, "authority fence marker")
-        if record.get("identity_digest") != _digest(
-            {key: value for key, value in record.items() if key != "identity_digest"}
-        ):
-            raise MutationFenceError("authority fence marker digest is invalid")
-        if record.get("schema_version") != SCHEMA_VERSION:
-            raise MutationFenceError("authority fence schema is unsupported")
-        project_id = record.get("project_id")
-        if not isinstance(project_id, str) or _PROJECT_ID.fullmatch(project_id) is None:
-            raise MutationFenceError("project identifier is not canonical and opaque")
+        self._verify_marker(record)
         if asdict(_existing(self.authority, "authority database")) != record.get("authority"):
             raise MutationFenceError("authority database identity changed")
         if asdict(_existing(self.authority_lock, "authority.lock")) != record.get("authority_lock"):
@@ -281,6 +302,18 @@ class MutationFence:
         if life.get("state") not in LIFECYCLE_STATES:
             raise MutationFenceError("authority lifecycle state is invalid")
         return record
+
+    def _verify_marker(self, record: dict[str, object]) -> str:
+        if record.get("identity_digest") != _digest(
+            {key: value for key, value in record.items() if key != "identity_digest"}
+        ):
+            raise MutationFenceError("authority fence marker digest is invalid")
+        if record.get("schema_version") != SCHEMA_VERSION:
+            raise MutationFenceError("authority fence schema is unsupported")
+        project_id = record.get("project_id")
+        if not isinstance(project_id, str) or _PROJECT_ID.fullmatch(project_id) is None:
+            raise MutationFenceError("project identifier is not canonical and opaque")
+        return project_id
 
     @contextmanager
     def locked(self) -> Iterator[None]:
