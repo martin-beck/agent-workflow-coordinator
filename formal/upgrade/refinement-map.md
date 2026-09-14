@@ -14,6 +14,7 @@ records only the TLC result in `evidence.json`.
 | `FunctionalAvailability` | `test_loaded_rollback_requires_authority_and_runtime_revalidation`, `test_apply_rejects_failed_state_and_unreconciled_rollback_record` | public tests present; refinement pending |
 | Git backend | production Git adapter and ref/restore tests | model branch exists; production adapter explicitly fail-closed |
 | SQLite backend | `test_wal_cas_and_reload_are_durable`, `test_sidecars_require_private_provisioning_and_stable_regular_identities` | model branch and public tests present; release-specific rereader/refinement pending |
+| Concrete SQLite rereader | `test_concrete_release_rereader_derives_and_rechecks_actual_authority`, selector/projection/sidecar swap tests | public hostile tests present; trace refinement and release orchestration pending |
 
 The names above are resolved against the implementation snapshot recorded in
 `evidence.json`; they are not claims about later source revisions. The model
