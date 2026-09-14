@@ -1150,13 +1150,18 @@ class RollbackControlStoreTests(unittest.TestCase):
                 store.cas(0, RECORD)
             self.assertEqual("ambiguous", store.snapshot("op-1")["status"])
 
-            existing = FlakyStore(Path(directory) / "existing.sqlite", PROJECT)
+            existing_path = Path(directory) / "existing.sqlite"
+            existing = FlakyStore(existing_path, PROJECT)
             existing.fail_next_commit = False
             existing.cas(0, RECORD)
             existing.fail_next_commit = True
             with self.assertRaisesRegex(ControlStoreError, "commit outcome is ambiguous"):
                 existing.cas(1, {**RECORD, "status": "releasing", "revision": 2})
             self.assertEqual("ambiguous", existing.snapshot("op-1")["status"])
+            reopened = SQLiteRollbackControlStore(existing_path, PROJECT)
+            self.assertEqual("ambiguous", reopened.snapshot("op-1")["status"])
+            with self.assertRaisesRegex(ControlStoreError, "requires verified engine recovery"):
+                reopened.reconcile_release("op-1")
 
             session_store = SQLiteBarrierSessionStore(
                 FlakyStore(Path(directory) / "session-control.sqlite", PROJECT)
