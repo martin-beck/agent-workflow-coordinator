@@ -417,6 +417,59 @@ class UpgradeEngineTests(unittest.TestCase):
                 engine.rollback(lambda _step, _state: {})
             self.assertEqual([], json.loads(journal.read_text())["records"])
 
+    def test_rollback_rejects_unbound_adapter_context_before_journal(self) -> None:
+        class MismatchedAdapter(FakeAdapter):
+            def snapshot(self, phase: str, context: object) -> dict[str, object]:
+                result = super().snapshot(phase, context)
+                if phase == "rollback":
+                    result["authority_revision"] = "different-authority"
+                return result
+
+        with tempfile.TemporaryDirectory() as directory:
+            journal = Path(directory) / "journal.json"
+            engine = UpgradeEngine(
+                "op-mismatched",
+                journal,
+                {**CONTEXT, "operation_id": "op-mismatched"},
+                backend_adapter=MismatchedAdapter(),
+            )
+            engine.plan()
+            with self.assertRaises(UpgradeError):
+                engine.rollback(lambda _step, _state: {})
+            self.assertEqual([], json.loads(journal.read_text())["records"])
+
+    def test_rollback_handler_cannot_override_adapter_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            journal = Path(directory) / "journal.json"
+            engine = UpgradeEngine(
+                "op-handler-evidence",
+                journal,
+                {**CONTEXT, "operation_id": "op-handler-evidence"},
+                backend_adapter=FakeAdapter(),
+            )
+            engine.plan()
+            value = json.loads(journal.read_text())
+            value["status"] = "failed"
+            value["phase"] = "discover"
+            value["records"] = [
+                {
+                    "operation_id": "op-handler-evidence",
+                    "step_id": "op-handler-evidence.discover",
+                    "phase": "discover",
+                    "outcome": "failed",
+                    "error": "failed",
+                    "context": {**CONTEXT, "operation_id": "op-handler-evidence"},
+                }
+            ]
+            journal.write_text(json.dumps(value))
+
+            def forge(_step: str, _state: Mapping[str, object]) -> dict[str, object]:
+                return {"restored_verified": False}
+
+            with self.assertRaises(UpgradeError):
+                engine.rollback(forge)
+            self.assertEqual("safe-mode", engine._load()["status"])
+
     def test_started_phase_requires_explicit_recovery(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             journal = Path(directory) / "journal.json"
