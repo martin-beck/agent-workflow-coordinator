@@ -1,0 +1,97 @@
+# Copyright (C) Huawei Technologies Co., Ltd. 2026. All rights reserved.
+# SPDX-License-Identifier: MIT
+"""Read-only SQLite authority evidence for the future scoped adapter."""
+
+from __future__ import annotations
+
+import os
+import sqlite3
+import stat
+from collections.abc import Mapping
+from pathlib import Path
+from typing import Any
+
+
+class SQLiteAuthorityError(RuntimeError):
+    """SQLite authority evidence is unavailable or mutation was requested."""
+
+
+class SQLiteAuthorityAdapter:
+    """Read-only integrity evidence adapter; execute remains disabled."""
+
+    def __init__(self, authority: Path) -> None:
+        resolved = authority.resolve()
+        try:
+            parent = resolved.parent.stat()
+            descriptor = resolved.stat()
+        except OSError as error:
+            raise SQLiteAuthorityError("SQLite authority is unavailable") from error
+        if (
+            not stat.S_ISREG(descriptor.st_mode)
+            or descriptor.st_uid != os.geteuid()
+            or descriptor.st_nlink != 1
+            or stat.S_IMODE(descriptor.st_mode) != 0o600
+            or parent.st_uid != os.geteuid()
+            or stat.S_IMODE(parent.st_mode) != 0o700
+        ):
+            raise SQLiteAuthorityError("SQLite authority descriptor is unsafe")
+        self._authority = resolved
+
+    @staticmethod
+    def _context(context: Mapping[str, object]) -> dict[str, object]:
+        required = {
+            "schema_version",
+            "backend",
+            "project_id",
+            "operation_id",
+            "state_revision",
+            "authority_revision",
+            "fencing_token",
+            "fencing_owner",
+            "durable_barrier_id",
+            "artifact_root",
+            "source",
+            "destination",
+            "manifest",
+            "barrier_identity_digest",
+            "target",
+            "envelope_digest",
+        }
+        if set(context) != required or context.get("backend") != "sqlite":
+            raise SQLiteAuthorityError("SQLite authority context is incomplete or mismatched")
+        return dict(context)
+
+    def snapshot(self, phase: str, context: Mapping[str, object]) -> dict[str, Any]:
+        """Return read-only integrity evidence without claiming mutation safety."""
+        value = self._context(context)
+        try:
+            connection = sqlite3.connect(
+                f"file:{self._authority}?mode=ro", uri=True, isolation_level=None
+            )
+            try:
+                integrity = str(connection.execute("PRAGMA integrity_check").fetchone()[0])
+                foreign = list(connection.execute("PRAGMA foreign_key_check"))
+            finally:
+                connection.close()
+        except (OSError, sqlite3.Error, TypeError, IndexError) as error:
+            raise SQLiteAuthorityError("SQLite authority observation failed") from error
+        if integrity != "ok" or foreign:
+            raise SQLiteAuthorityError("SQLite authority integrity is not clean")
+        value.update(
+            {
+                "phase": phase,
+                "backend_identity_verified": True,
+                "sqlite_integrity_verified": True,
+                "sqlite_foreign_keys_verified": True,
+                "mutates_authority": False,
+            }
+        )
+        return value
+
+    def verify_rollback_context(self, context: Mapping[str, object]) -> dict[str, Any]:
+        value = self.snapshot("rollback", context)
+        value["rollback_context_verified"] = False
+        return value
+
+    def execute(self, _phase: str, _context: Mapping[str, object]) -> dict[str, Any]:
+        raise SQLiteAuthorityError("SQLite authority mutation adapter is not implemented")
