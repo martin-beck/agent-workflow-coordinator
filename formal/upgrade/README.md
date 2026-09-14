@@ -18,11 +18,22 @@ SQLite, WAL/SHM, filesystem replacement, process scheduling, and external
 commands. The implementation must provide separate public evidence mapped to
 each action and invariant before this model can support publication.
 
+`HandoffctlUpgradeBarrier.tla` is a separate bounded v10 control-plane model.
+It covers the target-neutral barrier session, immutable forward and rollback
+child identities, compare-and-swap revisions, write admission, and the
+fail-closed `ambiguous` state after an uncertain transition. It intentionally
+does not model SQLite VFS/WAL durability, power loss, Python refinement, or
+the coordinator authority. Its TLC result is therefore bounded abstract
+evidence only; it does not enable `upgrade apply` or `upgrade rollback`.
+
 Run with the pinned TLC verifier used by the repository formal workflow:
 
 ```sh
 java -cp tla2tools.jar tlc2.TLC -config formal/upgrade/UpgradeRecovery.cfg \
   formal/upgrade/UpgradeRecovery.tla
+
+java -cp tla2tools.jar tlc2.TLC -config formal/upgrade/HandoffctlUpgradeBarrier.cfg \
+  formal/upgrade/HandoffctlUpgradeBarrier.tla
 ```
 
 The model is bounded by the constants in the configuration; no unbounded or

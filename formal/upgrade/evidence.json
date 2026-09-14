@@ -47,6 +47,45 @@
       "RollbackProof"
     ]
   },
+  "barrier_model": {
+    "model": "formal/upgrade/HandoffctlUpgradeBarrier.tla",
+    "config": "formal/upgrade/HandoffctlUpgradeBarrier.cfg",
+    "model_sha256": "f46e2489f967ca7ed217d63fc285b0cbaeb399f95969923412d050330f964d40",
+    "config_sha256": "f10a8cbd0e183f895c00edcd32304f2277862538a8085fd3a7c95d2e84f8ac01",
+    "bounds": {
+      "processes": ["p1", "p2"],
+      "max_revision": 5,
+      "statuses": ["absent", "held", "releasing", "released", "ambiguous"]
+    },
+    "result": {
+      "status": "pass",
+      "states_generated": 79617,
+      "distinct_states": 21264,
+      "depth": 39,
+      "invariants": [
+        "TypeOK",
+        "OneActiveSession",
+        "IdentityStable",
+        "ChildIdentityStable",
+        "NoUnheldRollbackGap",
+        "ReleaseEvidence",
+        "WriteFence",
+        "AmbiguousIsWriteClosed",
+        "CasBounded"
+      ]
+    },
+    "claim_boundary": {
+      "class": "bounded-model",
+      "implementation_refinement": "not-proven",
+      "excluded": [
+        "SQLite VFS and WAL fsync durability",
+        "power loss and arbitrary process termination",
+        "Python implementation equivalence",
+        "coordinator authority mutation routes",
+        "filesystem descriptor and lock semantics"
+      ]
+    }
+  },
   "claim_boundary": {
     "class": "bounded-model",
     "implementation_refinement": "not-proven",
