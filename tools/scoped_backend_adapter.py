@@ -15,6 +15,8 @@ class BackendAdapter(Protocol):
 
     def snapshot(self, phase: str, context: Mapping[str, object]) -> dict[str, Any]: ...
 
+    def verify_rollback_context(self, context: Mapping[str, object]) -> dict[str, Any] | None: ...
+
     def execute(self, phase: str, context: Mapping[str, object]) -> dict[str, Any]: ...
 
 
@@ -45,4 +47,12 @@ class ScopedBackendAdapter:
             result = self._backend.execute(phase, context)
         if not isinstance(result, dict):
             raise TypeError("backend execution result must be an object")
+        return result
+
+    def verify_rollback_context(self, context: Mapping[str, object]) -> dict[str, Any] | None:
+        """Verify rollback evidence only while the scope is held."""
+        with self._scope.hold():
+            result = self._backend.verify_rollback_context(context)
+        if result is not None and not isinstance(result, dict):
+            raise TypeError("rollback verification result must be an object or null")
         return result
