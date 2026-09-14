@@ -2479,6 +2479,9 @@ class RollbackControlStoreTests(unittest.TestCase):
             old_replacement["envelope_digest"] = canonical_envelope_digest(old_replacement)
             with self.assertRaisesRegex(ControlStoreError, "newer project fence"):
                 store.reconcile_ambiguous("op-1", old_replacement)
+            reopened = SQLiteRollbackControlStore(root / "control.sqlite", PROJECT)
+            with self.assertRaisesRegex(ControlStoreError, "newer project fence"):
+                reopened.reconcile_ambiguous("op-1", old_replacement)
 
             with store.operation_lock():
                 actions: tuple[Callable[[], object], ...] = (
