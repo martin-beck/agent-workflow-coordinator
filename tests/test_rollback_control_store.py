@@ -16,23 +16,27 @@ from tools.rollback_control_store import (
     SQLiteControlStoreAdapter,
     SQLiteRollbackControlStore,
     bind_control_store,
-    canonical_barrier_digest,
-    canonical_envelope_digest,
 )
+from tools.upgrade_identity import canonical_barrier_digest, canonical_envelope_digest
 
 PROJECT = "11111111-1111-4111-8111-111111111111"
 RECORD = {
-    "operation_id": "op-1",
+    "schema_version": 2,
+    "backend": "sqlite",
     "project_id": PROJECT,
+    "operation_id": "op-1",
     "state_revision": 1,
+    "authority_revision": "authority-1",
     "fencing_token": "fence-1",
     "fencing_owner": "owner-1",
-    "backend": "sqlite",
-    "authority_revision": "authority-1",
     "durable_barrier_id": "barrier-1",
-    "barrier_identity_digest": "a" * 64,
-    "envelope_digest": "b" * 64,
+    "artifact_root": "/artifacts",
+    "source": "/authority.sqlite",
+    "destination": "/artifacts/backup.sqlite",
+    "manifest": "/artifacts/manifest.json",
+    "barrier_identity_digest": "0" * 64,
     "target": "rollback",
+    "envelope_digest": "0" * 64,
     "status": "held",
     "revision": 1,
 }

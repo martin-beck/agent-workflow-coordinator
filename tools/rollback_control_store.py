@@ -9,10 +9,7 @@ an implementation yet and must fail closed.
 
 from __future__ import annotations
 
-import hashlib
-import json
 import os
-import re
 import sqlite3
 import stat
 import threading
@@ -24,21 +21,14 @@ from pathlib import Path
 from typing import Protocol, cast
 
 from tools.handoffctl import locked
-
-SCHEMA_VERSION = 1
-IDENTITY_FIELDS = (
-    "operation_id",
-    "project_id",
-    "state_revision",
-    "fencing_token",
-    "fencing_owner",
-    "backend",
-    "authority_revision",
-    "durable_barrier_id",
-    "barrier_identity_digest",
-    "envelope_digest",
-    "target",
+from tools.upgrade_identity import (
+    ENVELOPE_FIELDS,
+    UpgradeIdentityError,
+    validate_envelope,
 )
+
+SCHEMA_VERSION = 2
+IDENTITY_FIELDS = ENVELOPE_FIELDS
 STATUSES = {"held", "releasing", "released", "ambiguous"}
 STATUS_TRANSITIONS = {
     "held": {"held", "releasing", "ambiguous"},
@@ -46,37 +36,27 @@ STATUS_TRANSITIONS = {
     "released": {"released", "ambiguous"},
     "ambiguous": set(),
 }
-_TOKEN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,126}")
-_DIGEST = re.compile(r"[0-9a-f]{64}")
+_COLUMNS = (*IDENTITY_FIELDS, "status", "revision")
+_SELECT_COLUMNS = (
+    "schema_version,backend,project_id,operation_id,state_revision,authority_revision,"
+    "fencing_token,fencing_owner,durable_barrier_id,artifact_root,source,destination,manifest,"
+    "barrier_identity_digest,target,envelope_digest,status,revision"
+)
+_SELECT_SQL = f"SELECT {_SELECT_COLUMNS} FROM barrier WHERE operation_id=?"  # noqa: S608
 _INSERT_SQL = (
-    "INSERT INTO barrier (operation_id,project_id,state_revision,fencing_token,fencing_owner,"
-    "backend,authority_revision,durable_barrier_id,barrier_identity_digest,envelope_digest,"
-    "target,status,revision) "
-    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)"
+    "INSERT INTO barrier (schema_version,backend,project_id,operation_id,state_revision,"
+    "authority_revision,fencing_token,fencing_owner,durable_barrier_id,artifact_root,source,"
+    "destination,manifest,barrier_identity_digest,target,envelope_digest,status,revision) "
+    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
 )
+_UPDATE_FIELDS = tuple(field for field in _COLUMNS if field != "operation_id")
 _UPDATE_SQL = (
-    "UPDATE barrier SET project_id=?,state_revision=?,fencing_token=?,fencing_owner=?,backend=?,"
-    "authority_revision=?,durable_barrier_id=?,barrier_identity_digest=?,envelope_digest=?,"
-    "target=?,status=?,revision=? WHERE operation_id=? AND revision=?"
+    "UPDATE barrier SET schema_version=?,backend=?,project_id=?,state_revision=?,"
+    "authority_revision=?,fencing_token=?,fencing_owner=?,durable_barrier_id=?,artifact_root=?,"
+    "source=?,destination=?,manifest=?,barrier_identity_digest=?,target=?,envelope_digest=?,"
+    "status=?,revision=? "
+    "WHERE operation_id=? AND revision=?"
 )
-
-
-def canonical_barrier_digest(record: Mapping[str, object]) -> str:
-    """Return the stable identity digest, excluding mutable status/revision and digests."""
-    payload = {
-        field: record[field]
-        for field in IDENTITY_FIELDS
-        if field not in {"barrier_identity_digest", "envelope_digest"}
-    }
-    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
-    return hashlib.sha256(encoded).hexdigest()
-
-
-def canonical_envelope_digest(record: Mapping[str, object]) -> str:
-    """Return the stable full identity envelope digest."""
-    payload = {field: record[field] for field in IDENTITY_FIELDS if field != "envelope_digest"}
-    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
-    return hashlib.sha256(encoded).hexdigest()
 
 
 class ControlStoreError(RuntimeError):
@@ -142,7 +122,7 @@ def bind_control_store(
     return SQLiteControlStoreAdapter(delegate, store)
 
 
-def _validate(record: Mapping[str, object]) -> dict[str, object]:  # noqa: C901
+def _validate(record: Mapping[str, object]) -> dict[str, object]:
     if set(record) != set(IDENTITY_FIELDS) | {"status", "revision"}:
         raise ControlStoreError("control record fields are invalid")
     if not isinstance(record["state_revision"], int) or isinstance(record["state_revision"], bool):
@@ -155,31 +135,11 @@ def _validate(record: Mapping[str, object]) -> dict[str, object]:  # noqa: C901
     ):
         raise ControlStoreError("control revision is invalid")
     try:
-        project = uuid.UUID(str(record["project_id"]))
-    except ValueError as error:
-        raise ControlStoreError("control project_id is invalid") from error
-    if project.version != 4:
-        raise ControlStoreError("control project_id must be UUIDv4")
-    if record["backend"] != "sqlite" or record["target"] not in {"new", "rollback"}:
-        raise ControlStoreError("control backend or target is invalid")
-    for field in (
-        "operation_id",
-        "fencing_token",
-        "fencing_owner",
-        "authority_revision",
-        "durable_barrier_id",
-    ):
-        value = record[field]
-        if not isinstance(value, str) or not _TOKEN.fullmatch(value):
-            raise ControlStoreError(f"control {field} is invalid")
-    for field in ("barrier_identity_digest", "envelope_digest"):
-        value = record[field]
-        if not isinstance(value, str) or not _DIGEST.fullmatch(value):
-            raise ControlStoreError(f"control {field} is invalid")
-    if record["barrier_identity_digest"] != canonical_barrier_digest(record):
-        raise ControlStoreError("control barrier identity digest is invalid")
-    if record["envelope_digest"] != canonical_envelope_digest(record):
-        raise ControlStoreError("control envelope digest is invalid")
+        validate_envelope({field: record[field] for field in IDENTITY_FIELDS})
+    except UpgradeIdentityError as error:
+        raise ControlStoreError("control envelope identity is invalid") from error
+    if record["backend"] != "sqlite":
+        raise ControlStoreError("control backend is invalid")
     if record["status"] not in STATUSES:
         raise ControlStoreError("control status is invalid")
     return dict(record)
@@ -352,17 +312,22 @@ class SQLiteRollbackControlStore:
             )
             connection.execute(
                 """CREATE TABLE IF NOT EXISTS barrier (
-                    operation_id TEXT PRIMARY KEY,
+                    schema_version INTEGER NOT NULL,
+                    backend TEXT NOT NULL,
                     project_id TEXT NOT NULL,
+                    operation_id TEXT PRIMARY KEY,
                     state_revision INTEGER NOT NULL,
+                    authority_revision TEXT NOT NULL,
                     fencing_token TEXT NOT NULL,
                     fencing_owner TEXT NOT NULL,
-                    backend TEXT NOT NULL,
-                    authority_revision TEXT NOT NULL,
                     durable_barrier_id TEXT NOT NULL,
+                    artifact_root TEXT NOT NULL,
+                    source TEXT NOT NULL,
+                    destination TEXT NOT NULL,
+                    manifest TEXT NOT NULL,
                     barrier_identity_digest TEXT NOT NULL,
-                    envelope_digest TEXT NOT NULL,
                     target TEXT NOT NULL,
+                    envelope_digest TEXT NOT NULL,
                     status TEXT NOT NULL,
                     revision INTEGER NOT NULL
                 )"""
@@ -372,7 +337,8 @@ class SQLiteRollbackControlStore:
                 "ON barrier(project_id) WHERE status IN ('held','releasing')"
             )
             connection.execute(
-                "INSERT OR IGNORE INTO control_meta(key,value) VALUES ('schema_version','1')"
+                "INSERT OR IGNORE INTO control_meta(key,value) VALUES ('schema_version',?)",
+                (str(SCHEMA_VERSION),),
             )
             schema = connection.execute(
                 "SELECT value FROM control_meta WHERE key='schema_version'"
@@ -469,12 +435,7 @@ class SQLiteRollbackControlStore:
     def _snapshot_locked(self, operation_id: str) -> dict[str, object]:
         self._require_operation_lock()
         with self._connection() as connection:
-            row = connection.execute(
-                "SELECT operation_id,project_id,state_revision,fencing_token,fencing_owner,backend,"
-                "authority_revision,durable_barrier_id,barrier_identity_digest,envelope_digest,"
-                "target,status,revision FROM barrier WHERE operation_id=?",
-                (operation_id,),
-            ).fetchone()
+            row = connection.execute(_SELECT_SQL, (operation_id,)).fetchone()
             if row is None:
                 raise ControlStoreError("control barrier is missing")
             return _validate(dict(zip((*IDENTITY_FIELDS, "status", "revision"), row, strict=True)))
@@ -572,12 +533,7 @@ class SQLiteRollbackControlStore:
         self, connection: sqlite3.Connection, expected_revision: int, supplied: dict[str, object]
     ) -> dict[str, object]:
         connection.execute("BEGIN IMMEDIATE")
-        current = connection.execute(
-            "SELECT operation_id,project_id,state_revision,fencing_token,fencing_owner,backend,"
-            "authority_revision,durable_barrier_id,barrier_identity_digest,envelope_digest,"
-            "target,status,revision FROM barrier WHERE operation_id=?",
-            (supplied["operation_id"],),
-        ).fetchone()
+        current = connection.execute(_SELECT_SQL, (supplied["operation_id"],)).fetchone()
         if current is not None and current[-1] != expected_revision:
             connection.rollback()
             raise ControlStoreError("control barrier CAS conflict")

@@ -9,6 +9,8 @@ import importlib.util
 import unittest
 from pathlib import Path
 
+from tools.upgrade_identity import canonical_barrier_digest, canonical_envelope_digest
+
 ROOT = Path(__file__).resolve().parents[1]
 SPEC = importlib.util.spec_from_file_location(
     "upgrade_admission", ROOT / "tools/upgrade_admission.py"
@@ -31,19 +33,26 @@ def complete(names: tuple[str, ...]) -> dict[str, object]:
     snapshot: dict[str, object] = dict.fromkeys(names, True)
     snapshot.update(
         {
+            "schema_version": 2,
+            "backend": "sqlite",
             "operation_id": "upgrade-001",
             "project_id": "11111111-1111-4111-8111-111111111111",
-            "backend": "sqlite",
             "state_revision": 4,
+            "authority_revision": "authority-4",
             "fencing_token": "fence-4",
             "fencing_owner": "worker-1",
-            "authority_revision": "authority-4",
-            "barrier_identity_digest": "a" * 64,
-            "envelope_digest": "b" * 64,
             "durable_barrier_id": "barrier-4",
+            "artifact_root": "/artifacts",
+            "source": "/authority.sqlite",
+            "destination": "/artifacts/backup.sqlite",
+            "manifest": "/artifacts/manifest.json",
+            "barrier_identity_digest": "0" * 64,
             "target": "new",
+            "envelope_digest": "0" * 64,
         }
     )
+    snapshot["barrier_identity_digest"] = canonical_barrier_digest(snapshot)
+    snapshot["envelope_digest"] = canonical_envelope_digest(snapshot)
     return snapshot
 
 

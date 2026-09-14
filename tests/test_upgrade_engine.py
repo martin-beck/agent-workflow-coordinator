@@ -14,8 +14,6 @@ from typing import cast
 from tools.rollback_control_store import (
     SQLiteRollbackControlStore,
     bind_control_store,
-    canonical_barrier_digest,
-    canonical_envelope_digest,
 )
 from tools.upgrade_admission import (
     PREFLIGHT_PREDICATES,
@@ -23,61 +21,48 @@ from tools.upgrade_admission import (
     REOPEN_PREDICATES,
 )
 from tools.upgrade_engine import CONTEXT_FIELDS, PHASES, Handler, UpgradeEngine, UpgradeError
+from tools.upgrade_identity import canonical_barrier_digest, canonical_envelope_digest
 
-CONTEXT = {
-    "operation_id": "op-1",
-    "project_id": "11111111-1111-4111-8111-111111111111",
-    "state_revision": 1,
-    "fencing_token": "fence-1",
-    "fencing_owner": "worker-1",
-    "backend": "sqlite",
-    "authority_revision": "authority-1",
-    "durable_barrier_id": "barrier-1",
-    "barrier_identity_digest": "a" * 64,
-    "envelope_digest": "b" * 64,
-    "target": "new",
-}
-ROLLBACK_CONTEXT = {
-    **CONTEXT,
-    "target": "rollback",
-    "barrier_identity_digest": "c" * 64,
-    "envelope_digest": "d" * 64,
-}
-ROLLBACK_CONTEXT["barrier_identity_digest"] = canonical_barrier_digest(
-    {**ROLLBACK_CONTEXT, "status": "held", "revision": 1}
-)
-ROLLBACK_CONTEXT["envelope_digest"] = canonical_envelope_digest(
-    {**ROLLBACK_CONTEXT, "status": "held", "revision": 1}
-)
+
+def make_context(operation_id: str = "op-1", target: str = "new") -> dict[str, object]:
+    context: dict[str, object] = {
+        "schema_version": 2,
+        "backend": "sqlite",
+        "project_id": "11111111-1111-4111-8111-111111111111",
+        "operation_id": operation_id,
+        "state_revision": 1,
+        "authority_revision": "authority-1",
+        "fencing_token": "fence-1",
+        "fencing_owner": "worker-1",
+        "durable_barrier_id": "barrier-1",
+        "artifact_root": "/artifacts",
+        "source": "/authority.sqlite",
+        "destination": "/artifacts/backup.sqlite",
+        "manifest": "/artifacts/manifest.json",
+        "barrier_identity_digest": "0" * 64,
+        "target": target,
+        "envelope_digest": "0" * 64,
+    }
+    context["barrier_identity_digest"] = canonical_barrier_digest(context)
+    context["envelope_digest"] = canonical_envelope_digest(context)
+    return context
+
+
+CONTEXT = make_context()
+ROLLBACK_CONTEXT = make_context(target="rollback")
 ADMISSION = {
     **dict.fromkeys(PREFLIGHT_PREDICATES, True),
     **dict.fromkeys(QUIESCENCE_PREDICATES, True),
     **dict.fromkeys(REOPEN_PREDICATES, True),
-    "operation_id": "op-1",
-    "project_id": "11111111-1111-4111-8111-111111111111",
-    "state_revision": 1,
-    "fencing_token": "fence-1",
-    "fencing_owner": "worker-1",
-    "backend": "sqlite",
-    "authority_revision": "authority-1",
-    "durable_barrier_id": "barrier-1",
-    "barrier_identity_digest": "a" * 64,
-    "envelope_digest": "b" * 64,
-    "target": "new",
+    **CONTEXT,
     "validation_failed": False,
 }
 
 
 class FakeAdapter:
     def verify_rollback_context(self, context: Mapping[str, object]) -> dict[str, object] | None:
-        if (
-            all(
-                context.get(field) == ROLLBACK_CONTEXT[field]
-                for field in CONTEXT_FIELDS
-                if field not in {"operation_id"}
-            )
-            and context.get("target") == "rollback"
-        ):
+        expected = make_context(str(context.get("operation_id")), target="rollback")
+        if all(context.get(field) == expected[field] for field in CONTEXT_FIELDS):
             return dict(context)
         return None
 
@@ -85,27 +70,12 @@ class FakeAdapter:
         identity = dict(context) if isinstance(context, Mapping) else CONTEXT
         if phase == "rollback":
             return {
-                **ROLLBACK_CONTEXT,
-                "operation_id": identity["operation_id"],
+                **make_context(str(identity["operation_id"]), target="rollback"),
                 "rollback_context_verified": True,
             }
         return {
             **ADMISSION,
-            **{
-                field: identity[field]
-                for field in (
-                    "operation_id",
-                    "project_id",
-                    "state_revision",
-                    "fencing_token",
-                    "fencing_owner",
-                    "authority_revision",
-                    "durable_barrier_id",
-                    "barrier_identity_digest",
-                    "envelope_digest",
-                    "target",
-                )
-            },
+            **{field: identity[field] for field in CONTEXT_FIELDS},
         }
 
     def execute(self, phase: str, _context: object) -> dict[str, object]:
@@ -214,7 +184,7 @@ class UpgradeEngineTests(unittest.TestCase):
             engine = UpgradeEngine(
                 "op-2",
                 Path(directory) / "journal.json",
-                {**CONTEXT, "operation_id": "op-2"},
+                make_context("op-2"),
                 backend_adapter=FakeAdapter(),
             )
             engine.plan()
@@ -237,7 +207,7 @@ class UpgradeEngineTests(unittest.TestCase):
             engine = UpgradeEngine(
                 "op-evidence",
                 Path(directory) / "journal.json",
-                {**CONTEXT, "operation_id": "op-evidence"},
+                make_context("op-evidence"),
                 backend_adapter=FakeAdapter(),
             )
             engine.plan()
@@ -290,7 +260,7 @@ class UpgradeEngineTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             journal = Path(directory) / "journal.json"
             engine = UpgradeEngine(
-                "op-3", journal, {**CONTEXT, "operation_id": "op-3"}, backend_adapter=FakeAdapter()
+                "op-3", journal, make_context("op-3"), backend_adapter=FakeAdapter()
             )
             with self.assertRaises(UpgradeError):
                 engine.apply({})
@@ -318,7 +288,7 @@ class UpgradeEngineTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             journal = Path(directory) / "journal.json"
             engine = UpgradeEngine(
-                "op-4", journal, {**CONTEXT, "operation_id": "op-4"}, backend_adapter=FakeAdapter()
+                "op-4", journal, make_context("op-4"), backend_adapter=FakeAdapter()
             )
             engine.plan()
             with self.assertRaises(UpgradeError):
@@ -335,7 +305,7 @@ class UpgradeEngineTests(unittest.TestCase):
             engine = UpgradeEngine(
                 "op-record",
                 journal,
-                {**CONTEXT, "operation_id": "op-record"},
+                make_context("op-record"),
                 backend_adapter=FakeAdapter(),
             )
             engine.plan()
@@ -348,7 +318,7 @@ class UpgradeEngineTests(unittest.TestCase):
                     "step_id": "op-record.discover",
                     "phase": "discover",
                     "outcome": "started",
-                    "context": {**CONTEXT, "operation_id": "op-record"},
+                    "context": make_context("op-record"),
                 }
             ]
             for field in CONTEXT:
@@ -364,7 +334,7 @@ class UpgradeEngineTests(unittest.TestCase):
             engine = UpgradeEngine(
                 "op-rollback",
                 journal,
-                {**CONTEXT, "operation_id": "op-rollback"},
+                make_context("op-rollback"),
                 backend_adapter=FakeAdapter(),
             )
             engine.plan()
@@ -374,7 +344,7 @@ class UpgradeEngineTests(unittest.TestCase):
                 "step_id": "op-rollback.rollback",
                 "phase": "rollback",
                 "outcome": "started",
-                "context": {**CONTEXT, "operation_id": "op-rollback", "target": "rollback"},
+                "context": make_context("op-rollback", target="rollback"),
             }
             for mutation in (
                 {
@@ -398,7 +368,7 @@ class UpgradeEngineTests(unittest.TestCase):
             engine = UpgradeEngine(
                 "op-success-rollback",
                 journal,
-                {**CONTEXT, "operation_id": "op-success-rollback"},
+                make_context("op-success-rollback"),
                 backend_adapter=FakeAdapter(),
             )
             engine.plan()
@@ -412,7 +382,7 @@ class UpgradeEngineTests(unittest.TestCase):
                     "phase": "discover",
                     "outcome": "failed",
                     "error": "failed",
-                    "context": {**CONTEXT, "operation_id": "op-success-rollback"},
+                    "context": make_context("op-success-rollback"),
                 }
             ]
             journal.write_text(json.dumps(value))
@@ -423,7 +393,7 @@ class UpgradeEngineTests(unittest.TestCase):
             reloaded = UpgradeEngine(
                 "op-success-rollback",
                 journal,
-                {**CONTEXT, "operation_id": "op-success-rollback"},
+                make_context("op-success-rollback"),
                 backend_adapter=FakeAdapter(),
             )
             self.assertEqual("rollback", reloaded._load()["phase"])
@@ -456,7 +426,7 @@ class UpgradeEngineTests(unittest.TestCase):
             engine = UpgradeEngine(
                 "op-unverified",
                 journal,
-                {**CONTEXT, "operation_id": "op-unverified"},
+                make_context("op-unverified"),
                 backend_adapter=UnverifiedAdapter(),
             )
             engine.plan()
@@ -477,7 +447,7 @@ class UpgradeEngineTests(unittest.TestCase):
             engine = UpgradeEngine(
                 "op-mismatched",
                 journal,
-                {**CONTEXT, "operation_id": "op-mismatched"},
+                make_context("op-mismatched"),
                 backend_adapter=MismatchedAdapter(),
             )
             engine.plan()
@@ -491,7 +461,7 @@ class UpgradeEngineTests(unittest.TestCase):
             engine = UpgradeEngine(
                 "op-handler-evidence",
                 journal,
-                {**CONTEXT, "operation_id": "op-handler-evidence"},
+                make_context("op-handler-evidence"),
                 backend_adapter=FakeAdapter(),
             )
             engine.plan()
@@ -505,7 +475,7 @@ class UpgradeEngineTests(unittest.TestCase):
                     "phase": "discover",
                     "outcome": "failed",
                     "error": "failed",
-                    "context": {**CONTEXT, "operation_id": "op-handler-evidence"},
+                    "context": make_context("op-handler-evidence"),
                 }
             ]
             journal.write_text(json.dumps(value))
@@ -556,7 +526,7 @@ class UpgradeEngineTests(unittest.TestCase):
             engine = UpgradeEngine(
                 operation_id,
                 journal,
-                {**CONTEXT, "operation_id": operation_id},
+                make_context(operation_id),
                 backend_adapter=adapter,
             )
             engine.plan()
@@ -570,7 +540,7 @@ class UpgradeEngineTests(unittest.TestCase):
                     "phase": "discover",
                     "outcome": "failed",
                     "error": "failed",
-                    "context": {**CONTEXT, "operation_id": operation_id},
+                    "context": make_context(operation_id),
                 }
             ]
             journal.write_text(json.dumps(value))
@@ -582,7 +552,7 @@ class UpgradeEngineTests(unittest.TestCase):
             reloaded = UpgradeEngine(
                 operation_id,
                 journal,
-                {**CONTEXT, "operation_id": operation_id},
+                make_context(operation_id),
                 backend_adapter=adapter,
             )
             self.assertEqual("rolled-back", reloaded._load()["status"])
@@ -591,7 +561,7 @@ class UpgradeEngineTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             journal = Path(directory) / "journal.json"
             engine = UpgradeEngine(
-                "op-5", journal, {**CONTEXT, "operation_id": "op-5"}, backend_adapter=FakeAdapter()
+                "op-5", journal, make_context("op-5"), backend_adapter=FakeAdapter()
             )
             engine.plan()
             value = json.loads(journal.read_text())
@@ -603,7 +573,7 @@ class UpgradeEngineTests(unittest.TestCase):
                     "step_id": "op-5.discover",
                     "phase": "discover",
                     "outcome": "started",
-                    "context": {**CONTEXT, "operation_id": "op-5"},
+                    "context": make_context("op-5"),
                 }
             ]
             journal.write_text(json.dumps(value))
@@ -615,7 +585,7 @@ class UpgradeEngineTests(unittest.TestCase):
             engine = UpgradeEngine(
                 "op-probe",
                 Path(directory) / "journal.json",
-                {**CONTEXT, "operation_id": "op-probe"},
+                make_context("op-probe"),
                 backend_adapter=FailingAdapter(),
             )
             engine.plan()

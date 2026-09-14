@@ -5,9 +5,9 @@
 
 from __future__ import annotations
 
-import re
-import uuid
 from collections.abc import Mapping
+
+from tools.upgrade_identity import ENVELOPE_FIELDS, UpgradeIdentityError, validate_envelope
 
 
 class AdmissionError(ValueError):
@@ -50,50 +50,20 @@ REOPEN_PREDICATES = (
     "lease_fence_valid",
 )
 
-IDENTITY_FIELDS = (
-    "operation_id",
-    "project_id",
-    "backend",
-    "state_revision",
-    "fencing_token",
-    "fencing_owner",
-    "authority_revision",
-    "barrier_identity_digest",
-    "envelope_digest",
-    "target",
-    "durable_barrier_id",
-)
+IDENTITY_FIELDS = ENVELOPE_FIELDS
 QUIESCENCE_IDENTITY = "durable_barrier_id"
 KNOWN_FIELDS = set(PREFLIGHT_PREDICATES + QUIESCENCE_PREDICATES + REOPEN_PREDICATES)
 KNOWN_FIELDS.update((*IDENTITY_FIELDS, QUIESCENCE_IDENTITY, "validation_failed", "safe_mode_ready"))
-
-
-def _valid_identity(field: str, value: object) -> bool:
-    if field == "state_revision":
-        return isinstance(value, int) and not isinstance(value, bool) and value >= 1
-    if not isinstance(value, str) or not value:
-        return False
-    if field in {"barrier_identity_digest", "envelope_digest"}:
-        return re.fullmatch(r"[0-9a-f]{64}", value) is not None
-    if field == "backend":
-        return value in {"git", "sqlite"}
-    if field == "project_id":
-        try:
-            return uuid.UUID(value).version == 4
-        except ValueError:
-            return False
-    if field == "target":
-        return value in {"new", "rollback"}
-    return re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", value) is not None
 
 
 def _require(snapshot: Mapping[str, object], predicates: tuple[str, ...], phase: str) -> None:
     unknown = set(snapshot) - KNOWN_FIELDS
     if unknown:
         raise AdmissionError(f"{phase} denied; unknown fields: {', '.join(sorted(unknown))}")
-    for field in IDENTITY_FIELDS:
-        if not _valid_identity(field, snapshot.get(field)):
-            raise AdmissionError(f"{phase} denied; invalid {field}")
+    try:
+        validate_envelope({field: snapshot.get(field) for field in IDENTITY_FIELDS})
+    except UpgradeIdentityError as error:
+        raise AdmissionError(f"{phase} denied; invalid identity envelope") from error
     missing = [name for name in predicates if snapshot.get(name) is not True]
     if missing:
         raise AdmissionError(f"{phase} denied; unmet predicates: {', '.join(missing)}")
