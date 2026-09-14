@@ -571,7 +571,10 @@ class RollbackControlStoreTests(unittest.TestCase):
                     SQLiteRollbackControlStore(control_path, PROJECT, authority_path),
                     lambda: "authority-3",
                 )
-                self.assertEqual(final, reader.snapshot())
+                snapshot = reader.snapshot()
+                self.assertEqual(final, snapshot)
+                assert snapshot is not None
+                self.assertIsNone(snapshot.forward_child)
                 self.assertEqual(b"authority remains untouched\n", authority_path.read_bytes())
             self.assertEqual(final, reader.snapshot())
 
