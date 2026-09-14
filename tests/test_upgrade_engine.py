@@ -466,6 +466,21 @@ class UpgradeEngineTests(unittest.TestCase):
                     "successful phase lacks result",
                 ),
                 (
+                    "success without result field",
+                    lambda value: value.update(
+                        status="running",
+                        phase="discover",
+                        records=[
+                            {
+                                key: item
+                                for key, item in ordinary("success").items()
+                                if key != "result"
+                            }
+                        ],
+                    ),
+                    "phase outcome fields are invalid",
+                ),
+                (
                     "failure without string error",
                     lambda value: value.update(
                         status="failed",
@@ -726,6 +741,20 @@ class UpgradeEngineTests(unittest.TestCase):
                     "failed",
                     "discover",
                     "verified rollback lacks result evidence",
+                ),
+                (
+                    "verified rollback without result field",
+                    [
+                        failed_phase,
+                        {
+                            key: item
+                            for key, item in rollback_record("rollback_verified").items()
+                            if key != "result"
+                        },
+                    ],
+                    "failed",
+                    "discover",
+                    "rollback record fields are invalid",
                 ),
                 (
                     "ambiguous rollback without error string",
@@ -1525,11 +1554,15 @@ class UpgradeEngineTests(unittest.TestCase):
                     backend_adapter=FakeAdapter(),
                 )
                 with (
-                    patch("tools.upgrade_engine.time.monotonic", side_effect=(0.0, 31.0)),
-                    patch("tools.upgrade_engine.time.sleep"),
+                    patch(
+                        "tools.upgrade_engine.time.monotonic",
+                        side_effect=(0.0, 1.0, 31.0),
+                    ),
+                    patch("tools.upgrade_engine.time.sleep") as sleep,
                     self.assertRaisesRegex(UpgradeError, "lock acquisition timed out"),
                 ):
                     engine.plan()
+                sleep.assert_called_once_with(0.01)
                 fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
 
             engine = UpgradeEngine(
@@ -1630,6 +1663,46 @@ class UpgradeEngineTests(unittest.TestCase):
             journal.write_text(json.dumps(value))
             with self.assertRaisesRegex(UpgradeError, "requires explicit reconciliation"):
                 failed.rollback(lambda _step, _state: {})
+
+    def test_apply_resumes_after_a_durable_success_without_repeating_it(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            operation_id = "op-resume-success"
+            journal = Path(directory) / "journal.json"
+            engine = UpgradeEngine(
+                operation_id,
+                journal,
+                make_context(operation_id),
+                backend_adapter=FakeAdapter(),
+            )
+            value = engine.plan()
+            value.update(
+                status="running",
+                phase="discover",
+                records=[
+                    {
+                        "operation_id": operation_id,
+                        "step_id": f"{operation_id}.discover",
+                        "phase": "discover",
+                        "outcome": "success",
+                        "context": make_context(operation_id),
+                        "result": {"durably_completed": True},
+                    }
+                ],
+            )
+            journal.write_text(json.dumps(value))
+            called: list[str] = []
+
+            def preflight(step_id: str, _state: object) -> dict[str, object]:
+                called.append(step_id)
+                return {}
+
+            with self.assertRaisesRegex(UpgradeError, "phase evidence incomplete: preflight"):
+                engine.apply({"preflight": preflight})
+            self.assertEqual([f"{operation_id}.preflight"], called)
+            durable = json.loads(journal.read_text())
+            self.assertEqual(
+                ["discover", "preflight"], [item["phase"] for item in durable["records"]]
+            )
 
     def test_started_phase_requires_explicit_recovery(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
