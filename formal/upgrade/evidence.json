@@ -1,0 +1,114 @@
+{
+  "model": "formal/upgrade/UpgradeRecovery.tla",
+  "config": "formal/upgrade/UpgradeRecovery.cfg",
+  "model_sha256": "bf31b544b87038cf2d9a50dc389caa34b8f3a2d9fe6d966908b4ecfc4b76fb3e",
+  "config_sha256": "920eef41219ab0c9eba7b11ed334618fd97a89900a6942d1e0087c950861462f",
+  "implementation_snapshot": {
+    "revision": "257ac7cf7914e0218ab945da7813df9de7da639b",
+    "files": {
+      "schema/upgrade-contract.schema.json": "6ef2362107a0c3ff895e6dc96e35899e19b367bebd549b6acee42a680d7a442b",
+      "tools/generate_upgrade_contract.py": "b3db939912bed549eaba17a2e064e776ff9119b82287218016100e25e5ad9ba4",
+      "tools/validate_upgrade_contract.py": "6c264c4775e4ee1a778181d7e127d9f256c56abd4bfebb02c624e13c289dbc4a",
+      "tools/upgrade_contract_runtime.py": "caeb45260b790e7fdf8118ce370558bd26b04035407679df8e9845775e197119",
+      "tools/upgrade_commands.py": "5b6360c39fa10979a77a0c6180968598593f56b9ea0c59de60b59c8017e37071",
+      "tools/handoffctl.py": "dcdfa4be613ce5e059329644b0bf1874a499896e30a8b2b6f79b6e5b68611e3e",
+      "tests/test_upgrade_commands.py": "4eaa65ac1730c9149156ba76e345dcb1f8e2c44a51042e27f2d4a4b4e7634f32",
+      "tests/test_upgrade_contract.py": "a7e99dc8b7af5a117245999bd09911af00f25f22e46aba51007939b07ace0570",
+      "tools/rollback_control_store.py": "387b05743c697e40f340bbaff651edc5a889868ba1393199000001978d41976b",
+      "tools/upgrade_identity.py": "44bf4479b28e1b684879f7f000f713e8f5177034e1a2d43a30c09745c9c014a",
+      "tests/test_rollback_control_store.py": "604d8b96882e8dba20b24c83f059a09f7bb4b194da65ea88d18d5334c4b9daf4",
+      "tests/test_upgrade_identity.py": "0206aef1794ed73ffcdefb4f965f657514f11858d9beb0b2fa92f7dceaaaf905"
+    }
+  },
+  "design_snapshot": {
+    "revision": "bbbef2053bad329e85a8d257493cd642e20e06d2",
+    "files": {
+      "docs/UPGRADE_PROTOCOL.md": "8b3a1e5600165919e9cf4a3943237abfec064c6cc4286ad727b463cf2ddbfc62",
+      "docs/UPGRADE_EXECUTION_REDESIGN.md": "610e937d47cb5b793f684626c139ca1c8b460bedcd3b8f1f4dbdf5cde0c67954"
+    },
+    "status": "design-only-v10; no executable refinement"
+  },
+  "verifier": {
+    "name": "TLC",
+    "version": "2.19 (08 August 2024, rev 5a47802)",
+    "jar_sha256": "936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88"
+  },
+  "bounds": {
+    "operations": ["op1", "op2"],
+    "releases": ["old", "new"],
+    "backends": ["git", "sqlite"]
+  },
+  "result": {
+    "status": "pass",
+    "states_generated": 4501,
+    "distinct_states": 900,
+    "depth": 19,
+    "invariants": [
+      "TypeInvariant",
+      "FunctionalAvailability",
+      "NoReplacementBeforeBackup",
+      "ReleaseOrder",
+      "RollbackProof"
+    ]
+  },
+  "barrier_model": {
+    "model": "formal/upgrade/HandoffctlUpgradeBarrier.tla",
+    "config": "formal/upgrade/HandoffctlUpgradeBarrier.cfg",
+    "model_sha256": "2a1a31f530781645f5e8e76f67ca80a8ed59ec5d1f78706ca2a5530ebefa7b92",
+    "config_sha256": "e38502a22e5c73b175c92d152b21f086269c49e9256d2d25fa9209657697e776",
+    "bounds": {
+      "processes": ["p1", "p2"],
+      "max_revision": 3,
+      "statuses": ["absent", "held", "releasing", "released", "ambiguous"]
+    },
+    "result": {
+      "status": "pass",
+      "states_generated": 12575081,
+      "distinct_states": 2518656,
+      "depth": 44,
+      "invariants": [
+        "TypeOK",
+        "OneActiveSession",
+        "IdentityStable",
+        "ChildIdentityStable",
+        "NoUnheldRollbackGap",
+        "ReleaseEvidence",
+        "WriteFence",
+        "AmbiguousIsWriteClosed",
+        "CasBounded",
+        "LockOwnership",
+        "LockOrder",
+        "RecheckEvidence",
+        "StaleCASRejected",
+        "WriterDrainOnAcquire"
+      ]
+    },
+    "claim_boundary": {
+      "class": "bounded-model",
+      "implementation_refinement": "not-proven",
+      "excluded": [
+        "SQLite VFS and WAL fsync durability",
+        "power loss and arbitrary process termination",
+        "Python implementation equivalence",
+        "coordinator authority mutation routes",
+        "filesystem descriptor and lock semantics"
+      ]
+    }
+  },
+  "claim_boundary": {
+    "class": "bounded-model",
+    "implementation_refinement": "not-proven",
+    "model_limitations": [
+      "backend backup branches are abstract and do not model Git or SQLite internals",
+      "fence acquisition is modeled, but stale-fence/CAS rejection is not modeled"
+    ],
+    "excluded": [
+      "Python implementation equivalence",
+      "Git refs and archive semantics",
+      "SQLite WAL/SHM durability",
+      "filesystem descriptor and rename atomicity",
+      "process scheduling and multiprocess locking",
+      "external command behavior"
+    ]
+  }
+}
