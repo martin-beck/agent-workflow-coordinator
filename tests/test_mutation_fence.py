@@ -91,6 +91,29 @@ class MutationFenceTests(unittest.TestCase):
                 "path/id",
             )
 
+    def test_marker_and_lifecycle_symlinks_are_rejected(self) -> None:
+        provision(self.authority, self.marker, self.lifecycle, self.lock, "project-public-id")
+        marker_copy = self.root / "marker-copy"
+        marker_copy.write_bytes(self.marker.read_bytes())
+        marker_copy.chmod(0o600)
+        self.marker.unlink()
+        self.marker.symlink_to(marker_copy)
+        with self.assertRaisesRegex(MutationFenceError, "unreadable|descriptor"):
+            MutationFence(self.authority, self.marker, self.lifecycle, self.lock)._verify()
+
+        self.marker.unlink()
+        self.marker_copy = self.root / "marker-copy-2"
+        self.marker_copy.write_bytes(marker_copy.read_bytes())
+        self.marker_copy.chmod(0o600)
+        self.marker_copy.rename(self.marker)
+        lifecycle_copy = self.root / "lifecycle-copy"
+        lifecycle_copy.write_bytes(self.lifecycle.read_bytes())
+        lifecycle_copy.chmod(0o600)
+        self.lifecycle.unlink()
+        self.lifecycle.symlink_to(lifecycle_copy)
+        with self.assertRaisesRegex(MutationFenceError, "unreadable|descriptor"):
+            MutationFence(self.authority, self.marker, self.lifecycle, self.lock)._verify()
+
 
 if __name__ == "__main__":
     unittest.main()

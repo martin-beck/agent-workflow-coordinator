@@ -66,10 +66,38 @@ def _digest(value: dict[str, object]) -> str:
 
 
 def _read_json(path: Path, label: str) -> dict[str, object]:
+    parent_fd = -1
+    descriptor = -1
     try:
-        value = json.loads(path.read_text())
+        parent_fd, parent = _parent(path)
+        descriptor = os.open(path.name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=parent_fd)
+        before = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(before.st_mode)
+            or before.st_uid != os.geteuid()
+            or before.st_nlink != 1
+            or stat.S_IMODE(before.st_mode) != 0o600
+        ):
+            raise MutationFenceError(f"{label} is not an owner-only regular file")
+        chunks: list[bytes] = []
+        while chunk := os.read(descriptor, 8192):
+            chunks.append(chunk)
+        after = os.fstat(descriptor)
+        if before.st_dev != after.st_dev or before.st_ino != after.st_ino:
+            raise MutationFenceError(f"{label} identity changed")
+        if (
+            os.fstat(parent_fd).st_dev != parent.st_dev
+            or os.fstat(parent_fd).st_ino != parent.st_ino
+        ):
+            raise MutationFenceError(f"{label} parent identity changed")
+        value = json.loads(b"".join(chunks).decode("utf-8"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
         raise MutationFenceError(f"{label} is unreadable") from error
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+        if parent_fd >= 0:
+            os.close(parent_fd)
     if not isinstance(value, dict):
         raise MutationFenceError(f"{label} schema is invalid")
     return value
