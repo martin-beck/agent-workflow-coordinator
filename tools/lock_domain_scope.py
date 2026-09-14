@@ -4,12 +4,12 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
 from contextlib import AbstractContextManager, contextmanager
 
 from tools.admission_lease import LOCK_ORDER, AdmissionLease
 from tools.handoffctl import CoordinatorLockGuard
-from tools.lock_domain import LockDomainIdentity
+from tools.lock_domain import LockDomainError, LockDomainIdentity
 from tools.mutation_fence import MutationFence
 from tools.rollback_control_store import SQLiteBarrierSessionStore
 
@@ -39,6 +39,19 @@ class LockDomainScope:
     def assert_ordered(self) -> None:
         if LOCK_ORDER != ("common", "control", "authority"):
             raise RuntimeError("admission lock order is invalid")
+
+    def assert_context(self, context: Mapping[str, object]) -> None:
+        """Reject engine context whose immutable lease identity has drifted."""
+        required = {
+            "project_id": self._lease.project_id,
+            "authority_revision": self._lease.authority_revision,
+            "fencing_token": self._lease.fencing_token,
+            "fencing_owner": self._lease.fencing_owner,
+            "durable_barrier_id": self._lease.durable_barrier_id,
+            "state_revision": self._lease.revision,
+        }
+        if any(context.get(key) != value for key, value in required.items()):
+            raise LockDomainError("engine context does not match admission lease")
 
     @contextmanager
     def hold(self) -> Iterator[object]:

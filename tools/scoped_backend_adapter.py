@@ -11,6 +11,13 @@ from tools.admitted_control_store import OrderedAdmissionScope
 
 
 @runtime_checkable
+class CallerTraceScope(OrderedAdmissionScope, Protocol):
+    """Scope that binds each engine context to its immutable lease."""
+
+    def assert_context(self, context: Mapping[str, object]) -> None: ...
+
+
+@runtime_checkable
 class BackendAdapter(Protocol):
     """Minimal upgrade-engine backend surface guarded by this boundary."""
 
@@ -28,16 +35,17 @@ class ScopedBackendAdapter:
     it, and it does not make upgrade/apply/rollback executable.
     """
 
-    def __init__(self, backend: BackendAdapter, scope: OrderedAdmissionScope) -> None:
+    def __init__(self, backend: BackendAdapter, scope: CallerTraceScope) -> None:
         if not isinstance(backend, BackendAdapter):
             raise TypeError("upgrade backend adapter is incomplete")
-        if not isinstance(scope, OrderedAdmissionScope):
-            raise TypeError("ordered admission scope is required")
+        if not isinstance(scope, CallerTraceScope):
+            raise TypeError("caller trace scope is required")
         self._backend = backend
         self._scope = scope
 
     def snapshot(self, phase: str, context: Mapping[str, object]) -> dict[str, Any]:
         """Read backend evidence only while the scope is held."""
+        self._scope.assert_context(context)
         with self._scope.hold():
             snapshot = self._backend.snapshot(phase, context)
         if not isinstance(snapshot, dict):
@@ -46,6 +54,7 @@ class ScopedBackendAdapter:
 
     def execute(self, phase: str, context: Mapping[str, object]) -> dict[str, Any]:
         """Execute one adapter operation only while the scope is held."""
+        self._scope.assert_context(context)
         with self._scope.hold():
             result = self._backend.execute(phase, context)
         if not isinstance(result, dict):
@@ -54,6 +63,7 @@ class ScopedBackendAdapter:
 
     def verify_rollback_context(self, context: Mapping[str, object]) -> dict[str, Any] | None:
         """Verify rollback evidence only while the scope is held."""
+        self._scope.assert_context(context)
         with self._scope.hold():
             result = self._backend.verify_rollback_context(context)
         if result is not None and not isinstance(result, dict):
