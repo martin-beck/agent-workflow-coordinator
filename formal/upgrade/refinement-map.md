@@ -4,6 +4,11 @@ This is an evidence map, not a refinement proof. The model actions identify
 the obligations that implementation tests must cover; the current checkpoint
 records only the TLC result in `evidence.json`.
 
+The machine-readable `v10-refinement-contract.json` records the same bounded
+model/config hashes, implementation snapshot, action-to-obligation mapping,
+required executable evidence, and explicit non-claims. It is a publication
+contract for the next implementation slice, not an implementation proof.
+
 | Model obligation | Intended implementation evidence | Status |
 | --- | --- | --- |
 | discover/preflight/quiesce | `test_apply_is_ordered_and_idempotent`, `test_commit_validate_and_reopen_require_safety_evidence` | public tests present; refinement pending |

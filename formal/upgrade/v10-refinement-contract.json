@@ -1,0 +1,75 @@
+{
+  "schema_version": 1,
+  "kind": "bounded-refinement-contract",
+  "model": {
+    "path": "formal/upgrade/HandoffctlUpgradeBarrier.tla",
+    "sha256": "2a1a31f530781645f5e8e76f67ca80a8ed59ec5d1f78706ca2a5530ebefa7b92",
+    "config": "formal/upgrade/HandoffctlUpgradeBarrier.cfg",
+    "config_sha256": "e38502a22e5c73b175c92d152b21f086269c49e9256d2d25fa9209657697e776",
+    "bounds": {
+      "processes": ["p1", "p2"],
+      "max_revision": 3,
+      "statuses": ["absent", "held", "releasing", "released", "ambiguous"]
+    }
+  },
+  "implementation_snapshot": {
+    "revision": "7cb1c7be8711242ffb551b82db77b90d793600f0",
+    "runtime_revision": "c6999ca684b67365d71d9e0069b71b0cd3c7834c",
+    "status": "descriptor-safe control-store reread and write-route admission evidence; executable apply and rollback remain rejection-only"
+  },
+  "correspondence": [
+    {
+      "model_actions": ["AcquireCommon", "AcquireControl", "AcquireAuthority", "ReleaseAuthority", "ReleaseControl", "ReleaseCommon"],
+      "implementation_obligation": "One non-reentrant operation scope acquires repository-common, control-store, and authority locks in that order and releases them in reverse order.",
+      "evidence_required": ["lock-order tests", "re-entry rejection", "descriptor identity checks"],
+      "status": "obligation-only"
+    },
+    {
+      "model_actions": ["ObserveAuthority", "RecheckHeld", "RejectStaleCAS"],
+      "implementation_obligation": "A writer rereads the durable control barrier and authority binding from descriptor-bound state immediately before admission; stale or non-released state rejects without mutation.",
+      "evidence_required": ["binding rename/swap tests", "control-store identity tests", "stale revision tests"],
+      "status": "obligation-only"
+    },
+    {
+      "model_actions": ["RequestWrite", "AcceptWrite", "RejectWrite", "FinishWrite"],
+      "implementation_obligation": "Every authoritative SQLite mutation route, including tasks, observations, results, migrations, and reconciliation, uses the same fence and cannot bypass it through a separate connection.",
+      "evidence_required": ["route inventory", "multiprocess writer rejection", "post-release admission"],
+      "status": "obligation-only"
+    },
+    {
+      "model_actions": ["MarkAmbiguous", "Acquire"],
+      "implementation_obligation": "Process death or uncertain WAL/control-store outcomes preserve durable write-closed state; recovery must reread and reconcile before a newer fenced session can proceed.",
+      "evidence_required": ["sigkill boundaries", "WAL/SHM fault tests", "new-session CAS tests"],
+      "status": "obligation-only"
+    }
+  ],
+  "tlc_result": {
+    "status": "bounded-model-only",
+    "states_generated": 12575081,
+    "distinct_states": 2518656,
+    "depth": 43,
+    "invariants": [
+      "TypeOK",
+      "OneActiveSession",
+      "IdentityStable",
+      "ChildIdentityStable",
+      "NoUnheldRollbackGap",
+      "ReleaseEvidence",
+      "WriteFence",
+      "AmbiguousIsWriteClosed",
+      "CasBounded",
+      "LockOwnership",
+      "LockOrder",
+      "RecheckEvidence",
+      "StaleCASRejected",
+      "WriterDrainOnAcquire"
+    ]
+  },
+  "nonclaims": [
+    "This artifact does not prove Python implementation refinement.",
+    "The model does not model SQLite VFS, WAL/SHM fsync, power loss, or arbitrary process termination.",
+    "Descriptor-safe binding rereads and authority write fencing remain executable evidence obligations.",
+    "Git authority operations, selector launch, and upgrade mutation are outside this checkpoint."
+  ],
+  "mutation_gate": "upgrade apply and upgrade rollback must remain rejection-only until every obligation has exact-head executable evidence and independent review."
+}
