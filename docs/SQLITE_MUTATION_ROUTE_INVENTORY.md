@@ -38,3 +38,20 @@ prove that every future authority route is registered here, that SQLite
 WAL/SHM survives arbitrary process death, or that the control-store fence is a
 complete implementation refinement of the formal model. Authority mutation,
 upgrade apply, and upgrade rollback remain disabled.
+
+## Constructor binding gap (AR-0007)
+
+`SQLiteRollbackControlStore(path, project_id, authority_path=None)` binds the
+control database and descriptor identities, but does not accept a
+`MutationFence`/authority admission scope. `SQLiteBarrierSessionStore(control,
+authority_revision_reader=None)` inherits the same boundary from its control
+store and also does not bind an authority mutation scope. Existing callers and
+the rejection-only upgrade paths rely on these compatible constructors.
+
+Requiring a scope in either constructor would be a breaking change; silently
+adding an optional scope would not be a fail-closed proof. The exact remaining
+route gap is a future adapter that binds the already-tested
+`MutationFence.mutation_scope` around every authoritative write while keeping
+these control-plane constructors compatible. Until that adapter and its
+multiprocess evidence exist, this is an explicit nonclaim rather than an
+acceptance gate.
