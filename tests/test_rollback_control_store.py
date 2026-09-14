@@ -538,6 +538,7 @@ class RollbackControlStoreTests(unittest.TestCase):
                 )
                 self.assertEqual(final, reader.snapshot())
                 self.assertEqual(b"authority remains untouched\n", authority_path.read_bytes())
+            self.assertEqual(final, reader.snapshot())
 
     def test_v10_subprocess_death_rolls_back_uncommitted_wal_change(self) -> None:
         """Cover uncommitted WAL rollback only; no ambiguous-recovery claim."""
