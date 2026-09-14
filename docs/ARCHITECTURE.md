@@ -23,6 +23,10 @@ mutation-owned files before and after the transition, rejecting newly introduced
 findings. Existing unrelated findings remain visible to `doctor`; expiry, privacy, and size
 findings do not block otherwise safe lifecycle transitions.
 
+Dependency admission is fail-closed: `done` satisfies a dependency directly. A `superseded` task
+requires an explicit `superseded_by` successor chain ending at an existing `done` task; malformed,
+missing, cyclic, or unfinished chains never satisfy admission.
+
 Project identity has three layers: a tracked profile, the permanent UUID/repository binding, and
 the backend selector. SQLite repeats the identity inside the database. Runtime paths and database
 identity must match that binding before normal command execution.
