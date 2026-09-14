@@ -94,6 +94,8 @@ class UpgradeAdmissionTests(unittest.TestCase):
             ("operation_id", ""),
             ("operation_id", "upgrade:bad"),
             ("project_id", ""),
+            ("project_id", "project-1"),
+            ("project_id", "11111111-1111-4111-0111-111111111111"),
             ("backend", "unknown"),
             ("fencing_token", ""),
             ("fencing_owner", ""),
