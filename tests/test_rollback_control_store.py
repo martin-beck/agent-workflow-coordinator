@@ -543,6 +543,12 @@ class RollbackControlStoreTests(unittest.TestCase):
             self.assertEqual(64, len(reopened_final.identity.identity_digest))
             self.assertNotEqual("0" * 64, reopened_final.identity.identity_digest)
             self.assertTrue(reopened_final.identity.identity_digest.isalnum())
+            self.assertTrue(
+                all(
+                    character in "0123456789abcdef"
+                    for character in reopened_final.identity.identity_digest
+                )
+            )
             self.assertEqual(
                 canonical_barrier_session_digest(reopened_final.identity.as_record()),
                 reopened_final.identity.identity_digest,
