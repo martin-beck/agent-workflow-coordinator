@@ -815,6 +815,16 @@ class SQLiteRollbackControlStore:
     def operation_owned_by_current_thread(self) -> bool:
         return self._operation_owner == threading.get_ident()
 
+    @property
+    def control_store_path(self) -> Path:
+        """Return the canonical control-store path for identity contracts."""
+        return self.path
+
+    @property
+    def control_lock_path(self) -> Path:
+        """Return the canonical control-lock path for identity contracts."""
+        return self._lock_path
+
     def _require_operation_lock(self) -> None:
         if not self.operation_owned_by_current_thread:
             raise ControlStoreError("control store operation lock is required")
@@ -1135,6 +1145,21 @@ class SQLiteBarrierSessionStore:
     @property
     def operation_owned_by_current_thread(self) -> bool:
         return self._control.operation_owned_by_current_thread
+
+    @property
+    def control_store_path(self) -> Path:
+        """Return the underlying control-store path for identity contracts."""
+        return self._control.control_store_path
+
+    @property
+    def control_lock_path(self) -> Path:
+        """Return the underlying control-lock path for identity contracts."""
+        return self._control.control_lock_path
+
+    @property
+    def authority_path(self) -> Path | None:
+        """Return the descriptor-bound authority path, when configured."""
+        return self._control.authority_path
 
     def operation_lock(self) -> AbstractContextManager[None]:
         """Acquire the common lock, then this control store's lock."""

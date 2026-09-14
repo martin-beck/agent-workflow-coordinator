@@ -401,6 +401,10 @@ class MutationFence:
             self._verify_control_binding(project_id)
         return record
 
+    def verify_binding(self) -> None:
+        """Public read-only binding check for future caller-owned adapters."""
+        self._verify()
+
     def _verify_marker(self, record: dict[str, object]) -> str:
         if record.get("identity_digest") != _digest(
             {key: value for key, value in record.items() if key != "identity_digest"}

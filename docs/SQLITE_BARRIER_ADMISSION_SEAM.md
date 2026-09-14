@@ -4,6 +4,13 @@ Status: design/test contract only. This document does not enable an upgrade,
 bind `storage_backend`, or change the default unprovisioned coordinator path.
 `handoffctl upgrade apply` and `rollback` remain rejection-only.
 
+The read-only `LockDomainContract` captures and revalidates the canonical
+common-lock, control-store, control-lock, authority, and authority-lock
+descriptor identities. It rejects split paths, duplicate paths, replacement,
+unsafe descriptors, and invalid provisioned bindings. Capturing this identity
+does not acquire a control or authority lock and does not bind any mutation
+caller; v10 session admission and formal correspondence remain pending.
+
 ## Ownership and lock order
 
 The caller owns one non-reentrant outer scope for the entire authority
