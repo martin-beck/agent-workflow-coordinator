@@ -2115,7 +2115,8 @@ class RollbackControlStoreTests(unittest.TestCase):
 
     def test_ambiguous_requires_explicit_newer_reconciliation(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            store = SQLiteRollbackControlStore(Path(directory) / "control.sqlite", PROJECT)
+            control_path = Path(directory) / "control.sqlite"
+            store = SQLiteRollbackControlStore(control_path, PROJECT)
             ambiguous = store.cas(0, RECORD)
             ambiguous = store.cas(1, {**ambiguous, "status": "ambiguous", "revision": 2})
             with self.assertRaises(ControlStoreError):
@@ -2128,8 +2129,13 @@ class RollbackControlStoreTests(unittest.TestCase):
             }
             replacement["barrier_identity_digest"] = canonical_barrier_digest(replacement)
             replacement["envelope_digest"] = canonical_envelope_digest(replacement)
-            recovered = store.reconcile_ambiguous("op-1", replacement)
+            reopened = SQLiteRollbackControlStore(control_path, PROJECT)
+            recovered = reopened.reconcile_ambiguous("op-1", replacement)
             self.assertEqual("held", recovered["status"])
+            self.assertEqual(
+                recovered,
+                SQLiteRollbackControlStore(control_path, PROJECT).snapshot("op-2"),
+            )
 
     def test_schema_corruption_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
