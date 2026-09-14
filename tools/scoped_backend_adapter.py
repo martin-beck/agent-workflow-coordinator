@@ -59,6 +59,7 @@ class ScopedBackendAdapter:
         """Construct only after descriptor and durable caller evidence match."""
         if not isinstance(identity, LockDomainIdentity):
             raise TypeError("lock-domain identity is required")
+        scope.assert_ordered()
         identity.assert_descriptor_binding(current_identity)
         identity.assert_session_binding(session_state, lease)
         return cls(backend, scope)

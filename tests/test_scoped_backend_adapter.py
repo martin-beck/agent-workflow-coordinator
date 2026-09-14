@@ -148,6 +148,22 @@ class ScopedBackendAdapterTests(unittest.TestCase):
                 cast(Any, object()),
             )
 
+    def test_session_entry_rejects_invalid_lock_order(self) -> None:
+        class BadOrderScope(Scope):
+            def assert_ordered(self) -> None:
+                raise RuntimeError("admission lock order is invalid")
+
+        identity = object.__new__(LockDomainIdentity)
+        with self.assertRaisesRegex(RuntimeError, "lock order"):
+            ScopedBackendAdapter.from_validated_session(
+                Backend(),
+                BadOrderScope(),
+                identity,
+                object(),
+                cast(BarrierSessionState, object()),
+                cast(Any, object()),
+            )
+
 
 if __name__ == "__main__":
     unittest.main()
