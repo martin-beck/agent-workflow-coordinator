@@ -238,6 +238,11 @@ class LockDomainTests(unittest.TestCase):
 
         with self.assertRaisesRegex(LockDomainError, "not held"):
             captured.assert_session_binding(BarrierSessionState(identity, "released", 3), lease)
+        with self.assertRaisesRegex(LockDomainError, "identity is required"):
+            captured.assert_session_binding(
+                BarrierSessionState(cast(BarrierSessionIdentity, object()), "held", 3),
+                lease,
+            )
 
 
 if __name__ == "__main__":
