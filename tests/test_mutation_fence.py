@@ -26,6 +26,13 @@ from tools.mutation_fence import (
 )
 from tools.sqlite_storage import SQLiteBackend, create_database
 
+AUTHORITATIVE_MUTATION_ROUTES = (
+    "mutate",
+    "update_observations",
+    "append_command_result",
+    "retire",
+)
+
 
 class MutationFenceTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -351,6 +358,60 @@ class MutationFenceTests(unittest.TestCase):
         self._set_barrier("held")
         with self.assertRaisesRegex(MutationFenceError, "rejected"), blocked.transaction():
             pass
+
+    def test_every_authoritative_route_enters_the_shared_fence_scope(self) -> None:
+        """Inventory contract: every SQLite writer crosses the injected seam."""
+        database = self.root / "route-inventory.sqlite3"
+        binding = {
+            "project_id": "00000000-0000-4000-8000-000000000001",
+            "state_repository": "owner/state",
+            "product_repository": "owner/product",
+        }
+        create_database(
+            database,
+            binding,
+            [],
+            imported_at="2026-09-14T00:00:00+00:00",
+            source_backend="git",
+            source_checkpoint="a" * 40,
+        )
+        entered: list[str] = []
+
+        class RejectingScope:
+            def __enter__(self) -> object:
+                entered.append("scope")
+                raise MutationFenceError("route admission is not provisioned")
+
+            def __exit__(self, *_args: object) -> None:
+                return None
+
+        def route_scope() -> RejectingScope:
+            return RejectingScope()
+
+        backend = SQLiteBackend(database, binding, self.root, mutation_scope=route_scope)
+        calls = {
+            "mutate": lambda: backend.mutate(
+                "AR-0001",
+                1,
+                "claim",
+                "2026-09-14T00:00:00+00:00",
+                lambda _meta, _tasks: ("", ""),
+            ),
+            "update_observations": lambda: backend.update_observations(
+                {}, "2026-09-14T00:00:00+00:00"
+            ),
+            "append_command_result": lambda: backend.append_command_result(
+                "AR-0001", "owner", "hash", 0, "ok", "2026-09-14T00:00:00+00:00"
+            ),
+            "retire": lambda: backend.retire(lambda _tasks: None, lambda: None),
+        }
+        for route in AUTHORITATIVE_MUTATION_ROUTES:
+            with (
+                self.subTest(route=route),
+                self.assertRaisesRegex(MutationFenceError, "not provisioned"),
+            ):
+                calls[route]()
+        self.assertEqual(len(AUTHORITATIVE_MUTATION_ROUTES), len(entered))
 
     def test_durable_barrier_read_failures_are_fail_closed(self) -> None:
         fence = self._fenced()
