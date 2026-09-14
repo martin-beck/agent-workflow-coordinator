@@ -14,6 +14,24 @@ from jsonschema import Draft202012Validator, ValidationError
 
 ROOT = Path(__file__).resolve().parents[1]
 PHASES = ("discover", "preflight", "quiesce", "backup", "stage", "commit", "validate", "reopen")
+PHASE_OPCODES = {
+    "discover": "release.inspect",
+    "preflight": "admission.check",
+    "quiesce": "barrier.acquire",
+    "backup": "backend.backup",
+    "stage": "runtime.stage",
+    "commit": "authority.atomic_replace",
+    "validate": "runtime.validate",
+    "reopen": "barrier.reopen",
+}
+INPUT_FIELDS = {
+    "backend",
+    "selector_ref",
+    "expected_state_revision",
+    "barrier_id",
+    "fencing_token",
+    "backup_operation_id",
+}
 
 
 class ContractError(ValueError):
@@ -38,7 +56,7 @@ def validate_contract(document: dict[str, Any]) -> None:
     _validate_backends(document)
 
 
-def _validate_phases(document: dict[str, Any]) -> None:
+def _validate_phases(document: dict[str, Any]) -> None:  # noqa: C901
     """Validate ordering, dependencies, operation identity, and gates."""
     phases = document["phases"]
     if [phase["id"] for phase in phases] != list(PHASES):
@@ -47,6 +65,8 @@ def _validate_phases(document: dict[str, Any]) -> None:
         raise ContractError("phase orders must be contiguous from one")
     operation_ids: set[str] = set()
     top_operation_id = document["operation_id"]
+    selected_backend = document["backend"]
+    canonical_inputs: dict[str, object] | None = None
     expected_dependencies = {
         "discover": set(),
         "preflight": {"discover"},
@@ -68,6 +88,37 @@ def _validate_phases(document: dict[str, Any]) -> None:
         if operation_id != expected or operation_id in operation_ids:
             raise ContractError(f"operation ID is not bound to {phase_id}")
         operation_ids.add(operation_id)
+        operation = phase["operation"]
+        if operation["opcode"] != PHASE_OPCODES[phase_id]:
+            raise ContractError(f"opcode is not bound to {phase_id}")
+        inputs = operation["inputs"]
+        _validate_inputs(inputs, selected_backend, top_operation_id)
+        if canonical_inputs is None:
+            canonical_inputs = inputs
+        elif inputs != canonical_inputs:
+            raise ContractError("operation inputs change between phases")
+
+    rollback = document["rollback"]["operation"]
+    if rollback["operation_id"] != f"{top_operation_id}:rollback":
+        raise ContractError("rollback operation ID is not bound")
+    if rollback["opcode"] != "backend.restore":
+        raise ContractError("rollback must use backend.restore")
+    _validate_inputs(rollback["inputs"], selected_backend, top_operation_id)
+    if rollback["inputs"] != canonical_inputs:
+        raise ContractError("rollback inputs do not match forward operation")
+
+
+def _validate_inputs(inputs: dict[str, object], backend: str, operation_id: str) -> None:
+    """Require one exact identity/fencing input tuple for every typed opcode."""
+    if set(inputs) != INPUT_FIELDS:
+        raise ContractError("operation input fields are incomplete or unknown")
+    if inputs["backend"] != backend:
+        raise ContractError("operation backend does not match selected backend")
+    revision = inputs["expected_state_revision"]
+    if type(revision) is not int or revision < 1:
+        raise ContractError("operation state revision is invalid")
+    if inputs["backup_operation_id"] != f"{operation_id}:backup":
+        raise ContractError("backup operation identity is not bound")
 
 
 def _validate_backends(document: dict[str, Any]) -> None:

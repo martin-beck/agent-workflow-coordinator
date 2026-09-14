@@ -40,6 +40,11 @@ def release(version: str, seed: str) -> dict[str, str]:
 def transition() -> dict[str, Any]:
     return {
         "operation_id": "upgrade:v0.3.5-to-v0.3.6:001",
+        "backend": "sqlite",
+        "selector_ref": ".runtime/runtime-selector.json",
+        "expected_state_revision": 7,
+        "barrier_id": "barrier-7",
+        "fencing_token": "fence-7",
         "from": release("v0.3.5", "a"),
         "to": release("v0.3.6", "b"),
     }
@@ -53,6 +58,11 @@ class UpgradeGeneratorTests(unittest.TestCase):
         self.assertEqual([phase["id"] for phase in first["phases"]], list(MODULE.PHASES))
         self.assertEqual(
             first["phases"][5]["operation"]["operation_id"], first["operation_id"] + ":commit"
+        )
+        self.assertEqual("authority.atomic_replace", first["phases"][5]["operation"]["opcode"])
+        self.assertEqual("backend.restore", first["rollback"]["operation"]["opcode"])
+        self.assertEqual(
+            first["rollback"]["operation"]["inputs"], first["phases"][0]["operation"]["inputs"]
         )
 
     def test_unknown_input_field_is_rejected_before_generation(self) -> None:
@@ -70,6 +80,16 @@ class UpgradeGeneratorTests(unittest.TestCase):
         document["from"] = []
         with self.assertRaises(ContractError):
             MODULE._validate_transition(document)
+        for field, value in (
+            ("backend", "remote"),
+            ("expected_state_revision", False),
+            ("selector_ref", ""),
+            ("barrier_id", 7),
+        ):
+            document = transition()
+            document[field] = value
+            with self.subTest(field=field), self.assertRaises(ContractError):
+                MODULE._validate_transition(document)
 
     def test_input_loader_and_cli_fail_closed(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -100,6 +120,16 @@ class UpgradeGeneratorTests(unittest.TestCase):
             self.assertEqual(
                 generate(json.loads(source.read_text())), json.loads(output.read_text())
             )
+
+    def test_generation_keeps_git_contract_typed_but_execution_unclaimed(self) -> None:
+        document = transition()
+        document["backend"] = "git"
+        generated = generate(document)
+        self.assertEqual("git", generated["backend"])
+        self.assertTrue(
+            all(phase["operation"]["inputs"]["backend"] == "git" for phase in generated["phases"])
+        )
+        self.assertNotIn("executable", generated)
 
 
 if __name__ == "__main__":

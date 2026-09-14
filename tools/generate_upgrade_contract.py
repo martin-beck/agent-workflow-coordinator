@@ -20,17 +20,44 @@ else:  # pragma: no cover - direct script execution
     )
 
 PHASES = ("discover", "preflight", "quiesce", "backup", "stage", "commit", "validate", "reopen")
+PHASE_OPCODES = {
+    "discover": "release.inspect",
+    "preflight": "admission.check",
+    "quiesce": "barrier.acquire",
+    "backup": "backend.backup",
+    "stage": "runtime.stage",
+    "commit": "authority.atomic_replace",
+    "validate": "runtime.validate",
+    "reopen": "barrier.reopen",
+}
+TRANSITION_FIELDS = {
+    "operation_id",
+    "backend",
+    "selector_ref",
+    "expected_state_revision",
+    "barrier_id",
+    "fencing_token",
+    "from",
+    "to",
+}
 
 
 def _validate_transition(value: Any) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise ContractError("transition input must be an object")
-    if set(value) != {"operation_id", "from", "to"}:
-        raise ContractError("transition input must contain only operation_id, from, and to")
+    if set(value) != TRANSITION_FIELDS:
+        raise ContractError("transition input fields are incomplete or unknown")
     if not isinstance(value["operation_id"], str):
         raise ContractError("operation_id must be a string")
     if not isinstance(value["from"], dict) or not isinstance(value["to"], dict):
         raise ContractError("from and to must be release objects")
+    if value["backend"] not in {"git", "sqlite"}:
+        raise ContractError("backend must be git or sqlite")
+    if type(value["expected_state_revision"]) is not int or value["expected_state_revision"] < 1:
+        raise ContractError("expected_state_revision must be a positive integer")
+    for field in ("selector_ref", "barrier_id", "fencing_token"):
+        if not isinstance(value[field], str) or not value[field]:
+            raise ContractError(f"{field} must be a non-empty string")
     return value
 
 
@@ -42,9 +69,19 @@ def _load_transition(path: Path) -> dict[str, Any]:
     return _validate_transition(value)
 
 
-def _operation(operation_id: str, phase: str) -> dict[str, Any]:
+def _operation(transition: dict[str, Any], phase: str, opcode: str) -> dict[str, Any]:
+    operation_id = transition["operation_id"]
     return {
         "operation_id": f"{operation_id}:{phase}",
+        "opcode": opcode,
+        "inputs": {
+            "backend": transition["backend"],
+            "selector_ref": transition["selector_ref"],
+            "expected_state_revision": transition["expected_state_revision"],
+            "barrier_id": transition["barrier_id"],
+            "fencing_token": transition["fencing_token"],
+            "backup_operation_id": f"{operation_id}:backup",
+        },
         "timeout_seconds": 300,
         "resources": ["maintenance-barrier", "durable-operation-record"],
         "preconditions": ["previous-phase-complete"],
@@ -85,12 +122,13 @@ def generate(transition: dict[str, Any]) -> dict[str, Any]:
                 "mutates_authority": phase == "commit",
                 "requires": dependencies[phase],
                 "on_failure": failure_modes[phase],
-                "operation": _operation(operation_id, phase),
+                "operation": _operation(transition, phase, PHASE_OPCODES[phase]),
             }
         )
     document = {
-        "schema_version": 1,
+        "schema_version": 2,
         "operation_id": operation_id,
+        "backend": transition["backend"],
         "from": transition["from"],
         "to": transition["to"],
         "preconditions": [
@@ -143,6 +181,7 @@ def generate(transition: dict[str, Any]) -> dict[str, Any]:
             "equivalence": "authority-compatible-round-trip",
             "reopen_gate": "validate-before-reopen",
             "ambiguous_external_result": "persist-operation-id-and-reconcile",
+            "operation": _operation(transition, "rollback", "backend.restore"),
         },
     }
     validate_contract(document)

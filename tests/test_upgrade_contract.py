@@ -8,6 +8,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import unittest
+from collections.abc import Callable
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
@@ -41,8 +42,9 @@ def contract() -> dict[str, Any]:
         "reopen",
     ]
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "operation_id": "upgrade:v0.3.5-to-v0.3.6:001",
+        "backend": "sqlite",
         "from": {
             "version": "v0.3.5",
             "source_commit": "713761b428676c0c290b207d4f04eee0a57390c3",
@@ -88,6 +90,24 @@ def contract() -> dict[str, Any]:
                 "on_failure": "restore-known-good",
                 "operation": {
                     "operation_id": f"upgrade:v0.3.5-to-v0.3.6:001:{phase}",
+                    "opcode": {
+                        "discover": "release.inspect",
+                        "preflight": "admission.check",
+                        "quiesce": "barrier.acquire",
+                        "backup": "backend.backup",
+                        "stage": "runtime.stage",
+                        "commit": "authority.atomic_replace",
+                        "validate": "runtime.validate",
+                        "reopen": "barrier.reopen",
+                    }[phase],
+                    "inputs": {
+                        "backend": "sqlite",
+                        "selector_ref": ".runtime/runtime-selector.json",
+                        "expected_state_revision": 7,
+                        "barrier_id": "barrier-7",
+                        "fencing_token": "fence-7",
+                        "backup_operation_id": "upgrade:v0.3.5-to-v0.3.6:001:backup",
+                    },
                     "timeout_seconds": 300,
                     "resources": ["maintenance-barrier"],
                     "preconditions": ["previous-phase-complete"],
@@ -129,6 +149,24 @@ def contract() -> dict[str, Any]:
             "equivalence": "authority-compatible-round-trip",
             "reopen_gate": "validate-before-reopen",
             "ambiguous_external_result": "persist-operation-id-and-reconcile",
+            "operation": {
+                "operation_id": "upgrade:v0.3.5-to-v0.3.6:001:rollback",
+                "opcode": "backend.restore",
+                "inputs": {
+                    "backend": "sqlite",
+                    "selector_ref": ".runtime/runtime-selector.json",
+                    "expected_state_revision": 7,
+                    "barrier_id": "barrier-7",
+                    "fencing_token": "fence-7",
+                    "backup_operation_id": "upgrade:v0.3.5-to-v0.3.6:001:backup",
+                },
+                "timeout_seconds": 300,
+                "resources": ["maintenance-barrier"],
+                "preconditions": ["previous-phase-complete"],
+                "postconditions": ["phase-contract-satisfied"],
+                "evidence": ["durable-operation-record"],
+                "durable_record": "operation-id-and-outcome",
+            },
         },
     }
 
@@ -201,6 +239,66 @@ class UpgradeContractTests(unittest.TestCase):
         document["from"]["tag_ref"] = "refs/tags/v9.9.9"
         with self.assertRaises(ContractError):
             validate_contract(document)
+
+    def test_typed_operations_reject_opcode_input_and_rollback_mismatches(self) -> None:
+        mutations: tuple[Callable[[dict[str, Any]], object], ...] = (
+            (lambda value: value["phases"][0]["operation"].update(opcode="runtime.stage")),
+            (
+                lambda value: value["phases"][2]["operation"]["inputs"].__setitem__(
+                    "fencing_token", "changed"
+                )
+            ),
+            (
+                lambda value: value["phases"][3]["operation"]["inputs"].update(
+                    backup_operation_id="unbound"
+                )
+            ),
+            (lambda value: value["rollback"]["operation"].update(opcode="barrier.reopen")),
+            (lambda value: value["rollback"]["operation"]["inputs"].update(backend="git")),
+        )
+        for mutate in mutations:
+            document = contract()
+            mutate(document)
+            with self.subTest(document=document), self.assertRaises(ContractError):
+                validate_contract(document)
+
+        document = contract()
+        document["phases"][0]["operation"]["inputs"]["arbitrary_script"] = "rm -rf /"
+        with self.assertRaises(ContractError):
+            validate_contract(document)
+        document = contract()
+        document["phases"][0]["operation"]["inputs"]["expected_state_revision"] = False
+        with self.assertRaises(ContractError):
+            validate_contract(document)
+
+    def test_semantic_validator_independently_binds_typed_operation_fields(self) -> None:
+        mutations: tuple[Callable[[dict[str, Any]], object], ...] = (
+            (
+                lambda value: value["rollback"]["operation"].update(
+                    operation_id="upgrade:v0.3.5-to-v0.3.6:001:restore"
+                )
+            ),
+            (
+                lambda value: value["rollback"]["operation"]["inputs"].__setitem__(
+                    "fencing_token", "different-fence"
+                )
+            ),
+            (
+                lambda value: value["phases"][0]["operation"]["inputs"].__setitem__(
+                    "unexpected", "value"
+                )
+            ),
+            (
+                lambda value: value["phases"][0]["operation"]["inputs"].__setitem__(
+                    "expected_state_revision", False
+                )
+            ),
+        )
+        for mutate in mutations:
+            document = contract()
+            mutate(document)
+            with self.subTest(document=document), self.assertRaises(ContractError):
+                validate_phases(document)
 
     def test_semantic_helper_branches_and_cli(self) -> None:
         document = contract()

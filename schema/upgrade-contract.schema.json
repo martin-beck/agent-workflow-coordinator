@@ -3,10 +3,11 @@
   "$id": "https://github.com/martin-beck/agent-workflow-coordinator/schema/upgrade-contract.schema.json",
   "additionalProperties": false,
   "type": "object",
-  "required": ["schema_version", "operation_id", "from", "to", "preconditions", "phases", "backend_contracts", "rollback"],
+  "required": ["schema_version", "operation_id", "backend", "from", "to", "preconditions", "phases", "backend_contracts", "rollback"],
   "properties": {
-    "schema_version": {"const": 1},
+    "schema_version": {"const": 2},
     "operation_id": {"pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$", "type": "string"},
+    "backend": {"enum": ["git", "sqlite"]},
     "from": {"$ref": "#/$defs/release"},
     "to": {"$ref": "#/$defs/release"},
     "preconditions": {"type": "array", "items": {"$ref": "#/$defs/check"}, "minItems": 1, "uniqueItems": true},
@@ -85,15 +86,30 @@
     "operation": {
       "additionalProperties": false,
       "type": "object",
-      "required": ["operation_id", "timeout_seconds", "resources", "preconditions", "postconditions", "evidence", "durable_record"],
+      "required": ["operation_id", "opcode", "inputs", "timeout_seconds", "resources", "preconditions", "postconditions", "evidence", "durable_record"],
       "properties": {
         "operation_id": {"pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$", "type": "string"},
+        "opcode": {"enum": ["release.inspect", "admission.check", "barrier.acquire", "backend.backup", "runtime.stage", "authority.atomic_replace", "runtime.validate", "barrier.reopen", "backend.restore"]},
+        "inputs": {"$ref": "#/$defs/operationInputs"},
         "timeout_seconds": {"minimum": 1, "maximum": 86400, "type": "integer"},
         "resources": {"type": "array", "items": {"type": "string"}, "minItems": 1, "uniqueItems": true},
         "preconditions": {"type": "array", "items": {"type": "string"}, "minItems": 1, "uniqueItems": true},
         "postconditions": {"type": "array", "items": {"type": "string"}, "minItems": 1, "uniqueItems": true},
         "evidence": {"type": "array", "items": {"type": "string"}, "minItems": 1, "uniqueItems": true},
         "durable_record": {"enum": ["operation-id-and-outcome", "safe-mode-record"]}
+      }
+    },
+    "operationInputs": {
+      "additionalProperties": false,
+      "type": "object",
+      "required": ["backend", "selector_ref", "expected_state_revision", "barrier_id", "fencing_token", "backup_operation_id"],
+      "properties": {
+        "backend": {"enum": ["git", "sqlite"]},
+        "selector_ref": {"pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))[A-Za-z0-9._/-]{1,255}$", "type": "string"},
+        "expected_state_revision": {"minimum": 1, "type": "integer"},
+        "barrier_id": {"pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$", "type": "string"},
+        "fencing_token": {"pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$", "type": "string"},
+        "backup_operation_id": {"pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$", "type": "string"}
       }
     },
     "backend": {
@@ -118,7 +134,7 @@
     "rollback": {
       "additionalProperties": false,
       "type": "object",
-      "required": ["required", "backup_integrity", "integrity_by_backend", "equivalence", "reopen_gate", "ambiguous_external_result"],
+      "required": ["required", "backup_integrity", "integrity_by_backend", "equivalence", "reopen_gate", "ambiguous_external_result", "operation"],
       "properties": {
         "required": {"const": true},
         "backup_integrity": {"const": "backend-specific"},
@@ -133,7 +149,8 @@
         },
         "equivalence": {"const": "authority-compatible-round-trip"},
         "reopen_gate": {"const": "validate-before-reopen"},
-        "ambiguous_external_result": {"enum": ["persist-operation-id-and-reconcile", "safe-mode"]}
+        "ambiguous_external_result": {"enum": ["persist-operation-id-and-reconcile", "safe-mode"]},
+        "operation": {"$ref": "#/$defs/operation"}
       }
     }
   }

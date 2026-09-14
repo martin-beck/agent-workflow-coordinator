@@ -13,6 +13,23 @@ shape and required fields; the validator additionally proves dependency
 references and ordering, operation-ID binding, non-no-op release identity,
 backend coverage, and backend-specific rollback integrity.
 
+Contract schema v2 replaces descriptive phase placeholders with a closed
+opcode set: `release.inspect`, `admission.check`, `barrier.acquire`,
+`backend.backup`, `runtime.stage`, `authority.atomic_replace`,
+`runtime.validate`, and `barrier.reopen`, plus the rollback-only
+`backend.restore`. Every operation binds the selected backend, runtime-selector
+reference, expected state revision, barrier and fencing identities, and exact
+backup operation ID. The validator rejects unknown inputs, opcode/phase
+mismatches, identity changes between phases, and restore outside the rollback
+record. Only `authority.atomic_replace` maps to the forward commit mutation;
+`backend.restore` is the explicit rollback counterpart.
+
+This typed data contract is necessary but not execution evidence. Git and
+SQLite contracts may both be generated and validated, but neither becomes
+executable until a reviewed backend phase adapter implements every opcode and
+its evidence contract. In particular, generated Git contracts do not enable
+Git upgrade execution.
+
 ## Safety contract
 
 The coordinator remains usable at every externally observable point. Before
