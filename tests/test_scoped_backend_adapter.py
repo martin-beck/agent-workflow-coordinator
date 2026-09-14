@@ -82,6 +82,17 @@ class ScopedBackendAdapterTests(unittest.TestCase):
         with self.assertRaisesRegex(TypeError, "scope"):
             ScopedBackendAdapter(Backend(), object())  # type: ignore[arg-type]
 
+    def test_incomplete_backend_is_rejected_before_engine_binding(self) -> None:
+        class IncompleteBackend:
+            def snapshot(self, _phase: str, _context: Mapping[str, object]) -> dict[str, object]:
+                return {}
+
+            def execute(self, _phase: str, _context: Mapping[str, object]) -> dict[str, object]:
+                return {}
+
+        with self.assertRaisesRegex(TypeError, "incomplete"):
+            ScopedBackendAdapter(IncompleteBackend(), Scope())  # type: ignore[arg-type]
+
 
 if __name__ == "__main__":
     unittest.main()
