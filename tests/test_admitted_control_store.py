@@ -5,7 +5,7 @@
 from __future__ import annotations
 
 import unittest
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from typing import Any
 
@@ -96,3 +96,57 @@ class AdmittedControlStoreTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(AdmissionLeaseError, "does not match"):
             admitted_cas(None, 1, self.record, self.lease, other_recheck, None)  # type: ignore[arg-type]
+
+    def test_stale_expected_revision_fails_before_scope(self) -> None:
+        class Scope:
+            def assert_ordered(self) -> None:
+                raise AssertionError("scope must not be touched")
+
+            def hold(self) -> Any:
+                raise AssertionError("scope must not be touched")
+
+        with self.assertRaisesRegex(AdmissionLeaseError, "revision does not match"):
+            admitted_cas(None, 2, self.record, self.lease, self.recheck, Scope())  # type: ignore[arg-type]
+
+    def test_record_is_snapshotted_before_scope_and_store(self) -> None:
+        events: list[str] = []
+
+        class MutableRecord(Mapping[str, object]):
+            def __init__(self, values: Mapping[str, object]) -> None:
+                self.values = dict(values)
+
+            def __getitem__(self, key: str) -> object:
+                return self.values[key]
+
+            def __iter__(self) -> Iterator[str]:
+                events.append("snapshot")
+                return iter(self.values)
+
+            def __len__(self) -> int:
+                return len(self.values)
+
+        class Scope:
+            def assert_ordered(self) -> None:
+                events.append("order")
+
+            @contextmanager
+            def hold(self) -> Any:
+                events.append("hold")
+                yield None
+
+        class Store:
+            def cas(
+                self,
+                expected_revision: int,  # noqa: ARG002
+                record: dict[str, object],
+            ) -> dict[str, object]:
+                events.append("write")
+                self.record = record
+                return record
+
+        store = Store()
+        result = admitted_cas(
+            store, 1, MutableRecord(self.record), self.lease, self.recheck, Scope()
+        )
+        self.assertEqual(self.record, result)
+        self.assertEqual(["snapshot", "order", "hold", "write"], events)

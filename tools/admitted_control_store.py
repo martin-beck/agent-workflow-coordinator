@@ -50,6 +50,12 @@ def admitted_cas(
         raise AdmissionLeaseError("admitted control recheck does not match lease")
     if not isinstance(scope, OrderedAdmissionScope):
         raise AdmissionLeaseError("admitted control scope is required")
+    if type(expected_revision) is not int or expected_revision != lease.revision:
+        raise AdmissionLeaseError("admitted control revision does not match lease")
+    try:
+        record_snapshot = dict(record)
+    except (TypeError, ValueError) as error:
+        raise AdmissionLeaseError("admitted control record is invalid") from error
     required = {
         "project_id": lease.project_id,
         "authority_revision": lease.authority_revision,
@@ -57,11 +63,11 @@ def admitted_cas(
         "fencing_owner": lease.fencing_owner,
         "durable_barrier_id": lease.durable_barrier_id,
     }
-    if any(record.get(name) != value for name, value in required.items()):
+    if any(record_snapshot.get(name) != value for name, value in required.items()):
         raise AdmissionLeaseError("admitted control record does not match lease")
     try:
         scope.assert_ordered()
         with scope.hold():
-            return store.cas(expected_revision, record)
+            return store.cas(expected_revision, record_snapshot)
     except (AttributeError, TypeError) as error:
         raise AdmissionLeaseError("admitted control scope is invalid") from error
