@@ -10,6 +10,7 @@ from contextlib import contextmanager
 from typing import cast
 
 from tools.scoped_backend_adapter import ScopedBackendAdapter
+from tools.upgrade_engine import BackendAdapter as EngineBackendAdapter
 
 
 class Scope:
@@ -43,6 +44,9 @@ class Backend:
 
 
 class ScopedBackendAdapterTests(unittest.TestCase):
+    def test_adapter_satisfies_upgrade_engine_interface_without_wiring_dispatch(self) -> None:
+        self.assertIsInstance(ScopedBackendAdapter(Backend(), Scope()), EngineBackendAdapter)
+
     def test_snapshot_and_execute_share_fail_closed_scope_boundary(self) -> None:
         scope = Scope()
         adapter = ScopedBackendAdapter(Backend(), scope)
