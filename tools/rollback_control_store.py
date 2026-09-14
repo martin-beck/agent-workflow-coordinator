@@ -242,11 +242,12 @@ class SQLiteRollbackControlStore:
                 previous = descriptor
                 descriptor = child
                 os.close(previous)
+            parent_status = os.fstat(descriptor)
         except OSError as error:
             if descriptor >= 0:
                 os.close(descriptor)
             raise ControlStoreError("control store parent descriptor is unsafe") from error
-        return descriptor, cls._file_identity(os.fstat(descriptor))
+        return descriptor, cls._file_identity(parent_status)
 
     @classmethod
     def _prepare_regular_file(cls, path: Path) -> tuple[tuple[int, int], tuple[int, int]]:

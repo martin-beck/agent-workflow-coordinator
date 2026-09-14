@@ -631,6 +631,108 @@ class RollbackControlStoreTests(unittest.TestCase):
             with self.assertRaisesRegex(ControlStoreError, "project binding mismatch"):
                 second.snapshot("op-1")
 
+    def test_regular_file_replacement_nonregular_file_and_descriptor_fault_fail_closed(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            control = root / "control.sqlite"
+            store = SQLiteRollbackControlStore(control, PROJECT)
+            control.rename(root / "previous-control.sqlite")
+            control.touch()
+            with self.assertRaisesRegex(ControlStoreError, "descriptor identity changed"):
+                store.cas(0, RECORD)
+
+            fifo = root / "control.fifo"
+            os.mkfifo(fifo)
+            with self.assertRaisesRegex(ControlStoreError, "not a regular file"):
+                SQLiteRollbackControlStore(fifo, PROJECT)
+
+            fault_store = SQLiteRollbackControlStore(root / "fault.sqlite", PROJECT)
+            with (
+                patch(
+                    "tools.rollback_control_store.os.fstat",
+                    side_effect=OSError("descriptor unreadable"),
+                ),
+                self.assertRaisesRegex(ControlStoreError, "parent descriptor is unsafe"),
+            ):
+                fault_store.snapshot("op-1")
+
+            real_fstat = os.fstat
+            fstat_calls = 0
+
+            def fail_file_descriptor(descriptor: int) -> os.stat_result:
+                nonlocal fstat_calls
+                fstat_calls += 1
+                if fstat_calls == 2:
+                    raise OSError("descriptor unreadable")
+                return real_fstat(descriptor)
+
+            with (
+                patch(
+                    "tools.rollback_control_store.os.fstat",
+                    side_effect=fail_file_descriptor,
+                ),
+                self.assertRaisesRegex(ControlStoreError, "descriptor is unreadable"),
+            ):
+                fault_store.snapshot("op-1")
+
+    def test_release_authorization_rejects_delegate_mutation_and_external_revision_tamper(
+        self,
+    ) -> None:
+        class EvidenceVerifier:
+            mutate_context = False
+
+            def snapshot(self, _phase: str, _context: Mapping[str, object]) -> dict[str, object]:
+                return {}
+
+            def execute(self, _phase: str, _context: Mapping[str, object]) -> dict[str, object]:
+                return {}
+
+            def revalidate_rollback(
+                self, context: Mapping[str, object], _result: Mapping[str, object]
+            ) -> Mapping[str, object]:
+                if self.mutate_context:
+                    assert isinstance(context, dict)
+                    context["authority_revision"] = "changed"
+                return RELEASE_EVIDENCE
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            authority = root / "authority.sqlite"
+            authority.touch()
+            context = {field: RECORD[field] for field in IDENTITY_FIELDS}
+
+            mutation_store = SQLiteRollbackControlStore(
+                root / "mutation-control.sqlite", PROJECT, authority
+            )
+            mutation_store.cas(0, RECORD)
+            mutation_verifier = EvidenceVerifier()
+            mutation_verifier.mutate_context = True
+            mutation_adapter = SQLiteControlStoreAdapter(mutation_verifier, mutation_store)
+            mutable_context = dict(context)
+            with mutation_adapter.operation_lock():
+                mutation_adapter.begin_release_rollback_context(mutable_context)
+                with self.assertRaisesRegex(ControlStoreError, "authorization identity changed"):
+                    mutation_adapter.revalidate_rollback(mutable_context, RELEASE_EVIDENCE)
+            self.assertEqual("releasing", mutation_store.snapshot("op-1")["status"])
+
+            control = root / "tamper-control.sqlite"
+            tamper_store = SQLiteRollbackControlStore(control, PROJECT, authority)
+            tamper_store.cas(0, RECORD)
+            tamper_adapter = SQLiteControlStoreAdapter(EvidenceVerifier(), tamper_store)
+            with tamper_adapter.operation_lock():
+                tamper_adapter.begin_release_rollback_context(context)
+                tamper_adapter.revalidate_rollback(context, RELEASE_EVIDENCE)
+                with closing(sqlite3.connect(control)) as connection:
+                    connection.execute(
+                        "UPDATE barrier SET revision=revision+1 WHERE operation_id='op-1'"
+                    )
+                    connection.commit()
+                with self.assertRaisesRegex(ControlStoreError, "release authorization is stale"):
+                    tamper_adapter.complete_release_rollback_context(context)
+            self.assertEqual("releasing", tamper_store.snapshot("op-1")["status"])
+
     def test_connection_and_durability_refusal_close_resources_and_retry(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "control.sqlite"
