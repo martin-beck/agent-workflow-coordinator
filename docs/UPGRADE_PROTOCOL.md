@@ -47,6 +47,13 @@ coordination writes must also participate in the upgrade fence. Until those
 contracts, their formal refinement, and hostile tests are reviewed, no typed
 opcode is dispatched to a mutating implementation.
 
+The normative redesign needed to close those blockers is specified in
+[Upgrade execution redesign](UPGRADE_EXECUTION_REDESIGN.md). It is a design
+checkpoint, not an executable capability. Where the redesign conflicts with
+the earlier v9 identity model, the redesign is the proposed v10 replacement;
+the current fail-closed command boundary remains authoritative until v10 is
+implemented and independently verified.
+
 ## Safety contract
 
 The coordinator remains usable at every externally observable point. Before
