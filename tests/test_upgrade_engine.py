@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import fcntl
 import json
 import os
 import signal
@@ -12,6 +13,7 @@ import unittest
 from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import cast
+from unittest.mock import patch
 
 from tools.rollback_control_store import (
     SQLiteControlStoreAdapter,
@@ -23,7 +25,14 @@ from tools.upgrade_admission import (
     QUIESCENCE_PREDICATES,
     REOPEN_PREDICATES,
 )
-from tools.upgrade_engine import CONTEXT_FIELDS, PHASES, Handler, UpgradeEngine, UpgradeError
+from tools.upgrade_engine import (
+    CONTEXT_FIELDS,
+    PHASES,
+    BackendAdapter,
+    Handler,
+    UpgradeEngine,
+    UpgradeError,
+)
 from tools.upgrade_identity import canonical_barrier_digest, canonical_envelope_digest
 
 
@@ -122,7 +131,7 @@ class FailingAdapter(FakeAdapter):
 class UpgradeEngineTests(unittest.TestCase):
     @staticmethod
     def _prepare_failed_journal(
-        directory: str, operation_id: str, adapter: FakeAdapter
+        directory: str, operation_id: str, adapter: BackendAdapter
     ) -> tuple[Path, UpgradeEngine]:
         journal = Path(directory) / "journal.json"
         engine = UpgradeEngine(
@@ -1024,6 +1033,8 @@ class UpgradeEngineTests(unittest.TestCase):
                 result = super().snapshot(phase, context)
                 if phase == "rollback":
                     result["authority_revision"] = "different-authority"
+                    result["barrier_identity_digest"] = canonical_barrier_digest(result)
+                    result["envelope_digest"] = canonical_envelope_digest(result)
                 return result
 
         with tempfile.TemporaryDirectory() as directory:
@@ -1140,6 +1151,485 @@ class UpgradeEngineTests(unittest.TestCase):
                 backend_adapter=adapter,
             )
             self.assertEqual("rolled-back", reloaded._load()["status"])
+
+    def test_apply_adapter_fault_boundaries_are_durable_and_fail_closed(self) -> None:  # noqa: C901
+        class CompleteAdapter(FakeAdapter):
+            def __init__(self, fault: str) -> None:
+                super().__init__()
+                self.fault = fault
+
+            def snapshot(self, phase: str, context: object) -> dict[str, object]:
+                result = super().snapshot(phase, context)
+                if self.fault == f"{phase}-snapshot-shape":
+                    key = {
+                        "preflight": "preflight_snapshot",
+                        "quiesce": "quiescence_snapshot",
+                        "commit": "admitted_snapshot",
+                        "reopen": "reopen_snapshot",
+                    }[phase]
+                    result[key] = []
+                if self.fault == "snapshot-identity" and phase == "discover":
+                    result["authority_revision"] = "changed"
+                return result
+
+            def execute(self, phase: str, _context: object) -> dict[str, object]:  # noqa: C901
+                result: dict[str, object] = {
+                    "backend": "sqlite",
+                    "fencing_token": "fence-1",
+                    "backend_identity_verified": True,
+                    "mutates_authority": phase == "commit",
+                }
+                if phase == "discover":
+                    result.update(release_authentic=True, runtime_supported=True)
+                elif phase == "preflight":
+                    result.update(
+                        preflight_admitted=True,
+                        capacity_verified=True,
+                        preflight_snapshot=ADMISSION,
+                    )
+                elif phase == "quiesce":
+                    result.update(
+                        barrier_acquired=True,
+                        workers_drained=True,
+                        leases_fenced=True,
+                        fencing_verified=True,
+                        quiescence_snapshot=ADMISSION,
+                    )
+                elif phase == "backup":
+                    result.update(backup_verified=True, restore_roundtrip_verified=True)
+                elif phase == "stage":
+                    result.update(staged_verified=True, manifest_verified=True)
+                elif phase == "commit":
+                    result.update(
+                        quiesced=True,
+                        backup_verified=True,
+                        selector_verified=True,
+                        selector_commit_atomic=True,
+                        fencing_verified=True,
+                        selector_before_verified=True,
+                        selector_after_verified=True,
+                        admitted_snapshot=ADMISSION,
+                        current_snapshot=ADMISSION,
+                    )
+                elif phase == "validate":
+                    result.update(
+                        runtime_validated=True,
+                        backend_roundtrip_valid=True,
+                        projections_valid=True,
+                        binding_valid=True,
+                    )
+                elif phase == "reopen":
+                    result.update(
+                        validated=True,
+                        barrier_held=True,
+                        reopen_snapshot=ADMISSION,
+                    )
+                if self.fault == f"{phase}-result-shape":
+                    key = {
+                        "preflight": "preflight_snapshot",
+                        "quiesce": "quiescence_snapshot",
+                        "commit": "current_snapshot",
+                        "reopen": "reopen_snapshot",
+                    }[phase]
+                    result[key] = []
+                if self.fault == "missing-evidence" and phase == "discover":
+                    result.pop("release_authentic")
+                if self.fault == "backend-mismatch" and phase == "discover":
+                    result["backend"] = "git"
+                if self.fault == "stale-fence" and phase == "quiesce":
+                    result["fencing_token"] = f"{result['fencing_token']}-stale"
+                if self.fault == "ambiguous" and phase == "discover":
+                    result["ambiguous"] = True
+                return result
+
+        cases = (
+            ("snapshot-identity", "discover", "phase failed"),
+            ("missing-evidence", "discover", "phase evidence incomplete"),
+            ("backend-mismatch", "discover", "phase backend mismatch"),
+            ("stale-fence", "quiesce", "phase fencing mismatch"),
+            ("ambiguous", "discover", "phase outcome is ambiguous"),
+            ("preflight-snapshot-shape", "preflight", "phase failed"),
+            ("quiesce-snapshot-shape", "quiesce", "phase failed"),
+            ("commit-snapshot-shape", "commit", "phase failed"),
+            ("reopen-snapshot-shape", "reopen", "phase failed"),
+            ("preflight-result-shape", "preflight", "phase admission denied"),
+            ("quiesce-result-shape", "quiesce", "phase admission denied"),
+            ("commit-result-shape", "commit", "phase admission denied"),
+            ("reopen-result-shape", "reopen", "phase admission denied"),
+        )
+        for fault, failed_phase, expected in cases:
+            with self.subTest(fault=fault), tempfile.TemporaryDirectory() as directory:
+                engine = UpgradeEngine(
+                    f"op-{fault}",
+                    Path(directory) / "journal.json",
+                    make_context(f"op-{fault}"),
+                    backend_adapter=CompleteAdapter(fault),
+                )
+                engine.plan()
+                with self.assertRaisesRegex(UpgradeError, expected):
+                    engine.apply(dict.fromkeys(PHASES, lambda _step, _state: {}))
+                durable = json.loads(engine.journal.read_text())
+                self.assertEqual(failed_phase, durable["phase"])
+                self.assertEqual(
+                    "safe-mode" if fault == "ambiguous" else "failed",
+                    durable["status"],
+                )
+
+        with tempfile.TemporaryDirectory() as directory:
+            operation_id = "op-handler-conflict"
+            engine = UpgradeEngine(
+                operation_id,
+                Path(directory) / "journal.json",
+                make_context(operation_id),
+                backend_adapter=CompleteAdapter("handler-conflict"),
+            )
+            engine.plan()
+
+            def conflict(_step: str, _state: object) -> dict[str, object]:
+                return {"backend": "git"}
+
+            with self.assertRaisesRegex(UpgradeError, "phase failed"):
+                engine.apply(
+                    {**dict.fromkeys(PHASES, lambda _step, _state: {}), "discover": conflict}
+                )
+            self.assertEqual("failed", json.loads(engine.journal.read_text())["status"])
+
+    def test_public_operation_guards_reject_invalid_and_unbound_operations(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for operation_id in ("", "contains:separator"):
+                with self.subTest(operation_id=operation_id), self.assertRaises(UpgradeError):
+                    UpgradeEngine(operation_id, root / "invalid.json", CONTEXT)
+
+            long_operation = "o" * 120
+            with self.assertRaisesRegex(UpgradeError, "invalid operation_id"):
+                UpgradeEngine(
+                    long_operation,
+                    root / "long.json",
+                    make_context(long_operation),
+                )
+
+            operation_id = "op-unbound"
+            engine = UpgradeEngine(operation_id, root / "journal.json", make_context(operation_id))
+            self.assertEqual(
+                {"operation_id": operation_id, "phases": list(PHASES), "checked": True},
+                engine.check(),
+            )
+            engine.plan()
+            with self.assertRaisesRegex(UpgradeError, "backend adapter is required"):
+                engine.apply({})
+            with self.assertRaisesRegex(UpgradeError, "backend adapter is required"):
+                engine.rollback(lambda _step, _state: {})
+
+            missing_handler = UpgradeEngine(
+                "op-missing-handler",
+                root / "missing-handler.json",
+                make_context("op-missing-handler"),
+                backend_adapter=FakeAdapter(),
+            )
+            missing_handler.plan()
+            with self.assertRaisesRegex(UpgradeError, "missing phase handler: discover"):
+                missing_handler.apply({})
+
+    def test_rollback_authority_and_release_faults_preserve_recovery_state(self) -> None:  # noqa: C901
+        class FaultAdapter(FakeAdapter):
+            def __init__(self, fault: str) -> None:
+                super().__init__()
+                self.fault = fault
+                self.verifications = 0
+
+            def snapshot(self, phase: str, context: object) -> dict[str, object]:
+                if self.fault == "new-target" and phase == "rollback":
+                    operation_id = str(cast(Mapping[str, object], context)["operation_id"])
+                    return {
+                        **make_context(operation_id),
+                        "rollback_context_verified": True,
+                    }
+                return super().snapshot(phase, context)
+
+            def verify_rollback_context(
+                self, context: Mapping[str, object]
+            ) -> dict[str, object] | None:
+                self.verifications += 1
+                if self.fault == "verify-raises":
+                    raise RuntimeError("authority unavailable")
+                if self.fault == "verify-missing":
+                    return None
+                durable = super().verify_rollback_context(context)
+                if durable is not None and self.verifications >= 2:
+                    if self.fault == "identity-changed":
+                        durable["authority_revision"] = "changed"
+                    if self.fault == "barrier-state":
+                        durable["status"] = "ambiguous"
+                return durable
+
+            def execute(self, phase: str, context: object) -> dict[str, object]:
+                result = super().execute(phase, context)
+                if phase == "rollback" and self.fault == "runtime-unverified":
+                    result["runtime_validated"] = False
+                if phase == "rollback" and self.fault == "result-incomplete":
+                    result.pop("backend")
+                return result
+
+            def begin_release_rollback_context(
+                self, context: Mapping[str, object]
+            ) -> dict[str, object]:
+                result = super().begin_release_rollback_context(context)
+                if self.fault == "begin-not-durable":
+                    return {"status": "held"}
+                return result
+
+            def complete_release_rollback_context(
+                self, context: Mapping[str, object]
+            ) -> dict[str, object]:
+                result = super().complete_release_rollback_context(context)
+                if self.fault == "complete-not-durable":
+                    return {"status": "releasing"}
+                return result
+
+            def revalidate_rollback(
+                self, context: Mapping[str, object], result: Mapping[str, object]
+            ) -> dict[str, object]:
+                if self.fault == "revalidation-invalid":
+                    return cast(dict[str, object], None)
+                evidence = super().revalidate_rollback(context, result)
+                if self.fault == "revalidation-changed":
+                    evidence["runtime_validated"] = False
+                return evidence
+
+        cases = (
+            ("new-target", "failed", None),
+            ("verify-raises", "failed", None),
+            ("verify-missing", "failed", None),
+            ("runtime-unverified", "safe-mode", "ambiguous"),
+            ("result-incomplete", "safe-mode", "ambiguous"),
+            ("handler-conflict", "safe-mode", "ambiguous"),
+            ("handler-evidence", "safe-mode", "ambiguous"),
+            ("identity-changed", "failed", "rollback_verified"),
+            ("barrier-state", "failed", "rollback_verified"),
+            ("begin-not-durable", "failed", "rollback_verified"),
+            ("complete-not-durable", "failed", "rollback_verified"),
+            ("revalidation-invalid", "failed", "rollback_verified"),
+            ("revalidation-changed", "failed", "rollback_verified"),
+        )
+        for fault, expected_status, expected_outcome in cases:
+            with self.subTest(fault=fault), tempfile.TemporaryDirectory() as directory:
+                adapter = FaultAdapter(fault)
+                journal, engine = self._prepare_failed_journal(directory, f"op-{fault}", adapter)
+
+                def handler(
+                    _step: str, _state: object, current_fault: str = fault
+                ) -> dict[str, object]:
+                    if current_fault == "handler-conflict":
+                        return {"backend": "git"}
+                    if current_fault == "handler-evidence":
+                        return {"restored_verified": True}
+                    return {}
+
+                with self.assertRaises(UpgradeError):
+                    engine.rollback(handler)
+                durable = json.loads(journal.read_text())
+                self.assertEqual(expected_status, durable["status"])
+                rollback_records = [
+                    record for record in durable["records"] if record["phase"] == "rollback"
+                ]
+                if expected_outcome is None:
+                    self.assertEqual([], rollback_records)
+                else:
+                    self.assertEqual(expected_outcome, rollback_records[-1]["outcome"])
+
+    def test_missing_release_api_keeps_verified_rollback_durable(self) -> None:
+        class RestoreOnlyAdapter:
+            def snapshot(self, phase: str, context: Mapping[str, object]) -> dict[str, object]:
+                if phase == "rollback":
+                    return {
+                        **make_context(str(context["operation_id"]), target="rollback"),
+                        "rollback_context_verified": True,
+                    }
+                return {**ADMISSION, **context}
+
+            def verify_rollback_context(self, context: Mapping[str, object]) -> dict[str, object]:
+                return {**context, "status": "held"}
+
+            def execute(self, phase: str, _context: Mapping[str, object]) -> dict[str, object]:
+                if phase != "rollback":
+                    return {}
+                return {
+                    "restored_verified": True,
+                    "runtime_validated": True,
+                    "backend_roundtrip_valid": True,
+                    "backend": "sqlite",
+                    "fencing_token": "fence-1",
+                }
+
+        with tempfile.TemporaryDirectory() as directory:
+            journal, engine = self._prepare_failed_journal(
+                directory,
+                "op-missing-release",
+                RestoreOnlyAdapter(),
+            )
+            with self.assertRaisesRegex(UpgradeError, "release recovery API is unavailable"):
+                engine.rollback(lambda _step, _state: {})
+            durable = json.loads(journal.read_text())
+            self.assertEqual("failed", durable["status"])
+            self.assertEqual("rollback_verified", durable["records"][-1]["outcome"])
+
+    def test_durable_journal_write_and_lock_faults_fail_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            operation_id = "op-write-fault"
+
+            with patch("tools.upgrade_engine.os.fsync", side_effect=OSError("fsync failed")):
+                engine = UpgradeEngine(
+                    operation_id,
+                    root / "write.json",
+                    make_context(operation_id),
+                    backend_adapter=FakeAdapter(),
+                )
+                with self.assertRaisesRegex(UpgradeError, "journal write failed"):
+                    engine.plan()
+                self.assertFalse(engine.journal.exists())
+
+            with (
+                patch("tools.upgrade_engine.os.fsync", side_effect=OSError("fsync failed")),
+                patch.object(Path, "unlink", side_effect=OSError("cleanup failed")),
+            ):
+                engine = UpgradeEngine(
+                    operation_id,
+                    root / "cleanup.json",
+                    make_context(operation_id),
+                    backend_adapter=FakeAdapter(),
+                )
+                with self.assertRaisesRegex(UpgradeError, "journal cleanup failed"):
+                    engine.plan()
+
+            with patch("tools.upgrade_engine.fcntl", None):
+                engine = UpgradeEngine(
+                    operation_id,
+                    root / "unavailable.json",
+                    make_context(operation_id),
+                    backend_adapter=FakeAdapter(),
+                )
+                with self.assertRaisesRegex(UpgradeError, "lock is unavailable"):
+                    engine.plan()
+
+            lock_path = root / "contended.lock"
+            lock_path.touch()
+            with lock_path.open("a+") as stream:
+                fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                engine = UpgradeEngine(
+                    operation_id,
+                    root / "timeout.json",
+                    make_context(operation_id),
+                    lock_path=lock_path,
+                    backend_adapter=FakeAdapter(),
+                )
+                with (
+                    patch("tools.upgrade_engine.time.monotonic", side_effect=(0.0, 31.0)),
+                    patch("tools.upgrade_engine.time.sleep"),
+                    self.assertRaisesRegex(UpgradeError, "lock acquisition timed out"),
+                ):
+                    engine.plan()
+                fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
+
+            engine = UpgradeEngine(
+                operation_id,
+                root / "lock-error.json",
+                make_context(operation_id),
+                backend_adapter=FakeAdapter(),
+            )
+            with (
+                patch("tools.upgrade_engine.fcntl.flock", side_effect=OSError("lock failed")),
+                self.assertRaisesRegex(UpgradeError, "lock acquisition failed"),
+            ):
+                engine.plan()
+
+    def test_loaded_rollback_requires_authority_and_runtime_revalidation(self) -> None:
+        class MissingAuthority(FakeAdapter):
+            def verify_rollback_context(
+                self, _context: Mapping[str, object]
+            ) -> dict[str, object] | None:
+                return None
+
+        class RaisingAuthority(FakeAdapter):
+            def verify_rollback_context(
+                self, _context: Mapping[str, object]
+            ) -> dict[str, object] | None:
+                raise RuntimeError("authority unavailable")
+
+        class RaisingRuntime(FakeAdapter):
+            def revalidate_rollback(
+                self, _context: Mapping[str, object], _result: Mapping[str, object]
+            ) -> dict[str, object]:
+                raise RuntimeError("runtime unavailable")
+
+        class ChangedRuntime(FakeAdapter):
+            def revalidate_rollback(
+                self, context: Mapping[str, object], result: Mapping[str, object]
+            ) -> dict[str, object]:
+                evidence = super().revalidate_rollback(context, result)
+                evidence["runtime_validated"] = False
+                return evidence
+
+        class RestoreOnlyAdapter:
+            def snapshot(self, _phase: str, _context: Mapping[str, object]) -> dict[str, object]:
+                return {}
+
+            def verify_rollback_context(self, context: Mapping[str, object]) -> dict[str, object]:
+                return dict(context)
+
+            def execute(self, _phase: str, _context: Mapping[str, object]) -> dict[str, object]:
+                return {}
+
+        with tempfile.TemporaryDirectory() as directory:
+            operation_id = "op-reload-rollback"
+            journal, engine = self._prepare_failed_journal(directory, operation_id, FakeAdapter())
+            completed = engine.rollback(lambda _step, _state: {})
+            self.assertEqual("rolled-back", completed["status"])
+            durable = journal.read_text()
+            cases: tuple[tuple[str, BackendAdapter, str], ...] = (
+                ("authority missing", MissingAuthority(), "not verified by authority"),
+                ("authority raises", RaisingAuthority(), "authority verification failed"),
+                (
+                    "runtime API missing",
+                    RestoreOnlyAdapter(),
+                    "rollback revalidation is unavailable",
+                ),
+                ("runtime raises", RaisingRuntime(), "rollback revalidation failed"),
+                ("runtime changed", ChangedRuntime(), "runtime is not revalidated"),
+            )
+            for name, adapter, expected in cases:
+                journal.write_text(durable)
+                reloaded = UpgradeEngine(
+                    operation_id,
+                    journal,
+                    make_context(operation_id),
+                    backend_adapter=adapter,
+                )
+                with self.subTest(name=name), self.assertRaisesRegex(UpgradeError, expected):
+                    reloaded.apply({})
+
+    def test_apply_rejects_failed_state_and_unreconciled_rollback_record(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            journal, failed = self._prepare_failed_journal(
+                directory, "op-explicit-recovery", FakeAdapter()
+            )
+            with self.assertRaisesRegex(UpgradeError, "requires explicit recovery"):
+                failed.apply({})
+
+            value = json.loads(journal.read_text())
+            value["records"].append(
+                {
+                    "operation_id": "op-explicit-recovery",
+                    "step_id": "op-explicit-recovery.rollback",
+                    "phase": "rollback",
+                    "outcome": "started",
+                    "context": make_context("op-explicit-recovery", target="rollback"),
+                }
+            )
+            journal.write_text(json.dumps(value))
+            with self.assertRaisesRegex(UpgradeError, "requires explicit reconciliation"):
+                failed.rollback(lambda _step, _state: {})
 
     def test_started_phase_requires_explicit_recovery(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
