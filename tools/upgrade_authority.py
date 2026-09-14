@@ -138,6 +138,12 @@ def _open_regular(
         raise
 
 
+def _require_owner_only_parent(parent: int, label: str) -> None:
+    status = os.fstat(parent)
+    if status.st_uid != os.geteuid() or stat.S_IMODE(status.st_mode) != 0o700:
+        raise AuthorityError(f"{label} requires an owner-only provisioned directory")
+
+
 def _recheck_regular(
     path: Path, parent_identity: tuple[int, int], identity: tuple[int, int]
 ) -> None:
@@ -196,9 +202,11 @@ def _sidecar_identities(parent: int, name: str) -> dict[str, tuple[int, int] | N
     return result
 
 
-def _read_bound_json(path: Path, *, label: str) -> dict[str, Any]:
+def _read_bound_json(path: Path, *, label: str, private_parent: bool = False) -> dict[str, Any]:
     parent, descriptor, parent_identity, identity = _open_regular(path)
     try:
+        if private_parent:
+            _require_owner_only_parent(parent, label)
         chunks: list[bytes] = []
         total = 0
         while True:
@@ -249,7 +257,7 @@ def _read_project_binding(path: Path, project_id: str) -> dict[str, object]:
 
 
 def _read_runtime_selector_bound(path: Path) -> dict[str, Any]:
-    value = _read_bound_json(path, label="runtime selector")
+    value = _read_bound_json(path, label="runtime selector", private_parent=True)
     if set(value) != {"schema_version", "active_release", "previous_release"}:
         raise AuthorityError("runtime selector schema is invalid")
     if value["schema_version"] != 1 or not all(
@@ -483,7 +491,9 @@ def read_runtime_selector(path: Path) -> dict[str, Any]:
     return _read_runtime_selector_bound(path)
 
 
-def commit_runtime_selector(path: Path, active_release: str, previous_release: str) -> None:
+def commit_runtime_selector(  # noqa: C901
+    path: Path, active_release: str, previous_release: str
+) -> None:
     """Atomically publish through a retained, owner-only parent descriptor."""
     if not all(
         isinstance(value, str) and _RELEASE_IDENTITY.fullmatch(value) is not None
@@ -491,14 +501,17 @@ def commit_runtime_selector(path: Path, active_release: str, previous_release: s
     ):
         raise AuthorityError("runtime selector identity is invalid")
     parent, parent_identity = _open_parent(path)
-    status = os.fstat(parent)
-    if status.st_uid != os.geteuid() or stat.S_IMODE(status.st_mode) != 0o700:
+    try:
+        _require_owner_only_parent(parent, "runtime selector")
+        _existing_regular_identity(parent, path.name)
+    except Exception:
         os.close(parent)
-        raise AuthorityError("runtime selector requires an owner-only provisioned directory")
-    _existing_regular_identity(parent, path.name)
+        raise
     descriptor = -1
     temporary = f".{path.name}.{secrets.token_hex(16)}"
     replaced = False
+    failure: Exception | None = None
+    cleanup_failure: OSError | None = None
     try:
         descriptor = os.open(
             temporary,
@@ -539,20 +552,37 @@ def commit_runtime_selector(path: Path, active_release: str, previous_release: s
         os.fsync(parent)
         _recheck_parent(path, parent_identity)
     except (OSError, AuthorityError) as error:
-        if replaced:
-            raise SelectorPublicationAmbiguousError(
-                "runtime selector publication is ambiguous; reconcile the exact release pair"
-            ) from error
-        raise AuthorityError("runtime selector publication failed") from error
+        failure = error
     finally:
         if descriptor >= 0:
-            os.close(descriptor)
+            try:
+                os.close(descriptor)
+            except OSError as error:
+                cleanup_failure = error
         try:
             os.unlink(temporary, dir_fd=parent)
         except FileNotFoundError:
             pass
-        finally:
+        except OSError as error:
+            cleanup_failure = error
+        try:
             os.close(parent)
+        except OSError as error:
+            cleanup_failure = error
+    if failure is not None or cleanup_failure is not None:
+        cause = cleanup_failure if cleanup_failure is not None else cast(Exception, failure)
+        if replaced:
+            detail = "; temporary cleanup failed" if cleanup_failure is not None else ""
+            raise SelectorPublicationAmbiguousError(
+                "runtime selector publication is ambiguous; "
+                f"reconcile the exact release pair{detail}"
+            ) from cause
+        message = (
+            "runtime selector publication cleanup failed"
+            if cleanup_failure is not None
+            else "runtime selector publication failed"
+        )
+        raise AuthorityError(message) from cause
 
 
 def reconcile_runtime_selector(
@@ -578,10 +608,12 @@ def reconcile_runtime_selector(
         after_previous_release,
     ):
         raise AuthorityError("selector reconciliation identities are invalid")
-    current = read_runtime_selector(path)
-    pair = (current["active_release"], current["previous_release"])
-    if pair == (after_active_release, after_previous_release):
-        return "committed"
-    if pair == (before_active_release, before_previous_release):
-        return "not-committed"
-    raise AuthorityError("selector reconciliation found an unknown release identity")
+    handoffctl = cast(Any, _handoffctl())
+    with handoffctl.locked():
+        current = read_runtime_selector(path)
+        pair = (current["active_release"], current["previous_release"])
+        if pair == (after_active_release, after_previous_release):
+            return "committed"
+        if pair == (before_active_release, before_previous_release):
+            return "not-committed"
+        raise AuthorityError("selector reconciliation found an unknown release identity")

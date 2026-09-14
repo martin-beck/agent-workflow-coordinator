@@ -11,7 +11,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from tools import upgrade_authority
 from tools.upgrade_authority import (
@@ -91,16 +91,20 @@ class RuntimeSelectorTests(unittest.TestCase):
                 self.assertRaisesRegex(SelectorPublicationAmbiguousError, "reconcile"),
             ):
                 commit_runtime_selector(path, "new", "old")
-            self.assertEqual(
-                "committed",
-                reconcile_runtime_selector(
-                    path,
-                    before_active_release="old",
-                    before_previous_release="older",
-                    after_active_release="new",
-                    after_previous_release="old",
-                ),
-            )
+            handoffctl = MagicMock()
+            with patch.object(upgrade_authority, "_handoffctl", return_value=handoffctl):
+                self.assertEqual(
+                    "committed",
+                    reconcile_runtime_selector(
+                        path,
+                        before_active_release="old",
+                        before_previous_release="older",
+                        after_active_release="new",
+                        after_previous_release="old",
+                    ),
+                )
+            handoffctl.locked.assert_called_once_with()
+            handoffctl.locked.return_value.__enter__.assert_called_once_with()
             commit_runtime_selector(path, "old", "older")
             self.assertEqual(
                 "not-committed",
@@ -130,6 +134,30 @@ class RuntimeSelectorTests(unittest.TestCase):
                     after_previous_release="pair",
                 )
 
+    def test_ambiguous_selector_cleanup_failure_preserves_classification(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "selector.json"
+            commit_runtime_selector(path, "old", "older")
+            real_fsync = os.fsync
+            calls = 0
+
+            def fail_directory_fsync(descriptor: int) -> None:
+                nonlocal calls
+                calls += 1
+                if calls == 2:
+                    raise OSError("directory fsync failed")
+                real_fsync(descriptor)
+
+            with (
+                patch("tools.upgrade_authority.os.fsync", side_effect=fail_directory_fsync),
+                patch("tools.upgrade_authority.os.unlink", side_effect=OSError("cleanup failed")),
+                self.assertRaisesRegex(
+                    SelectorPublicationAmbiguousError, "temporary cleanup failed"
+                ),
+            ):
+                commit_runtime_selector(path, "new", "old")
+            self.assertEqual("new", read_runtime_selector(path)["active_release"])
+
     def test_selector_publication_requires_private_real_ancestors(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -139,6 +167,11 @@ class RuntimeSelectorTests(unittest.TestCase):
             with self.assertRaisesRegex(AuthorityError, "owner-only provisioned"):
                 commit_runtime_selector(public / "selector.json", "new", "old")
             self.assertFalse((public / "selector.json").exists())
+            (public / "selector.json").write_text(
+                '{"schema_version":1,"active_release":"new","previous_release":"old"}\n'
+            )
+            with self.assertRaisesRegex(AuthorityError, "owner-only provisioned"):
+                read_runtime_selector(public / "selector.json")
 
             private = root / "private"
             private.mkdir(mode=0o700)
