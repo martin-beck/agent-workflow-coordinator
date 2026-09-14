@@ -6,8 +6,10 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import tempfile
 import time
+import uuid
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
@@ -73,11 +75,15 @@ STATUSES = {"planned", "running", "failed", "completed", "rolled-back", "safe-mo
 TOP_LEVEL_FIELDS = {"schema_version", "operation_id", "status", "phase", "context", "records"}
 CONTEXT_FIELDS = (
     "operation_id",
+    "project_id",
     "state_revision",
     "fencing_token",
     "fencing_owner",
     "backend",
     "authority_revision",
+    "durable_barrier_id",
+    "barrier_identity_digest",
+    "envelope_digest",
     "target",
 )
 
@@ -87,11 +93,15 @@ class PhaseContext:
     """Immutable identity and backend binding for one upgrade operation."""
 
     operation_id: str
+    project_id: str
     state_revision: int
     fencing_token: str
     fencing_owner: str
     backend: str
     authority_revision: str
+    durable_barrier_id: str
+    barrier_identity_digest: str
+    envelope_digest: str
     target: str
 
 
@@ -128,6 +138,50 @@ def _write(path: Path, value: Mapping[str, Any]) -> None:
         raise UpgradeError("durable upgrade journal write failed") from error
 
 
+def _validate_context_identities(supplied: dict[str, object]) -> None:
+    if any(
+        not isinstance(supplied[field], str) or not supplied[field]
+        for field in CONTEXT_FIELDS
+        if field != "state_revision"
+    ):
+        raise UpgradeError("invalid phase context identity")
+    for field in ("barrier_identity_digest", "envelope_digest"):
+        if not re.fullmatch(r"[0-9a-f]{64}", cast(str, supplied[field])):
+            raise UpgradeError(f"invalid {field}")
+    for field in (
+        "operation_id",
+        "fencing_token",
+        "fencing_owner",
+        "authority_revision",
+        "durable_barrier_id",
+    ):
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", cast(str, supplied[field])):
+            raise UpgradeError(f"invalid {field}")
+    try:
+        project = uuid.UUID(cast(str, supplied["project_id"]))
+    except ValueError as error:
+        raise UpgradeError("invalid project_id") from error
+    if project.version != 4:
+        raise UpgradeError("project_id must be UUIDv4")
+    if supplied["backend"] not in {"git", "sqlite"} or supplied["target"] not in {
+        "new",
+        "rollback",
+    }:
+        raise UpgradeError("unsupported backend or target")
+
+
+def _validate_context(supplied: dict[str, object], operation_id: str) -> None:
+    if set(supplied) != set(CONTEXT_FIELDS) or supplied.get("operation_id") != operation_id:
+        raise UpgradeError("complete bound phase context is required")
+    if (
+        not isinstance(supplied["state_revision"], int)
+        or isinstance(supplied["state_revision"], bool)
+        or supplied["state_revision"] < 1
+    ):
+        raise UpgradeError("invalid state revision")
+    _validate_context_identities(supplied)
+
+
 class UpgradeEngine:
     """Execute exactly eight ordered phases with durable outcomes."""
 
@@ -146,25 +200,7 @@ class UpgradeEngine:
         self.lock_path = lock_path or journal.parent / ".upgrade-engine.lock"
         self.backend_adapter = backend_adapter
         supplied = dict(context)
-        if set(supplied) != set(CONTEXT_FIELDS) or supplied.get("operation_id") != operation_id:
-            raise UpgradeError("complete bound phase context is required")
-        if (
-            not isinstance(supplied["state_revision"], int)
-            or isinstance(supplied["state_revision"], bool)
-            or supplied["state_revision"] < 1
-        ):
-            raise UpgradeError("invalid state revision")
-        if any(
-            not isinstance(supplied[field], str) or not supplied[field]
-            for field in CONTEXT_FIELDS
-            if field != "state_revision"
-        ):
-            raise UpgradeError("invalid phase context identity")
-        if supplied["backend"] not in {"git", "sqlite"} or supplied["target"] not in {
-            "new",
-            "rollback",
-        }:
-            raise UpgradeError("unsupported backend or target")
+        _validate_context(supplied, operation_id)
         self.context = PhaseContext(**cast(dict[str, Any], supplied))
 
     @contextmanager
@@ -306,7 +342,7 @@ class UpgradeEngine:
 
     def _bind_snapshot(self, snapshot: Mapping[str, object]) -> None:
         expected = asdict(self.context)
-        for field in ("operation_id", "state_revision", "fencing_token", "fencing_owner"):
+        for field in CONTEXT_FIELDS:
             if snapshot.get(field) != expected[field]:
                 raise UpgradeError(f"admission snapshot identity mismatch: {field}")
 

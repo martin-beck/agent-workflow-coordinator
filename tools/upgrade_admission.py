@@ -5,6 +5,8 @@
 
 from __future__ import annotations
 
+import re
+import uuid
 from collections.abc import Mapping
 
 
@@ -50,15 +52,38 @@ REOPEN_PREDICATES = (
 
 IDENTITY_FIELDS = (
     "operation_id",
+    "project_id",
+    "backend",
     "state_revision",
     "fencing_token",
     "fencing_owner",
+    "authority_revision",
+    "barrier_identity_digest",
+    "envelope_digest",
+    "target",
 )
 QUIESCENCE_IDENTITY = "durable_barrier_id"
 KNOWN_FIELDS = set(PREFLIGHT_PREDICATES + QUIESCENCE_PREDICATES + REOPEN_PREDICATES)
-KNOWN_FIELDS.update(
-    (*IDENTITY_FIELDS, QUIESCENCE_IDENTITY, "target", "validation_failed", "safe_mode_ready")
-)
+KNOWN_FIELDS.update((*IDENTITY_FIELDS, QUIESCENCE_IDENTITY, "validation_failed", "safe_mode_ready"))
+
+
+def _valid_identity(field: str, value: object) -> bool:
+    if field == "state_revision":
+        return isinstance(value, int) and not isinstance(value, bool) and value >= 1
+    if not isinstance(value, str) or not value:
+        return False
+    if field in {"barrier_identity_digest", "envelope_digest"}:
+        return re.fullmatch(r"[0-9a-f]{64}", value) is not None
+    if field == "backend":
+        return value in {"git", "sqlite"}
+    if field == "project_id":
+        try:
+            return uuid.UUID(value).version == 4
+        except ValueError:
+            return False
+    if field == "target":
+        return value in {"new", "rollback"}
+    return re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", value) is not None
 
 
 def _require(snapshot: Mapping[str, object], predicates: tuple[str, ...], phase: str) -> None:
@@ -66,11 +91,7 @@ def _require(snapshot: Mapping[str, object], predicates: tuple[str, ...], phase:
     if unknown:
         raise AdmissionError(f"{phase} denied; unknown fields: {', '.join(sorted(unknown))}")
     for field in IDENTITY_FIELDS:
-        value = snapshot.get(field)
-        if field == "state_revision":
-            if not isinstance(value, int) or isinstance(value, bool) or value < 1:
-                raise AdmissionError(f"{phase} denied; invalid {field}")
-        elif not isinstance(value, str) or not value:
+        if not _valid_identity(field, snapshot.get(field)):
             raise AdmissionError(f"{phase} denied; invalid {field}")
     missing = [name for name in predicates if snapshot.get(name) is not True]
     if missing:

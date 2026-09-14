@@ -31,11 +31,16 @@ def complete(names: tuple[str, ...]) -> dict[str, object]:
     snapshot: dict[str, object] = dict.fromkeys(names, True)
     snapshot.update(
         {
-            "operation_id": "upgrade:001",
+            "operation_id": "upgrade-001",
+            "project_id": "11111111-1111-4111-8111-111111111111",
+            "backend": "sqlite",
             "state_revision": 4,
-            "fencing_token": "fence:4",
+            "fencing_token": "fence-4",
             "fencing_owner": "worker-1",
-            "durable_barrier_id": "barrier:4",
+            "authority_revision": "authority-4",
+            "barrier_identity_digest": "a" * 64,
+            "envelope_digest": "b" * 64,
+            "durable_barrier_id": "barrier-4",
             "target": "new",
         }
     )
@@ -87,8 +92,14 @@ class UpgradeAdmissionTests(unittest.TestCase):
         recheck_before_replacement(snapshot, dict(snapshot))
         for field, value in (
             ("operation_id", ""),
+            ("operation_id", "upgrade:bad"),
+            ("project_id", ""),
+            ("backend", "unknown"),
             ("fencing_token", ""),
             ("fencing_owner", ""),
+            ("authority_revision", ""),
+            ("barrier_identity_digest", "not-a-digest"),
+            ("envelope_digest", "not-a-digest"),
             ("state_revision", 0),
             ("state_revision", False),
         ):

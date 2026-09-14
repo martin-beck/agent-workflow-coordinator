@@ -19,11 +19,15 @@ from tools.upgrade_engine import PHASES, Handler, UpgradeEngine, UpgradeError
 
 CONTEXT = {
     "operation_id": "op-1",
+    "project_id": "11111111-1111-4111-8111-111111111111",
     "state_revision": 1,
     "fencing_token": "fence-1",
     "fencing_owner": "worker-1",
     "backend": "sqlite",
     "authority_revision": "authority-1",
+    "durable_barrier_id": "barrier-1",
+    "barrier_identity_digest": "a" * 64,
+    "envelope_digest": "b" * 64,
     "target": "new",
 }
 ADMISSION = {
@@ -31,10 +35,15 @@ ADMISSION = {
     **dict.fromkeys(QUIESCENCE_PREDICATES, True),
     **dict.fromkeys(REOPEN_PREDICATES, True),
     "operation_id": "op-1",
+    "project_id": "11111111-1111-4111-8111-111111111111",
     "state_revision": 1,
     "fencing_token": "fence-1",
     "fencing_owner": "worker-1",
+    "backend": "sqlite",
+    "authority_revision": "authority-1",
     "durable_barrier_id": "barrier-1",
+    "barrier_identity_digest": "a" * 64,
+    "envelope_digest": "b" * 64,
     "target": "new",
     "validation_failed": False,
 }
@@ -47,7 +56,18 @@ class FakeAdapter:
             **ADMISSION,
             **{
                 field: identity[field]
-                for field in ("operation_id", "state_revision", "fencing_token", "fencing_owner")
+                for field in (
+                    "operation_id",
+                    "project_id",
+                    "state_revision",
+                    "fencing_token",
+                    "fencing_owner",
+                    "authority_revision",
+                    "durable_barrier_id",
+                    "barrier_identity_digest",
+                    "envelope_digest",
+                    "target",
+                )
             },
         }
 
@@ -232,6 +252,22 @@ class UpgradeEngineTests(unittest.TestCase):
             engine.plan()
             with self.assertRaises(UpgradeError):
                 engine.plan()
+
+    def test_context_digest_and_target_shapes_are_strict(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            for field, value in (
+                ("backend", "unknown"),
+                ("target", "upgrade"),
+                ("barrier_identity_digest", "not-a-digest"),
+                ("envelope_digest", "not-a-digest"),
+            ):
+                with self.subTest(field=field), self.assertRaises(UpgradeError):
+                    UpgradeEngine(
+                        "op-shape",
+                        Path(directory) / f"{field}.json",
+                        {**CONTEXT, field: value},
+                        backend_adapter=FakeAdapter(),
+                    )
 
     def test_context_and_journal_tampering_fail_closed(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
