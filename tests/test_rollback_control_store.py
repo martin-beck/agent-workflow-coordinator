@@ -532,6 +532,7 @@ class RollbackControlStoreTests(unittest.TestCase):
             self.assertEqual(final, reopened_final)
             self.assertEqual(4, reopened_final.identity.state_revision)
             self.assertEqual("fence-2", reopened_final.identity.fencing_token)
+            self.assertEqual("owner-1", reopened_final.identity.fencing_owner)
             self.assertEqual(final.identity.authority_revision_at_acquire, "authority-3")
             self.assertEqual(b"authority remains untouched\n", authority_path.read_bytes())
             for _ in range(2):
