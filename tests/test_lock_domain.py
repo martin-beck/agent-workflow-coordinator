@@ -7,11 +7,12 @@ from __future__ import annotations
 import json
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from typing import cast
 
 from tools.handoffctl import CoordinatorLockGuard, locked
-from tools.lock_domain import LockDomainContract, LockDomainError
+from tools.lock_domain import LockDomainContract, LockDomainError, _identity
 from tools.mutation_fence import MutationFence, provision, provision_control_binding
 from tools.rollback_control_store import SQLiteBarrierSessionStore, SQLiteRollbackControlStore
 
@@ -122,6 +123,79 @@ class LockDomainTests(unittest.TestCase):
         with locked() as guard, self.assertRaisesRegex(LockDomainError, "binding"):
             LockDomainContract.capture(guard, self.session, self.fence)
         self.assertNotEqual(before, self.marker.read_bytes())
+
+    def test_identity_rejects_noncanonical_unsafe_and_unavailable_descriptors(self) -> None:
+        with self.assertRaisesRegex(LockDomainError, "not canonical"):
+            _identity(Path("relative-lock"))
+
+        unsafe_parent = self.root / "unsafe-parent"
+        unsafe_parent.mkdir()
+        unsafe_parent.chmod(0o755)
+        unsafe_file = unsafe_parent / "lock"
+        unsafe_file.write_bytes(b"")
+        unsafe_file.chmod(0o600)
+        with self.assertRaisesRegex(LockDomainError, "parent is not owner-only"):
+            _identity(unsafe_file)
+        unsafe_parent.chmod(0o700)
+
+        unsafe_file.chmod(0o644)
+        with self.assertRaisesRegex(LockDomainError, "descriptor is unsafe"):
+            _identity(unsafe_file)
+        with self.assertRaisesRegex(LockDomainError, "unavailable"):
+            _identity(self.root / "missing-lock")
+
+    def test_identity_rejects_nonregular_descriptor_and_symlink(self) -> None:
+        directory = self.root / "directory-lock"
+        directory.mkdir()
+        with self.assertRaisesRegex(LockDomainError, "descriptor is unsafe"):
+            _identity(directory)
+
+        target = self.root / "target-lock"
+        target.write_bytes(b"")
+        target.chmod(0o600)
+        link = self.root / "link-lock"
+        link.symlink_to(target)
+        with self.assertRaisesRegex(LockDomainError, "canonical|unavailable"):
+            _identity(link)
+
+    def test_capture_rejects_missing_types_and_unowned_guard(self) -> None:
+        with locked() as guard:
+            with self.assertRaisesRegex(LockDomainError, "common lock"):
+                LockDomainContract.capture(
+                    cast(CoordinatorLockGuard, None), self.session, self.fence
+                )
+            with self.assertRaisesRegex(LockDomainError, "session store"):
+                LockDomainContract.capture(guard, cast(SQLiteBarrierSessionStore, None), self.fence)
+            with self.assertRaisesRegex(LockDomainError, "authority fence"):
+                LockDomainContract.capture(guard, self.session, cast(MutationFence, None))
+            saved_guard = guard
+        with self.assertRaisesRegex(LockDomainError, "ownership"):
+            LockDomainContract.capture(saved_guard, self.session, self.fence)
+
+    def test_capture_rejects_incomplete_and_noncanonical_bindings(self) -> None:
+        incomplete = MutationFence(self.authority, self.marker, self.lifecycle, self.authority_lock)
+        with locked() as guard, self.assertRaisesRegex(LockDomainError, "incomplete"):
+            LockDomainContract.capture(guard, self.session, incomplete)
+
+        symlink = self.root / "control-link.sqlite"
+        symlink.symlink_to(self.control)
+        self.store.path = symlink
+        with locked() as guard, self.assertRaisesRegex(LockDomainError, "canonical"):
+            LockDomainContract.capture(guard, self.session, self.fence)
+
+        split_store = self.root / "split-control.sqlite"
+        split_store.write_bytes(b"split")
+        split_store.chmod(0o600)
+        self.store.path = split_store
+        with locked() as guard, self.assertRaisesRegex(LockDomainError, "control-store"):
+            LockDomainContract.capture(guard, self.session, self.fence)
+
+    def test_assert_current_rejects_changed_identity(self) -> None:
+        with locked() as guard:
+            captured = LockDomainContract.capture(guard, self.session, self.fence)
+            altered = replace(captured, authority=self.root / "other.sqlite")
+            with self.assertRaisesRegex(LockDomainError, "identity changed"):
+                altered.assert_current(guard, self.session, self.fence)
 
 
 if __name__ == "__main__":
