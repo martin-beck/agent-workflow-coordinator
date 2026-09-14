@@ -11,7 +11,13 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from validate_upgrade_contract import ContractError, validate_contract
+if __package__:
+    from .validate_upgrade_contract import ContractError, validate_contract
+else:  # pragma: no cover - direct script execution
+    from validate_upgrade_contract import (  # type: ignore[import-not-found,no-redef]
+        ContractError,
+        validate_contract,
+    )
 
 PHASES = ("discover", "preflight", "quiesce", "backup", "stage", "commit", "validate", "reopen")
 
