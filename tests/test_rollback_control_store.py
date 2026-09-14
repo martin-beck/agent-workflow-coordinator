@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import inspect
 import json
 import os
 import signal
@@ -329,6 +330,39 @@ class StaticAuthorityRuntimeRereader:
 
 
 class RollbackControlStoreTests(unittest.TestCase):
+    def test_authoritative_control_store_routes_have_operation_scope_contract(self) -> None:
+        """Keep the documented rollback/session write surface behind admission."""
+        routes = {
+            SQLiteRollbackControlStore: (
+                ("cas", "scoped"),
+                ("begin_release", "scoped"),
+                ("reconcile_release", "rejected"),
+                ("reconcile_ambiguous", "scoped"),
+                ("with_barrier", "scoped"),
+            ),
+            SQLiteBarrierSessionStore: (
+                ("create", "scoped"),
+                ("cas", "scoped"),
+                ("bind_child", "scoped"),
+                ("begin_reopen", "scoped"),
+                ("complete_reopen", "scoped"),
+                ("mark_ambiguous", "scoped"),
+                ("recover_unknown", "scoped"),
+                ("reconcile_ambiguous", "scoped"),
+            ),
+        }
+        for store_type, route_contracts in routes.items():
+            for name, contract in route_contracts:
+                with self.subTest(store=store_type.__name__, route=name):
+                    source = inspect.getsource(getattr(store_type, name))
+                    if contract == "rejected":
+                        self.assertIn("requires verified engine recovery", source)
+                    else:
+                        self.assertTrue(
+                            "operation_lock" in source or "self.cas(" in source,
+                            f"{store_type.__name__}.{name} lacks operation-scope admission",
+                        )
+
     def _session_identity(self) -> BarrierSessionIdentity:
         from tools.upgrade_identity import BarrierSessionIdentity, canonical_barrier_session_digest
 
