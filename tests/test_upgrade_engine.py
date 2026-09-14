@@ -11,6 +11,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import cast
 
+from tools.rollback_control_store import SQLiteRollbackControlStore
 from tools.upgrade_admission import (
     PREFLIGHT_PREDICATES,
     QUIESCENCE_PREDICATES,
@@ -57,15 +58,17 @@ ADMISSION = {
 
 
 class FakeAdapter:
-    def verify_rollback_context(self, context: Mapping[str, object]) -> bool:
-        return (
+    def verify_rollback_context(self, context: Mapping[str, object]) -> dict[str, object] | None:
+        if (
             all(
                 context.get(field) == ROLLBACK_CONTEXT[field]
                 for field in CONTEXT_FIELDS
                 if field not in {"operation_id"}
             )
             and context.get("target") == "rollback"
-        )
+        ):
+            return dict(context)
+        return None
 
     def snapshot(self, phase: str, context: object) -> dict[str, object]:
         identity = dict(context) if isinstance(context, Mapping) else CONTEXT
@@ -485,6 +488,53 @@ class UpgradeEngineTests(unittest.TestCase):
             with self.assertRaises(UpgradeError):
                 engine.rollback(forge)
             self.assertEqual("safe-mode", engine._load()["status"])
+
+    def test_rollback_uses_durable_sqlite_control_record(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            operation_id = "op-control-store"
+            control = SQLiteRollbackControlStore(
+                Path(directory) / "control.sqlite", cast(str, CONTEXT["project_id"])
+            )
+            control.cas(
+                0,
+                {
+                    **ROLLBACK_CONTEXT,
+                    "operation_id": operation_id,
+                    "status": "held",
+                    "revision": 1,
+                },
+            )
+
+            class ControlAdapter(FakeAdapter):
+                def verify_rollback_context(
+                    self, context: Mapping[str, object]
+                ) -> dict[str, object] | None:
+                    return control.verify_rollback_context(context)
+
+            journal = Path(directory) / "journal.json"
+            engine = UpgradeEngine(
+                operation_id,
+                journal,
+                {**CONTEXT, "operation_id": operation_id},
+                backend_adapter=ControlAdapter(),
+            )
+            engine.plan()
+            value = json.loads(journal.read_text())
+            value["status"] = "failed"
+            value["phase"] = "discover"
+            value["records"] = [
+                {
+                    "operation_id": operation_id,
+                    "step_id": f"{operation_id}.discover",
+                    "phase": "discover",
+                    "outcome": "failed",
+                    "error": "failed",
+                    "context": {**CONTEXT, "operation_id": operation_id},
+                }
+            ]
+            journal.write_text(json.dumps(value))
+            result = engine.rollback(lambda _step, _state: {})
+            self.assertEqual("rolled-back", result["status"])
 
     def test_started_phase_requires_explicit_recovery(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

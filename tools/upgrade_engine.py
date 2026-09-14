@@ -45,7 +45,9 @@ class BackendAdapter(Protocol):
 
     def snapshot(self, phase: str, context: Mapping[str, object]) -> Mapping[str, object]: ...
 
-    def verify_rollback_context(self, context: Mapping[str, object]) -> bool: ...
+    def verify_rollback_context(
+        self, context: Mapping[str, object]
+    ) -> Mapping[str, object] | None: ...
 
     def execute(self, phase: str, context: Mapping[str, object]) -> Mapping[str, object]: ...
 
@@ -303,7 +305,17 @@ class UpgradeEngine:
                     ):
                         raise UpgradeError(f"rollback context mismatch: {field}")
                 verifier = getattr(self.backend_adapter, "verify_rollback_context", None)
-                if not callable(verifier) or verifier(rollback_context) is not True:
+                try:
+                    durable = (
+                        verifier(cast(Mapping[str, object], _freeze(rollback_context)))
+                        if callable(verifier)
+                        else None
+                    )
+                except Exception as error:
+                    raise UpgradeError("rollback authority verification failed") from error
+                if not isinstance(durable, Mapping) or any(
+                    durable.get(field) != rollback_context[field] for field in CONTEXT_FIELDS
+                ):
                     raise UpgradeError("rollback context is not verified by authority")
                 if set(record) - RECORD_FIELDS:
                     raise UpgradeError("upgrade journal rollback context is invalid")
@@ -574,7 +586,17 @@ class UpgradeEngine:
                 ):
                     raise UpgradeError(f"rollback context mismatch: {field}")
             verifier = getattr(self.backend_adapter, "verify_rollback_context", None)
-            if not callable(verifier) or verifier(supplied) is not True:
+            try:
+                durable = (
+                    verifier(cast(Mapping[str, object], _freeze(supplied)))
+                    if callable(verifier)
+                    else None
+                )
+            except Exception as error:
+                raise UpgradeError("rollback authority verification failed") from error
+            if not isinstance(durable, Mapping) or any(
+                durable.get(field) != supplied[field] for field in CONTEXT_FIELDS
+            ):
                 raise UpgradeError("rollback context is not verified by authority")
             self._verified_rollback_context = supplied
             return self._rollback_locked(handler)
