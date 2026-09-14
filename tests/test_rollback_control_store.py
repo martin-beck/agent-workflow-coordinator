@@ -545,6 +545,7 @@ class RollbackControlStoreTests(unittest.TestCase):
             self.assertIsNone(reopened_final.rollback_child)
             self.assertEqual("held", reopened_final.status)
             self.assertEqual(1, reopened_final.revision)
+            self.assertEqual("authority-3", reopened_final.identity.authority_revision_at_acquire)
             self.assertEqual(64, len(reopened_final.identity.identity_digest))
             self.assertNotEqual("0" * 64, reopened_final.identity.identity_digest)
             self.assertTrue(reopened_final.identity.identity_digest.isalnum())
