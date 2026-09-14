@@ -31,6 +31,12 @@ CONTEXT = {
     "envelope_digest": "b" * 64,
     "target": "new",
 }
+ROLLBACK_CONTEXT = {
+    **CONTEXT,
+    "target": "rollback",
+    "barrier_identity_digest": "c" * 64,
+    "envelope_digest": "d" * 64,
+}
 ADMISSION = {
     **dict.fromkeys(PREFLIGHT_PREDICATES, True),
     **dict.fromkeys(QUIESCENCE_PREDICATES, True),
@@ -185,7 +191,7 @@ class UpgradeEngineTests(unittest.TestCase):
             with self.assertRaises(UpgradeError):
                 engine.apply(handlers)
             with self.assertRaises(UpgradeError):
-                engine.rollback(fail)
+                engine.rollback(fail, {**ROLLBACK_CONTEXT, "operation_id": "op-2"})
             self.assertEqual(engine._load()["status"], "safe-mode")
 
     def test_commit_validate_and_reopen_require_safety_evidence(self) -> None:  # noqa: C901
@@ -277,6 +283,8 @@ class UpgradeEngineTests(unittest.TestCase):
                 "op-4", journal, {**CONTEXT, "operation_id": "op-4"}, backend_adapter=FakeAdapter()
             )
             engine.plan()
+            with self.assertRaises(UpgradeError):
+                engine.rollback(lambda _step, _state: {})
             value = json.loads(journal.read_text())
             value["context"]["backend"] = "git"
             journal.write_text(json.dumps(value))
@@ -370,7 +378,10 @@ class UpgradeEngineTests(unittest.TestCase):
                 }
             ]
             journal.write_text(json.dumps(value))
-            result = engine.rollback(lambda _step, _state: {})
+            result = engine.rollback(
+                lambda _step, _state: {},
+                {**ROLLBACK_CONTEXT, "operation_id": "op-success-rollback"},
+            )
             self.assertEqual("rolled-back", result["status"])
             self.assertEqual("rollback_completed", result["records"][-1]["outcome"])
 

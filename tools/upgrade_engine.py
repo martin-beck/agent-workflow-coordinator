@@ -4,7 +4,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import re
@@ -205,6 +204,7 @@ class UpgradeEngine:
         self.journal = journal
         self.lock_path = lock_path or journal.parent / ".upgrade-engine.lock"
         self.backend_adapter = backend_adapter
+        self._verified_rollback_context: dict[str, object] | None = None
         supplied = dict(context)
         _validate_context(supplied, operation_id)
         self.context = PhaseContext(**cast(dict[str, Any], supplied))
@@ -252,31 +252,6 @@ class UpgradeEngine:
             _write(self.journal, value)
             return value
 
-    def _rollback_context(self) -> dict[str, Any]:
-        context = asdict(self.context)
-        context["target"] = "rollback"
-        identity = {
-            key: context[key]
-            for key in (
-                "project_id",
-                "operation_id",
-                "state_revision",
-                "authority_revision",
-                "durable_barrier_id",
-                "fencing_token",
-                "fencing_owner",
-                "target",
-            )
-        }
-        context["barrier_identity_digest"] = hashlib.sha256(
-            json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()
-        ).hexdigest()
-        envelope = {key: value for key, value in context.items() if key != "envelope_digest"}
-        context["envelope_digest"] = hashlib.sha256(
-            json.dumps(envelope, sort_keys=True, separators=(",", ":")).encode()
-        ).hexdigest()
-        return context
-
     def _load(self) -> dict[str, Any]:  # noqa: C901
         try:
             value = json.loads(self.journal.read_text(encoding="utf-8"))
@@ -313,7 +288,10 @@ class UpgradeEngine:
                     raise UpgradeError("upgrade journal rollback identity is invalid")
                 if record.get("outcome") not in {"started", "rollback_completed", "ambiguous"}:
                     raise UpgradeError("upgrade journal rollback outcome is invalid")
-                if record.get("context") != self._rollback_context() or set(record) - RECORD_FIELDS:
+                rollback_context = self._verified_rollback_context
+                if rollback_context is None or record.get("context") != rollback_context:
+                    raise UpgradeError("verified rollback context is required")
+                if set(record) - RECORD_FIELDS:
                     raise UpgradeError("upgrade journal rollback context is invalid")
                 outcome = record["outcome"]
                 expected_fields = {
@@ -403,11 +381,23 @@ class UpgradeEngine:
             raise UpgradeError("running journal phase is inconsistent")
         if status in {"failed", "safe-mode"} and not phase_outcomes:
             raise UpgradeError("failed journal has no failed phase")
-        if status == "completed" and phase_outcomes != ["success"] * len(PHASES):
+        rollback_records = [record for record in records if record.get("phase") == "rollback"]
+        rollback_completed = [
+            record for record in rollback_records if record.get("outcome") == "rollback_completed"
+        ]
+        if status == "completed" and (
+            phase_outcomes != ["success"] * len(PHASES) or rollback_records
+        ):
             raise UpgradeError("completed journal is incomplete")
-        if status == "rolled-back" and not any(
-            record.get("phase") == "rollback" and record.get("outcome") == "rollback_completed"
-            for record in records
+        if status in {"failed", "safe-mode"} and rollback_completed:
+            raise UpgradeError("failed journal has rollback completion")
+        if status == "rolled-back" and (
+            len(rollback_completed) != 1
+            or not isinstance(rollback_completed[0].get("result"), dict)
+            or any(
+                rollback_completed[0]["result"].get(field) is not True
+                for field in ("restored_verified", "runtime_validated", "backend_roundtrip_valid")
+            )
         ):
             raise UpgradeError("rolled-back journal lacks rollback completion")
         return cast(dict[str, Any], value)
@@ -548,8 +538,23 @@ class UpgradeEngine:
         _write(self.journal, value)
         return value
 
-    def rollback(self, handler: Handler) -> dict[str, Any]:
+    def rollback(
+        self, handler: Handler, rollback_context: Mapping[str, object] | None = None
+    ) -> dict[str, Any]:
         with self._exclusive():
+            if rollback_context is None:
+                raise UpgradeError("verified rollback context is required")
+            supplied = dict(rollback_context)
+            _validate_context(supplied, self.operation_id)
+            if supplied["target"] != "rollback":
+                raise UpgradeError("rollback context target is invalid")
+            for field in CONTEXT_FIELDS:
+                if (
+                    field not in {"target", "barrier_identity_digest", "envelope_digest"}
+                    and supplied[field] != asdict(self.context)[field]
+                ):
+                    raise UpgradeError(f"rollback context mismatch: {field}")
+            self._verified_rollback_context = supplied
             return self._rollback_locked(handler)
 
     def _rollback_locked(self, handler: Handler) -> dict[str, Any]:
@@ -567,14 +572,14 @@ class UpgradeEngine:
             "step_id": step_id,
             "phase": "rollback",
             "outcome": "started",
-            "context": self._rollback_context(),
+            "context": self._verified_rollback_context,
         }
         value["records"].append(record)
         _write(self.journal, value)
         try:
             result = dict(
                 self.backend_adapter.execute(
-                    "rollback", cast(Mapping[str, object], _freeze(self._rollback_context()))
+                    "rollback", cast(Mapping[str, object], _freeze(self._verified_rollback_context))
                 )
             )
             result.update(handler(step_id, cast(Mapping[str, Any], _freeze(value))) or {})
