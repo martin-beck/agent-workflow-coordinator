@@ -531,6 +531,7 @@ class RollbackControlStoreTests(unittest.TestCase):
             self.assertIsNotNone(reopened_final)
             assert reopened_final is not None
             self.assertEqual(final, reopened_final)
+            self.assertGreater(len(set(reopened_final.identity.identity_digest)), 1)
             self.assertEqual(
                 final.identity.identity_digest, reopened_final.identity.identity_digest
             )
