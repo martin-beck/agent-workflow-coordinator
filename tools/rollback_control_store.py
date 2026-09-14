@@ -86,6 +86,14 @@ class SQLiteControlStoreAdapter:
     def release_rollback_context(self, context: Mapping[str, object]) -> Mapping[str, object]:
         return self._store.release(str(context["operation_id"]))
 
+    def revalidate_rollback(
+        self, context: Mapping[str, object], result: Mapping[str, object]
+    ) -> Mapping[str, object]:
+        durable = self._store.verify_rollback_context(context)
+        if durable is None or durable["status"] != "released":
+            raise ControlStoreError("rollback control record is not released")
+        return dict(result)
+
 
 def bind_control_store(
     backend: str, delegate: UpgradeAdapter, store: SQLiteRollbackControlStore | None

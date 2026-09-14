@@ -75,6 +75,13 @@ REQUIRED_EVIDENCE = {
     ),
     "reopen": ("validated", "barrier_held"),
 }
+ROLLBACK_RESULT_FIELDS = {
+    "restored_verified",
+    "runtime_validated",
+    "backend_roundtrip_valid",
+    "backend",
+    "fencing_token",
+}
 PHASE_MUTATION = {phase: phase == "commit" for phase in PHASES}
 STATUSES = {"planned", "running", "failed", "completed", "rolled-back", "safe-mode"}
 TOP_LEVEL_FIELDS = {
@@ -437,6 +444,32 @@ class UpgradeEngine:
             )
         ):
             raise UpgradeError("rolled-back journal lacks rollback completion")
+        if status == "rolled-back":
+            result = rollback_completed[0]["result"]
+            if (
+                set(result) - ROLLBACK_RESULT_FIELDS
+                or result.get("backend") != self.context.backend
+            ):
+                raise UpgradeError("rollback result schema is invalid")
+            revalidate = getattr(self.backend_adapter, "revalidate_rollback", None)
+            if not callable(revalidate):
+                raise UpgradeError("rollback revalidation is unavailable")
+            try:
+                evidence = revalidate(
+                    cast(Mapping[str, object], _freeze(rollback_completed[0]["context"])),
+                    cast(Mapping[str, object], _freeze(result)),
+                )
+            except Exception as error:
+                raise UpgradeError("rollback revalidation failed") from error
+            if not isinstance(evidence, Mapping) or any(
+                evidence.get(field) is not True
+                for field in (
+                    "restored_verified",
+                    "runtime_validated",
+                    "backend_roundtrip_valid",
+                )
+            ):
+                raise UpgradeError("rollback runtime is not revalidated")
         if status == "rolled-back" and value["rollback_verified"] is not True:
             raise UpgradeError("rolled-back journal lacks durable verification")
         if status != "rolled-back" and value["rollback_verified"] is True:
@@ -663,6 +696,7 @@ class UpgradeEngine:
             )
             if not isinstance(released, Mapping) or released.get("status") != "released":
                 raise UpgradeError("rollback barrier was not durably released")
+            result = {key: result[key] for key in ROLLBACK_RESULT_FIELDS if key in result}
             record["outcome"] = "rollback_completed"
             record["result"] = result
             value["status"] = "rolled-back"
