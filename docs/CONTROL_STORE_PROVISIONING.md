@@ -30,8 +30,10 @@ The marker is valid only when all of these values match the permanent project
 binding: project ID, state repository, product repository, backend (`sqlite`),
 control schema version, and the control database device/inode identity. Its
 immutable identity digest binds the authority and control database identities,
-the concrete lock-file identity, fixed runtime selector identities, and the
-runtime-directory identity. It does not bind ephemeral WAL/SHM inode values.
+the project control-lock identity and its parent identity, the separate
+`authority.lock` identity and its parent identity, fixed runtime selector
+identities, and the runtime-directory identity. It does not bind ephemeral
+WAL/SHM inode values.
 Those values are recorded in a separate durable, fsynced WAL lifecycle record
 described below. The marker also records an opaque, privacy-safe project
 identifier. The control database must contain the same project ID and schema
