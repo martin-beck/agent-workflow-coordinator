@@ -2493,6 +2493,7 @@ class RollbackControlStoreTests(unittest.TestCase):
                     store.lock_owned_by_caller(guard),
                 ):
                     raise RuntimeError("body failed")
+                guard.assert_owned()
                 with store.lock_owned_by_caller(guard):
                     self.assertTrue(store.operation_owned_by_current_thread)
                 self.assertFalse(store.operation_owned_by_current_thread)
