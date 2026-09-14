@@ -55,7 +55,7 @@
     "model": "formal/upgrade/HandoffctlUpgradeBarrier.tla",
     "config": "formal/upgrade/HandoffctlUpgradeBarrier.cfg",
     "model_sha256": "2a1a31f530781645f5e8e76f67ca80a8ed59ec5d1f78706ca2a5530ebefa7b92",
-    "config_sha256": "2d783ad13b894d6140d0688ae2346e936a47752e4e5e993d02cac509528416c2",
+    "config_sha256": "e38502a22e5c73b175c92d152b21f086269c49e9256d2d25fa9209657697e776",
     "bounds": {
       "processes": ["p1", "p2"],
       "max_revision": 3,
@@ -75,7 +75,12 @@
         "ReleaseEvidence",
         "WriteFence",
         "AmbiguousIsWriteClosed",
-        "CasBounded"
+        "CasBounded",
+        "LockOwnership",
+        "LockOrder",
+        "RecheckEvidence",
+        "StaleCASRejected",
+        "WriterDrainOnAcquire"
       ]
     },
     "claim_boundary": {
