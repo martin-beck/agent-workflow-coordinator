@@ -44,6 +44,21 @@ def _snapshot_process(path_text: str, crash: bool) -> None:
         os._exit(17)
 
 
+def _hold_exclusive_transaction(path_text: str, ready: object) -> None:
+    connection = sqlite3.connect(path_text, isolation_level=None)
+    try:
+        connection.execute("BEGIN EXCLUSIVE")
+        update = connection.execute(
+            "UPDATE records SET body = 'uncommitted' WHERE id = 1 AND body = 'clean'"
+        )
+        if update.rowcount != 1:
+            raise RuntimeError("CAS did not match the expected authority row")
+        ready.send(True)  # type: ignore[attr-defined]
+        ready.recv()  # type: ignore[attr-defined]
+    finally:
+        connection.close()
+
+
 class Scope:
     def assert_ordered(self) -> None:
         pass
@@ -116,6 +131,32 @@ class SQLiteAuthorityAdapterTests(unittest.TestCase):
                 "sqlite_integrity_verified"
             ]
         )
+
+    def test_exclusive_transaction_failure_then_process_death_recovers(self) -> None:
+        context = multiprocessing.get_context("fork")
+        ready, release = context.Pipe(duplex=True)
+        worker = context.Process(
+            target=_hold_exclusive_transaction,
+            args=(str(self.authority), release),
+        )
+        worker.start()
+        self.assertTrue(ready.recv())
+        try:
+            with self.assertRaisesRegex(SQLiteAuthorityError, "observation failed"):
+                self.adapter.snapshot("discover", CONTEXT)
+        finally:
+            worker.terminate()
+            worker.join(5)
+            ready.close()
+            release.close()
+        self.assertFalse(worker.is_alive())
+        self.assertTrue(
+            SQLiteAuthorityAdapter(self.authority).snapshot("discover", CONTEXT)[
+                "sqlite_integrity_verified"
+            ]
+        )
+        with sqlite3.connect(self.authority) as connection:
+            self.assertEqual("clean", connection.execute("SELECT body FROM records").fetchone()[0])
 
     def test_new_or_replaced_wal_sidecar_fails_old_reader_closed(self) -> None:
         sidecar = self.authority.with_name(self.authority.name + "-wal")
