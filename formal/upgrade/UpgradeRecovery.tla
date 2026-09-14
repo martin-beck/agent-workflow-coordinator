@@ -1,4 +1,6 @@
 ---- MODULE UpgradeRecovery ----
+\* Copyright (C) Huawei Technologies Co., Ltd. 2026. All rights reserved.
+\* SPDX-License-Identifier: MIT
 EXTENDS Naturals, FiniteSets, TLC
 
 CONSTANTS Operations, Releases, Backends
