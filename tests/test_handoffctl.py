@@ -15,6 +15,7 @@ import time
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import patch
 
@@ -1078,6 +1079,30 @@ class HandoffTest(unittest.TestCase):
                 guard.path.touch()
                 with self.assertRaisesRegex(CORE.LockOwnershipError, "path identity"):
                     guard.assert_owned()
+
+    def test_lock_guard_rejects_descriptor_and_path_failures(self) -> None:
+        with CORE.locked(timeout=0.1) as guard:
+            with (
+                patch.object(CORE.os, "fstat", side_effect=OSError("closed")),
+                self.assertRaisesRegex(CORE.LockOwnershipError, "descriptor is unavailable"),
+            ):
+                guard.assert_owned()
+            with (
+                patch.object(
+                    CORE.os,
+                    "fstat",
+                    return_value=SimpleNamespace(st_dev=-1, st_ino=-1),
+                ),
+                self.assertRaisesRegex(CORE.LockOwnershipError, "descriptor identity"),
+            ):
+                guard.assert_owned()
+            with (
+                patch.object(
+                    CORE, "coordinator_lock_path", return_value=guard.path.parent / "other"
+                ),
+                self.assertRaisesRegex(CORE.LockOwnershipError, "path changed"),
+            ):
+                guard.assert_owned()
 
     @staticmethod
     def _assert_guard_rejected(guard: Any, errors: list[BaseException]) -> None:

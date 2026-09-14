@@ -485,6 +485,77 @@ class RollbackControlStoreTests(unittest.TestCase):
                 with self.assertRaisesRegex(ControlStoreError, "authority revision changed"):
                     store.recheck_held_locked(guard, identity, held.revision)
 
+    def test_v10_caller_owned_recheck_rejects_missing_lock_and_invalid_inputs(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "control.sqlite"
+            store = SQLiteBarrierSessionStore(
+                SQLiteRollbackControlStore(path, PROJECT), lambda: "authority-3"
+            )
+            identity = self._session_identity()
+            with locked() as guard:
+                with self.assertRaisesRegex(ControlStoreError, "operation lock is required"):
+                    store.recheck_held_locked(guard, identity, 1)
+                with store.lock_owned_by_caller(guard):
+                    with self.assertRaisesRegex(ControlStoreError, "identity is required"):
+                        store.recheck_held_locked(guard, cast(Any, None), 1)
+                    with self.assertRaisesRegex(ControlStoreError, "expected revision"):
+                        store.recheck_held_locked(guard, identity, 0)
+                    with self.assertRaisesRegex(ControlStoreError, "session is absent"):
+                        store.recheck_held_locked(guard, identity, 1)
+
+            no_reader = SQLiteBarrierSessionStore(SQLiteRollbackControlStore(path, PROJECT))
+            no_reader.create(identity)
+            with (
+                locked() as guard,
+                no_reader.lock_owned_by_caller(guard),
+                self.assertRaisesRegex(ControlStoreError, "rereader is required"),
+            ):
+                no_reader.recheck_held_locked(guard, identity, 1)
+
+    def test_v10_caller_owned_recheck_rejects_path_and_reader_failures(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            identity = self._session_identity()
+            path = Path(directory) / "control.sqlite"
+            store = SQLiteBarrierSessionStore(
+                SQLiteRollbackControlStore(path, PROJECT), lambda: "authority-3"
+            )
+            held = store.create(identity)
+            with (
+                locked() as guard,
+                patch(
+                    "tools.rollback_control_store.coordinator_lock_path",
+                    return_value=guard.path.parent / "other",
+                ),
+                self.assertRaisesRegex(ControlStoreError, "path mismatch"),
+                store.lock_owned_by_caller(guard),
+            ):
+                pass
+
+            failing = SQLiteBarrierSessionStore(
+                SQLiteRollbackControlStore(Path(directory) / "failing.sqlite", PROJECT),
+                lambda: (_ for _ in ()).throw(OSError("authority unavailable")),
+            )
+            failing.create(identity)
+            with (
+                locked() as guard,
+                failing.lock_owned_by_caller(guard),
+                self.assertRaisesRegex(ControlStoreError, "reread failed"),
+            ):
+                failing.recheck_held_locked(guard, identity, 1)
+
+            invalid = SQLiteBarrierSessionStore(
+                SQLiteRollbackControlStore(Path(directory) / "invalid.sqlite", PROJECT),
+                lambda: "",
+            )
+            invalid.create(identity)
+            with (
+                locked() as guard,
+                invalid.lock_owned_by_caller(guard),
+                self.assertRaisesRegex(ControlStoreError, "revision is invalid"),
+            ):
+                invalid.recheck_held_locked(guard, identity, 1)
+            self.assertEqual(1, held.revision)
+
     def test_v10_commit_failure_is_durably_ambiguous(self) -> None:
         class FlakyConnection:
             def __init__(self, connection: sqlite3.Connection, owner: Any) -> None:
