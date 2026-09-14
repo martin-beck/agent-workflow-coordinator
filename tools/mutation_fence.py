@@ -2,9 +2,10 @@
 # SPDX-License-Identifier: MIT
 """Provisioned authority-lock and mutation-fence foundation.
 
-This module is intentionally a seam: ordinary coordination does not construct
-it, and upgrade admission remains rejection-only until a later slice binds the
-durable barrier reread to every authority mutation.
+This module is an optional seam: ordinary coordination does not construct it.
+The SQLite backend accepts it only when an explicitly provisioned caller binds
+the route; ``storage_backend`` remains unbound. Upgrade admission and
+apply/rollback remain rejection-only.
 """
 
 from __future__ import annotations
@@ -17,8 +18,9 @@ import os
 import re
 import secrets
 import stat
-from collections.abc import Iterator
-from contextlib import contextmanager, suppress
+import threading
+from collections.abc import Callable, Iterator
+from contextlib import AbstractContextManager, contextmanager, suppress
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -279,15 +281,22 @@ class MutationFence:
         marker: Path,
         lifecycle: Path,
         authority_lock: Path,
+        control_store: Path | None = None,
+        control_binding: Path | None = None,
+        control_lock: Path | None = None,
     ):
         self.authority = authority
         self.marker = marker
         self.lifecycle = lifecycle
         self.authority_lock = authority_lock
+        self.control_store = control_store
+        self.control_binding = control_binding
+        self.control_lock = control_lock
+        self._scope_owner: int | None = None
 
     def _verify(self) -> dict[str, object]:
         record = _read_json(self.marker, "authority fence marker")
-        self._verify_marker(record)
+        project_id = self._verify_marker(record)
         if asdict(_existing(self.authority, "authority database")) != record.get("authority"):
             raise MutationFenceError("authority database identity changed")
         if asdict(_existing(self.authority_lock, "authority.lock")) != record.get("authority_lock"):
@@ -301,6 +310,8 @@ class MutationFence:
             raise MutationFenceError("authority lifecycle binding is invalid")
         if life.get("state") not in LIFECYCLE_STATES:
             raise MutationFenceError("authority lifecycle state is invalid")
+        if any((self.control_store, self.control_binding, self.control_lock)):
+            self._verify_control_binding(project_id)
         return record
 
     def _verify_marker(self, record: dict[str, object]) -> str:
@@ -314,6 +325,73 @@ class MutationFence:
         if not isinstance(project_id, str) or _PROJECT_ID.fullmatch(project_id) is None:
             raise MutationFenceError("project identifier is not canonical and opaque")
         return project_id
+
+    def _verify_control_binding(self, project_id: str) -> None:
+        store = self.control_store
+        binding_path = self.control_binding
+        lock = self.control_lock
+        if not all((store, binding_path, lock)):
+            raise MutationFenceError("control binding prerequisites are incomplete")
+        if store is None or binding_path is None or lock is None:
+            raise MutationFenceError("control binding prerequisites are incomplete")
+        binding = _read_json(binding_path, "control binding")
+        if binding.get("identity_digest") != _digest(
+            {key: value for key, value in binding.items() if key != "identity_digest"}
+        ):
+            raise MutationFenceError("control binding digest is invalid")
+        if binding.get("project_id") != project_id:
+            raise MutationFenceError("control binding project identity changed")
+        if asdict(_existing(store, "control store")) != binding.get("control_store"):
+            raise MutationFenceError("control store identity changed")
+        if asdict(_existing(lock, "control.lock")) != binding.get("control_lock"):
+            raise MutationFenceError("control.lock identity changed")
+
+    @contextmanager
+    def control_locked(self) -> Iterator[None]:
+        """Hold the separately provisioned control lock."""
+        self._verify()
+        lock = self.control_lock
+        binding_path = self.control_binding
+        if lock is None or binding_path is None:
+            raise MutationFenceError("control binding prerequisites are incomplete")
+        binding = _read_json(binding_path, "control binding")
+        parent_fd, _ = _parent(lock)
+        descriptor = -1
+        try:
+            descriptor = os.open(lock.name, os.O_RDWR | os.O_NOFOLLOW, dir_fd=parent_fd)
+            if asdict(_identity(os.fstat(descriptor), os.fstat(parent_fd))) != binding.get(
+                "control_lock"
+            ):
+                raise MutationFenceError("control.lock identity changed")
+            fcntl.flock(descriptor, fcntl.LOCK_EX)
+            self._verify()
+            yield
+        finally:
+            if descriptor >= 0:
+                fcntl.flock(descriptor, fcntl.LOCK_UN)
+                os.close(descriptor)
+            os.close(parent_fd)
+
+    @contextmanager
+    def mutation_scope(
+        self,
+        common_lock: Callable[[], AbstractContextManager[object]],
+        barrier_status: Callable[[], str | None],
+    ) -> Iterator[None]:
+        """Acquire common -> control -> authority and admit only released."""
+        if self._scope_owner == threading.get_ident():
+            raise MutationFenceError("mutation fence scope is non-reentrant")
+        self._scope_owner = threading.get_ident()
+        try:
+            with common_lock(), self.control_locked(), self.locked():
+                status = barrier_status()
+                if status != "released":
+                    raise MutationFenceError(
+                        f"authority mutation rejected while barrier is {status}"
+                    )
+                yield
+        finally:
+            self._scope_owner = None
 
     @contextmanager
     def locked(self) -> Iterator[None]:

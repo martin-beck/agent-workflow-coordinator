@@ -10,6 +10,8 @@ import json
 import os
 import tempfile
 import unittest
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -21,6 +23,7 @@ from tools.mutation_fence import (
     provision,
     provision_control_binding,
 )
+from tools.sqlite_storage import SQLiteBackend, create_database
 
 
 class MutationFenceTests(unittest.TestCase):
@@ -240,6 +243,101 @@ class MutationFenceTests(unittest.TestCase):
             provision_control_binding(
                 self.control, self.control_binding, self.control_lock, "project"
             )
+
+    def _fenced(self) -> MutationFence:
+        provision(self.authority, self.marker, self.lifecycle, self.lock, "project")
+        provision_control_binding(self.control, self.control_binding, self.control_lock, "project")
+        return MutationFence(
+            self.authority,
+            self.marker,
+            self.lifecycle,
+            self.lock,
+            self.control,
+            self.control_binding,
+            self.control_lock,
+        )
+
+    def test_scope_rejects_missing_and_nonreleased_barriers(self) -> None:
+        fence = self._fenced()
+
+        @contextmanager
+        def common() -> Iterator[object]:
+            yield None
+
+        for status in (None, "held", "releasing", "ambiguous"):
+
+            def read_status(status: str | None = status) -> str | None:
+                return status
+
+            with (
+                self.subTest(status=status),
+                self.assertRaisesRegex(MutationFenceError, "rejected"),
+                fence.mutation_scope(common, read_status),
+            ):
+                pass
+        with fence.mutation_scope(common, lambda: "released"):
+            pass
+
+    def test_scope_is_nonreentrant_and_sqlite_route_uses_it(self) -> None:
+        fence = self._fenced()
+
+        @contextmanager
+        def common() -> Iterator[object]:
+            yield None
+
+        with (
+            fence.mutation_scope(common, lambda: "released"),
+            self.assertRaisesRegex(MutationFenceError, "non-reentrant"),
+            fence.mutation_scope(common, lambda: "released"),
+        ):
+            pass
+        database = self.root / "backend.sqlite3"
+        binding = {
+            "project_id": "00000000-0000-4000-8000-000000000001",
+            "state_repository": "owner/state",
+            "product_repository": "owner/product",
+        }
+        create_database(
+            database,
+            binding,
+            [],
+            imported_at="2026-09-14T00:00:00+00:00",
+            source_backend="git",
+            source_checkpoint="a" * 40,
+        )
+        backend_marker = self.root / "backend-marker.json"
+        backend_lifecycle = self.root / "backend-lifecycle.json"
+        backend_lock = self.root / "backend-authority.lock"
+        provision(database, backend_marker, backend_lifecycle, backend_lock, "project")
+        backend_fence = MutationFence(
+            database,
+            backend_marker,
+            backend_lifecycle,
+            backend_lock,
+            self.control,
+            self.control_binding,
+            self.control_lock,
+        )
+
+        @contextmanager
+        def route_scope() -> Iterator[object]:
+            with backend_fence.mutation_scope(common, lambda: "released"):
+                yield None
+
+        backend = SQLiteBackend(database, binding, self.root, mutation_scope=route_scope)
+        with backend.transaction() as connection:
+            self.assertEqual(
+                "active",
+                connection.execute("SELECT value FROM metadata WHERE key='state'").fetchone()[0],
+            )
+        blocked = SQLiteBackend(
+            database,
+            binding,
+            self.root,
+            mutation_scope=lambda: backend_fence.mutation_scope(common, lambda: "held"),
+        )
+        with self.assertRaisesRegex(MutationFenceError, "rejected"), blocked.transaction():
+            pass
 
     def test_record_permissions_and_descriptor_races_fail_closed(self) -> None:
         provision(self.authority, self.marker, self.lifecycle, self.lock, "project")
