@@ -176,6 +176,7 @@ class SQLiteRollbackControlStore:
         self._check_paths(path, authority_path)
         self.path = path
         self.authority_path = authority_path
+        self._critical = False
         self.project_id = project_id
         try:
             project = uuid.UUID(project_id)
@@ -260,6 +261,8 @@ class SQLiteRollbackControlStore:
             raise
 
     def snapshot(self, operation_id: str) -> dict[str, object]:
+        if self._critical:
+            raise ControlStoreError("control store lock is non-reentrant")
         with locked(), closing(self._connect()) as connection:
             row = connection.execute(
                 "SELECT operation_id,project_id,state_revision,fencing_token,fencing_owner,backend,"
@@ -309,6 +312,13 @@ class SQLiteRollbackControlStore:
             raise ControlStoreError("barrier is not held")
         releasing = self.cas(cast(int, current["revision"]), {**current, "status": "releasing"})
         return self.cas(cast(int, releasing["revision"]), {**releasing, "status": "released"})
+
+    def reconcile_release(self, operation_id: str) -> dict[str, object]:
+        """Complete a release interrupted after its durable releasing transition."""
+        current = self.snapshot(operation_id)
+        if current["status"] != "releasing":
+            raise ControlStoreError("barrier is not awaiting release reconciliation")
+        return self.cas(cast(int, current["revision"]), {**current, "status": "released"})
 
     def reconcile_ambiguous(
         self, operation_id: str, replacement: Mapping[str, object]
@@ -403,6 +413,12 @@ class SQLiteRollbackControlStore:
         if supplied["project_id"] != self.project_id:
             raise ControlStoreError("control project binding mismatch")
         with locked(), closing(self._connect()) as connection:
-            held = self._cas_connection(connection, expected_revision, supplied)
-            result = dict(authority(dict(held)))
-            return self._cas_connection(connection, cast(int, held["revision"]), _validate(result))
+            self._critical = True
+            try:
+                held = self._cas_connection(connection, expected_revision, supplied)
+                result = dict(authority(dict(held)))
+                return self._cas_connection(
+                    connection, cast(int, held["revision"]), _validate(result)
+                )
+            finally:
+                self._critical = False

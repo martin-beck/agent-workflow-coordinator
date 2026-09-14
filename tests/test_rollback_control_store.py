@@ -154,6 +154,27 @@ class RollbackControlStoreTests(unittest.TestCase):
                 store.with_barrier(0, RECORD, fail)
             self.assertEqual("held", store.snapshot("op-1")["status"])
 
+    def test_release_reconciliation_completes_releasing_barrier(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            store = SQLiteRollbackControlStore(Path(directory) / "control.sqlite", PROJECT)
+            held = store.cas(0, RECORD)
+            releasing = store.cas(1, {**held, "status": "releasing", "revision": 2})
+            self.assertEqual("released", store.reconcile_release("op-1")["status"])
+            self.assertEqual(3, store.snapshot("op-1")["revision"])
+            self.assertEqual("releasing", releasing["status"])
+
+    def test_with_barrier_rejects_reentrant_store_access(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            store = SQLiteRollbackControlStore(Path(directory) / "control.sqlite", PROJECT)
+
+            def reenter(_record: Mapping[str, object]) -> Mapping[str, object]:
+                store.snapshot("op-1")
+                return RECORD
+
+            with self.assertRaises(ControlStoreError):
+                store.with_barrier(0, RECORD, reenter)
+            self.assertEqual("held", store.snapshot("op-1")["status"])
+
     def test_cas_conflict_and_binding_mismatch_fail_closed(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             store = SQLiteRollbackControlStore(Path(directory) / "control.sqlite", PROJECT)
