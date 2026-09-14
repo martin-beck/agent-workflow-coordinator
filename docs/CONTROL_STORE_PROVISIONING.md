@@ -37,6 +37,14 @@ schema digest, and a valid WAL configuration. The marker and control record
 are immutable identity evidence; mutable barrier state is protected by the
 control database's revision/CAS protocol.
 
+Repository-scoped IDs have one canonical encoding: lowercase ASCII
+`sha256:<64 lowercase hexadecimal digits>` over the UTF-8 bytes of a canonical
+JSON object whose keys are sorted, separators are `,` and `:`, and values are
+restricted to the documented project/repository identity fields. The digest
+input contains no URL, local path, username, hostname, credential, or
+environment value. A repository-scoped display ID may be a separately
+assigned opaque identifier, but it is never used in place of the digest.
+
 Provisioning must bind and verify an existing authority database before it
 creates a control store. It must open the authority and every existing
 sidecar with no-follow descriptors, verify regular-file type, owner, link
@@ -52,11 +60,18 @@ final commit or rollback:
 
 1. coordinator common lock and its retained directory descriptor;
 2. project control lock and its retained lock-file descriptor;
-3. authority descriptor/transaction lock and retained authority/sidecar
-   descriptors; and
-4. durable control read and authority transaction, with the barrier reread
-   immediately before the authority transaction opens and immediately before
-   commit where SQLite permits it.
+3. the separate project authority lock file (`authority.lock`), opened with
+   no-follow and retained as a descriptor; and
+4. retained authority descriptors and the SQLite authority transaction; and
+5. durable control read and barrier reread under the full scope.
+
+The authority lock is a concrete regular file beside the authority database,
+owner-only and created only by provisioning. Its device/inode, parent
+identity, owner, link count, and mode are recorded in the marker. Acquisition
+uses an exclusive OS file lock on the retained descriptor; release unlocks
+that descriptor only after SQLite commit or rollback and identity checks. The
+lock file is not the SQLite transaction: both are required, and either
+acquisition or descriptor validation failure rejects the mutation.
 
 Each lock object has an identity tuple (device, inode, regular-file type,
 owner, link count, and expected parent-directory identity). Before every
@@ -80,12 +95,16 @@ must reject every mutation. Before provisioning, absent control objects are
 the sole allowed unprovisioned state; absence of the authority or a mismatch
 in an existing authority is always an error.
 
-The absence of a WAL/SHM sidecar is accepted only at the documented
-pre-WAL/opening point, when SQLite proves that the file is not currently
-using that sidecar and provisioning records that fact. Once WAL is enabled,
-both sidecars are required for identity verification; disappearance,
-replacement, or unexpected recreation is corruption, not a fresh optional
-sidecar.
+WAL/SHM have an explicit lifecycle. Before the first WAL open, both may be
+absent. During an active WAL connection, SQLite may create or retain both;
+their no-follow descriptor identities and digest are bound while the full
+scope is held. A normal, explicitly requested checkpoint/truncate followed by
+connection close may remove sidecars; the implementation records the clean
+closed state and rebinds newly created sidecars on the next controlled WAL
+open. Any sidecar replacement, deletion during an active connection,
+unexpected recreation, or lifecycle transition without the retained
+authority lock is corruption and fails closed. Normal SQLite checkpoint
+lifecycle is therefore distinguishable from an attack or torn replacement.
 
 ## Initialization and migration
 
@@ -131,8 +150,14 @@ the implementation must reread the barrier and perform the authority commit
 under the same ordered scope. If either the barrier reread or SQLite commit
 returns an error, times out, or has an unknown outcome, the operation is
 ambiguous: it must not report success, release the barrier, or retry a write
-without fresh evidence. Durable control state remains held or becomes
-ambiguous, and recovery is required.
+without fresh evidence. The exact protocol is: hold common, control, and
+authority locks; reread and validate the barrier; begin the authority
+transaction; reread and validate the barrier again; perform the single
+authority commit; then classify only an observed successful commit as success.
+If the barrier reread or commit has an unknown outcome, durable control state
+remains held or becomes ambiguous, and recovery is required. No code path may
+release the barrier until a later process has independently established the
+authority commit outcome.
 
 Recovery and rollback retain the barrier until validation is complete. No
 rollback binding may be created after terminal verification, and no new
@@ -147,7 +172,8 @@ schema/digest values, revisions, fencing tokens, release identifiers, and
 sanitized status/error codes. Public project identifiers must be opaque,
 stable digests or repository-scoped IDs that cannot disclose local paths,
 usernames, hostnames, or private URLs. They must not contain user names,
-absolute home paths, command arguments, prompts, credentials, environment values, raw
-subprocess output, or private repository URLs. Public evidence may report
+absolute home paths, command arguments, prompts, credentials, environment
+values, raw subprocess output, or private repository URLs. Public evidence may
+report
 hashes, schema versions, invariant names, and pass/fail classifications, but
 not the private control database contents or filesystem layout.
