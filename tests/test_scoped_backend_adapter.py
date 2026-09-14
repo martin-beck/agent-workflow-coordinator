@@ -19,6 +19,9 @@ class Scope:
     def assert_ordered(self) -> None:
         self.events.append("ordered")
 
+    def assert_context(self, _context: Mapping[str, object]) -> None:
+        self.events.append("context")
+
     @contextmanager
     def hold(self) -> Iterator[object]:
         self.events.append("held")
@@ -49,12 +52,25 @@ class ScopedBackendAdapterTests(unittest.TestCase):
         self.assertIsNotNone(rollback)
         self.assertTrue(cast(dict[str, object], rollback)["verified"])
         self.assertEqual(
-            ["held", "released", "held", "released", "held", "released"],
+            [
+                "context",
+                "held",
+                "released",
+                "context",
+                "held",
+                "released",
+                "context",
+                "held",
+                "released",
+            ],
             scope.events,
         )
 
     def test_scope_failure_prevents_backend_call(self) -> None:
         class FailingScope(Scope):
+            def assert_context(self, _context: Mapping[str, object]) -> None:
+                pass
+
             @contextmanager
             def hold(self) -> Iterator[object]:
                 if not self.events:
@@ -67,6 +83,19 @@ class ScopedBackendAdapterTests(unittest.TestCase):
 
         adapter = ScopedBackendAdapter(UnexpectedBackend(), FailingScope())
         with self.assertRaisesRegex(RuntimeError, "stale lease"):
+            adapter.snapshot("preflight", {})
+
+    def test_context_failure_prevents_scope_and_backend_call(self) -> None:
+        class ContextScope(Scope):
+            def assert_context(self, _context: Mapping[str, object]) -> None:
+                raise RuntimeError("lease context drift")
+
+        class UnexpectedBackend(Backend):
+            def snapshot(self, _phase: str, _context: Mapping[str, object]) -> dict[str, object]:
+                raise AssertionError("backend must not run")
+
+        adapter = ScopedBackendAdapter(UnexpectedBackend(), ContextScope())
+        with self.assertRaisesRegex(RuntimeError, "context drift"):
             adapter.snapshot("preflight", {})
 
     def test_rollback_verification_failure_prevents_backend_result_use(self) -> None:
