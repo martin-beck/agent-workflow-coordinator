@@ -58,9 +58,11 @@ PR records the gap but does not satisfy that implementation gate. Until the
 adapter and its multiprocess evidence exist, this is an explicit nonclaim.
 
 The uncalled `commit_runtime_selector_admitted` adapter defines the
-caller-owned selector boundary: it requires a typed lease exposing `hold()`
-and `assert_ordered()`, validates the lease before touching the selector path,
-and publishes only while the lease is held. Its tests reject missing,
-structurally invalid, and incorrectly ordered leases. This is an API contract
-only; no existing caller uses it, and selector mutation remains disabled in
-the rejection-only upgrade paths.
+caller-owned selector boundary: it requires an immutable `AdmissionLease`, a
+matching `AdmissionRecheck`, and a separate ordered scope that exposes
+`assert_ordered()` and `hold()`. It validates immutable evidence and lock order
+before touching the selector path, and publishes only while the caller-owned
+scope is held. Its tests reject missing, structurally invalid, mismatched, and
+incorrectly ordered inputs. This is an API contract only; no existing caller
+uses it, and selector mutation remains disabled in the rejection-only upgrade
+paths.
