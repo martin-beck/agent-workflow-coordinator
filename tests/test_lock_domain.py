@@ -173,9 +173,7 @@ class LockDomainTests(unittest.TestCase):
             LockDomainContract.capture(saved_guard, self.session, self.fence)
 
     def test_capture_rejects_incomplete_and_noncanonical_bindings(self) -> None:
-        incomplete = MutationFence(
-            self.authority, self.marker, self.lifecycle, self.authority_lock
-        )
+        incomplete = MutationFence(self.authority, self.marker, self.lifecycle, self.authority_lock)
         with locked() as guard, self.assertRaisesRegex(LockDomainError, "incomplete"):
             LockDomainContract.capture(guard, self.session, incomplete)
 
