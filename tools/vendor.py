@@ -57,7 +57,6 @@ SOURCE_FILES: tuple[tuple[str, str], ...] = (
         "formal/handoffctl/HandoffctlRecovery.cfg",
     ),
     ("formal/handoffctl/attest.py", "formal/handoffctl/attest.py"),
-    ("formal/handoffctl/HandoffctlPR.tla", "formal/handoffctl/HandoffctlPR.tla"),
     ("formal/handoffctl/HandoffctlPR.cfg", "formal/handoffctl/HandoffctlPR.cfg"),
     ("formal/tier-evidence.json", "formal/tier-evidence.json"),
     ("formal/evidence.json", "formal/evidence.json"),
