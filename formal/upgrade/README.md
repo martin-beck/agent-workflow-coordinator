@@ -5,6 +5,9 @@ It covers ordered preflight/quiescence/backup/stage/commit/validate/reopen
 transitions, rollback verification and release, and recovery after a durable
 rollback verification followed by barrier release.
 
+It also models an interruption while a barrier is held: recovery converts the
+ambiguous/safe-mode state into a rollback-started state before verification.
+
 The model is deliberately not an implementation proof. It abstracts Git,
 SQLite, WAL/SHM, filesystem replacement, process scheduling, and external
 commands. The implementation must provide separate public evidence mapped to
@@ -18,4 +21,6 @@ java -cp tla2tools.jar tlc2.TLC -config formal/upgrade/UpgradeRecovery.cfg \
 ```
 
 The model is bounded by the constants in the configuration; no unbounded or
-implementation-refinement claim is made.
+implementation-refinement claim is made. Exact run metadata is recorded in
+`evidence.json`; the executable-to-model obligations and their current gaps
+are recorded in `refinement-map.md`.

@@ -75,15 +75,28 @@ ReleaseRollback(op) ==
     /\ runtime' = [runtime EXCEPT ![op] = "old"]
     /\ UNCHANGED <<phase, target, backup, fence, available>>
 Recover(op) ==
-    /\ journal[op] = "rollback_verified" /\ barrier[op] = "released"
-    /\ journal' = [journal EXCEPT ![op] = "rolled_back"]
-    /\ runtime' = [runtime EXCEPT ![op] = "old"]
-    /\ UNCHANGED <<phase, target, barrier, backup, fence, available>>
+    \/ ( /\ journal[op] = "rollback_verified" /\ barrier[op] = "released"
+         /\ journal' = [journal EXCEPT ![op] = "rolled_back"]
+         /\ runtime' = [runtime EXCEPT ![op] = "old"]
+         /\ UNCHANGED <<phase, target, barrier, backup, fence, available>> )
+    \/ ( /\ journal[op] = "safe_mode" /\ barrier[op] = "ambiguous" /\ backup[op]
+         /\ target' = [target EXCEPT ![op] = "rollback"]
+         /\ barrier' = [barrier EXCEPT ![op] = "held"]
+         /\ journal' = [journal EXCEPT ![op] = "rollback_started"]
+         /\ UNCHANGED <<phase, runtime, backup, fence, available>> )
+Crash(op) ==
+    /\ barrier[op] = "held"
+    /\ journal[op] \in {"running", "rollback_verified"}
+    /\ barrier' = [barrier EXCEPT ![op] = "ambiguous"]
+    /\ IF journal[op] = "running"
+          THEN journal' = [journal EXCEPT ![op] = "safe_mode"]
+          ELSE UNCHANGED journal
+    /\ UNCHANGED <<phase, target, runtime, backup, fence, available>>
 
 Next == \E op \in Operations:
     Preflight(op) \/ Quiesce(op) \/ Backup(op) \/ Stage(op) \/ Commit(op) \/
     Validate(op) \/ Reopen(op) \/ StartRollback(op) \/ VerifyRollback(op) \/
-    ReleaseRollback(op) \/ Recover(op) \/ UNCHANGED vars
+    ReleaseRollback(op) \/ Recover(op) \/ Crash(op) \/ UNCHANGED vars
 
 FunctionalAvailability == \A op \in Operations: available[op]
 NoReplacementBeforeBackup == \A op \in Operations: runtime[op] = "new" => backup[op]
