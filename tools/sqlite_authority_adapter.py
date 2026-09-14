@@ -36,6 +36,34 @@ class SQLiteAuthorityAdapter:
         ):
             raise SQLiteAuthorityError("SQLite authority descriptor is unsafe")
         self._authority = resolved
+        self._parent_identity = (parent.st_dev, parent.st_ino)
+        self._descriptor_identity = (
+            descriptor.st_dev,
+            descriptor.st_ino,
+            stat.S_IMODE(descriptor.st_mode),
+            descriptor.st_uid,
+            descriptor.st_nlink,
+        )
+
+    def _check_identity(self) -> None:
+        try:
+            parent = self._authority.parent.stat()
+            descriptor = self._authority.stat()
+        except OSError as error:
+            raise SQLiteAuthorityError("SQLite authority identity changed") from error
+        current_parent = (parent.st_dev, parent.st_ino)
+        current_descriptor = (
+            descriptor.st_dev,
+            descriptor.st_ino,
+            stat.S_IMODE(descriptor.st_mode),
+            descriptor.st_uid,
+            descriptor.st_nlink,
+        )
+        if (
+            current_parent != self._parent_identity
+            or current_descriptor != self._descriptor_identity
+        ):
+            raise SQLiteAuthorityError("SQLite authority identity changed")
 
     @staticmethod
     def _context(context: Mapping[str, object]) -> dict[str, object]:
@@ -64,6 +92,7 @@ class SQLiteAuthorityAdapter:
     def snapshot(self, phase: str, context: Mapping[str, object]) -> dict[str, Any]:
         """Return read-only integrity evidence without claiming mutation safety."""
         value = self._context(context)
+        self._check_identity()
         try:
             connection = sqlite3.connect(
                 f"file:{self._authority}?mode=ro", uri=True, isolation_level=None
@@ -73,6 +102,7 @@ class SQLiteAuthorityAdapter:
                 foreign = list(connection.execute("PRAGMA foreign_key_check"))
             finally:
                 connection.close()
+            self._check_identity()
         except (OSError, sqlite3.Error, TypeError, IndexError) as error:
             raise SQLiteAuthorityError("SQLite authority observation failed") from error
         if integrity != "ok" or foreign:
