@@ -276,9 +276,14 @@ class LockDomainScopeTests(unittest.TestCase):
         with self.assertRaisesRegex(ControlStoreError, "authority revision changed"):
             self.session.recheck_held(1)
         scope = LockDomainScope(self.domain, self.session, self.fence, self.lease, locked)
-        with self.assertRaisesRegex(LockDomainError, "do not match"), scope.hold():
-            self.fail("stale retry must remain rejected after authority reread")
-        self.assertFalse(self.session.operation_owned_by_current_thread)
+        for retry in range(2):
+            with (
+                self.subTest(retry=retry),
+                self.assertRaisesRegex(LockDomainError, "do not match"),
+                scope.hold(),
+            ):
+                self.fail("stale retry must remain rejected after authority reread")
+            self.assertFalse(self.session.operation_owned_by_current_thread)
 
     def test_two_process_scopes_never_overlap(self) -> None:
         context = multiprocessing.get_context("fork")
