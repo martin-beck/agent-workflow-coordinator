@@ -1,8 +1,8 @@
 {
   "model": "formal/upgrade/UpgradeSessionIntent.tla",
   "config": "formal/upgrade/UpgradeSessionIntent.cfg",
-  "model_sha256": "32653f40593af47059802a7a9164ad2546f8d9ff1514d969a4845dca736c793f",
-  "config_sha256": "1d4abebf8b3e52b5136cca82e7bff525376de4da45bdd5db5971510205640254",
+  "model_sha256": "6dcb841eafaa972480527e00a33d2c47683b51be36ff9bdb1700789ebf396474",
+  "config_sha256": "e8afb2fce86572e3d900aca87db915c9090527c4b2ecfef667d49a7ef78bd790",
   "verifier": {
     "name": "TLC",
     "version": "2.19 (08 August 2024, rev 5a47802)",
@@ -18,16 +18,17 @@
   },
   "result": {
     "status": "pass",
-    "states_generated": 41,
-    "distinct_states": 20,
-    "depth": 6,
+    "states_generated": 56,
+    "distinct_states": 27,
+    "depth": 7,
     "invariants": [
       "TypeOK",
       "IntentRevisionBound",
       "IntentStatusCoherence",
       "LockOwnership",
       "NoWriteBeforeRecovery",
-      "AmbiguousIsWriteClosed"
+      "AmbiguousIsWriteClosed",
+      "ReconcileRequiresFence"
     ]
   },
   "claim_boundary": {

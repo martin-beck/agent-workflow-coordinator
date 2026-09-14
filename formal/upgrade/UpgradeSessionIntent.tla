@@ -85,12 +85,23 @@ Crash(p) ==
     /\ alive[p]
     /\ lockOwner = p
     /\ owner = p
-    /\ intent = "prepared"
+    /\ intent \in {"prepared", "committed"}
     /\ alive' = [alive EXCEPT ![p] = FALSE]
     /\ lockOwner' = NoOwner
     /\ owner' = NoOwner
     /\ UNCHANGED <<status, intent, revision, expectedRevision,
                   proposedRevision, fence, writes>>
+
+RecoverCommitted(p) ==
+    /\ alive[p]
+    /\ lockOwner = NoOwner
+    /\ owner = NoOwner
+    /\ intent = "committed"
+    /\ status = "releasing"
+    /\ lockOwner' = p
+    /\ owner' = p
+    /\ UNCHANGED <<status, intent, revision, expectedRevision,
+                  proposedRevision, alive, fence, writes>>
 
 RecoverUnknown(p) ==
     /\ alive[p]
@@ -133,7 +144,8 @@ AdmitWrite(p) ==
 Next ==
     \/ (\E p \in Processes:
           Prepare(p) \/ CommitSession(p) \/ PublishIntent(p) \/ Release(p)
-          \/ Crash(p) \/ RecoverUnknown(p) \/ Reconcile(p) \/ AdmitWrite(p))
+          \/ Crash(p) \/ RecoverCommitted(p) \/ RecoverUnknown(p)
+          \/ Reconcile(p) \/ AdmitWrite(p))
     \/ UNCHANGED vars
 
 TypeOK ==
@@ -167,7 +179,7 @@ AmbiguousIsWriteClosed ==
     status = "ambiguous" => intent = "ambiguous"
 
 ReconcileRequiresFence ==
-    intent = "none" /\ status = "held" => fence >= 0
+    intent = "none" /\ status = "held" /\ revision > 1 => fence > 0
 
 Spec == Init /\ [][Next]_vars
 
@@ -177,5 +189,6 @@ THEOREM Spec => []IntentStatusCoherence
 THEOREM Spec => []LockOwnership
 THEOREM Spec => []NoWriteBeforeRecovery
 THEOREM Spec => []AmbiguousIsWriteClosed
+THEOREM Spec => []ReconcileRequiresFence
 
 =========================================================================================
