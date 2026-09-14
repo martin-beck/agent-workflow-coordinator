@@ -67,6 +67,16 @@ def _backup_then_crash_after_replace(source: str, destination: str) -> None:
         MODULE._install(Path(source), Path(destination), BINDING)
 
 
+def _manifest_then_crash_before_directory_fsync(path: str, manifest: dict[str, object]) -> None:
+    """Kill after manifest replacement and before its directory durability barrier."""
+
+    def crash(_directory: Path) -> None:
+        os.kill(os.getpid(), signal.SIGKILL)
+
+    with patch.object(MODULE, "_fsync_directory", side_effect=crash):
+        write_manifest(Path(path), manifest)
+
+
 class SQLiteBackupTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = TemporaryDirectory()
@@ -146,6 +156,22 @@ class SQLiteBackupTests(unittest.TestCase):
         MODULE._integrity(destination, BINDING)
         with closing(sqlite3.connect(destination)) as connection:
             self.assertEqual("before", connection.execute("SELECT body FROM records").fetchone()[0])
+
+    def test_process_death_after_manifest_replace_reopens_verified_control(self) -> None:
+        backup = self.root / "backup.sqlite3"
+        manifest = backup_database(self.source, backup, BINDING)
+        manifest_path = self.root / "backup-manifest.json"
+        process = multiprocessing.get_context("fork").Process(
+            target=_manifest_then_crash_before_directory_fsync,
+            args=(str(manifest_path), manifest),
+        )
+        process.start()
+        process.join(timeout=10)
+        self.assertEqual(-signal.SIGKILL, process.exitcode)
+        self.assertFalse(process.is_alive())
+        reopened = MODULE.json.loads(manifest_path.read_text(encoding="utf-8"))
+        MODULE._validate_manifest(reopened)
+        self.assertEqual(manifest["database_sha256"], reopened["database_sha256"])
 
     def test_failed_directory_fsync_restores_existing_destination(self) -> None:
         backup = self.root / "backup.sqlite3"
