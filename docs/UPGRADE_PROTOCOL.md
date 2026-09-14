@@ -30,6 +30,23 @@ executable until a reviewed backend phase adapter implements every opcode and
 its evidence contract. In particular, generated Git contracts do not enable
 Git upgrade execution.
 
+`handoffctl upgrade check --contract FILE` and `handoffctl upgrade plan
+--contract FILE` expose only a deterministic, sanitized projection of a valid
+typed contract. They do not write an engine journal, acquire a barrier, stage
+a runtime, or claim executability. The matching `apply` and `rollback`
+commands intentionally reject before mutation while the executable protocol
+is incomplete. This boundary covers both backends: Git is not accidentally
+enabled, and SQLite is not enabled by fabricated admission evidence.
+
+Production execution remains blocked on four linked corrections: quiescence
+must acquire a barrier before quiesced admission; a forward barrier needs a
+complete acquire/recheck/reopen lifecycle; forward `target=new` and rollback
+`target=rollback` must have a non-conflicting durable identity model; and the
+selected runtime must actually be consumed by a verified launcher. SQLite
+coordination writes must also participate in the upgrade fence. Until those
+contracts, their formal refinement, and hostile tests are reviewed, no typed
+opcode is dispatched to a mutating implementation.
+
 ## Safety contract
 
 The coordinator remains usable at every externally observable point. Before

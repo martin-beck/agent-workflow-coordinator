@@ -20,6 +20,8 @@ SOURCE_FILES: tuple[tuple[str, str], ...] = (
     ("tools/handoffctl.py", "tools/handoffctl.py"),
     ("tools/sqlite_storage.py", "tools/sqlite_storage.py"),
     ("tools/status_renderer.py", "tools/status_renderer.py"),
+    ("tools/upgrade_commands.py", "tools/upgrade_commands.py"),
+    ("tools/upgrade_contract_runtime.py", "tools/upgrade_contract_runtime.py"),
     ("tools/vendor.py", "tools/handoffctl_vendor.py"),
     ("tests/test_handoffctl.py", "tests/test_handoffctl.py"),
     ("tests/test_sqlite_storage.py", "tests/test_sqlite_storage.py"),
@@ -34,6 +36,10 @@ SOURCE_FILES: tuple[tuple[str, str], ...] = (
     (
         "schema/backend-config.schema.json",
         "schema/handoffctl-backend-config.schema.json",
+    ),
+    (
+        "schema/upgrade-contract.schema.json",
+        "schema/handoffctl-upgrade-contract.schema.json",
     ),
     ("formal/handoffctl/Handoffctl.tla", "formal/handoffctl/Handoffctl.tla"),
     ("formal/handoffctl/Handoffctl.cfg", "formal/handoffctl/Handoffctl.cfg"),

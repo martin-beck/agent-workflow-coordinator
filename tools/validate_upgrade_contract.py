@@ -12,26 +12,33 @@ from typing import Any
 
 from jsonschema import Draft202012Validator, ValidationError
 
+if __package__:
+    from .upgrade_contract_runtime import (
+        INPUT_FIELDS,
+        PHASE_OPCODES,
+        PHASES,
+        RuntimeContractError,
+        validate_runtime_contract,
+    )
+else:  # pragma: no cover - direct script execution
+    try:
+        from upgrade_contract_runtime import (  # type: ignore[import-not-found,no-redef]
+            INPUT_FIELDS,
+            PHASE_OPCODES,
+            PHASES,
+            RuntimeContractError,
+            validate_runtime_contract,
+        )
+    except ModuleNotFoundError:
+        from tools.upgrade_contract_runtime import (
+            INPUT_FIELDS,
+            PHASE_OPCODES,
+            PHASES,
+            RuntimeContractError,
+            validate_runtime_contract,
+        )
+
 ROOT = Path(__file__).resolve().parents[1]
-PHASES = ("discover", "preflight", "quiesce", "backup", "stage", "commit", "validate", "reopen")
-PHASE_OPCODES = {
-    "discover": "release.inspect",
-    "preflight": "admission.check",
-    "quiesce": "barrier.acquire",
-    "backup": "backend.backup",
-    "stage": "runtime.stage",
-    "commit": "authority.atomic_replace",
-    "validate": "runtime.validate",
-    "reopen": "barrier.reopen",
-}
-INPUT_FIELDS = {
-    "backend",
-    "selector_ref",
-    "expected_state_revision",
-    "barrier_id",
-    "fencing_token",
-    "backup_operation_id",
-}
 
 
 class ContractError(ValueError):
@@ -40,6 +47,10 @@ class ContractError(ValueError):
 
 def validate_contract(document: dict[str, Any]) -> None:
     """Validate a complete generated contract before any upgrade mutation."""
+    try:
+        validate_runtime_contract(document)
+    except RuntimeContractError as error:
+        raise ContractError(str(error)) from error
     schema = json.loads((ROOT / "schema/upgrade-contract.schema.json").read_text())
     try:
         Draft202012Validator(schema).validate(document)

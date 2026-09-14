@@ -2152,6 +2152,11 @@ class HandoffTest(unittest.TestCase):
                 "cmd_run",
                 7,
             ),
+            (
+                ["handoffctl", "upgrade", "check", "--contract", "contract.json"],
+                "cmd_upgrade",
+                0,
+            ),
         ]
         for argv, target, result in cases:
             with (
