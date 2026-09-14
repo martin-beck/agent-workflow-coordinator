@@ -522,6 +522,13 @@ class RollbackControlStoreTests(unittest.TestCase):
                     final.revision,
                 ),
             )
+            reopened_final = SQLiteBarrierSessionStore(
+                SQLiteRollbackControlStore(control_path, PROJECT, authority_path),
+                lambda: "authority-3",
+            ).snapshot()
+            self.assertIsNotNone(reopened_final)
+            assert reopened_final is not None
+            self.assertEqual(final, reopened_final)
 
     def test_v10_subprocess_death_rolls_back_uncommitted_wal_change(self) -> None:
         """Cover uncommitted WAL rollback only; no ambiguous-recovery claim."""
