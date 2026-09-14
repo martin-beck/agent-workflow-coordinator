@@ -151,6 +151,19 @@ if mode == "kill-during-caller-owned-recheck":
             os.fsync(ready.fileno())
         os.kill(os.getpid(), signal.SIGKILL)
 
+if mode == "kill-after-session-commit":
+    original_mark_intent = store._mark_intent_locked
+
+    def kill_before_outcome(connection, intent_id, outcome, cause_code=None):
+        ready_path.write_text("committed-before-outcome\n", encoding="utf-8")
+        with ready_path.open("rb") as ready:
+            os.fsync(ready.fileno())
+        os.kill(os.getpid(), signal.SIGKILL)
+        original_mark_intent(connection, intent_id, outcome, cause_code)
+
+    store._mark_intent_locked = kill_before_outcome
+    store.begin_reopen(2, "new")
+
 if mode != "kill-during-transaction":
     raise SystemExit("unknown test mode")
 
@@ -399,6 +412,43 @@ class RollbackControlStoreTests(unittest.TestCase):
                 )
             self.assertEqual(authority_bytes, authority_path.read_bytes())
 
+    def test_v10_subprocess_commit_before_outcome_recovers_ambiguously(self) -> None:
+        """Cover post-CAS/pre-outcome death; no authority-fencing claim."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            control_path = root / "control.sqlite"
+            authority_path = root / "authority.sqlite"
+            authority_bytes = b"authority remains untouched after outcome loss\n"
+            authority_path.write_bytes(authority_bytes)
+            ready_path = root / "ready"
+            process = self._run_session_process(
+                control_path, authority_path, "kill-after-session-commit", ready_path
+            )
+            self._wait_for_file(ready_path, process)
+            self.assertEqual(
+                "committed-before-outcome", ready_path.read_text(encoding="utf-8").strip()
+            )
+            returncode = process.wait(timeout=10)
+            stdout, stderr = process.communicate()
+            self.assertEqual(
+                -signal.SIGKILL,
+                returncode,
+                msg=f"stdout={stdout}; stderr={stderr}",
+            )
+            store = SQLiteBarrierSessionStore(
+                SQLiteRollbackControlStore(control_path, PROJECT, authority_path),
+                lambda: "authority-3",
+            )
+            state = store.snapshot()
+            self.assertIsNotNone(state)
+            assert state is not None
+            self.assertEqual(("releasing", 3), (state.status, state.revision))
+            recovered = store.recover_unknown()
+            self.assertIsNotNone(recovered)
+            assert recovered is not None
+            self.assertEqual(("ambiguous", 4), (recovered.status, recovered.revision))
+            self.assertEqual(authority_bytes, authority_path.read_bytes())
+
     def test_v10_durable_session_persists_children_and_reopen(self) -> None:
         from tools.upgrade_identity import BarrierChildIdentity
 
@@ -613,6 +663,280 @@ class RollbackControlStoreTests(unittest.TestCase):
             ):
                 invalid.recheck_held_locked(guard, identity, 1)
             self.assertEqual(1, held.revision)
+
+    def test_v10_session_intent_recovery_fences_and_requires_newer_fence(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "control.sqlite"
+            store = SQLiteBarrierSessionStore(
+                SQLiteRollbackControlStore(path, PROJECT), lambda: "authority-3"
+            )
+            identity = self._session_identity()
+            held = store.create(identity)
+            connection = sqlite3.connect(path)
+            try:
+                intent = connection.execute(
+                    "SELECT intent_id,outcome FROM barrier_session_intent WHERE project_id=?",
+                    (PROJECT,),
+                ).fetchone()
+                self.assertIsNotNone(intent)
+                assert intent is not None
+                self.assertEqual("committed", intent[1])
+                connection.execute(
+                    "UPDATE barrier_session_intent SET outcome='prepared' WHERE intent_id=?",
+                    (intent[0],),
+                )
+                connection.commit()
+            finally:
+                connection.close()
+            recovered = store.recover_unknown()
+            self.assertIsNotNone(recovered)
+            assert recovered is not None
+            self.assertEqual(
+                ("ambiguous", held.revision + 1), (recovered.status, recovered.revision)
+            )
+            self.assertEqual(recovered, store.recover_unknown())
+            with self.assertRaisesRegex(ControlStoreError, "distinct newer fence"):
+                store.reconcile_ambiguous(recovered.revision, held)
+
+            replacement_record = dict(identity.as_record())
+            replacement_record["attempt_id"] = "attempt-new"
+            replacement_record["state_revision"] = identity.state_revision + 1
+            replacement_record["durable_barrier_id"] = "barrier-new"
+            replacement_record["fencing_token"] = "fence-new"  # noqa: S105
+            from tools.upgrade_identity import canonical_barrier_session_digest
+
+            replacement_record["identity_digest"] = canonical_barrier_session_digest(
+                replacement_record
+            )
+            replacement = BarrierSessionState(
+                BarrierSessionIdentity.from_record(replacement_record), "held", 1
+            )
+            reused_fence_record = dict(replacement_record)
+            reused_fence_record["durable_barrier_id"] = identity.durable_barrier_id
+            reused_fence_record["fencing_token"] = identity.fencing_token
+            reused_fence_record["identity_digest"] = canonical_barrier_session_digest(
+                reused_fence_record
+            )
+            reused_fence = BarrierSessionState(
+                BarrierSessionIdentity.from_record(reused_fence_record), "held", 1
+            )
+            with self.assertRaisesRegex(ControlStoreError, "distinct newer fence"):
+                store.reconcile_ambiguous(recovered.revision, reused_fence)
+            mismatch_store = SQLiteBarrierSessionStore(
+                SQLiteRollbackControlStore(path, PROJECT), lambda: "authority-other"
+            )
+            with self.assertRaisesRegex(
+                ControlStoreError, "replacement authority revision changed"
+            ):
+                mismatch_store.reconcile_ambiguous(recovered.revision, replacement)
+
+            def fail_authority_read() -> str:
+                raise RuntimeError("authority unavailable")
+
+            failing_store = SQLiteBarrierSessionStore(
+                SQLiteRollbackControlStore(path, PROJECT), fail_authority_read
+            )
+            with self.assertRaisesRegex(ControlStoreError, "fresh authority reread failed"):
+                failing_store.reconcile_ambiguous(recovered.revision, replacement)
+            invalid_store = SQLiteBarrierSessionStore(
+                SQLiteRollbackControlStore(path, PROJECT), lambda: ""
+            )
+            with self.assertRaisesRegex(ControlStoreError, "fresh authority revision is invalid"):
+                invalid_store.reconcile_ambiguous(recovered.revision, replacement)
+            connection = sqlite3.connect(path)
+            try:
+                connection.execute(
+                    "INSERT INTO barrier_session_intent "
+                    "(project_id,intent_id,attempt_id,expected_revision,proposed_revision,"
+                    "proposed_status,identity_digest,outcome,cause_code) "
+                    "VALUES (?,?,?,?,?,?,?,?,?)",
+                    (
+                        PROJECT,
+                        "unresolved-intent",
+                        identity.attempt_id,
+                        recovered.revision,
+                        recovered.revision + 1,
+                        "held",
+                        identity.identity_digest,
+                        "prepared",
+                        None,
+                    ),
+                )
+                connection.commit()
+            finally:
+                connection.close()
+            with self.assertRaisesRegex(ControlStoreError, "unresolved intent"):
+                store.reconcile_ambiguous(recovered.revision, replacement)
+            connection = sqlite3.connect(path)
+            try:
+                connection.execute(
+                    "UPDATE barrier_session_intent SET outcome='ambiguous' "
+                    "WHERE intent_id='unresolved-intent'"
+                )
+                connection.commit()
+            finally:
+                connection.close()
+            reconciled = store.reconcile_ambiguous(recovered.revision, replacement)
+            self.assertEqual(replacement, reconciled)
+            self.assertEqual(replacement, store.snapshot())
+            connection = sqlite3.connect(path)
+            try:
+                history = connection.execute(
+                    "SELECT record_json FROM barrier_session_history "
+                    "WHERE project_id=? AND attempt_id=?",
+                    (PROJECT, identity.attempt_id),
+                ).fetchone()
+            finally:
+                connection.close()
+            self.assertIsNotNone(history)
+            assert history is not None
+            self.assertEqual("ambiguous", json.loads(history[0])["status"])
+
+    def test_v10_session_intent_recovery_rejects_invalid_intent_records(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "control.sqlite"
+            store = SQLiteBarrierSessionStore(
+                SQLiteRollbackControlStore(path, PROJECT), lambda: "authority-3"
+            )
+            identity = self._session_identity()
+            store.create(identity)
+            with sqlite3.connect(path) as connection:
+                connection.execute(
+                    "UPDATE barrier_session_intent SET outcome='prepared',attempt_id='wrong' "
+                    "WHERE project_id=?",
+                    (PROJECT,),
+                )
+            with self.assertRaisesRegex(ControlStoreError, "identity is invalid"):
+                store.recover_unknown()
+            with sqlite3.connect(path) as connection:
+                connection.execute(
+                    "UPDATE barrier_session_intent SET attempt_id=?,proposed_status=? "
+                    "WHERE project_id=?",
+                    (identity.attempt_id, "releasing", PROJECT),
+                )
+            with self.assertRaisesRegex(ControlStoreError, "identity is invalid"):
+                store.recover_unknown()
+            with sqlite3.connect(path) as connection:
+                connection.execute(
+                    "UPDATE barrier_session_intent SET proposed_status=? WHERE project_id=?",
+                    ("bogus", PROJECT),
+                )
+            with self.assertRaisesRegex(ControlStoreError, "identity is invalid"):
+                store.recover_unknown()
+
+            with store.operation_lock():
+                connection = sqlite3.connect(path)
+                try:
+                    store._ensure_table(connection)
+                    with self.assertRaisesRegex(ControlStoreError, "outcome is invalid"):
+                        store._mark_intent_locked(connection, "missing", "unknown")
+                    with self.assertRaisesRegex(ControlStoreError, "outcome fence was lost"):
+                        store._mark_intent_locked(connection, "missing", "ambiguous")
+                finally:
+                    connection.close()
+
+    def test_v10_session_intent_publication_failure_requires_recovery(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "control.sqlite"
+            store = SQLiteBarrierSessionStore(
+                SQLiteRollbackControlStore(path, PROJECT), lambda: "authority-3"
+            )
+            identity = self._session_identity()
+            original = store._mark_intent_locked
+
+            def fail_publication(*_args: Any, **_kwargs: Any) -> None:
+                raise OSError("outcome publication unavailable")
+
+            store._mark_intent_locked = fail_publication  # type: ignore[method-assign]
+            with self.assertRaisesRegex(ControlStoreError, "outcome publication is ambiguous"):
+                store.create(identity)
+            store._mark_intent_locked = original  # type: ignore[method-assign]
+            recovered = store.recover_unknown()
+            self.assertIsNotNone(recovered)
+            assert recovered is not None
+            self.assertEqual("ambiguous", recovered.status)
+
+    def test_v10_session_intent_recovery_rejects_missing_session(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "control.sqlite"
+            store = SQLiteBarrierSessionStore(
+                SQLiteRollbackControlStore(path, PROJECT), lambda: "authority-3"
+            )
+            with store.operation_lock():
+                connection = sqlite3.connect(path)
+                try:
+                    store._ensure_table(connection)
+                    connection.execute(
+                        "INSERT INTO barrier_session_intent "
+                        "(project_id,intent_id,attempt_id,expected_revision,proposed_revision,"
+                        "proposed_status,identity_digest,outcome,cause_code) "
+                        "VALUES (?,?,?,?,?,?,?,?,?)",
+                        (PROJECT, "orphan", "attempt", 0, 1, "held", "d" * 64, "prepared", None),
+                    )
+                    connection.commit()
+                finally:
+                    connection.close()
+            with self.assertRaisesRegex(ControlStoreError, "has no session"):
+                store.recover_unknown()
+
+    def test_v10_session_intent_recovery_marks_preexisting_ambiguous(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "control.sqlite"
+            store = SQLiteBarrierSessionStore(
+                SQLiteRollbackControlStore(path, PROJECT), lambda: "authority-3"
+            )
+            identity = self._session_identity()
+            created = store.create(identity)
+            connection = sqlite3.connect(path)
+            try:
+                connection.execute(
+                    "UPDATE barrier_session SET status='ambiguous',revision=? WHERE project_id=?",
+                    (created.revision + 1, PROJECT),
+                )
+                connection.execute(
+                    "UPDATE barrier_session_intent SET outcome='prepared',"
+                    "expected_revision=?,proposed_revision=?,proposed_status=? "
+                    "WHERE project_id=?",
+                    (created.revision, created.revision + 1, "ambiguous", PROJECT),
+                )
+                connection.commit()
+            finally:
+                connection.close()
+            recovered = store.recover_unknown()
+            self.assertIsNotNone(recovered)
+            assert recovered is not None
+            self.assertEqual(
+                ("ambiguous", created.revision + 1), (recovered.status, recovered.revision)
+            )
+            with sqlite3.connect(path) as connection:
+                outcome = connection.execute(
+                    "SELECT outcome FROM barrier_session_intent WHERE project_id=?",
+                    (PROJECT,),
+                ).fetchone()
+            self.assertEqual(("ambiguous",), outcome)
+
+    def test_v10_session_intent_recovery_and_reconcile_reject_reentrant_or_invalid_calls(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "control.sqlite"
+            store = SQLiteBarrierSessionStore(
+                SQLiteRollbackControlStore(path, PROJECT), lambda: "authority-3"
+            )
+            identity = self._session_identity()
+            held = store.create(identity)
+            with store.operation_lock():
+                with self.assertRaisesRegex(ControlStoreError, "non-reentrant"):
+                    store.recover_unknown()
+                with self.assertRaisesRegex(ControlStoreError, "non-reentrant"):
+                    store.reconcile_ambiguous(held.revision, held)
+            with self.assertRaisesRegex(ControlStoreError, "expected revision is invalid"):
+                store.reconcile_ambiguous(0, held)
+            with self.assertRaisesRegex(ControlStoreError, "new held session"):
+                store.reconcile_ambiguous(
+                    held.revision,
+                    BarrierSessionState(identity, "releasing", 1),
+                )
 
     def test_v10_commit_failure_is_durably_ambiguous(self) -> None:
         class FlakyConnection:
