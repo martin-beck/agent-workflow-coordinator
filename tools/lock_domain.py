@@ -16,7 +16,11 @@ from tools.rollback_control_store import (
     BarrierSessionState,
     SQLiteBarrierSessionStore,
 )
-from tools.upgrade_identity import BarrierSessionIdentity
+from tools.upgrade_identity import (
+    BarrierSessionIdentity,
+    UpgradeIdentityError,
+    validate_barrier_session_identity,
+)
 
 
 class LockDomainError(RuntimeError):
@@ -121,6 +125,10 @@ class LockDomainIdentity:
         identity = session_state.identity
         if not isinstance(identity, BarrierSessionIdentity):
             raise LockDomainError("durable barrier session identity is required")
+        try:
+            validate_barrier_session_identity(identity.as_record())
+        except UpgradeIdentityError as error:
+            raise LockDomainError("durable barrier session identity is invalid") from error
         fields = (
             (identity.project_id, lease.project_id),
             (identity.authority_revision_at_acquire, lease.authority_revision),

@@ -243,6 +243,9 @@ class LockDomainTests(unittest.TestCase):
                 BarrierSessionState(cast(BarrierSessionIdentity, object()), "held", 3),
                 lease,
             )
+        tampered = replace(identity, identity_digest="tampered")
+        with self.assertRaisesRegex(LockDomainError, "identity is invalid"):
+            captured.assert_session_binding(BarrierSessionState(tampered, "held", 3), lease)
 
 
 if __name__ == "__main__":
