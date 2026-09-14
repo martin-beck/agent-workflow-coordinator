@@ -10,7 +10,9 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from contextlib import contextmanager
 from pathlib import Path
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 from tools import upgrade_authority
@@ -18,12 +20,50 @@ from tools.upgrade_authority import (
     AuthorityError,
     SelectorPublicationAmbiguousError,
     commit_runtime_selector,
+    commit_runtime_selector_admitted,
     read_runtime_selector,
     reconcile_runtime_selector,
 )
 
 
 class RuntimeSelectorTests(unittest.TestCase):
+    def test_admitted_selector_publication_requires_typed_ordered_lease(self) -> None:
+        class Lease:
+            def __init__(self, *, ordered: bool = True) -> None:
+                self.events: list[str] = []
+                self.ordered = ordered
+
+            @contextmanager
+            def hold(self) -> Any:
+                self.events.append("hold")
+                yield None
+                self.events.append("release")
+
+            def assert_ordered(self) -> None:
+                self.events.append("assert-order")
+                if not self.ordered or self.events != ["hold", "assert-order"]:
+                    raise AuthorityError("selector admission lock order is invalid")
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "selector.json"
+            with self.assertRaisesRegex(AuthorityError, "lease is required"):
+                commit_runtime_selector_admitted(path, "new", "old", None)  # type: ignore[arg-type]
+            with self.assertRaisesRegex(AuthorityError, "lease is required"):
+                commit_runtime_selector_admitted(path, "new", "old", object())  # type: ignore[arg-type]
+
+            unordered = Lease(ordered=False)
+            with self.assertRaisesRegex(AuthorityError, "lock order is invalid"):
+                commit_runtime_selector_admitted(path, "new", "old", unordered)
+            self.assertFalse(path.exists())
+
+            valid = Lease()
+            commit_runtime_selector_admitted(path, "new", "old", valid)
+            self.assertEqual(
+                ["hold", "assert-order", "release"],
+                valid.events,
+            )
+            self.assertEqual("new", read_runtime_selector(path)["active_release"])
+
     def test_handoffctl_is_package_safe(self) -> None:
         module = importlib.import_module("tools.handoffctl")
         self.assertTrue(callable(module.backend_selection))
