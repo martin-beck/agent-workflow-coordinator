@@ -8,9 +8,10 @@ rollback verification followed by barrier release.
 It also models an interruption while a barrier is held: recovery converts the
 ambiguous/safe-mode state into a rollback-started state before verification.
 
-The `Backends` constant is a scenario bound only in this checkpoint; backend
-specific operations and fence/CAS evolution are not yet modeled. Those remain
-explicit refinement obligations rather than hidden claims.
+The model now selects an abstract Git or SQLite backup action per operation,
+but does not model backend internals. Fence acquisition is explicit; stale
+fence/CAS rejection remains an implementation/refinement obligation rather
+than a hidden claim.
 
 The model is deliberately not an implementation proof. It abstracts Git,
 SQLite, WAL/SHM, filesystem replacement, process scheduling, and external

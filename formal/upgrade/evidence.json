@@ -1,7 +1,7 @@
 {
   "model": "formal/upgrade/UpgradeRecovery.tla",
   "config": "formal/upgrade/UpgradeRecovery.cfg",
-  "model_sha256": "b3ea2ab4e932a531257fcbd4e3eaf4d5e2d238a4052ac9ea2d204f410e9d620d",
+  "model_sha256": "bf31b544b87038cf2d9a50dc389caa34b8f3a2d9fe6d966908b4ecfc4b76fb3e",
   "config_sha256": "920eef41219ab0c9eba7b11ed334618fd97a89900a6942d1e0087c950861462f",
   "implementation_snapshot": {
     "revision": "1fcab38e0521b2970387c49cd020067a727b4608",
@@ -39,8 +39,8 @@
     "class": "bounded-model",
     "implementation_refinement": "not-proven",
     "model_limitations": [
-      "backend is a bounded scenario parameter, not backend-specific behavior",
-      "fence is typed but stale-fence/CAS evolution is not modeled"
+      "backend backup branches are abstract and do not model Git or SQLite internals",
+      "fence acquisition is modeled, but stale-fence/CAS rejection is not modeled"
     ],
     "excluded": [
       "Python implementation equivalence",
