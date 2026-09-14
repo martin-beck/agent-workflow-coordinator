@@ -21,7 +21,7 @@ from typing import Any, cast
 from unittest.mock import MagicMock, patch
 
 from tools import upgrade_authority
-from tools.handoffctl import LockOwnershipError, locked
+from tools.handoffctl import CoordinatorLockGuard, LockOwnershipError, locked
 from tools.rollback_control_store import (
     IDENTITY_FIELDS,
     AuthorityRuntimeRereader,
@@ -447,8 +447,8 @@ class RollbackControlStoreTests(unittest.TestCase):
             held = store.create(identity)
             with (
                 self.assertRaisesRegex(LockOwnershipError, "guard is required"),
-                store.lock_owned_by_caller(None),
-            ):  # type: ignore[arg-type]
+                store.lock_owned_by_caller(cast(CoordinatorLockGuard, None)),
+            ):
                 pass
             with self.assertRaisesRegex(TypeError, "missing"):
                 store.recheck_held_locked(identity, held.revision)  # type: ignore[call-arg]
