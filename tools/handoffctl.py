@@ -1584,7 +1584,11 @@ def mutate_sqlite(args: argparse.Namespace, kind: str) -> None:
         candidate = [
             (path, meta if item["id"] == args.task else item, text) for path, item, text in tasks
         ]
-        errors = basic_task_errors(selected[0], meta) + graph_errors(candidate)
+        errors = (
+            basic_task_errors(selected[0], meta)
+            + graph_errors(candidate)
+            + supersession_errors(candidate)
+        )
         if errors:
             raise RuntimeError("transition validation failed:\n" + "\n".join(errors))
         return note, _transition_note(selected[2], note, at)
