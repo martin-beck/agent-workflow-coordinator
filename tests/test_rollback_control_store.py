@@ -333,6 +333,109 @@ class RollbackControlStoreTests(unittest.TestCase):
                 existing_session.mark_ambiguous(1, "io-failure")
             self.assertEqual("ambiguous", existing_session.snapshot().status)  # type: ignore[union-attr]
 
+    def test_v10_cas_fences_verify_affected_rows_and_recovery_errors(self) -> None:
+        class Cursor:
+            def __init__(self, rowcount: int) -> None:
+                self.rowcount = rowcount
+
+        class Connection:
+            def __init__(self, selected: object, update_count: int = 0) -> None:
+                self.selected = selected
+                self.update_count = update_count
+                self.statements = 0
+
+            def execute(self, sql: str, *_args: object) -> Any:
+                if "SELECT MAX" in sql:
+                    return type("Result", (), {"fetchone": lambda _self: (None,)})()
+                self.statements += 1
+                if "SELECT" in sql:
+                    return type("Result", (), {"fetchone": lambda _self: self.selected})()
+                return Cursor(self.update_count)
+
+            def rollback(self) -> None:
+                return None
+
+            def commit(self) -> None:
+                return None
+
+        with tempfile.TemporaryDirectory() as directory:
+            store = SQLiteRollbackControlStore(Path(directory) / "control.sqlite", PROJECT)
+            store._operation_owner = threading.get_ident()
+            try:
+                insert_connection = Connection(None)
+                with self.assertRaisesRegex(ControlStoreError, "insert lost"):
+                    store._cas_connection(cast(Any, insert_connection), 0, dict(RECORD))
+                current_row = (*tuple(RECORD[field] for field in IDENTITY_FIELDS), "held", 1)
+                update_connection = Connection(current_row)
+                with self.assertRaisesRegex(ControlStoreError, "update lost"):
+                    store._cas_connection(
+                        cast(Any, update_connection),
+                        1,
+                        {**RECORD, "status": "releasing", "revision": 2},
+                    )
+                with self.assertRaisesRegex(ControlStoreError, "could not be durably fenced"):
+                    SQLiteRollbackControlStore._mark_ambiguous_after_commit_failure(
+                        cast(Any, Connection(current_row, update_count=0)),
+                        RECORD,
+                        1,
+                        OSError("commit uncertain"),
+                    )
+            finally:
+                store._operation_owner = None
+
+    def test_v10_session_cas_fences_insert_and_update_rows(self) -> None:  # noqa: C901
+        class Result:
+            def __init__(self, value: object) -> None:
+                self.value = value
+
+            def fetchone(self) -> object:
+                return self.value
+
+        class SessionControl:
+            project_id = PROJECT
+            operation_owned_by_current_thread = True
+
+            def __init__(self, selected: object) -> None:
+                self.selected = selected
+
+            def _require_operation_lock(self) -> None:
+                return None
+
+            @contextmanager
+            def _connection(self) -> Iterator[Any]:
+                yield connection
+
+        identity = self._session_identity()
+        current_row = (*tuple(identity.as_record().values()), "held", 1, None, None)
+        for selected, state, expected, message in (
+            (None, BarrierSessionState(identity, "held", 1), 0, "update lost"),
+            (current_row, BarrierSessionState(identity, "releasing", 2), 1, "update lost"),
+        ):
+            with self.subTest(selected=selected):
+
+                class Cursor:
+                    rowcount = 0
+
+                class Connection:
+                    def __init__(self, selected: object) -> None:
+                        self.selected = selected
+
+                    def execute(self, sql: str, *_args: object) -> Any:
+                        if "SELECT" in sql:
+                            return Result(self.selected)
+                        return Cursor()
+
+                    def rollback(self) -> None:
+                        return None
+
+                    def commit(self) -> None:
+                        return None
+
+                connection = Connection(selected)
+                store = SQLiteBarrierSessionStore(cast(Any, SessionControl(selected)))
+                with self.assertRaisesRegex(ControlStoreError, message):
+                    store._cas_locked(expected, state)
+
     def test_v10_durable_session_starts_fresh_attempt_after_release(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "control.sqlite"
