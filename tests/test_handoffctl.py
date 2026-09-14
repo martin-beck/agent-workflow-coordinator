@@ -1033,6 +1033,20 @@ class HandoffTest(unittest.TestCase):
         with self.assertRaisesRegex(CORE.LockOwnershipError, "inactive"):
             guard.assert_owned()
 
+    def test_lock_guard_constructor_is_not_public(self) -> None:
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "state.lock"
+            fd = path.open("w+")
+            try:
+                with self.assertRaises(TypeError):
+                    CORE.CoordinatorLockGuard(path, fd.fileno(), exclusive=True)
+                with self.assertRaisesRegex(TypeError, "construction is private"):
+                    CORE.CoordinatorLockGuard(
+                        path, fd.fileno(), exclusive=True, _creation_token=object()
+                    )
+            finally:
+                fd.close()
+
     def test_lock_guard_rejects_use_from_another_thread(self) -> None:
         errors: list[BaseException] = []
         with CORE.locked(timeout=0.1) as guard:

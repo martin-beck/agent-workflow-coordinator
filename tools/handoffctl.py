@@ -59,6 +59,7 @@ DATABASE = RUNTIME / "coordinator.sqlite3"
 BACKENDS = ("sqlite", "git")
 LOCK_TIMEOUT_SECONDS = 10.0
 LOCK_POLL_SECONDS = 0.05
+_GUARD_CREATION_TOKEN = object()
 SUBPROCESS_TIMEOUT_SECONDS = 30.0
 COMMAND_TIMEOUT_SECONDS = 1800.0
 OBSERVATION_ATTEMPTS = 3
@@ -313,7 +314,9 @@ class CoordinatorLockGuard:
         "_path_identity",
     )
 
-    def __init__(self, path: Path, fd: int, *, exclusive: bool) -> None:
+    def __init__(self, path: Path, fd: int, *, exclusive: bool, _creation_token: object) -> None:
+        if _creation_token is not _GUARD_CREATION_TOKEN:
+            raise TypeError("CoordinatorLockGuard construction is private")
         status = path.stat()
         self._fd = fd
         self._identity = (status.st_dev, status.st_ino)
@@ -323,6 +326,10 @@ class CoordinatorLockGuard:
         self._owner_thread = threading.get_ident()
         self._path = path.resolve()
         self._active = True
+
+    @classmethod
+    def _create(cls, path: Path, fd: int, *, exclusive: bool) -> "CoordinatorLockGuard":
+        return cls(path, fd, exclusive=exclusive, _creation_token=_GUARD_CREATION_TOKEN)
 
     @property
     def path(self) -> Path:
@@ -502,7 +509,7 @@ def locked(
                         f"LOCK_TIMEOUT after {timeout:.1f}s acquiring {mode} coordinator lock"
                     ) from error
                 time.sleep(min(LOCK_POLL_SECONDS, remaining))
-        guard = CoordinatorLockGuard(lock_path, fd, exclusive=exclusive)
+        guard = CoordinatorLockGuard._create(lock_path, fd, exclusive=exclusive)
         yield guard
     finally:
         if "guard" in locals():
