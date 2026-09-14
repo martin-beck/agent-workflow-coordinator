@@ -7,6 +7,7 @@ import argparse
 import importlib.util
 import json
 import multiprocessing
+import os
 import signal
 import sqlite3
 import subprocess
@@ -69,6 +70,19 @@ with ready.open("rb") as stream:
     os.fsync(stream.fileno())
 os.kill(os.getpid(), signal.SIGKILL)
 """
+
+
+def _commit_then_crash_before_projection(database: str, tasks_root: str) -> None:
+    """Commit the SQLite CAS, then die before disposable projections are written."""
+    CORE.DATABASE = Path(database)
+    CORE.TASKS = Path(tasks_root)
+    arguments = argparse.Namespace(task="AR-0001", owner="worker", lease_minutes=10)
+
+    def crash() -> None:
+        os.kill(os.getpid(), signal.SIGKILL)
+
+    with patch.object(CORE, "export_sqlite_projections", side_effect=crash):
+        CORE.mutate(arguments, "claim")
 
 
 def task(
@@ -540,6 +554,29 @@ class SQLiteStorageTest(unittest.TestCase):
                 argparse.Namespace(task="AR-0001", owner="worker", lease_minutes=10), "claim"
             )
         self.assertEqual(2, CORE.all_tasks()[0][1]["task_revision"])
+
+    def test_process_death_after_commit_before_projection_reconciles_from_authority(self) -> None:
+        self.configure_core(backend="sqlite")
+        backend = self.create()
+        CORE.export_sqlite_projections()
+        process = multiprocessing.get_context("fork").Process(
+            target=_commit_then_crash_before_projection,
+            args=(str(self.database), str(self.tasks)),
+        )
+        process.start()
+        process.join(timeout=10)
+        self.assertEqual(-signal.SIGKILL, process.exitcode)
+        self.assertFalse(process.is_alive())
+
+        committed = next(item for item in backend.load_tasks() if item[1]["id"] == "AR-0001")
+        self.assertEqual(
+            ("in_progress", 2), (committed[1]["status"], committed[1]["task_revision"])
+        )
+        stale_projection = (self.tasks / "AR-0001-test.md").read_text()
+        self.assertIn('"status": "open"', stale_projection)
+        CORE.export_sqlite_projections()
+        reconciled = (self.tasks / "AR-0001-test.md").read_text()
+        self.assertIn('"status": "in_progress"', reconciled)
 
     def test_sqlite_command_journal_snapshot_doctor_and_offline_reconcile(self) -> None:
         self.configure_core(backend="sqlite")
