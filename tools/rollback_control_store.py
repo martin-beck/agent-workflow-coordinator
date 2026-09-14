@@ -10,6 +10,7 @@ an implementation yet and must fail closed.
 from __future__ import annotations
 
 import os
+import re
 import sqlite3
 import stat
 import threading
@@ -25,6 +26,8 @@ from tools.handoffctl import locked
 from tools.upgrade_authority import inspect_sqlite_release_authority
 from tools.upgrade_identity import (
     ENVELOPE_FIELDS,
+    BarrierChildIdentity,
+    BarrierSessionIdentity,
     UpgradeIdentityError,
     validate_envelope,
 )
@@ -67,6 +70,7 @@ _RELEASE_EVIDENCE_FIELDS = {
     "backend",
     "fencing_token",
 }
+_CAUSE_CODE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
 
 
 @dataclass(frozen=True)
@@ -101,6 +105,140 @@ class SQLiteAuthorityRuntimeState:
     integrity_check: str
     foreign_key_violations: int
     backend_roundtrip: str
+
+
+@dataclass(frozen=True, slots=True)
+class BarrierSessionState:
+    """Typed, immutable view of a target-neutral barrier session.
+
+    The existing SQLite rollback adapter remains v9 and fail-closed.  This
+    value object is the v10 control-store seam: it makes the shared session
+    identity and CAS state explicit without pretending that the durable
+    adapter or SQLite mutation fencing is complete.
+    """
+
+    identity: BarrierSessionIdentity
+    status: str
+    revision: int
+    forward_child: BarrierChildIdentity | None = None
+    rollback_child: BarrierChildIdentity | None = None
+
+    def __post_init__(self) -> None:
+        if self.status not in {"held", "releasing", "released", "ambiguous"}:
+            raise ControlStoreError("barrier session status is invalid")
+        if type(self.revision) is not int or self.revision < 1:
+            raise ControlStoreError("barrier session revision is invalid")
+        for child in (self.forward_child, self.rollback_child):
+            if child is not None:
+                child.validate_for(self.identity)
+        if (
+            self.forward_child is not None
+            and self.rollback_child is not None
+            and self.forward_child.operation_id == self.rollback_child.operation_id
+        ):
+            raise ControlStoreError("barrier child operation identities must be distinct")
+
+
+class BarrierSessionContract:
+    """Small pure CAS contract used to gate a future durable adapter.
+
+    This class intentionally has no filesystem or SQLite side effects.  It is
+    suitable for exact transition tests while the production adapter remains
+    disabled until AR-0012 supplies authority fencing and crash evidence.
+    """
+
+    def __init__(self, identity: BarrierSessionIdentity) -> None:
+        self._state = BarrierSessionState(identity, "held", 1)
+
+    @property
+    def state(self) -> BarrierSessionState:
+        return self._state
+
+    def recheck_held(self, expected_revision: int) -> BarrierSessionState:
+        self._expect(expected_revision, {"held"})
+        return self._state
+
+    def bind_child(
+        self, expected_revision: int, child: BarrierChildIdentity
+    ) -> BarrierSessionState:
+        self._expect(expected_revision, {"held"})
+        child.validate_for(self._state.identity)
+        if child.target == "new":
+            if self._state.forward_child is not None:
+                raise ControlStoreError("forward barrier child is already bound")
+            updated = BarrierSessionState(
+                self._state.identity,
+                self._state.status,
+                self._state.revision + 1,
+                child,
+                self._state.rollback_child,
+            )
+        else:
+            if self._state.forward_child is None:
+                raise ControlStoreError("rollback child requires a bound forward child")
+            if self._state.rollback_child is not None:
+                raise ControlStoreError("rollback barrier child is already bound")
+            updated = BarrierSessionState(
+                self._state.identity,
+                self._state.status,
+                self._state.revision + 1,
+                self._state.forward_child,
+                child,
+            )
+        self._state = updated
+        return updated
+
+    def begin_reopen(self, expected_revision: int, child_target: str) -> BarrierSessionState:
+        self._expect(expected_revision, {"held"})
+        if child_target not in {"new", "rollback"}:
+            raise ControlStoreError("reopen child target is invalid")
+        child = (
+            self._state.rollback_child if child_target == "rollback" else self._state.forward_child
+        )
+        if child is None:
+            raise ControlStoreError("reopen child is not bound")
+        self._state = BarrierSessionState(
+            self._state.identity,
+            "releasing",
+            self._state.revision + 1,
+            self._state.forward_child,
+            self._state.rollback_child,
+        )
+        return self._state
+
+    def complete_reopen(
+        self, expected_revision: int, fresh_runtime_verified: bool
+    ) -> BarrierSessionState:
+        self._expect(expected_revision, {"releasing"})
+        if fresh_runtime_verified is not True:
+            raise ControlStoreError("fresh runtime evidence is required to release barrier")
+        self._state = BarrierSessionState(
+            self._state.identity,
+            "released",
+            self._state.revision + 1,
+            self._state.forward_child,
+            self._state.rollback_child,
+        )
+        return self._state
+
+    def mark_ambiguous(self, expected_revision: int, cause_code: str) -> BarrierSessionState:
+        self._expect(expected_revision, {"held", "releasing"})
+        if _CAUSE_CODE.fullmatch(cause_code) is None:
+            raise ControlStoreError("ambiguous barrier cause code is invalid")
+        self._state = BarrierSessionState(
+            self._state.identity,
+            "ambiguous",
+            self._state.revision + 1,
+            self._state.forward_child,
+            self._state.rollback_child,
+        )
+        return self._state
+
+    def _expect(self, expected_revision: int, statuses: set[str]) -> None:
+        if type(expected_revision) is not int or expected_revision != self._state.revision:
+            raise ControlStoreError("barrier session revision conflict")
+        if self._state.status not in statuses:
+            raise ControlStoreError("barrier session transition is not permitted")
 
 
 class AuthorityRuntimeRereader(Protocol):

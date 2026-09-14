@@ -10,7 +10,9 @@ import posixpath
 import re
 import uuid
 from collections.abc import Mapping
+from dataclasses import dataclass
 from pathlib import PurePosixPath
+from typing import cast
 
 ENVELOPE_SCHEMA_VERSION = 2
 # The v10 barrier is a target-neutral session.  Child envelopes continue to
@@ -62,6 +64,74 @@ _DIGEST = re.compile(r"[0-9a-f]{64}")
 
 class UpgradeIdentityError(ValueError):
     """An upgrade envelope is incomplete, non-canonical, or inconsistent."""
+
+
+@dataclass(frozen=True, slots=True)
+class BarrierSessionIdentity:
+    """Typed target-neutral identity shared by forward and rollback children.
+
+    This is a contract seam only.  It deliberately contains no mutable state
+    or persistence handle; a durable adapter must validate this value before
+    adding status/revision fields to a control-store row.
+    """
+
+    schema_version: int
+    project_id: str
+    attempt_id: str
+    state_revision: int
+    authority_revision_at_acquire: str
+    durable_barrier_id: str
+    fencing_token: str
+    fencing_owner: str
+    identity_digest: str
+
+    @classmethod
+    def from_record(cls, record: Mapping[str, object]) -> BarrierSessionIdentity:
+        value = validate_barrier_session_identity(record)
+        return cls(
+            schema_version=cast(int, value["schema_version"]),
+            project_id=cast(str, value["project_id"]),
+            attempt_id=cast(str, value["attempt_id"]),
+            state_revision=cast(int, value["state_revision"]),
+            authority_revision_at_acquire=cast(str, value["authority_revision_at_acquire"]),
+            durable_barrier_id=cast(str, value["durable_barrier_id"]),
+            fencing_token=cast(str, value["fencing_token"]),
+            fencing_owner=cast(str, value["fencing_owner"]),
+            identity_digest=cast(str, value["identity_digest"]),
+        )
+
+    def as_record(self) -> dict[str, object]:
+        return {
+            field: getattr(self, field)
+            for field in (*BARRIER_SESSION_IDENTITY_FIELDS, "identity_digest")
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class BarrierChildIdentity:
+    """Typed immutable child binding under one barrier session."""
+
+    operation_id: str
+    target: str
+    barrier_identity_digest: str
+
+    @classmethod
+    def bind(
+        cls, session: BarrierSessionIdentity, operation_id: str, target: str
+    ) -> BarrierChildIdentity:
+        if _TOKEN.fullmatch(operation_id) is None:
+            raise UpgradeIdentityError("barrier child operation identity is invalid")
+        if target not in {"new", "rollback"}:
+            raise UpgradeIdentityError("barrier child target is invalid")
+        return cls(operation_id, target, session.identity_digest)
+
+    def validate_for(self, session: BarrierSessionIdentity) -> None:
+        if self.barrier_identity_digest != session.identity_digest:
+            raise UpgradeIdentityError("barrier child session identity does not match")
+        if _TOKEN.fullmatch(self.operation_id) is None:
+            raise UpgradeIdentityError("barrier child operation identity is invalid")
+        if self.target not in {"new", "rollback"}:
+            raise UpgradeIdentityError("barrier child target is invalid")
 
 
 def canonical_barrier_session_digest(record: Mapping[str, object]) -> str:

@@ -9,6 +9,8 @@ import unittest
 from tools.upgrade_identity import (
     BARRIER_SESSION_IDENTITY_FIELDS,
     ENVELOPE_FIELDS,
+    BarrierChildIdentity,
+    BarrierSessionIdentity,
     UpgradeIdentityError,
     canonical_barrier_digest,
     canonical_barrier_session_digest,
@@ -59,6 +61,34 @@ def barrier_session() -> dict[str, object]:
 
 
 class UpgradeIdentityTests(unittest.TestCase):
+    def test_v10_typed_identity_round_trip_and_child_rejections(self) -> None:
+        value = barrier_session()
+        identity = BarrierSessionIdentity.from_record(value)
+        self.assertEqual(value, identity.as_record())
+        child = BarrierChildIdentity.bind(identity, "child-1", "new")
+        child.validate_for(identity)
+        with self.assertRaises(UpgradeIdentityError):
+            BarrierChildIdentity.bind(identity, "", "new")
+        with self.assertRaises(UpgradeIdentityError):
+            BarrierChildIdentity.bind(identity, "child-1", "other")
+        with self.assertRaises(UpgradeIdentityError):
+            BarrierChildIdentity("child-1", "new", "0" * 64).validate_for(identity)
+
+    def test_v10_typed_identity_rejects_noncanonical_records(self) -> None:
+        value = barrier_session()
+        identity_errors = (
+            {**value, "schema_version": 2},
+            {**value, "project_id": "not-a-uuid"},
+            {**value, "project_id": "11111111-1111-1111-8111-111111111111"},
+            {**value, "attempt_id": ""},
+            {**value, "state_revision": 0},
+            {**value, "state_revision": True},
+            {**value, "identity_digest": "f" * 64},
+        )
+        for invalid in identity_errors:
+            with self.subTest(invalid=invalid), self.assertRaises(UpgradeIdentityError):
+                BarrierSessionIdentity.from_record(invalid)
+
     def test_v10_barrier_session_is_target_neutral(self) -> None:
         value = barrier_session()
         self.assertEqual(set(BARRIER_SESSION_IDENTITY_FIELDS) | {"identity_digest"}, set(value))

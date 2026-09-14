@@ -20,6 +20,8 @@ from tools import upgrade_authority
 from tools.rollback_control_store import (
     IDENTITY_FIELDS,
     AuthorityRuntimeRereader,
+    BarrierSessionContract,
+    BarrierSessionState,
     ControlStoreError,
     SQLiteAuthorityRuntimeRereader,
     SQLiteAuthorityRuntimeState,
@@ -149,6 +151,114 @@ class StaticAuthorityRuntimeRereader:
 
 
 class RollbackControlStoreTests(unittest.TestCase):
+    def test_v10_barrier_session_contract_keeps_forward_and_rollback_under_one_fence(self) -> None:
+        from tools.upgrade_identity import BarrierChildIdentity, BarrierSessionIdentity
+
+        session_record = {
+            "schema_version": 1,
+            "project_id": PROJECT,
+            "attempt_id": "attempt-1",
+            "state_revision": 3,
+            "authority_revision_at_acquire": "authority-3",
+            "durable_barrier_id": "barrier-1",
+            "fencing_token": "fence-1",
+            "fencing_owner": "owner-1",
+            "identity_digest": "0" * 64,
+        }
+        from tools.upgrade_identity import canonical_barrier_session_digest
+
+        session_record["identity_digest"] = canonical_barrier_session_digest(session_record)
+        identity = BarrierSessionIdentity.from_record(session_record)
+        contract = BarrierSessionContract(identity)
+        self.assertIsInstance(contract.state, BarrierSessionState)
+        forward = BarrierChildIdentity.bind(identity, "forward-1", "new")
+        rollback = BarrierChildIdentity.bind(identity, "rollback-1", "rollback")
+        held = contract.bind_child(1, forward)
+        self.assertEqual("held", contract.recheck_held(held.revision).status)
+        held = contract.bind_child(held.revision, rollback)
+        releasing = contract.begin_reopen(held.revision, "rollback")
+        released = contract.complete_reopen(releasing.revision, True)
+        self.assertEqual("released", released.status)
+        self.assertEqual("fence-1", released.identity.fencing_token)
+        with self.assertRaisesRegex(ControlStoreError, "transition"):
+            contract.mark_ambiguous(released.revision, "io-failure")
+
+    def test_v10_barrier_session_contract_rejects_stale_and_unsafe_transitions(self) -> None:
+        from tools.upgrade_identity import BarrierChildIdentity, BarrierSessionIdentity
+
+        record = {
+            "schema_version": 1,
+            "project_id": PROJECT,
+            "attempt_id": "attempt-1",
+            "state_revision": 1,
+            "authority_revision_at_acquire": "authority-1",
+            "durable_barrier_id": "barrier-1",
+            "fencing_token": "fence-1",
+            "fencing_owner": "owner-1",
+            "identity_digest": "0" * 64,
+        }
+        from tools.upgrade_identity import canonical_barrier_session_digest
+
+        record["identity_digest"] = canonical_barrier_session_digest(record)
+        identity = BarrierSessionIdentity.from_record(record)
+        contract = BarrierSessionContract(identity)
+        with self.assertRaisesRegex(ControlStoreError, "revision conflict"):
+            contract.recheck_held(0)
+        with self.assertRaisesRegex(ControlStoreError, "rollback child"):
+            contract.bind_child(1, BarrierChildIdentity.bind(identity, "rollback-1", "rollback"))
+        forward = contract.bind_child(1, BarrierChildIdentity.bind(identity, "forward-1", "new"))
+        with self.assertRaisesRegex(ControlStoreError, "already bound"):
+            contract.bind_child(
+                forward.revision, BarrierChildIdentity.bind(identity, "forward-2", "new")
+            )
+        with self.assertRaisesRegex(ControlStoreError, "runtime evidence"):
+            releasing = contract.begin_reopen(forward.revision, "new")
+            contract.complete_reopen(releasing.revision, False)
+
+    def test_v10_barrier_session_contract_enters_ambiguous_safe_mode(self) -> None:
+        from tools.upgrade_identity import BarrierSessionIdentity, canonical_barrier_session_digest
+
+        record = {
+            "schema_version": 1,
+            "project_id": PROJECT,
+            "attempt_id": "attempt-2",
+            "state_revision": 2,
+            "authority_revision_at_acquire": "authority-2",
+            "durable_barrier_id": "barrier-2",
+            "fencing_token": "fence-2",
+            "fencing_owner": "owner-2",
+            "identity_digest": "0" * 64,
+        }
+        record["identity_digest"] = canonical_barrier_session_digest(record)
+        contract = BarrierSessionContract(BarrierSessionIdentity.from_record(record))
+        with self.assertRaisesRegex(ControlStoreError, "cause code"):
+            contract.mark_ambiguous(1, "bad cause")
+        ambiguous = contract.mark_ambiguous(1, "io-failure")
+        self.assertEqual("ambiguous", ambiguous.status)
+        with self.assertRaisesRegex(ControlStoreError, "transition"):
+            contract.recheck_held(ambiguous.revision)
+
+    def test_v10_barrier_session_state_rejects_invalid_shape(self) -> None:
+        from tools.upgrade_identity import BarrierSessionIdentity, canonical_barrier_session_digest
+
+        record = {
+            "schema_version": 1,
+            "project_id": PROJECT,
+            "attempt_id": "attempt-3",
+            "state_revision": 3,
+            "authority_revision_at_acquire": "authority-3",
+            "durable_barrier_id": "barrier-3",
+            "fencing_token": "fence-3",
+            "fencing_owner": "owner-3",
+            "identity_digest": "0" * 64,
+        }
+        record["identity_digest"] = canonical_barrier_session_digest(record)
+        identity = BarrierSessionIdentity.from_record(record)
+        with self.assertRaisesRegex(ControlStoreError, "status"):
+            BarrierSessionState(identity, "invalid", 1)
+        with self.assertRaisesRegex(ControlStoreError, "revision"):
+            BarrierSessionState(identity, "held", 0)
+
     def test_canonical_barrier_digest_is_stable_and_excludes_mutable_fields(self) -> None:
         first = canonical_barrier_digest(RECORD)
         second = canonical_barrier_digest({**RECORD, "status": "ambiguous", "revision": 99})
