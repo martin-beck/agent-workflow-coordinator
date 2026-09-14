@@ -91,7 +91,7 @@ AUTHORITY_BINDING = {
 # These subprocess fixtures cover only WAL/SHM rollback after process death and
 # clean control-plane reopen. They do not prove caller-owned admission,
 # ambiguous recovery, mutation fencing, or authority integration.
-_SUBPROCESS_SESSION_SCRIPT = r'''
+_SUBPROCESS_SESSION_SCRIPT = r"""
 import os
 import signal
 import sqlite3
@@ -149,7 +149,7 @@ with control.operation_lock(), control._connection() as connection:
     with ready_path.open("rb") as ready:
         os.fsync(ready.fileno())
     os.kill(os.getpid(), signal.SIGKILL)
-'''
+"""
 
 
 def authority_task() -> tuple[Path, dict[str, object], str]:
@@ -445,18 +445,20 @@ class RollbackControlStoreTests(unittest.TestCase):
             )
             identity = self._session_identity()
             held = store.create(identity)
-            with self.assertRaisesRegex(
-                LockOwnershipError, "guard is required"
-            ), store.lock_owned_by_caller(None):  # type: ignore[arg-type]
+            with (
+                self.assertRaisesRegex(LockOwnershipError, "guard is required"),
+                store.lock_owned_by_caller(None),
+            ):  # type: ignore[arg-type]
                 pass
             with self.assertRaisesRegex(TypeError, "missing"):
                 store.recheck_held_locked(identity, held.revision)  # type: ignore[call-arg]
             with locked() as guard, store.lock_owned_by_caller(guard):
                 reread = store.recheck_held_locked(guard, identity, held.revision)
                 self.assertEqual(held, reread)
-                with self.assertRaisesRegex(
-                    ControlStoreError, "non-reentrant"
-                ), store.lock_owned_by_caller(guard):
+                with (
+                    self.assertRaisesRegex(ControlStoreError, "non-reentrant"),
+                    store.lock_owned_by_caller(guard),
+                ):
                     pass
             self.assertEqual(held, store.snapshot())
 

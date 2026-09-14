@@ -1045,8 +1045,9 @@ class HandoffTest(unittest.TestCase):
         self.assertIsInstance(errors[0], CORE.LockOwnershipError)
 
     def test_shared_lock_guard_cannot_authorize_exclusive_operation(self) -> None:
-        with CORE.locked(exclusive=False, timeout=0.1) as guard, self.assertRaisesRegex(
-            CORE.LockOwnershipError, "not exclusive"
+        with (
+            CORE.locked(exclusive=False, timeout=0.1) as guard,
+            self.assertRaisesRegex(CORE.LockOwnershipError, "not exclusive"),
         ):
             guard.assert_owned()
 
