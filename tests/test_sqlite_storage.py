@@ -7,9 +7,11 @@ import argparse
 import importlib.util
 import json
 import multiprocessing
+import signal
 import sqlite3
 import subprocess
 import sys
+import time
 import unittest
 from collections.abc import Callable
 from pathlib import Path
@@ -41,6 +43,32 @@ BINDING = {
     "state_repository": "owner/state",
     "product_repository": "owner/product",
 }
+
+
+# Diagnostic only: terminate an authority writer after an uncommitted WAL
+# update and verify that SQLite reopens the prior durable state. This does not
+# claim barrier admission, authority-route fencing, or formal refinement.
+_CRASHING_AUTHORITY_SCRIPT = r"""
+import os
+import signal
+import sqlite3
+import sys
+from pathlib import Path
+
+database = Path(sys.argv[1])
+ready = database.with_name(database.name + ".ready")
+connection = sqlite3.connect(database)
+connection.execute("PRAGMA journal_mode=WAL")
+connection.execute("BEGIN IMMEDIATE")
+connection.execute(
+    "UPDATE tasks SET body=?, revision=revision+1 WHERE id=?",
+    ("# crashed before commit\n", "AR-0001"),
+)
+ready.write_text("uncommitted-wal\n", encoding="utf-8")
+with ready.open("rb") as stream:
+    os.fsync(stream.fileno())
+os.kill(os.getpid(), signal.SIGKILL)
+"""
 
 
 def task(
@@ -188,6 +216,43 @@ class SQLiteStorageTest(unittest.TestCase):
         copied = SQLiteBackend(self.database, {**BINDING, "project_id": "other"}, self.tasks)
         with self.assertRaisesRegex(RuntimeError, "BINDING_MISMATCH"):
             copied.load_tasks()
+
+    def test_authority_writer_death_rolls_back_uncommitted_wal_update(self) -> None:
+        """Diagnostic SQLite WAL rollback only; no fencing or refinement claim."""
+        backend = self.create()
+        ready = self.database.with_name(self.database.name + ".ready")
+        process = subprocess.Popen(  # noqa: S603 - fixed interpreter and test script
+            [sys.executable, "-c", _CRASHING_AUTHORITY_SCRIPT, str(self.database)],
+            cwd=ROOT,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        try:
+            deadline = time.monotonic() + 10
+            while not ready.exists() and time.monotonic() < deadline:
+                if process.poll() is not None:
+                    stdout, stderr = process.communicate()
+                    self.fail(
+                        f"authority crash fixture exited early: {process.returncode}; "
+                        f"stdout={stdout!r}; stderr={stderr!r}"
+                    )
+                time.sleep(0.01)
+            self.assertTrue(ready.exists(), "authority crash fixture did not reach WAL checkpoint")
+            self.assertEqual("uncommitted-wal", ready.read_text(encoding="utf-8").strip())
+            self.assertEqual(-signal.SIGKILL, process.wait(timeout=10))
+            stdout, stderr = process.communicate()
+            self.assertEqual("", stdout)
+            self.assertEqual("", stderr)
+        finally:
+            if process.poll() is None:
+                process.kill()
+            process.communicate(timeout=5)
+
+        task_row = next(item for item in backend.load_tasks() if item[1]["id"] == "AR-0001")
+        self.assertEqual(1, task_row[1]["task_revision"])
+        self.assertEqual("# Test\n", task_row[2])
+        self.assertEqual([], backend.integrity_errors())
 
     def test_exact_revision_cas_events_and_aba_prevention(self) -> None:
         backend = self.create()

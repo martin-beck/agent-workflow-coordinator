@@ -16,3 +16,25 @@ must bind `MutationFence.mutation_scope`; this slice only proves that every
 listed route enters the supplied scope before opening its write transaction.
 The unbound backend remains outside the acceptance claim and upgrade
 apply/rollback remain rejection-only.
+
+## Rollback control-store routes
+
+The durable rollback/session store has a separate write surface. Every public
+writer below acquires the coordinator/control operation scope, or delegates to
+a writer that does so. The private helpers are only callable while that scope
+is already held.
+
+| Store | Route | Durable writes | Evidence |
+| --- | --- | --- | --- |
+| `SQLiteRollbackControlStore` | `cas` | barrier row/history | `test_cas_conflict_and_binding_mismatch_fail_closed`, `test_v10_cas_fences_verify_affected_rows_and_recovery_errors` |
+| `SQLiteRollbackControlStore` | `begin_release`, `reconcile_release` | barrier status/release journal | `test_release_reconciliation_requires_verified_engine_recovery` |
+| `SQLiteRollbackControlStore` | `reconcile_ambiguous` | barrier/history replacement | `test_ambiguous_requires_explicit_newer_reconciliation` |
+| `SQLiteRollbackControlStore` | `with_barrier` | barrier acquire/release | `test_with_barrier_holds_coordinator_lock_through_authority_callback` |
+| `SQLiteBarrierSessionStore` | `create`, `cas`, `bind_child`, `begin_reopen`, `complete_reopen`, `mark_ambiguous` | session/child rows and history | `test_v10_session_cas_fences_insert_and_update_rows`, `test_v10_durable_session_persists_children_and_reopen` |
+| `SQLiteBarrierSessionStore` | `recover_unknown`, `reconcile_ambiguous` | intent/session/history rows | `test_v10_session_intent_recovery_fences_and_requires_newer_fence` |
+
+The inventory proves admission ordering and row-fence tests only. It does not
+prove that every future authority route is registered here, that SQLite
+WAL/SHM survives arbitrary process death, or that the control-store fence is a
+complete implementation refinement of the formal model. Authority mutation,
+upgrade apply, and upgrade rollback remain disabled.
