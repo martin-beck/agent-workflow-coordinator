@@ -107,6 +107,9 @@ class FakeAdapter:
             )
         return result
 
+    def release_rollback_context(self, _context: Mapping[str, object]) -> dict[str, object]:
+        return {"status": "released"}
+
 
 class FailingAdapter(FakeAdapter):
     def snapshot(self, _phase: str, _context: object) -> dict[str, object]:

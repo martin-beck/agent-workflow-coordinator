@@ -10,7 +10,12 @@ import unittest
 from collections.abc import Mapping
 from pathlib import Path
 
-from tools.rollback_control_store import ControlStoreError, SQLiteRollbackControlStore
+from tools.rollback_control_store import (
+    ControlStoreError,
+    SQLiteControlStoreAdapter,
+    SQLiteRollbackControlStore,
+    bind_control_store,
+)
 
 PROJECT = "11111111-1111-4111-8111-111111111111"
 RECORD = {
@@ -31,6 +36,22 @@ RECORD = {
 
 
 class RollbackControlStoreTests(unittest.TestCase):
+    def test_binding_is_sqlite_only_and_store_owned(self) -> None:
+        class Delegate:
+            def snapshot(self, _phase: str, _context: Mapping[str, object]) -> Mapping[str, object]:
+                return {}
+
+            def execute(self, _phase: str, _context: Mapping[str, object]) -> Mapping[str, object]:
+                return {}
+
+        with tempfile.TemporaryDirectory() as directory:
+            store = SQLiteRollbackControlStore(Path(directory) / "control.sqlite", PROJECT)
+            self.assertIsInstance(
+                bind_control_store("sqlite", Delegate(), store), SQLiteControlStoreAdapter
+            )
+            with self.assertRaises(ControlStoreError):
+                bind_control_store("git", Delegate(), None)
+
     def test_wal_cas_and_reload_are_durable(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             store = SQLiteRollbackControlStore(Path(directory) / "control.sqlite", PROJECT)

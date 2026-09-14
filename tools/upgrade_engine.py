@@ -601,7 +601,7 @@ class UpgradeEngine:
             self._verified_rollback_context = supplied
             return self._rollback_locked(handler)
 
-    def _rollback_locked(self, handler: Handler) -> dict[str, Any]:
+    def _rollback_locked(self, handler: Handler) -> dict[str, Any]:  # noqa: C901
         value = self._load()
         if self.backend_adapter is None:
             raise UpgradeError("backend adapter is required for rollback")
@@ -640,6 +640,14 @@ class UpgradeEngine:
             if set(handler_result).intersection(required):
                 raise UpgradeError("handler cannot provide backend rollback evidence")
             result.update(handler_result)
+            releaser = getattr(self.backend_adapter, "release_rollback_context", None)
+            if not callable(releaser):
+                raise UpgradeError("rollback barrier release is unavailable")
+            released = releaser(
+                cast(Mapping[str, object], _freeze(self._verified_rollback_context))
+            )
+            if not isinstance(released, Mapping) or released.get("status") != "released":
+                raise UpgradeError("rollback barrier was not durably released")
             record["outcome"] = "rollback_completed"
             record["result"] = result
             value["status"] = "rolled-back"

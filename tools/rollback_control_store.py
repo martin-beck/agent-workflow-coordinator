@@ -15,7 +15,7 @@ import uuid
 from collections.abc import Callable, Mapping
 from contextlib import closing
 from pathlib import Path
-from typing import cast
+from typing import Protocol, cast
 
 from tools.handoffctl import locked
 
@@ -57,6 +57,43 @@ _UPDATE_SQL = (
 
 class ControlStoreError(RuntimeError):
     """Control-store data is unavailable or failed validation."""
+
+
+class UpgradeAdapter(Protocol):
+    """Minimal engine adapter surface wrapped by the control store."""
+
+    def snapshot(self, phase: str, context: Mapping[str, object]) -> Mapping[str, object]: ...
+
+    def execute(self, phase: str, context: Mapping[str, object]) -> Mapping[str, object]: ...
+
+
+class SQLiteControlStoreAdapter:
+    """Bind an engine adapter's rollback authority to a durable SQLite store."""
+
+    def __init__(self, delegate: UpgradeAdapter, store: SQLiteRollbackControlStore) -> None:
+        self._delegate = delegate
+        self._store = store
+
+    def snapshot(self, phase: str, context: Mapping[str, object]) -> Mapping[str, object]:
+        return self._delegate.snapshot(phase, context)
+
+    def execute(self, phase: str, context: Mapping[str, object]) -> Mapping[str, object]:
+        return self._delegate.execute(phase, context)
+
+    def verify_rollback_context(self, context: Mapping[str, object]) -> dict[str, object] | None:
+        return self._store.verify_rollback_context(context)
+
+    def release_rollback_context(self, context: Mapping[str, object]) -> Mapping[str, object]:
+        return self._store.release(str(context["operation_id"]))
+
+
+def bind_control_store(
+    backend: str, delegate: UpgradeAdapter, store: SQLiteRollbackControlStore | None
+) -> SQLiteControlStoreAdapter:
+    """Construct only a proven SQLite adapter; Git is explicitly fail-closed."""
+    if backend != "sqlite" or store is None:
+        raise ControlStoreError("durable rollback control store is unavailable for backend")
+    return SQLiteControlStoreAdapter(delegate, store)
 
 
 def _validate(record: Mapping[str, object]) -> dict[str, object]:  # noqa: C901
@@ -206,6 +243,14 @@ class SQLiteRollbackControlStore:
         with locked(), closing(self._connect()) as connection:
             return self._cas_connection(connection, expected_revision, supplied)
 
+    def release(self, operation_id: str) -> dict[str, object]:
+        """Durably release a held barrier through the releasing state."""
+        current = self.snapshot(operation_id)
+        if current["status"] != "held":
+            raise ControlStoreError("barrier is not held")
+        releasing = self.cas(cast(int, current["revision"]), {**current, "status": "releasing"})
+        return self.cas(cast(int, releasing["revision"]), {**releasing, "status": "released"})
+
     def _cas_connection(  # noqa: C901
         self, connection: sqlite3.Connection, expected_revision: int, supplied: dict[str, object]
     ) -> dict[str, object]:
@@ -227,6 +272,13 @@ class SQLiteRollbackControlStore:
             connection.rollback()
             raise ControlStoreError("new control barrier must start held")
         if current is None:
+            latest = connection.execute(
+                "SELECT MAX(state_revision) FROM barrier WHERE project_id=?",
+                (supplied["project_id"],),
+            ).fetchone()[0]
+            if latest is not None and supplied["state_revision"] <= latest:
+                connection.rollback()
+                raise ControlStoreError("stale control state revision")
             active = connection.execute(
                 "SELECT operation_id FROM barrier WHERE project_id=? "
                 "AND status IN ('held','releasing') LIMIT 1",
