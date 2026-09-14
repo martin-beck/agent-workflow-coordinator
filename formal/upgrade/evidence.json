@@ -1,6 +1,17 @@
 {
   "model": "formal/upgrade/UpgradeRecovery.tla",
   "config": "formal/upgrade/UpgradeRecovery.cfg",
+  "model_sha256": "b3ea2ab4e932a531257fcbd4e3eaf4d5e2d238a4052ac9ea2d204f410e9d620d",
+  "config_sha256": "920eef41219ab0c9eba7b11ed334618fd97a89900a6942d1e0087c950861462f",
+  "implementation_snapshot": {
+    "revision": "1fcab38e0521b2970387c49cd020067a727b4608",
+    "files": {
+      "tools/rollback_control_store.py": "17b39854d13c6e7072c81b1eff0ed464f0a8eabd1477eff9b21cbcb814b6bb98",
+      "tools/upgrade_engine.py": "86cf445ce072e01ead36bef84f7d82b5cadafde53bc9a589b36e4a6efd7873ae",
+      "tests/test_rollback_control_store.py": "a04eef4f758e45af37e9a0816d246bb276a4b1763f2045508876e34ab297c10e",
+      "tests/test_upgrade_engine.py": "d1ed4d1feec8aa037def024a1b5661c7634282ab2ad4b1379e170517a8e3c1ae"
+    }
+  },
   "verifier": {
     "name": "TLC",
     "version": "2.19 (08 August 2024, rev 5a47802)",

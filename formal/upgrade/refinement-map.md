@@ -6,14 +6,21 @@ records only the TLC result in `evidence.json`.
 
 | Model obligation | Intended implementation evidence | Status |
 | --- | --- | --- |
-| discover/preflight/quiesce | `tests/test_upgrade_engine.py` admission and phase tests | implementation evidence pending |
-| backup before commit | `tests/test_upgrade_engine.py`, backup fault tests | implementation evidence pending |
-| validate/reopen release order | upgrade-engine and control-store release tests | implementation evidence pending |
-| rollback_started/rollback_verified | rollback journal and control-store tests | implementation evidence pending |
-| `Crash` and ambiguous recovery | process-death and reconciliation tests | implementation evidence pending |
-| `FunctionalAvailability` | runtime admission/reopen tests | implementation evidence pending |
+| discover/preflight/quiesce | `test_apply_is_ordered_and_idempotent`, `test_commit_validate_and_reopen_require_safety_evidence` | public tests present; refinement pending |
+| backup before commit | `test_apply_adapter_fault_boundaries_are_durable_and_fail_closed`, `test_failure_is_durable_and_rollback_can_enter_safe_mode` | public tests present; refinement pending |
+| validate/reopen release order | `test_commit_validate_and_reopen_require_safety_evidence`, `test_releasing_barrier_cannot_be_completed_without_authority_evidence` | public tests present; refinement pending |
+| rollback_started/rollback_verified | `test_rollback_verified_is_durable_before_release_and_revalidated`, `test_successful_rollback_requires_and_writes_terminal_record` | public tests present; refinement pending |
+| `Crash` and ambiguous recovery | `test_sigkill_after_durable_releasing_recovers_without_second_restore`, `test_ambiguous_requires_explicit_newer_reconciliation` | public tests present; refinement pending |
+| `FunctionalAvailability` | `test_loaded_rollback_requires_authority_and_runtime_revalidation`, `test_apply_rejects_failed_state_and_unreconciled_rollback_record` | public tests present; refinement pending |
 | Git backend | production Git adapter and ref/restore tests | explicitly fail-closed/pending |
-| SQLite backend | WAL/SHM and restore-equivalence tests | implementation evidence pending |
+| SQLite backend | `test_wal_cas_and_reload_are_durable`, `test_sidecars_require_private_provisioning_and_stable_regular_identities` | public tests present; release-specific rereader/refinement pending |
+
+The names above are resolved against the implementation snapshot recorded in
+`evidence.json`; they are not claims about later source revisions. The model
+actions are coarser than the Python phase journal, so passing these tests does
+not establish a trace-preserving refinement. In particular, no test currently
+binds the abstract `Backends` parameter or `fence` variable to a model
+transition, and Git remains fail-closed.
 
 The model abstracts these mechanisms. A passing TLC run must not be reported
 as proof that any row is implemented until the corresponding executable
