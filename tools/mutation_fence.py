@@ -17,6 +17,7 @@ import json
 import os
 import re
 import secrets
+import sqlite3
 import stat
 import threading
 from collections.abc import Callable, Iterator
@@ -293,6 +294,7 @@ class MutationFence:
         self.control_binding = control_binding
         self.control_lock = control_lock
         self._scope_owner: int | None = None
+        self._process_lock = threading.Lock()
 
     def _verify(self) -> dict[str, object]:
         record = _read_json(self.marker, "authority fence marker")
@@ -376,15 +378,16 @@ class MutationFence:
     def mutation_scope(
         self,
         common_lock: Callable[[], AbstractContextManager[object]],
-        barrier_status: Callable[[], str | None],
     ) -> Iterator[None]:
         """Acquire common -> control -> authority and admit only released."""
         if self._scope_owner == threading.get_ident():
             raise MutationFenceError("mutation fence scope is non-reentrant")
+        if not self._process_lock.acquire(blocking=False):
+            raise MutationFenceError("mutation fence scope is busy")
         self._scope_owner = threading.get_ident()
         try:
             with common_lock(), self.control_locked(), self.locked():
-                status = barrier_status()
+                status = self._read_barrier_status()
                 if status != "released":
                     raise MutationFenceError(
                         f"authority mutation rejected while barrier is {status}"
@@ -392,6 +395,29 @@ class MutationFence:
                 yield
         finally:
             self._scope_owner = None
+            self._process_lock.release()
+
+    def _read_barrier_status(self) -> str:
+        if self.control_store is None:
+            raise MutationFenceError("control binding prerequisites are incomplete")
+        project_id = self._verify_marker(_read_json(self.marker, "authority fence marker"))
+        connection: sqlite3.Connection | None = None
+        try:
+            connection = sqlite3.connect(f"file:{self.control_store}?mode=ro", uri=True, timeout=10)
+            rows = connection.execute(
+                "SELECT status FROM barrier WHERE project_id=?", (project_id,)
+            ).fetchall()
+        except (sqlite3.Error, OSError) as error:
+            raise MutationFenceError("durable control barrier is unreadable") from error
+        finally:
+            if connection is not None:
+                connection.close()
+        if len(rows) != 1:
+            raise MutationFenceError("durable control barrier is missing or ambiguous")
+        status = rows[0][0]
+        if not isinstance(status, str):
+            raise MutationFenceError("durable control barrier status is invalid")
+        return status
 
     @contextmanager
     def locked(self) -> Iterator[None]:

@@ -8,6 +8,7 @@ from __future__ import annotations
 import errno
 import json
 import os
+import sqlite3
 import tempfile
 import unittest
 from collections.abc import Iterator
@@ -38,7 +39,11 @@ class MutationFenceTests(unittest.TestCase):
         self.lifecycle = self.root / "wal-lifecycle.json"
         self.lock = self.root / "authority.lock"
         self.control = self.root / "control.sqlite3"
-        self.control.write_bytes(b"existing control")
+        connection = sqlite3.connect(self.control)
+        connection.execute("CREATE TABLE barrier(project_id TEXT, status TEXT)")
+        connection.execute("INSERT INTO barrier VALUES ('project', 'released')")
+        connection.commit()
+        connection.close()
         self.control.chmod(0o600)
         self.control_lock = self.root / "control.lock"
         self.control_binding = self.root / "control-binding.json"
@@ -257,6 +262,14 @@ class MutationFenceTests(unittest.TestCase):
             self.control_lock,
         )
 
+    def _set_barrier(self, status: str | None) -> None:
+        connection = sqlite3.connect(self.control)
+        connection.execute("DELETE FROM barrier WHERE project_id='project'")
+        if status is not None:
+            connection.execute("INSERT INTO barrier VALUES ('project', ?)", (status,))
+        connection.commit()
+        connection.close()
+
     def test_scope_rejects_missing_and_nonreleased_barriers(self) -> None:
         fence = self._fenced()
 
@@ -265,17 +278,16 @@ class MutationFenceTests(unittest.TestCase):
             yield None
 
         for status in (None, "held", "releasing", "ambiguous"):
-
-            def read_status(status: str | None = status) -> str | None:
-                return status
+            self._set_barrier(status)
 
             with (
                 self.subTest(status=status),
-                self.assertRaisesRegex(MutationFenceError, "rejected"),
-                fence.mutation_scope(common, read_status),
+                self.assertRaisesRegex(MutationFenceError, "rejected|missing"),
+                fence.mutation_scope(common),
             ):
                 pass
-        with fence.mutation_scope(common, lambda: "released"):
+        self._set_barrier("released")
+        with fence.mutation_scope(common):
             pass
 
     def test_scope_is_nonreentrant_and_sqlite_route_uses_it(self) -> None:
@@ -286,9 +298,9 @@ class MutationFenceTests(unittest.TestCase):
             yield None
 
         with (
-            fence.mutation_scope(common, lambda: "released"),
+            fence.mutation_scope(common),
             self.assertRaisesRegex(MutationFenceError, "non-reentrant"),
-            fence.mutation_scope(common, lambda: "released"),
+            fence.mutation_scope(common),
         ):
             pass
         database = self.root / "backend.sqlite3"
@@ -321,7 +333,7 @@ class MutationFenceTests(unittest.TestCase):
 
         @contextmanager
         def route_scope() -> Iterator[object]:
-            with backend_fence.mutation_scope(common, lambda: "released"):
+            with backend_fence.mutation_scope(common):
                 yield None
 
         backend = SQLiteBackend(database, binding, self.root, mutation_scope=route_scope)
@@ -334,10 +346,71 @@ class MutationFenceTests(unittest.TestCase):
             database,
             binding,
             self.root,
-            mutation_scope=lambda: backend_fence.mutation_scope(common, lambda: "held"),
+            mutation_scope=lambda: backend_fence.mutation_scope(common),
         )
+        self._set_barrier("held")
         with self.assertRaisesRegex(MutationFenceError, "rejected"), blocked.transaction():
             pass
+
+    def test_durable_barrier_read_failures_are_fail_closed(self) -> None:
+        fence = self._fenced()
+
+        @contextmanager
+        def common() -> Iterator[object]:
+            yield None
+
+        connection = sqlite3.connect(self.control)
+        connection.execute("INSERT INTO barrier VALUES ('project', 'released')")
+        connection.commit()
+        connection.close()
+        with (
+            self.assertRaisesRegex(MutationFenceError, "missing or ambiguous"),
+            fence.mutation_scope(common),
+        ):
+            pass
+        self._set_barrier("held")
+        connection = sqlite3.connect(self.control)
+        connection.execute(
+            "UPDATE barrier SET status=? WHERE project_id='project'", (sqlite3.Binary(b"x"),)
+        )
+        connection.commit()
+        connection.close()
+        with (
+            self.assertRaisesRegex(MutationFenceError, "status is invalid"),
+            fence.mutation_scope(common),
+        ):
+            pass
+        self.control.write_bytes(b"not sqlite")
+        self.control.chmod(0o600)
+        with self.assertRaisesRegex(MutationFenceError, "unreadable"), fence.mutation_scope(common):
+            pass
+
+    def test_missing_binding_and_process_busy_are_rejected(self) -> None:
+        provision(self.authority, self.marker, self.lifecycle, self.lock, "project")
+        incomplete = MutationFence(
+            self.authority,
+            self.marker,
+            self.lifecycle,
+            self.lock,
+            control_store=self.control,
+        )
+
+        @contextmanager
+        def common() -> Iterator[object]:
+            yield None
+
+        with (
+            self.assertRaisesRegex(MutationFenceError, "prerequisites"),
+            incomplete.mutation_scope(common),
+        ):
+            pass
+        fence = self._fenced()
+        fence._process_lock.acquire()
+        try:
+            with self.assertRaisesRegex(MutationFenceError, "busy"), fence.mutation_scope(common):
+                pass
+        finally:
+            fence._process_lock.release()
 
     def test_record_permissions_and_descriptor_races_fail_closed(self) -> None:
         provision(self.authority, self.marker, self.lifecycle, self.lock, "project")
