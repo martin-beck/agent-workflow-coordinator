@@ -1,0 +1,44 @@
+{
+  "model": "formal/upgrade/UpgradeSessionIntent.tla",
+  "config": "formal/upgrade/UpgradeSessionIntent.cfg",
+  "model_sha256": "32653f40593af47059802a7a9164ad2546f8d9ff1514d969a4845dca736c793f",
+  "config_sha256": "1d4abebf8b3e52b5136cca82e7bff525376de4da45bdd5db5971510205640254",
+  "verifier": {
+    "name": "TLC",
+    "version": "2.19 (08 August 2024, rev 5a47802)",
+    "jar_sha256": "936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88",
+    "admission": "tools/tlc_runner.py with isolated explicit admission lock",
+    "workers": 1,
+    "heap": "512m",
+    "timeout_seconds": 300
+  },
+  "bounds": {
+    "processes": ["p1", "p2"],
+    "max_revision": 4
+  },
+  "result": {
+    "status": "pass",
+    "states_generated": 41,
+    "distinct_states": 20,
+    "depth": 6,
+    "invariants": [
+      "TypeOK",
+      "IntentRevisionBound",
+      "IntentStatusCoherence",
+      "LockOwnership",
+      "NoWriteBeforeRecovery",
+      "AmbiguousIsWriteClosed"
+    ]
+  },
+  "claim_boundary": {
+    "class": "bounded-model diagnostic",
+    "implementation_refinement": "not-proven",
+    "excluded": [
+      "SQLite VFS and WAL fsync durability",
+      "arbitrary process termination in the Python implementation",
+      "authority mutation routes",
+      "production intent schema/API equivalence",
+      "upgrade apply and rollback enablement"
+    ]
+  }
+}

@@ -40,3 +40,20 @@ The model is bounded by the constants in the configuration; no unbounded or
 implementation-refinement claim is made. Exact run metadata is recorded in
 `evidence.json`; the executable-to-model obligations and their current gaps
 are recorded in `refinement-map.md`.
+
+## Session intent diagnostic
+
+`UpgradeSessionIntent.tla` is a small bounded contract model for the
+session-only durable-intent boundary. It distinguishes a prepared intent,
+session commit, intent publication, process loss, conservative unknown-outcome
+recovery to `ambiguous`, and newer-fence reconciliation. Its invariants close
+writes before recovery, preserve intent/revision coherence, and require
+ambiguous state to remain write-closed.
+
+This is diagnostic evidence only. It does not model SQLite VFS/WAL fsync,
+Python process death, authority writes, or implementation refinement. A pass
+does not establish that the current product persists or recovers these states.
+The exact isolated run is recorded in `intent-evidence.json` (41 generated,
+20 distinct states, depth 6, all six invariants passed). AR-0007 and AR-0012
+remain gated on executable crash-boundary tests, route fencing, and exact-head
+formal correspondence.
