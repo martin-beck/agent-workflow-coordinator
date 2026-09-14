@@ -2482,6 +2482,8 @@ class RollbackControlStoreTests(unittest.TestCase):
             reopened = SQLiteRollbackControlStore(root / "control.sqlite", PROJECT)
             with self.assertRaisesRegex(ControlStoreError, "newer project fence"):
                 reopened.reconcile_ambiguous("op-1", old_replacement)
+            unchanged = reopened.snapshot("op-1")
+            self.assertEqual(("ambiguous", 2), (unchanged["status"], unchanged["revision"]))
 
             with store.operation_lock():
                 actions: tuple[Callable[[], object], ...] = (
