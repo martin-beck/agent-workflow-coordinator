@@ -56,3 +56,13 @@ while keeping these control-plane constructors compatible. AR-0007 remains
 incomplete until its required fencing/correspondence evidence is accepted; this
 PR records the gap but does not satisfy that implementation gate. Until the
 adapter and its multiprocess evidence exist, this is an explicit nonclaim.
+
+The uncalled `commit_runtime_selector_admitted` adapter defines the
+caller-owned selector boundary: it requires an immutable `AdmissionLease`, a
+matching `AdmissionRecheck`, and a separate ordered scope that exposes
+`assert_ordered()` and `hold()`. It validates immutable evidence and lock order
+before touching the selector path, and publishes only while the caller-owned
+scope is held. Its tests reject missing, structurally invalid, mismatched, and
+incorrectly ordered inputs. This is an API contract only; no existing caller
+uses it, and selector mutation remains disabled in the rejection-only upgrade
+paths.
