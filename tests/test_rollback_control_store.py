@@ -2445,6 +2445,24 @@ class RollbackControlStoreTests(unittest.TestCase):
             self.assertGreater(sleep.call_args_list[-1].args[0], 0)
             self.assertLess(sleep.call_args_list[-1].args[0], 0.05)
 
+    def test_control_lock_timeout_closes_descriptor_for_retry(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "control.sqlite"
+            first = SQLiteRollbackControlStore(path, PROJECT)
+            second = SQLiteRollbackControlStore(path, PROJECT)
+            with (
+                first._control_lock(),
+                patch(
+                    "tools.rollback_control_store.time.monotonic",
+                    side_effect=(0.0, 0.0, 11.0),
+                ),
+                patch("tools.rollback_control_store.time.sleep"),
+                self.assertRaises(ControlStoreError),
+            ):
+                second.cas(0, RECORD)
+            second.cas(0, RECORD)
+            self.assertEqual("op-1", second.snapshot("op-1")["operation_id"])
+
     def test_releasing_barrier_cannot_be_completed_without_authority_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             store = SQLiteRollbackControlStore(Path(directory) / "control.sqlite", PROJECT)
