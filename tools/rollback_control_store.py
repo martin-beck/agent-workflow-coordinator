@@ -9,6 +9,8 @@ an implementation yet and must fail closed.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 import sqlite3
 import uuid
@@ -38,7 +40,7 @@ STATUS_TRANSITIONS = {
     "held": {"held", "releasing", "ambiguous"},
     "releasing": {"releasing", "released", "ambiguous"},
     "released": {"released", "ambiguous"},
-    "ambiguous": {"ambiguous"},
+    "ambiguous": set(),
 }
 _TOKEN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,126}")
 _DIGEST = re.compile(r"[0-9a-f]{64}")
@@ -53,6 +55,17 @@ _UPDATE_SQL = (
     "authority_revision=?,durable_barrier_id=?,barrier_identity_digest=?,envelope_digest=?,"
     "target=?,status=?,revision=? WHERE operation_id=? AND revision=?"
 )
+
+
+def canonical_barrier_digest(record: Mapping[str, object]) -> str:
+    """Return the stable identity digest, excluding mutable status/revision and digests."""
+    payload = {
+        field: record[field]
+        for field in IDENTITY_FIELDS
+        if field not in {"barrier_identity_digest", "envelope_digest"}
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    return hashlib.sha256(encoded).hexdigest()
 
 
 class ControlStoreError(RuntimeError):
@@ -296,10 +309,9 @@ class SQLiteRollbackControlStore:
         candidate = _validate(replacement)
         if candidate["operation_id"] == operation_id or candidate["status"] != "held":
             raise ControlStoreError("ambiguous reconciliation requires a new held operation")
-        if (
-            candidate["project_id"] != previous["project_id"]
-            or cast(int, candidate["state_revision"]) <= cast(int, previous["state_revision"])
-        ):
+        if candidate["project_id"] != previous["project_id"] or cast(
+            int, candidate["state_revision"]
+        ) <= cast(int, previous["state_revision"]):
             raise ControlStoreError("ambiguous reconciliation requires a newer project fence")
         return self.cas(0, candidate)
 

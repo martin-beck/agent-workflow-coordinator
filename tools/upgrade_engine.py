@@ -30,6 +30,7 @@ except ImportError:  # pragma: no cover - the coordinator is POSIX-only
     fcntl = None  # type: ignore[assignment]
 
 PHASES = ("discover", "preflight", "quiesce", "backup", "stage", "commit", "validate", "reopen")
+JOURNAL_SCHEMA_VERSION = 2
 MAX_OPERATION_ID_LENGTH = 128 - max(len(f".{phase}") for phase in (*PHASES, "rollback"))
 
 
@@ -261,7 +262,7 @@ class UpgradeEngine:
             if self.journal.exists():
                 raise UpgradeError("operation already planned")
             value: dict[str, Any] = {
-                "schema_version": 1,
+                "schema_version": JOURNAL_SCHEMA_VERSION,
                 "operation_id": self.operation_id,
                 "status": "planned",
                 "phase": None,
@@ -278,7 +279,7 @@ class UpgradeEngine:
         except (OSError, json.JSONDecodeError) as error:
             raise UpgradeError("upgrade journal is unreadable") from error
         if (
-            value.get("schema_version") != 1
+            value.get("schema_version") != JOURNAL_SCHEMA_VERSION
             or set(value) != TOP_LEVEL_FIELDS
             or value.get("operation_id") != self.operation_id
             or value.get("status") not in STATUSES

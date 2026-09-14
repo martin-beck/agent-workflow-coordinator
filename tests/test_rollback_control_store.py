@@ -15,6 +15,7 @@ from tools.rollback_control_store import (
     SQLiteControlStoreAdapter,
     SQLiteRollbackControlStore,
     bind_control_store,
+    canonical_barrier_digest,
 )
 
 PROJECT = "11111111-1111-4111-8111-111111111111"
@@ -36,6 +37,12 @@ RECORD = {
 
 
 class RollbackControlStoreTests(unittest.TestCase):
+    def test_canonical_barrier_digest_is_stable_and_excludes_mutable_fields(self) -> None:
+        first = canonical_barrier_digest(RECORD)
+        second = canonical_barrier_digest({**RECORD, "status": "ambiguous", "revision": 99})
+        self.assertEqual(first, second)
+        self.assertEqual(64, len(first))
+
     def test_binding_is_sqlite_only_and_store_owned(self) -> None:
         class Delegate:
             def snapshot(self, _phase: str, _context: Mapping[str, object]) -> Mapping[str, object]:
