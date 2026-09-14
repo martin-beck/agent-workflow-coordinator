@@ -9,6 +9,7 @@ import tempfile
 import unittest
 from collections.abc import Mapping
 from pathlib import Path
+from typing import cast
 
 from tools.upgrade_admission import (
     PREFLIGHT_PREDICATES,
@@ -309,6 +310,40 @@ class UpgradeEngineTests(unittest.TestCase):
                 tampered["records"][0]["context"][field] = "tampered"
                 journal.write_text(json.dumps(tampered))
                 with self.subTest(field=field), self.assertRaises(UpgradeError):
+                    engine._load()
+
+    def test_rollback_record_schema_and_target_are_strict(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            journal = Path(directory) / "journal.json"
+            engine = UpgradeEngine(
+                "op-rollback",
+                journal,
+                {**CONTEXT, "operation_id": "op-rollback"},
+                backend_adapter=FakeAdapter(),
+            )
+            engine.plan()
+            base = json.loads(journal.read_text())
+            record = {
+                "operation_id": "op-rollback",
+                "step_id": "op-rollback.rollback",
+                "phase": "rollback",
+                "outcome": "started",
+                "context": {**CONTEXT, "operation_id": "op-rollback", "target": "rollback"},
+            }
+            for mutation in (
+                {
+                    "context": {
+                        **cast(dict[str, object], record["context"]),
+                        "target": "new",
+                    }
+                },
+                {"extra": True},
+                {"phase": None},
+            ):
+                value = json.loads(json.dumps(base))
+                value["records"] = [{**record, **mutation}]
+                journal.write_text(json.dumps(value))
+                with self.subTest(mutation=mutation), self.assertRaises(UpgradeError):
                     engine._load()
 
     def test_started_phase_requires_explicit_recovery(self) -> None:

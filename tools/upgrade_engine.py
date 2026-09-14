@@ -247,6 +247,11 @@ class UpgradeEngine:
             _write(self.journal, value)
             return value
 
+    def _rollback_context(self) -> dict[str, Any]:
+        context = asdict(self.context)
+        context["target"] = "rollback"
+        return context
+
     def _load(self) -> dict[str, Any]:  # noqa: C901
         try:
             value = json.loads(self.journal.read_text(encoding="utf-8"))
@@ -267,11 +272,15 @@ class UpgradeEngine:
             raise UpgradeError("upgrade journal records are invalid")
         expected = 0
         phase_outcomes: list[str] = []
+        rollback_seen = False
         for record in records:
             if not isinstance(record, dict):
                 raise UpgradeError("upgrade journal record is invalid")
             phase = record.get("phase")
             if phase == "rollback":
+                if rollback_seen:
+                    raise UpgradeError("duplicate rollback record")
+                rollback_seen = True
                 if (
                     record.get("operation_id") != self.operation_id
                     or record.get("step_id") != f"{self.operation_id}.rollback"
@@ -279,14 +288,31 @@ class UpgradeEngine:
                     raise UpgradeError("upgrade journal rollback identity is invalid")
                 if record.get("outcome") not in {"started", "success", "ambiguous"}:
                     raise UpgradeError("upgrade journal rollback outcome is invalid")
-                if record.get("context") != asdict(self.context) or set(record) - RECORD_FIELDS:
+                if record.get("context") != self._rollback_context() or set(record) - RECORD_FIELDS:
                     raise UpgradeError("upgrade journal rollback context is invalid")
-                if record["outcome"] == "success" and not isinstance(record.get("result"), dict):
+                outcome = record["outcome"]
+                expected_fields = {
+                    "started": {"operation_id", "step_id", "phase", "outcome", "context"},
+                    "success": {"operation_id", "step_id", "phase", "outcome", "context", "result"},
+                    "ambiguous": {
+                        "operation_id",
+                        "step_id",
+                        "phase",
+                        "outcome",
+                        "context",
+                        "error",
+                    },
+                }[outcome]
+                if set(record) != expected_fields:
+                    raise UpgradeError("rollback record fields are invalid")
+                if outcome == "success" and not isinstance(record["result"], dict):
                     raise UpgradeError("successful rollback lacks result evidence")
-                if record["outcome"] == "ambiguous" and not isinstance(record.get("error"), str):
+                if outcome == "ambiguous" and not isinstance(record["error"], str):
                     raise UpgradeError("ambiguous rollback lacks error evidence")
                 continue
             if phase is not None:
+                if rollback_seen:
+                    raise UpgradeError("phase follows rollback record")
                 if (
                     expected >= len(PHASES)
                     or phase != PHASES[expected]
@@ -294,6 +320,8 @@ class UpgradeEngine:
                     or record.get("step_id") != f"{self.operation_id}.{phase}"
                 ):
                     raise UpgradeError("upgrade journal phase identity is invalid")
+                if not isinstance(record.get("step_id"), str) or len(record["step_id"]) > 128:
+                    raise UpgradeError("upgrade journal step identity is invalid")
                 if record.get("outcome") not in {"started", "success", "failed", "ambiguous"}:
                     raise UpgradeError("upgrade journal outcome is invalid")
                 if set(record) - RECORD_FIELDS or record.get("context") != asdict(self.context):
@@ -313,11 +341,8 @@ class UpgradeEngine:
                     raise UpgradeError("started phase has terminal evidence")
                 phase_outcomes.append(cast(str, record["outcome"]))
                 expected += 1
-            elif (
-                record.get("operation_id") != self.operation_id
-                or record.get("step_id") != "rollback"
-            ):
-                raise UpgradeError("upgrade journal auxiliary identity is invalid")
+            else:
+                raise UpgradeError("upgrade journal record phase is missing")
         status = cast(str, value["status"])
         if status == "planned" and records:
             raise UpgradeError("planned journal contains records")
@@ -490,14 +515,14 @@ class UpgradeEngine:
             "step_id": step_id,
             "phase": "rollback",
             "outcome": "started",
-            "context": asdict(self.context),
+            "context": self._rollback_context(),
         }
         value["records"].append(record)
         _write(self.journal, value)
         try:
             result = dict(
                 self.backend_adapter.execute(
-                    "rollback", cast(Mapping[str, object], _freeze(asdict(self.context)))
+                    "rollback", cast(Mapping[str, object], _freeze(self._rollback_context()))
                 )
             )
             result.update(handler(step_id, cast(Mapping[str, Any], _freeze(value))) or {})
