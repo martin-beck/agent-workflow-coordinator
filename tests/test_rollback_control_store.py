@@ -89,8 +89,9 @@ AUTHORITY_BINDING = {
 
 
 # These subprocess fixtures cover only WAL/SHM rollback after process death and
-# clean control-plane reopen. They do not prove caller-owned admission,
-# ambiguous recovery, mutation fencing, or authority integration.
+# clean control-plane reopen. The caller-owned mode additionally exercises the
+# lock/recheck seam, but does not prove ambiguous recovery, mutation fencing,
+# authority integration, or formal refinement.
 _SUBPROCESS_SESSION_SCRIPT = r"""
 import os
 import signal
@@ -134,6 +135,21 @@ if mode == "clean":
     with ready_path.open("rb") as ready:
         os.fsync(ready.fileno())
     raise SystemExit(0)
+
+if mode == "kill-during-caller-owned-recheck":
+    from tools.handoffctl import locked
+
+    with locked() as guard, store.lock_owned_by_caller(guard), control._connection() as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        connection.execute(
+            "UPDATE barrier_session SET status='releasing', revision=revision+1 WHERE project_id=?",
+            (project_id,),
+        )
+        journal_mode = str(connection.execute("PRAGMA journal_mode").fetchone()[0]).lower()
+        ready_path.write_text(journal_mode + "\n", encoding="utf-8")
+        with ready_path.open("rb") as ready:
+            os.fsync(ready.fileno())
+        os.kill(os.getpid(), signal.SIGKILL)
 
 if mode != "kill-during-transaction":
     raise SystemExit("unknown test mode")
@@ -339,6 +355,48 @@ class RollbackControlStoreTests(unittest.TestCase):
             self.assertIsNotNone(state)
             assert state is not None
             self.assertEqual(("held", 2), (state.status, state.revision))
+            self.assertEqual(authority_bytes, authority_path.read_bytes())
+
+    def test_v10_subprocess_caller_owned_wal_rollback_preserves_recheck(self) -> None:
+        """Cover caller-owned WAL rollback and recheck only; no ambiguity claim."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            control_path = root / "control.sqlite"
+            authority_path = root / "authority.sqlite"
+            authority_bytes = b"authority remains untouched after caller-owned crash\n"
+            authority_path.write_bytes(authority_bytes)
+            ready_path = root / "ready"
+            process = self._run_session_process(
+                control_path,
+                authority_path,
+                "kill-during-caller-owned-recheck",
+                ready_path,
+            )
+            self._wait_for_file(ready_path, process)
+            self.assertEqual("wal", ready_path.read_text(encoding="utf-8").strip())
+            self.assertTrue((root / "control.sqlite-wal").exists())
+            self.assertTrue((root / "control.sqlite-shm").exists())
+            returncode = process.wait(timeout=10)
+            stdout, stderr = process.communicate()
+            self.assertEqual(
+                -signal.SIGKILL,
+                returncode,
+                msg=f"stdout={stdout}; stderr={stderr}",
+            )
+
+            store = SQLiteBarrierSessionStore(
+                SQLiteRollbackControlStore(control_path, PROJECT, authority_path),
+                lambda: "authority-3",
+            )
+            state = store.snapshot()
+            self.assertIsNotNone(state)
+            assert state is not None
+            self.assertEqual(("held", 2), (state.status, state.revision))
+            with locked() as guard, store.lock_owned_by_caller(guard):
+                self.assertEqual(
+                    state,
+                    store.recheck_held_locked(guard, state.identity, state.revision),
+                )
             self.assertEqual(authority_bytes, authority_path.read_bytes())
 
     def test_v10_durable_session_persists_children_and_reopen(self) -> None:
