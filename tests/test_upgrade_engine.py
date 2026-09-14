@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import fcntl
 import json
+import multiprocessing
 import os
 import signal
 import tempfile
@@ -15,6 +16,7 @@ from pathlib import Path
 from typing import cast
 from unittest.mock import patch
 
+from tools import upgrade_engine as upgrade_engine_module
 from tools.rollback_control_store import (
     SQLiteAuthorityRuntimeState,
     SQLiteControlStoreAdapter,
@@ -70,6 +72,18 @@ ADMISSION = {
     **CONTEXT,
     "validation_failed": False,
 }
+
+
+def _plan_then_crash_after_journal_replace(journal: str, context: dict[str, object]) -> None:
+    """Persist a complete journal, then die before the caller can continue."""
+    original_write = upgrade_engine_module._write
+
+    def write_then_crash(path: Path, value: Mapping[str, object]) -> None:
+        original_write(path, value)
+        os.kill(os.getpid(), signal.SIGKILL)
+
+    with patch.object(upgrade_engine_module, "_write", side_effect=write_then_crash):
+        UpgradeEngine("op-1", Path(journal), context).plan()
 
 
 class StaticAuthorityRuntimeRereader:
@@ -146,6 +160,39 @@ class FailingAdapter(FakeAdapter):
 
 
 class UpgradeEngineTests(unittest.TestCase):
+    def test_journal_process_death_reopens_bound_control_and_rejects_revision_drift(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            journal = Path(directory) / "journal.json"
+            process = multiprocessing.get_context("fork").Process(
+                target=_plan_then_crash_after_journal_replace,
+                args=(str(journal), CONTEXT),
+            )
+            process.start()
+            process.join(timeout=10)
+            self.assertEqual(-signal.SIGKILL, process.exitcode)
+            self.assertFalse(process.is_alive())
+
+            persisted = json.loads(journal.read_text(encoding="utf-8"))
+            self.assertEqual(
+                CONTEXT["authority_revision"], persisted["context"]["authority_revision"]
+            )
+            self.assertEqual(CONTEXT["fencing_token"], persisted["context"]["fencing_token"])
+            self.assertEqual(
+                CONTEXT["barrier_identity_digest"], persisted["context"]["barrier_identity_digest"]
+            )
+            self.assertEqual(CONTEXT["envelope_digest"], persisted["context"]["envelope_digest"])
+            self.assertEqual(
+                "planned",
+                UpgradeEngine("op-1", journal, CONTEXT)._load()["status"],
+            )
+
+            drifted = make_context()
+            drifted["authority_revision"] = "authority-2"
+            drifted["barrier_identity_digest"] = canonical_barrier_digest(drifted)
+            drifted["envelope_digest"] = canonical_envelope_digest(drifted)
+            with self.assertRaisesRegex(UpgradeError, "context is invalid or changed"):
+                UpgradeEngine("op-1", journal, drifted)._load()
+
     @staticmethod
     def _prepare_failed_journal(
         directory: str, operation_id: str, adapter: BackendAdapter
