@@ -1,0 +1,45 @@
+{
+  "model": "formal/upgrade/UpgradeSessionIntent.tla",
+  "config": "formal/upgrade/UpgradeSessionIntent.cfg",
+  "model_sha256": "6dcb841eafaa972480527e00a33d2c47683b51be36ff9bdb1700789ebf396474",
+  "config_sha256": "e8afb2fce86572e3d900aca87db915c9090527c4b2ecfef667d49a7ef78bd790",
+  "verifier": {
+    "name": "TLC",
+    "version": "2.19 (08 August 2024, rev 5a47802)",
+    "jar_sha256": "936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88",
+    "admission": "tools/tlc_runner.py with isolated explicit admission lock",
+    "workers": 1,
+    "heap": "512m",
+    "timeout_seconds": 300
+  },
+  "bounds": {
+    "processes": ["p1", "p2"],
+    "max_revision": 4
+  },
+  "result": {
+    "status": "pass",
+    "states_generated": 56,
+    "distinct_states": 27,
+    "depth": 7,
+    "invariants": [
+      "TypeOK",
+      "IntentRevisionBound",
+      "IntentStatusCoherence",
+      "LockOwnership",
+      "NoWriteBeforeRecovery",
+      "AmbiguousIsWriteClosed",
+      "ReconcileRequiresFence"
+    ]
+  },
+  "claim_boundary": {
+    "class": "bounded-model diagnostic",
+    "implementation_refinement": "not-proven",
+    "excluded": [
+      "SQLite VFS and WAL fsync durability",
+      "arbitrary process termination in the Python implementation",
+      "authority mutation routes",
+      "production intent schema/API equivalence",
+      "upgrade apply and rollback enablement"
+    ]
+  }
+}
