@@ -22,9 +22,13 @@ SOURCE_FILES: tuple[tuple[str, str], ...] = (
     ("tools/status_renderer.py", "tools/status_renderer.py"),
     ("tools/upgrade_commands.py", "tools/upgrade_commands.py"),
     ("tools/upgrade_contract_runtime.py", "tools/upgrade_contract_runtime.py"),
+    ("tools/tlc_runner.py", "tools/tlc_runner.py"),
     ("tools/vendor.py", "tools/handoffctl_vendor.py"),
     ("tests/test_handoffctl.py", "tests/test_handoffctl.py"),
     ("tests/test_sqlite_storage.py", "tests/test_sqlite_storage.py"),
+    ("tests/test_tlc_runner.py", "tests/test_tlc_runner.py"),
+    ("tests/test_upgrade_commands.py", "tests/test_upgrade_commands.py"),
+    ("tests/test_upgrade_contract_runtime.py", "tests/test_upgrade_contract_runtime.py"),
     (
         "schema/project-config.schema.json",
         "schema/handoffctl-project-config.schema.json",
