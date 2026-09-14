@@ -4,6 +4,8 @@
 
 from __future__ import annotations
 
+import multiprocessing
+import os
 import sqlite3
 import tempfile
 import unittest
@@ -33,6 +35,13 @@ CONTEXT = {
     "target": "new",
     "envelope_digest": "0" * 64,
 }
+
+
+def _snapshot_process(path_text: str, crash: bool) -> None:
+    adapter = SQLiteAuthorityAdapter(Path(path_text))
+    adapter.snapshot("discover", CONTEXT)
+    if crash:
+        os._exit(17)
 
 
 class Scope:
@@ -82,6 +91,31 @@ class SQLiteAuthorityAdapterTests(unittest.TestCase):
             self.adapter.snapshot("discover", CONTEXT)
         with self.assertRaisesRegex(SQLiteAuthorityError, "mismatched"):
             self.adapter.snapshot("discover", {**CONTEXT, "backend": "git"})
+
+    def test_descriptor_replacement_fails_old_reader_and_fresh_reader_recovers(self) -> None:
+        replacement = self.root / "replacement.sqlite"
+        replacement.write_bytes(self.authority.read_bytes())
+        replacement.chmod(0o600)
+        replacement.replace(self.authority)
+        with self.assertRaisesRegex(SQLiteAuthorityError, "identity changed"):
+            self.adapter.snapshot("discover", CONTEXT)
+        self.assertTrue(
+            SQLiteAuthorityAdapter(self.authority).snapshot("discover", CONTEXT)[
+                "sqlite_integrity_verified"
+            ]
+        )
+
+    def test_process_death_after_read_allows_fresh_reader(self) -> None:
+        context = multiprocessing.get_context("fork")
+        worker = context.Process(target=_snapshot_process, args=(str(self.authority), True))
+        worker.start()
+        worker.join(5)
+        self.assertEqual(17, worker.exitcode)
+        self.assertTrue(
+            SQLiteAuthorityAdapter(self.authority).snapshot("discover", CONTEXT)[
+                "sqlite_integrity_verified"
+            ]
+        )
 
     def test_unavailable_and_unsafe_descriptors_fail_closed(self) -> None:
         with self.assertRaisesRegex(SQLiteAuthorityError, "unavailable"):
