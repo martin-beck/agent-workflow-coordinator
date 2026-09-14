@@ -6,6 +6,9 @@
 from __future__ import annotations
 
 import importlib.util
+import multiprocessing
+import os
+import signal
 import sqlite3
 import unittest
 from contextlib import closing
@@ -52,6 +55,16 @@ def create_database(path: Path, *, body: str = "before") -> None:
     connection.execute("INSERT INTO records(body) VALUES (?)", (body,))
     connection.commit()
     connection.close()
+
+
+def _backup_then_crash_after_replace(source: str, destination: str) -> None:
+    """Kill the worker after atomic replacement and before directory fsync."""
+
+    def crash(_directory: Path) -> None:
+        os.kill(os.getpid(), signal.SIGKILL)
+
+    with patch.object(MODULE, "_fsync_directory", side_effect=crash):
+        MODULE._install(Path(source), Path(destination), BINDING)
 
 
 class SQLiteBackupTests(unittest.TestCase):
@@ -118,6 +131,21 @@ class SQLiteBackupTests(unittest.TestCase):
             self.assertEqual(
                 "known-good", connection.execute("SELECT body FROM records").fetchone()[0]
             )
+
+    def test_process_death_after_backup_replace_reopens_complete_destination(self) -> None:
+        destination = self.root / "restored.sqlite3"
+        create_database(destination, body="known-good")
+        process = multiprocessing.get_context("fork").Process(
+            target=_backup_then_crash_after_replace,
+            args=(str(self.source), str(destination)),
+        )
+        process.start()
+        process.join(timeout=10)
+        self.assertEqual(-signal.SIGKILL, process.exitcode)
+        self.assertFalse(process.is_alive())
+        MODULE._integrity(destination, BINDING)
+        with closing(sqlite3.connect(destination)) as connection:
+            self.assertEqual("before", connection.execute("SELECT body FROM records").fetchone()[0])
 
     def test_failed_directory_fsync_restores_existing_destination(self) -> None:
         backup = self.root / "backup.sqlite3"
