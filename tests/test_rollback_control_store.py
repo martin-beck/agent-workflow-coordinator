@@ -46,8 +46,13 @@ class RollbackControlStoreTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as directory:
             store = SQLiteRollbackControlStore(Path(directory) / "control.sqlite", PROJECT)
+            with self.assertRaises(ControlStoreError):
+                bind_control_store("sqlite", Delegate(), store)
+            authority = Path(directory) / "authority.sqlite"
+            authority.touch()
+            bound = SQLiteRollbackControlStore(Path(directory) / "bound.sqlite", PROJECT, authority)
             self.assertIsInstance(
-                bind_control_store("sqlite", Delegate(), store), SQLiteControlStoreAdapter
+                bind_control_store("sqlite", Delegate(), bound), SQLiteControlStoreAdapter
             )
             with self.assertRaises(ControlStoreError):
                 bind_control_store("git", Delegate(), None)

@@ -99,8 +99,10 @@ def bind_control_store(
     backend: str, delegate: UpgradeAdapter, store: SQLiteRollbackControlStore | None
 ) -> SQLiteControlStoreAdapter:
     """Construct only a proven SQLite adapter; Git is explicitly fail-closed."""
-    if backend != "sqlite" or store is None:
-        raise ControlStoreError("durable rollback control store is unavailable for backend")
+    if backend != "sqlite" or store is None or store.authority_path is None:
+        raise ControlStoreError(
+            "durable rollback control store or authority binding is unavailable"
+        )
     return SQLiteControlStoreAdapter(delegate, store)
 
 
@@ -149,6 +151,7 @@ class SQLiteRollbackControlStore:
     def __init__(self, path: Path, project_id: str, authority_path: Path | None = None) -> None:
         self._check_paths(path, authority_path)
         self.path = path
+        self.authority_path = authority_path
         self.project_id = project_id
         try:
             project = uuid.UUID(project_id)
@@ -174,6 +177,7 @@ class SQLiteRollbackControlStore:
             raise ControlStoreError("control and authority identity is unavailable") from error
 
     def _connect(self) -> sqlite3.Connection:
+        self._check_paths(self.path, self.authority_path)
         self.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         connection = sqlite3.connect(self.path, isolation_level=None, timeout=10)
         try:
