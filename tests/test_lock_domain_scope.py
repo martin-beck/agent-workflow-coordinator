@@ -4,9 +4,13 @@
 
 from __future__ import annotations
 
+import multiprocessing
+import os
 import tempfile
+import time
 import unittest
 from pathlib import Path
+from typing import Any
 
 from tools.admission_lease import AdmissionLease
 from tools.handoffctl import locked
@@ -36,6 +40,36 @@ def identity() -> BarrierSessionIdentity:
     }
     record["identity_digest"] = canonical_barrier_session_digest(record)
     return BarrierSessionIdentity.from_record(record)
+
+
+def _scope_process(
+    root_text: str, start: Any, starts: Any, ends: Any, index: int, crash: bool
+) -> None:
+    root = Path(root_text)
+    authority = root / "authority.sqlite"
+    control = root / "control.sqlite"
+    store = SQLiteRollbackControlStore(control, PROJECT, authority)
+    session = SQLiteBarrierSessionStore(store, lambda: "authority-1")
+    fence = MutationFence(
+        authority,
+        root / "authority-marker.json",
+        root / "authority-lifecycle.json",
+        root / "authority.lock",
+        control,
+        root / "control-binding.json",
+        store.control_lock_path,
+    )
+    with locked() as guard:
+        domain = LockDomainContract.capture(guard, session, fence)
+    lease = AdmissionLease(PROJECT, "authority-1", "fence-1", "owner-1", "barrier-1", 1)
+    scope = LockDomainScope(domain, session, fence, lease, locked)
+    start.wait()
+    with scope.hold():
+        starts[index] = time.monotonic_ns()
+        if crash:
+            os._exit(17)
+        time.sleep(0.05)
+        ends[index] = time.monotonic_ns()
 
 
 class LockDomainScopeTests(unittest.TestCase):
@@ -104,6 +138,54 @@ class LockDomainScopeTests(unittest.TestCase):
         scope = LockDomainScope(self.domain, self.session, self.fence, self.lease, locked)
         with self.assertRaisesRegex(LockDomainError, "binding|identity"), scope.hold():
             self.fail("unreachable")
+
+    def test_two_process_scopes_never_overlap(self) -> None:
+        context = multiprocessing.get_context("fork")
+        start = context.Event()
+        starts = context.Array("q", [0, 0], lock=False)
+        ends = context.Array("q", [0, 0], lock=False)
+        workers = [
+            context.Process(
+                target=_scope_process,
+                args=(self.directory.name, start, starts, ends, index, False),
+            )
+            for index in (0, 1)
+        ]
+        for worker in workers:
+            worker.start()
+        start.set()
+        for worker in workers:
+            worker.join(5)
+            self.assertEqual(0, worker.exitcode)
+        self.assertTrue(
+            ends[0] <= starts[1] or ends[1] <= starts[0],
+            (list(starts), list(ends)),
+        )
+
+    def test_process_death_releases_scope_for_fresh_recheck(self) -> None:
+        context = multiprocessing.get_context("fork")
+        start = context.Event()
+        starts = context.Array("q", [0], lock=False)
+        ends = context.Array("q", [0], lock=False)
+        crashed = context.Process(
+            target=_scope_process,
+            args=(self.directory.name, start, starts, ends, 0, True),
+        )
+        crashed.start()
+        start.set()
+        crashed.join(5)
+        self.assertEqual(17, crashed.exitcode)
+
+        start = context.Event()
+        recovered = context.Process(
+            target=_scope_process,
+            args=(self.directory.name, start, starts, ends, 0, False),
+        )
+        recovered.start()
+        start.set()
+        recovered.join(5)
+        self.assertEqual(0, recovered.exitcode)
+        self.assertGreater(ends[0], starts[0])
 
 
 if __name__ == "__main__":
