@@ -1666,11 +1666,19 @@ class RollbackControlStoreTests(unittest.TestCase):
             context = {field: record[field] for field in IDENTITY_FIELDS}
             with adapter.operation_lock():
                 adapter.begin_release_rollback_context(context)
+
+            reopened_store = SQLiteRollbackControlStore(
+                control_root / "barrier.sqlite", PROJECT, authority
+            )
+            reopened_adapter = SQLiteControlStoreAdapter(Delegate(), reopened_store, rereader)
+            with reopened_adapter.operation_lock():
                 self.assertEqual(
-                    RELEASE_EVIDENCE, adapter.revalidate_rollback(context, RELEASE_EVIDENCE)
+                    RELEASE_EVIDENCE,
+                    reopened_adapter.revalidate_rollback(context, RELEASE_EVIDENCE),
                 )
                 self.assertEqual(
-                    "released", adapter.complete_release_rollback_context(context)["status"]
+                    "released",
+                    reopened_adapter.complete_release_rollback_context(context)["status"],
                 )
 
             backend = SQLiteBackend(authority, AUTHORITY_BINDING, root / "tasks")
