@@ -199,16 +199,39 @@ class SQLiteAuthorityAdapter:
             raise
         except (TypeError, RuntimeError) as error:
             raise SQLiteAuthorityError("trusted SQLite session reread was rejected") from error
+        expected_result_keys = set(validated_context) | {
+            "phase",
+            "backend_identity_verified",
+            "sqlite_integrity_verified",
+            "sqlite_foreign_keys_verified",
+            "mutates_authority",
+        }
+        if set(value) != expected_result_keys:
+            raise SQLiteAuthorityError("SQLite authority backend result schema changed")
         for field, expected in validated_context.items():
             if value.get(field) != expected or type(value.get(field)) is not type(expected):
                 raise SQLiteAuthorityError("SQLite authority backend context identity changed")
-        if value.get("backend_identity_verified") is not True:
+        if type(value.get("phase")) is not str or value.get("phase") != phase:
+            raise SQLiteAuthorityError("SQLite authority backend phase changed")
+        if (
+            type(value.get("backend_identity_verified")) is not bool
+            or value.get("backend_identity_verified") is not True
+        ):
             raise SQLiteAuthorityError("SQLite authority backend identity is unverified")
-        if value.get("sqlite_integrity_verified") is not True:
+        if (
+            type(value.get("sqlite_integrity_verified")) is not bool
+            or value.get("sqlite_integrity_verified") is not True
+        ):
             raise SQLiteAuthorityError("SQLite authority integrity is unverified")
-        if value.get("sqlite_foreign_keys_verified") is not True:
+        if (
+            type(value.get("sqlite_foreign_keys_verified")) is not bool
+            or value.get("sqlite_foreign_keys_verified") is not True
+        ):
             raise SQLiteAuthorityError("SQLite authority foreign keys are unverified")
-        if value.get("mutates_authority") is not False:
+        if (
+            type(value.get("mutates_authority")) is not bool
+            or value.get("mutates_authority") is not False
+        ):
             raise SQLiteAuthorityError("SQLite authority backend is not read-only")
         return value
 

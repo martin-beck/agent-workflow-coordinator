@@ -153,13 +153,37 @@ class GitAuthorityAdapter:
             raise
         except (TypeError, RuntimeError) as error:
             raise GitAuthorityError("trusted Git session reread was rejected") from error
+        expected_result_keys = set(validated_context) | {
+            "phase",
+            "backend_identity_verified",
+            "git_head",
+            "git_branch",
+            "git_clean",
+            "mutates_authority",
+        }
+        if set(value) != expected_result_keys:
+            raise GitAuthorityError("Git authority backend result schema changed")
         for field, expected in validated_context.items():
             if value.get(field) != expected or type(value.get(field)) is not type(expected):
                 raise GitAuthorityError("Git authority backend context identity changed")
-        if value.get("backend_identity_verified") is not True:
+        if type(value.get("phase")) is not str or value.get("phase") != phase:
+            raise GitAuthorityError("Git authority backend phase changed")
+        if (
+            type(value.get("backend_identity_verified")) is not bool
+            or value.get("backend_identity_verified") is not True
+        ):
             raise GitAuthorityError("Git authority backend identity is unverified")
-        if value.get("mutates_authority") is not False:
+        if (
+            type(value.get("mutates_authority")) is not bool
+            or value.get("mutates_authority") is not False
+        ):
             raise GitAuthorityError("Git authority backend is not read-only")
+        if type(value.get("git_head")) is not str or not value.get("git_head"):
+            raise GitAuthorityError("Git authority backend head is unverified")
+        if type(value.get("git_branch")) is not str or not value.get("git_branch"):
+            raise GitAuthorityError("Git authority backend branch is unverified")
+        if type(value.get("git_clean")) is not bool or value.get("git_clean") is not True:
+            raise GitAuthorityError("Git authority backend cleanliness is unverified")
         if value.get("git_branch") != expected_branch or value.get("git_head") != expected_head:
             raise GitAuthorityError("Git authority identity changed")
         return value

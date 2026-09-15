@@ -484,6 +484,78 @@ class SQLiteAuthorityAdapterTests(unittest.TestCase):
         self.assertFalse(self.session.operation_owned_by_current_thread)
         self.assertEqual(before, self._durable_state())
 
+    def test_snapshot_bound_rejects_phase_drift_without_execute(self) -> None:
+        class TamperedAdapter(SQLiteAuthorityAdapter):
+            def snapshot(self, phase: str, context: Mapping[str, object]) -> dict[str, object]:
+                value = super().snapshot(phase, context)
+                value["phase"] = "other"
+                return value
+
+        tampered = TamperedAdapter(self.authority)
+        before = self._durable_state()
+        with (
+            patch.object(tampered, "execute", side_effect=AssertionError("execute reached")),
+            self.assertRaisesRegex(SQLiteAuthorityError, "backend phase changed"),
+        ):
+            tampered.snapshot_bound(
+                "discover",
+                {**CONTEXT, "project_id": PROJECT},
+                self.scope,
+                lease=self.lease,
+                admission_recheck=self.recheck,
+            )
+        self.assertFalse(self.session.operation_owned_by_current_thread)
+        self.assertEqual(before, self._durable_state())
+
+    def test_snapshot_bound_requires_exact_result_schema_and_types(self) -> None:
+        fields = {
+            "phase": 1,
+            "backend_identity_verified": 1,
+            "sqlite_integrity_verified": 1,
+            "sqlite_foreign_keys_verified": 1,
+            "mutates_authority": 0,
+        }
+
+        class TamperedAdapter(SQLiteAuthorityAdapter):
+            mode = "wrong"
+            field = "phase"
+            wrong: object = 1
+
+            def snapshot(self, phase: str, context: Mapping[str, object]) -> dict[str, object]:
+                value = super().snapshot(phase, context)
+                if self.mode == "missing":
+                    value.pop(self.field)
+                elif self.mode == "extra":
+                    value["unexpected"] = True
+                else:
+                    value[self.field] = self.wrong
+                return value
+
+        for mode in ("missing", "extra", "wrong"):
+            for field, wrong in fields.items():
+                with self.subTest(mode=mode, field=field):
+                    adapter = type(
+                        "SchemaTamperedAdapter",
+                        (TamperedAdapter,),
+                        {"mode": mode, "field": field, "wrong": wrong},
+                    )(self.authority)
+                    before = self._durable_state()
+                    with (
+                        patch.object(
+                            adapter, "execute", side_effect=AssertionError("execute reached")
+                        ),
+                        self.assertRaises(SQLiteAuthorityError),
+                    ):
+                        adapter.snapshot_bound(
+                            "discover",
+                            {**CONTEXT, "project_id": PROJECT},
+                            self.scope,
+                            lease=self.lease,
+                            admission_recheck=self.recheck,
+                        )
+                    self.assertFalse(self.session.operation_owned_by_current_thread)
+                    self.assertEqual(before, self._durable_state())
+
     def test_corrupt_or_mismatched_authority_fails_closed(self) -> None:
         self.authority.write_bytes(b"not sqlite")
         with self.assertRaisesRegex(SQLiteAuthorityError, "observation failed"):
