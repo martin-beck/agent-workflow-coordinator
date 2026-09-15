@@ -16,7 +16,8 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any, cast
 
-from tools.admission_lease import AdmissionLease
+from tools.admission_lease import AdmissionLease, AdmissionLeaseError, validate_recheck
+from tools.admitted_control_store import AdmittedControlBinding
 from tools.handoffctl import locked
 from tools.lock_domain import LockDomainContract, LockDomainError
 from tools.lock_domain_scope import LockDomainScope
@@ -90,6 +91,90 @@ def _scope_process(
             os._exit(17)
         time.sleep(0.05)
         ends[index] = time.monotonic_ns()
+
+
+def _binding_abort_process(root_text: str, start: Any) -> None:
+    """Abort a binding holder in a child process without touching its backend."""
+    root = Path(root_text)
+    control = SQLiteRollbackControlStore(
+        root / "control.sqlite", PROJECT, root / "authority.sqlite"
+    )
+    session = SQLiteBarrierSessionStore(control, lambda: "authority-1")
+    fence = MutationFence(
+        root / "authority.sqlite",
+        root / "authority-marker.json",
+        root / "authority-lifecycle.json",
+        root / "authority.lock",
+        root / "control.sqlite",
+        root / "control-binding.json",
+        control.control_lock_path,
+    )
+    with locked() as guard:
+        domain = LockDomainContract.capture(guard, session, fence)
+    lease = AdmissionLease(PROJECT, "authority-1", "fence-1", "owner-1", "barrier-1", 1)
+    recheck = validate_recheck(
+        lease,
+        project_id=PROJECT,
+        authority_revision="authority-1",
+        fencing_token="fence-1",  # noqa: S106
+        fencing_owner="owner-1",
+        durable_barrier_id="barrier-1",
+        revision=1,
+    )
+
+    class Backend:
+        def cas(self, *_args: object, **_kwargs: object) -> dict[str, object]:
+            raise AssertionError("aborted binding must not touch backend")
+
+    binding = AdmittedControlBinding.bind(
+        Backend(), lease, recheck, LockDomainScope(domain, session, fence, lease, locked)
+    )
+    start.wait()
+    with binding.validated_scope():
+        os._exit(29)
+
+
+def _fresh_binding_rejection_process(root_text: str, result: Any) -> None:
+    """Fresh worker must reject replaced durable identity before backend use."""
+    root = Path(root_text)
+    control = SQLiteRollbackControlStore(
+        root / "control.sqlite", PROJECT, root / "authority.sqlite"
+    )
+    session = SQLiteBarrierSessionStore(control, lambda: "authority-after-crash")
+    fence = MutationFence(
+        root / "authority.sqlite",
+        root / "authority-marker.json",
+        root / "authority-lifecycle.json",
+        root / "authority.lock",
+        root / "control.sqlite",
+        root / "control-binding.json",
+        control.control_lock_path,
+    )
+    with locked() as guard:
+        domain = LockDomainContract.capture(guard, session, fence)
+    lease = AdmissionLease(PROJECT, "authority-1", "fence-1", "owner-1", "barrier-1", 1)
+    recheck = validate_recheck(
+        lease,
+        project_id=PROJECT,
+        authority_revision="authority-1",
+        fencing_token="fence-1",  # noqa: S106
+        fencing_owner="owner-1",
+        durable_barrier_id="barrier-1",
+        revision=1,
+    )
+
+    class Backend:
+        def cas(self, *_args: object, **_kwargs: object) -> dict[str, object]:
+            raise AssertionError("rejected binding must not touch backend")
+
+    binding = AdmittedControlBinding.bind(
+        Backend(), lease, recheck, LockDomainScope(domain, session, fence, lease, locked)
+    )
+    try:
+        with binding.validated_scope():
+            result.put(("accepted", session.operation_owned_by_current_thread))
+    except AdmissionLeaseError as error:
+        result.put((str(error), not session.operation_owned_by_current_thread))
 
 
 def _fresh_recheck_process(
@@ -361,6 +446,45 @@ class LockDomainScopeTests(unittest.TestCase):
         scope = LockDomainScope(self.domain, self.session, self.fence, self.lease, locked)
         with self.assertRaisesRegex(LockDomainError, "do not match"), scope.hold():
             self.fail("fresh handoff must reject replaced durable session")
+        self.assertFalse(self.session.operation_owned_by_current_thread)
+
+    def test_binding_abort_releases_locks_and_fresh_worker_rejects_replaced_identity(self) -> None:
+        """A child abort cannot leak locks or bless a replaced binding identity."""
+        context = multiprocessing.get_context("fork")
+        start = context.Event()
+        crashed = context.Process(target=_binding_abort_process, args=(self.directory.name, start))
+        crashed.start()
+        start.set()
+        crashed.join(5)
+        self.assertEqual(29, crashed.exitcode)
+        self.assertFalse(self.session.operation_owned_by_current_thread)
+
+        changed_record = replace(
+            identity(), authority_revision_at_acquire="authority-after-crash", state_revision=2
+        ).as_record()
+        changed_record["identity_digest"] = canonical_barrier_session_digest(changed_record)
+        with sqlite3.connect(self.store.control_store_path) as connection:
+            connection.execute(
+                "UPDATE barrier_session SET authority_revision_at_acquire=?, "
+                "state_revision=?, identity_digest=?, revision=? WHERE project_id=?",
+                (
+                    changed_record["authority_revision_at_acquire"],
+                    changed_record["state_revision"],
+                    changed_record["identity_digest"],
+                    2,
+                    PROJECT,
+                ),
+            )
+            connection.commit()
+
+        result = context.Queue()
+        fresh = context.Process(
+            target=_fresh_binding_rejection_process, args=(self.directory.name, result)
+        )
+        fresh.start()
+        fresh.join(5)
+        self.assertEqual(0, fresh.exitcode)
+        self.assertEqual(("admitted control scope is invalid", True), result.get())
         self.assertFalse(self.session.operation_owned_by_current_thread)
 
     def test_repeated_handoff_rereads_authority_before_rejecting_stale_retry(self) -> None:
