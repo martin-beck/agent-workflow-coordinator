@@ -664,6 +664,16 @@ class LockDomainScopeTests(unittest.TestCase):
         self.assertEqual([], common_calls)
         self.assertFalse(self.session.operation_owned_by_current_thread)
 
+        missing_authority_context = dict(stale_context)
+        missing_authority_context.pop("authority_revision")
+        with (
+            self.assertRaisesRegex(LockDomainError, "does not match"),
+            scope.validated_hold(missing_authority_context),
+        ):
+            self.fail("missing authority revision must fail before scope acquisition")
+        self.assertEqual([], common_calls)
+        self.assertFalse(self.session.operation_owned_by_current_thread)
+
         missing_barrier_context = dict(stale_context)
         missing_barrier_context.pop("durable_barrier_id")
         with (
