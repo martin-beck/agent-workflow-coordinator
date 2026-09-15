@@ -681,6 +681,33 @@ class LockDomainScopeTests(unittest.TestCase):
         self.assertEqual([], common_calls)
         self.assertFalse(self.session.operation_owned_by_current_thread)
 
+        class ExplodingValueMapping(Mapping[str, object]):
+            _keys = (
+                "project_id",
+                "authority_revision",
+                "fencing_token",
+                "fencing_owner",
+                "durable_barrier_id",
+                "state_revision",
+            )
+
+            def __getitem__(self, key: str) -> object:
+                raise RuntimeError(f"value unavailable: {key}")
+
+            def __iter__(self) -> Iterator[str]:
+                return iter(self._keys)
+
+            def __len__(self) -> int:
+                return len(self._keys)
+
+        with (
+            self.assertRaisesRegex(LockDomainError, "mapping values are invalid"),
+            scope.validated_hold(cast(Any, ExplodingValueMapping())),
+        ):
+            self.fail("mapping value lookup failures must fail closed before scope acquisition")
+        self.assertEqual([], common_calls)
+        self.assertFalse(self.session.operation_owned_by_current_thread)
+
         extra_key_context = dict(stale_context)
         extra_key_context["unexpected"] = "not-authorized"
         with (
