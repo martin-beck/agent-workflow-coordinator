@@ -253,6 +253,35 @@ class SQLiteAuthorityAdapterTests(unittest.TestCase):
         self.assertFalse(
             self.adapter.verify_rollback_context(rollback_context)["rollback_context_verified"]
         )
+        bound = self.adapter.verify_rollback_context_bound(
+            {**rollback_context, "project_id": PROJECT},
+            self.scope,
+            lease=self.lease,
+            admission_recheck=self.recheck,
+        )
+        self.assertEqual("rollback", bound["phase"])
+        self.assertFalse(bound["rollback_context_verified"])
+        self.assertFalse(self.session.operation_owned_by_current_thread)
+        durable_before_bound_reject = self._durable_state()
+        with (
+            patch.object(
+                self.adapter, "snapshot", side_effect=AssertionError("SQLite reached")
+            ) as snapshot,
+            patch.object(
+                self.adapter, "execute", side_effect=AssertionError("execute reached")
+            ) as execute,
+            self.assertRaisesRegex(SQLiteAuthorityError, "rollback context target"),
+        ):
+            self.adapter.verify_rollback_context_bound(
+                CONTEXT,
+                self.scope,
+                lease=self.lease,
+                admission_recheck=self.recheck,
+            )
+        snapshot.assert_not_called()
+        execute.assert_not_called()
+        self.assertEqual(durable_before_bound_reject, self._durable_state())
+        self.assertFalse(self.session.operation_owned_by_current_thread)
         with self.assertRaisesRegex(SQLiteAuthorityError, "not implemented"):
             self.adapter.execute("commit", CONTEXT)
         self.assertFalse(
@@ -694,6 +723,66 @@ class SQLiteAuthorityAdapterTests(unittest.TestCase):
             self.assertRaisesRegex(SQLiteAuthorityError, "not clean"),
         ):
             self.adapter.snapshot("discover", CONTEXT)
+
+    def test_bound_rollback_rejects_stale_and_replaced_sessions_before_sqlite(self) -> None:
+        rollback = {**CONTEXT, "project_id": PROJECT, "target": "rollback"}
+        ambiguous = self.session.mark_ambiguous(1, "rollback-stale")
+        before_stale = self._durable_state()
+        with (
+            patch.object(
+                self.adapter, "snapshot", side_effect=AssertionError("SQLite reached")
+            ) as snapshot,
+            patch.object(
+                self.adapter, "execute", side_effect=AssertionError("execute reached")
+            ) as execute,
+            self.assertRaisesRegex(SQLiteAuthorityError, "trusted SQLite session"),
+        ):
+            self.adapter.verify_rollback_context_bound(
+                rollback,
+                self.scope,
+                lease=self.lease,
+                admission_recheck=self.recheck,
+            )
+        snapshot.assert_not_called()
+        execute.assert_not_called()
+        self.assertEqual(before_stale, self._durable_state())
+        self.assertFalse(self.session.operation_owned_by_current_thread)
+
+        replacement_record = self._session_identity().as_record()
+        replacement_record.update(
+            {
+                "attempt_id": "rollback-replacement",
+                "state_revision": 2,
+                "durable_barrier_id": "barrier-replacement",
+                "fencing_token": "fence-replacement",
+                "fencing_owner": "owner-replacement",
+            }
+        )
+        replacement_record["identity_digest"] = canonical_barrier_session_digest(replacement_record)
+        replacement = BarrierSessionState(
+            BarrierSessionIdentity.from_record(replacement_record), "held", 1
+        )
+        self.session.reconcile_ambiguous(ambiguous.revision, replacement)
+        before_replaced = self._durable_state()
+        with (
+            patch.object(
+                self.adapter, "snapshot", side_effect=AssertionError("SQLite reached")
+            ) as snapshot,
+            patch.object(
+                self.adapter, "execute", side_effect=AssertionError("execute reached")
+            ) as execute,
+            self.assertRaisesRegex(SQLiteAuthorityError, "trusted SQLite session"),
+        ):
+            self.adapter.verify_rollback_context_bound(
+                rollback,
+                self.scope,
+                lease=self.lease,
+                admission_recheck=self.recheck,
+            )
+        snapshot.assert_not_called()
+        execute.assert_not_called()
+        self.assertEqual(before_replaced, self._durable_state())
+        self.assertFalse(self.session.operation_owned_by_current_thread)
 
 
 if __name__ == "__main__":

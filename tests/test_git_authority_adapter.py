@@ -264,6 +264,37 @@ class GitAuthorityAdapterTests(unittest.TestCase):
         self.assertFalse(
             self.adapter.verify_rollback_context(rollback_context)["rollback_context_verified"]
         )
+        bound = self.adapter.verify_rollback_context_bound(
+            rollback_context,
+            self.scope,
+            lease=self.lease,
+            admission_recheck=self.recheck,
+            expected_branch=str(result["git_branch"]),
+            expected_head=str(result["git_head"]),
+        )
+        self.assertEqual("rollback", bound["phase"])
+        self.assertFalse(bound["rollback_context_verified"])
+        self.assertFalse(self.session.operation_owned_by_current_thread)
+        durable_before_bound_reject = self.session.snapshot()
+        with (
+            patch.object(self.adapter, "_git", side_effect=AssertionError("Git reached")) as git,
+            patch.object(
+                self.adapter, "execute", side_effect=AssertionError("execute reached")
+            ) as execute,
+            self.assertRaisesRegex(GitAuthorityError, "rollback context target"),
+        ):
+            self.adapter.verify_rollback_context_bound(
+                CONTEXT,
+                self.scope,
+                lease=self.lease,
+                admission_recheck=self.recheck,
+                expected_branch=str(result["git_branch"]),
+                expected_head=str(result["git_head"]),
+            )
+        git.assert_not_called()
+        execute.assert_not_called()
+        self.assertEqual(durable_before_bound_reject, self.session.snapshot())
+        self.assertFalse(self.session.operation_owned_by_current_thread)
         with self.assertRaisesRegex(GitAuthorityError, "not implemented"):
             self.adapter.execute("commit", CONTEXT)
 
@@ -854,6 +885,67 @@ class GitAuthorityAdapterTests(unittest.TestCase):
     def test_rollback_recheck_never_authorizes_mutation(self) -> None:
         result = self.adapter.verify_rollback_context({**CONTEXT, "target": "rollback"})
         self.assertFalse(result["rollback_context_verified"])
+
+    def test_bound_rollback_rejects_stale_and_replaced_sessions_before_git(self) -> None:
+        observed = self.adapter.snapshot("discover", CONTEXT)
+        rollback = {**CONTEXT, "target": "rollback"}
+        ambiguous = self.session.mark_ambiguous(1, "rollback-stale")
+        before_stale = self.session.snapshot()
+        with (
+            patch.object(self.adapter, "_git", side_effect=AssertionError("Git reached")) as git,
+            patch.object(
+                self.adapter, "execute", side_effect=AssertionError("execute reached")
+            ) as execute,
+            self.assertRaisesRegex(GitAuthorityError, "trusted Git session"),
+        ):
+            self.adapter.verify_rollback_context_bound(
+                rollback,
+                self.scope,
+                lease=self.lease,
+                admission_recheck=self.recheck,
+                expected_branch=str(observed["git_branch"]),
+                expected_head=str(observed["git_head"]),
+            )
+        git.assert_not_called()
+        execute.assert_not_called()
+        self.assertEqual(before_stale, self.session.snapshot())
+        self.assertFalse(self.session.operation_owned_by_current_thread)
+
+        replacement_record = self._session_identity().as_record()
+        replacement_record.update(
+            {
+                "attempt_id": "rollback-replacement",
+                "state_revision": 2,
+                "durable_barrier_id": "barrier-replacement",
+                "fencing_token": "fence-replacement",
+                "fencing_owner": "owner-replacement",
+            }
+        )
+        replacement_record["identity_digest"] = canonical_barrier_session_digest(replacement_record)
+        replacement = BarrierSessionState(
+            BarrierSessionIdentity.from_record(replacement_record), "held", 1
+        )
+        self.session.reconcile_ambiguous(ambiguous.revision, replacement)
+        before_replaced = self.session.snapshot()
+        with (
+            patch.object(self.adapter, "_git", side_effect=AssertionError("Git reached")) as git,
+            patch.object(
+                self.adapter, "execute", side_effect=AssertionError("execute reached")
+            ) as execute,
+            self.assertRaisesRegex(GitAuthorityError, "trusted Git session"),
+        ):
+            self.adapter.verify_rollback_context_bound(
+                rollback,
+                self.scope,
+                lease=self.lease,
+                admission_recheck=self.recheck,
+                expected_branch=str(observed["git_branch"]),
+                expected_head=str(observed["git_head"]),
+            )
+        git.assert_not_called()
+        execute.assert_not_called()
+        self.assertEqual(before_replaced, self.session.snapshot())
+        self.assertFalse(self.session.operation_owned_by_current_thread)
 
 
 if __name__ == "__main__":

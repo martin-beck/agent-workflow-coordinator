@@ -91,6 +91,8 @@ class GitAuthorityAdapter:
             value = context.get(field)
             if type(value) is not str or not value:
                 raise GitAuthorityError("Git authority context types are invalid")
+        if context.get("target") not in {"new", "rollback"}:
+            raise GitAuthorityError("Git authority context target is invalid")
         return dict(context)
 
     def snapshot(self, phase: str, context: Mapping[str, object]) -> dict[str, Any]:
@@ -212,6 +214,31 @@ class GitAuthorityAdapter:
         if context.get("target") != "rollback":
             raise GitAuthorityError("Git rollback context target is invalid")
         value = self.snapshot("rollback", context)
+        value["rollback_context_verified"] = False
+        return value
+
+    def verify_rollback_context_bound(
+        self,
+        context: Mapping[str, object],
+        scope: LockDomainScope,
+        *,
+        lease: AdmissionLease,
+        admission_recheck: AdmissionRecheck,
+        expected_branch: str,
+        expected_head: str,
+    ) -> dict[str, Any]:
+        """Reread rollback evidence only inside a trusted scope."""
+        if context.get("target") != "rollback":
+            raise GitAuthorityError("Git rollback context target is invalid")
+        value = self.snapshot_bound(
+            "rollback",
+            context,
+            scope,
+            lease=lease,
+            admission_recheck=admission_recheck,
+            expected_branch=expected_branch,
+            expected_head=expected_head,
+        )
         value["rollback_context_verified"] = False
         return value
 
