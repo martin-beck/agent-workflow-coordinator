@@ -167,7 +167,7 @@ jobs:
           TLC_HEAP: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && '512m' || '4096m' }}
           TLC_MEMORY_MAX: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && '3G' || '6G' }}
           TLC_SWAP_MAX: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && '3G' || '6G' }}
-           TLC_TIMEOUT_SECONDS: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && '600' || (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || needs.scope.outputs.release_sensitive == 'true') && '6000' || '1200' }}
+          TLC_TIMEOUT_SECONDS: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && '600' || (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || needs.scope.outputs.release_sensitive == 'true') && '6000' || '1200' }}
           TLC_ATTESTATION_PATH: ${{ runner.temp }}/formal-attestation.json
         run: formal/handoffctl/verify.sh --tier "$TLC_TIER"
       - name: Publish exact-head tier attestation
