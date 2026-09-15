@@ -46,7 +46,13 @@ def identity() -> BarrierSessionIdentity:
 
 
 def _scope_process(
-    root_text: str, start: Any, starts: Any, ends: Any, index: int, crash: bool
+    root_text: str,
+    start: Any,
+    starts: Any,
+    ends: Any,
+    index: int,
+    crash: bool,
+    validated: bool = False,
 ) -> None:
     root = Path(root_text)
     authority = root / "authority.sqlite"
@@ -66,8 +72,17 @@ def _scope_process(
         domain = LockDomainContract.capture(guard, session, fence)
     lease = AdmissionLease(PROJECT, "authority-1", "fence-1", "owner-1", "barrier-1", 1)
     scope = LockDomainScope(domain, session, fence, lease, locked)
+    context = {
+        "project_id": PROJECT,
+        "authority_revision": "authority-1",
+        "fencing_token": "fence-1",
+        "fencing_owner": "owner-1",
+        "durable_barrier_id": "barrier-1",
+        "state_revision": 1,
+    }
     start.wait()
-    with scope.hold():
+    held = scope.validated_hold(context) if validated else scope.hold()
+    with held:
         starts[index] = time.monotonic_ns()
         if crash:
             os._exit(17)
@@ -579,6 +594,31 @@ class LockDomainScopeTests(unittest.TestCase):
         recovered = context.Process(
             target=_scope_process,
             args=(self.directory.name, start, starts, ends, 0, False),
+        )
+        recovered.start()
+        start.set()
+        recovered.join(5)
+        self.assertEqual(0, recovered.exitcode)
+        self.assertGreater(ends[0], starts[0])
+
+    def test_validated_hold_process_death_releases_scope_for_fresh_caller(self) -> None:
+        context = multiprocessing.get_context("fork")
+        start = context.Event()
+        starts = context.Array("q", [0], lock=False)
+        ends = context.Array("q", [0], lock=False)
+        crashed = context.Process(
+            target=_scope_process,
+            args=(self.directory.name, start, starts, ends, 0, True, True),
+        )
+        crashed.start()
+        start.set()
+        crashed.join(5)
+        self.assertEqual(17, crashed.exitcode)
+
+        start = context.Event()
+        recovered = context.Process(
+            target=_scope_process,
+            args=(self.directory.name, start, starts, ends, 0, False, True),
         )
         recovered.start()
         start.set()
