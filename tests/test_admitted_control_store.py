@@ -81,6 +81,26 @@ class AdmittedControlStoreTests(unittest.TestCase):
         with self.assertRaisesRegex(AdmissionLeaseError, "does not match"):
             admitted_cas(Store(), 1, changed, self.lease, self.recheck, Scope())
 
+    def test_hostile_record_value_fails_before_scope_or_store(self) -> None:
+        class ExplodingEquality:
+            def __eq__(self, _other: object) -> bool:
+                raise RuntimeError("comparison unavailable")
+
+        class Scope:
+            def assert_ordered(self) -> None:
+                raise AssertionError("scope must not be touched")
+
+            def hold(self) -> Any:
+                raise AssertionError("scope must not be touched")
+
+        class Store:
+            def cas(self, *_args: object, **_kwargs: object) -> dict[str, object]:
+                raise AssertionError("store must not be touched")
+
+        changed = dict(self.record, project_id=ExplodingEquality())
+        with self.assertRaisesRegex(AdmissionLeaseError, "values are invalid"):
+            admitted_cas(Store(), 1, changed, self.lease, self.recheck, Scope())
+
     def test_missing_or_mismatched_contract_objects_fail_closed(self) -> None:
         with self.assertRaisesRegex(AdmissionLeaseError, "lease is required"):
             admitted_cas(None, 1, self.record, None, self.recheck, None)  # type: ignore[arg-type]
