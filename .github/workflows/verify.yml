@@ -52,6 +52,7 @@ jobs:
     runs-on: ubuntu-24.04
     outputs:
       formal_changed: ${{ steps.scope.outputs.formal_changed }}
+      release_sensitive: ${{ steps.scope.outputs.release_sensitive }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -64,19 +65,24 @@ jobs:
           BASE: ${{ github.event.pull_request.base.sha }}
           HEAD: ${{ github.event.pull_request.head.sha }}
         run: |
-          if [[ "$EVENT" != "pull_request" ]] || git diff --name-only "$BASE...$HEAD" | grep -Eq "^(formal/|tools/tlc_runner.py|tools/vendor.py|\\.github/workflows/verify\\.yml)"; then
+          if [[ "$EVENT" != "pull_request" ]] || git diff --name-only "$BASE...$HEAD" | grep -Eq "^(formal/|tools/tlc_runner.py|tools/vendor.py|tools/handoffctl.py|pyproject.toml|uv.lock|CHANGELOG.md|coordinator.vendor.json|\\.github/workflows/verify\\.yml)"; then
             echo "formal_changed=true" >> "$GITHUB_OUTPUT"
           else
             echo "formal_changed=false" >> "$GITHUB_OUTPUT"
           fi
+          if [[ "$EVENT" != "pull_request" ]] || git diff --name-only "$BASE...$HEAD" | grep -Eq "^(formal/|tools/tlc_runner.py|tools/vendor.py|tools/handoffctl.py|pyproject.toml|uv.lock|CHANGELOG.md|coordinator.vendor.json)"; then
+            echo "release_sensitive=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "release_sensitive=false" >> "$GITHUB_OUTPUT"
+          fi
 
   verify:
     needs: [awq, scope]
-    if: ${{ github.event_name != 'pull_request' || needs.scope.outputs.formal_changed == 'true' }}
+    if: ${{ github.event_name != 'pull_request' || needs.scope.outputs.formal_changed == 'true' || needs.scope.outputs.release_sensitive == 'true' }}
     runs-on: ${{ fromJSON((github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && '["self-hosted","Linux","X64","agent-workflow-coordinator-ci"]' || '["ubuntu-24.04"]') }}
-    timeout-minutes: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && 120 || 30 }}
+    timeout-minutes: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && 30 || (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || needs.scope.outputs.release_sensitive == 'true') && 120 || 30 }}
     env:
-      TLC_TIER: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && 'full-exhaustive' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && 'portable-smoke' || 'pr-publication' }}
+      TLC_TIER: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && 'portable-smoke' || (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || needs.scope.outputs.release_sensitive == 'true') && 'full-exhaustive' || 'pr-publication' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:

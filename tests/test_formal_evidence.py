@@ -133,10 +133,22 @@ class FormalEvidenceTests(unittest.TestCase):
         self.assertIn(
             "github.event.pull_request.head.repo.full_name != github.repository", workflow
         )
-        self.assertIn("&& 'portable-smoke' || 'pr-publication'", workflow)
+        self.assertIn("&& 'portable-smoke'", workflow)
+        self.assertIn("|| 'pr-publication'", workflow)
         self.assertIn("&& 'full-exhaustive'", workflow)
         self.assertIn("timeout-minutes: ${{", workflow)
-        self.assertIn("&& 120 || 30", workflow)
+        self.assertIn("release_sensitive", workflow)
+        for release_path in ("pyproject.toml", "uv.lock", "CHANGELOG.md", "tools/vendor.py"):
+            self.assertIn(release_path, workflow)
+        tier_expression = workflow[
+            workflow.index("      TLC_TIER:") : workflow.index(
+                "    steps:", workflow.index("  verify:")
+            )
+        ]
+        fork_guard = "github.event.pull_request.head.repo.full_name != github.repository"
+        self.assertLess(
+            tier_expression.index(fork_guard), tier_expression.index("'full-exhaustive'")
+        )
         steps_start = workflow.index("    steps:\n", workflow.index("  verify:\n"))
         job_environment = workflow[
             workflow.index("    env:\n", workflow.index("  verify:\n")) : steps_start
