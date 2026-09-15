@@ -77,6 +77,17 @@ class LockDomainScope:
             raise LockDomainError("engine context does not match admission lease")
 
     @contextmanager
+    def validated_hold(self, context: Mapping[str, object]) -> Iterator[object]:
+        """Validate caller context before acquiring the canonical scope.
+
+        This is a rejection-only boundary for future adapters. It performs no
+        CAS, selector publication, upgrade, apply, or rollback operation.
+        """
+        self.assert_context(context)
+        with self.hold():
+            yield object()
+
+    @contextmanager
     def hold(self) -> Iterator[object]:
         """Acquire and prove the full scope, releasing every lock on failure."""
         self.assert_ordered()
