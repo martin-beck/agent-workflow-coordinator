@@ -12,7 +12,8 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from tools.admission_lease import AdmissionLease
+from tools.admission_lease import AdmissionLease, AdmissionRecheck
+from tools.lock_domain_scope import LockDomainScope
 
 
 class GitAuthorityError(RuntimeError):
@@ -87,13 +88,14 @@ class GitAuthorityAdapter:
         )
         return value
 
-    def snapshot_bound(
+    def snapshot_bound(  # noqa: C901
         self,
         phase: str,
         context: Mapping[str, object],
-        scope: Any,
+        scope: LockDomainScope,
         *,
         lease: AdmissionLease,
+        admission_recheck: AdmissionRecheck,
         expected_branch: str,
         expected_head: str,
     ) -> dict[str, Any]:
@@ -111,6 +113,12 @@ class GitAuthorityAdapter:
             raise GitAuthorityError("expected Git head identity is invalid")
         if not isinstance(lease, AdmissionLease):
             raise GitAuthorityError("trusted admission lease is required")
+        if not isinstance(admission_recheck, AdmissionRecheck):
+            raise GitAuthorityError("trusted admission recheck is required")
+        if admission_recheck.lease != lease:
+            raise GitAuthorityError("trusted admission recheck does not match lease")
+        if not isinstance(scope, LockDomainScope):
+            raise GitAuthorityError("concrete lock-domain scope is required")
         expected_identity = {
             "project_id": lease.project_id,
             "authority_revision": lease.authority_revision,
@@ -122,7 +130,11 @@ class GitAuthorityAdapter:
         if any(context.get(name) != value for name, value in expected_identity.items()):
             raise GitAuthorityError("trusted session identity changed")
         try:
-            value = ScopedBackendAdapter(self, scope).snapshot(phase, context)
+            value = ScopedBackendAdapter(self, scope).snapshot(
+                phase,
+                context,
+                scope_context=expected_identity,
+            )
         except (TypeError, RuntimeError) as error:
             raise GitAuthorityError("trusted Git session reread was rejected") from error
         if value.get("git_branch") != expected_branch or value.get("git_head") != expected_head:
