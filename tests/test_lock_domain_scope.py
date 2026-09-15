@@ -75,6 +75,37 @@ def _scope_process(
         ends[index] = time.monotonic_ns()
 
 
+def _fresh_recheck_process(root_text: str, result: Any) -> None:
+    """Perform a trusted reread in a fresh process, then reject the old lease."""
+    root = Path(root_text)
+    authority = root / "authority.sqlite"
+    control = root / "control.sqlite"
+    store = SQLiteRollbackControlStore(control, PROJECT, authority)
+    session = SQLiteBarrierSessionStore(store, lambda: "authority-retry")
+    fence = MutationFence(
+        authority,
+        root / "authority-marker.json",
+        root / "authority-lifecycle.json",
+        root / "authority.lock",
+        control,
+        root / "control-binding.json",
+        store.control_lock_path,
+    )
+    with locked() as guard:
+        domain = LockDomainContract.capture(guard, session, fence)
+    lease = AdmissionLease(PROJECT, "authority-1", "fence-1", "owner-1", "barrier-1", 1)
+    rejected = False
+    try:
+        session.recheck_held(1)
+        scope = LockDomainScope(domain, session, fence, lease, locked)
+        with scope.hold():
+            rejected = False
+    except LockDomainError:
+        rejected = True
+    finally:
+        result.put((rejected, not session.operation_owned_by_current_thread))
+
+
 class LockDomainScopeTests(unittest.TestCase):
     def setUp(self) -> None:
         self.directory = tempfile.TemporaryDirectory()
@@ -293,6 +324,48 @@ class LockDomainScopeTests(unittest.TestCase):
             ):
                 self.fail("fresh authority reread must not bless the stale lease")
             self.assertFalse(fresh_session.operation_owned_by_current_thread)
+
+    def test_fresh_process_reread_rejects_old_lease_after_durable_retry(self) -> None:
+        """A fresh process cannot turn durable retry evidence into old-lease admission."""
+        context = multiprocessing.get_context("fork")
+        start = context.Event()
+        starts = context.Array("q", [0], lock=False)
+        ends = context.Array("q", [0], lock=False)
+        crashed = context.Process(
+            target=_scope_process,
+            args=(self.directory.name, start, starts, ends, 0, True),
+        )
+        crashed.start()
+        start.set()
+        crashed.join(5)
+        self.assertEqual(17, crashed.exitcode)
+
+        changed_record = replace(
+            identity(), authority_revision_at_acquire="authority-retry", state_revision=2
+        ).as_record()
+        changed_record["identity_digest"] = canonical_barrier_session_digest(changed_record)
+        with sqlite3.connect(self.store.control_store_path) as connection:
+            connection.execute(
+                "UPDATE barrier_session SET authority_revision_at_acquire=?, "
+                "state_revision=?, identity_digest=?, revision=? WHERE project_id=?",
+                (
+                    changed_record["authority_revision_at_acquire"],
+                    changed_record["state_revision"],
+                    changed_record["identity_digest"],
+                    1,
+                    PROJECT,
+                ),
+            )
+            connection.commit()
+
+        result = context.Queue()
+        fresh = context.Process(target=_fresh_recheck_process, args=(self.directory.name, result))
+        fresh.start()
+        fresh.join(5)
+        self.assertEqual(0, fresh.exitcode)
+        rejected, released = result.get(timeout=1)
+        self.assertTrue(rejected)
+        self.assertTrue(released)
 
     def test_two_process_scopes_never_overlap(self) -> None:
         context = multiprocessing.get_context("fork")
