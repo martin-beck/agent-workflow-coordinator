@@ -75,7 +75,7 @@ def _scope_process(
         ends[index] = time.monotonic_ns()
 
 
-def _fresh_recheck_process(root_text: str, result: Any) -> None:
+def _fresh_recheck_process(root_text: str, result: Any, crash_after_reread: bool = False) -> None:
     """Perform a trusted reread in a fresh process, then reject the old lease."""
     root = Path(root_text)
     authority = root / "authority.sqlite"
@@ -98,6 +98,8 @@ def _fresh_recheck_process(root_text: str, result: Any) -> None:
     try:
         for _ in range(2):
             session.recheck_held(1)
+        if crash_after_reread:
+            os._exit(19)
         scope = LockDomainScope(domain, session, fence, lease, locked)
         for _ in range(2):
             try:
@@ -361,6 +363,14 @@ class LockDomainScopeTests(unittest.TestCase):
                 ),
             )
             connection.commit()
+
+        reread_crashed = context.Process(
+            target=_fresh_recheck_process,
+            args=(self.directory.name, context.Queue(), True),
+        )
+        reread_crashed.start()
+        reread_crashed.join(5)
+        self.assertEqual(19, reread_crashed.exitcode)
 
         result = context.Queue()
         fresh = context.Process(target=_fresh_recheck_process, args=(self.directory.name, result))
