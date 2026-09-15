@@ -6,6 +6,11 @@
       "models": ["HandoffctlBinding"],
       "claims": "smoke-only; no full formal evidence or release attestation"
     },
+    "pr-fast": {
+      "exhaustive": false,
+      "models": ["HandoffctlFast"],
+      "claims": "required bounded safety-only merge gate; no liveness, full formal evidence, or release attestation"
+    },
     "pr-publication": {
       "exhaustive": false,
       "models": [
