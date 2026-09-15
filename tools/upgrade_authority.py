@@ -185,6 +185,7 @@ def read_git_authority_snapshot(  # noqa: C901
     head = observe("rev-parse", "--verify", "--end-of-options", "HEAD^{commit}")
     ref = branch if requested_ref == "HEAD" else requested_ref
     ref_head = observe("rev-parse", "--verify", "--end-of-options", f"{ref}^{{commit}}")
+    ref_name = f"refs/heads/{branch}" if requested_ref == "HEAD" else requested_ref
     check("merge-base", "--is-ancestor", ref_head, head)
     try:
         root_status = resolved.stat()
@@ -194,10 +195,21 @@ def read_git_authority_snapshot(  # noqa: C901
         raise AuthorityError("Git authority identity reread failed") from error
     if before != after:
         raise AuthorityError("Git authority identity changed")
-    if not branch or not head or not ref_head or status:
+    final_status = observe("status", "--porcelain=v1", "--untracked-files=all")
+    final_branch = observe("symbolic-ref", "--short", "-q", "HEAD")
+    final_head = observe("rev-parse", "--verify", "--end-of-options", "HEAD^{commit}")
+    final_ref_head = observe("rev-parse", "--verify", "--end-of-options", f"{ref}^{{commit}}")
+    final_ref_name = f"refs/heads/{final_branch}" if requested_ref == "HEAD" else requested_ref
+    if not branch or not head or not ref_head or status or final_status:
         raise AuthorityError("Git authority is not clean and branch-bound")
-    if requested_ref != "HEAD" and ref_head != head:
-        raise AuthorityError("Git authority requested ref is not the current head")
+    if (branch, head, ref_head, ref_name) != (
+        final_branch,
+        final_head,
+        final_ref_head,
+        final_ref_name,
+    ):
+        raise AuthorityError("Git authority observation changed")
+    check("merge-base", "--is-ancestor", final_ref_head, final_head)
     return GitAuthoritySnapshot(resolved, after[1], branch, head, requested_ref, ref_head, True)
 
 

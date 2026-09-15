@@ -59,7 +59,25 @@ class RuntimeSelectorTests(unittest.TestCase):
             self.assertEqual(snapshot.head, snapshot.requested_ref_head)
             self.assertEqual("master", snapshot.branch)
             subprocess.run(["git", "-C", str(root), "tag", "v1"], check=True)
+            (root / "state").write_text("second\n")
+            subprocess.run(["git", "-C", str(root), "add", "state"], check=True)
+            subprocess.run(
+                [
+                    "git",
+                    "-C",
+                    str(root),
+                    "-c",
+                    "user.name=test",
+                    "-c",
+                    "user.email=test@example",
+                    "commit",
+                    "-qm",
+                    "second",
+                ],
+                check=True,
+            )
             tagged = read_git_authority_snapshot(root, "refs/tags/v1")
+            self.assertNotEqual(tagged.head, tagged.requested_ref_head)
             self.assertEqual(snapshot.head, tagged.requested_ref_head)
 
     def test_git_snapshot_rejects_dirty_detached_or_unreachable_ref(self) -> None:
