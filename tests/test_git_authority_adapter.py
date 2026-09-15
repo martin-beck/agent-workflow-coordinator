@@ -14,6 +14,7 @@ from collections.abc import Mapping
 from contextlib import AbstractContextManager, nullcontext
 from pathlib import Path
 
+from tools.admission_lease import AdmissionLease
 from tools.git_authority_adapter import GitAuthorityAdapter, GitAuthorityError
 from tools.scoped_backend_adapter import ScopedBackendAdapter
 
@@ -38,6 +39,10 @@ CONTEXT = {
 
 
 class GitAuthorityAdapterTests(unittest.TestCase):
+    @staticmethod
+    def _lease() -> AdmissionLease:
+        return AdmissionLease("project", "authority", "fence", "owner", "barrier", 1)
+
     def setUp(self) -> None:
         self.directory = tempfile.TemporaryDirectory()
         self.root = Path(self.directory.name)
@@ -104,6 +109,7 @@ class GitAuthorityAdapterTests(unittest.TestCase):
             "discover",
             CONTEXT,
             Scope(),
+            lease=self._lease(),
             expected_branch=str(observed["git_branch"]),
             expected_head=str(observed["git_head"]),
         )
@@ -136,6 +142,7 @@ class GitAuthorityAdapterTests(unittest.TestCase):
                 "discover",
                 CONTEXT,
                 RejectingScope(),
+                lease=self._lease(),
                 expected_branch="master",
                 expected_head="0" * 40,
             )
@@ -145,6 +152,7 @@ class GitAuthorityAdapterTests(unittest.TestCase):
                 "discover",
                 CONTEXT,
                 Scope(),
+                lease=self._lease(),
                 expected_branch=str(observed["git_branch"]),
                 expected_head="0" * 40,
             )
@@ -156,6 +164,64 @@ class GitAuthorityAdapterTests(unittest.TestCase):
         (self.root / "state").write_text("clean\n")
         with self.assertRaisesRegex(GitAuthorityError, "mismatched"):
             self.adapter.snapshot("discover", {**CONTEXT, "backend": "sqlite"})
+
+    def test_snapshot_bound_rejects_durable_identity_drift_before_scope(self) -> None:
+        class ScopeMustNotRun:
+            def assert_ordered(self) -> None:
+                raise AssertionError("scope must not run")
+
+            def assert_context(self, _context: Mapping[str, object]) -> None:
+                raise AssertionError("scope must not run")
+
+            def hold(self) -> AbstractContextManager[object]:
+                raise AssertionError("scope must not run")
+
+        observed = self.adapter.snapshot("discover", CONTEXT)
+        for field in (
+            "project_id",
+            "authority_revision",
+            "fencing_token",
+            "fencing_owner",
+            "durable_barrier_id",
+            "state_revision",
+        ):
+            drifted = dict(CONTEXT)
+            drifted[field] = 2 if field == "state_revision" else f"changed-{field}"
+            with (
+                self.subTest(field=field),
+                self.assertRaisesRegex(GitAuthorityError, "session identity"),
+            ):
+                self.adapter.snapshot_bound(
+                    "discover",
+                    drifted,
+                    ScopeMustNotRun(),
+                    lease=self._lease(),
+                    expected_branch=str(observed["git_branch"]),
+                    expected_head=str(observed["git_head"]),
+                )
+
+    def test_snapshot_bound_rejects_replaced_lease_before_backend(self) -> None:
+        class ScopeMustNotRun:
+            def assert_ordered(self) -> None:
+                raise AssertionError("scope must not run")
+
+            def assert_context(self, _context: Mapping[str, object]) -> None:
+                raise AssertionError("scope must not run")
+
+            def hold(self) -> AbstractContextManager[object]:
+                raise AssertionError("scope must not run")
+
+        observed = self.adapter.snapshot("discover", CONTEXT)
+        replaced = AdmissionLease("project", "authority", "replacement", "owner", "barrier", 1)
+        with self.assertRaisesRegex(GitAuthorityError, "session identity"):
+            self.adapter.snapshot_bound(
+                "discover",
+                CONTEXT,
+                ScopeMustNotRun(),
+                lease=replaced,
+                expected_branch=str(observed["git_branch"]),
+                expected_head=str(observed["git_head"]),
+            )
 
     def test_rollback_recheck_never_authorizes_mutation(self) -> None:
         result = self.adapter.verify_rollback_context(CONTEXT)
