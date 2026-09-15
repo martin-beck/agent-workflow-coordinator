@@ -88,6 +88,67 @@ class GitAuthorityAdapterTests(unittest.TestCase):
         with self.assertRaisesRegex(TypeError, "disabled"):
             adapter.execute("commit", CONTEXT)
 
+    def test_snapshot_bound_rechecks_session_and_binds_immutable_git_identity(self) -> None:
+        class Scope:
+            def assert_ordered(self) -> None:
+                pass
+
+            def assert_context(self, _context: Mapping[str, object]) -> None:
+                pass
+
+            def hold(self) -> AbstractContextManager[object]:
+                return nullcontext()
+
+        observed = self.adapter.snapshot("discover", CONTEXT)
+        bound = self.adapter.snapshot_bound(
+            "discover",
+            CONTEXT,
+            Scope(),
+            expected_branch=str(observed["git_branch"]),
+            expected_head=str(observed["git_head"]),
+        )
+        self.assertEqual(observed["git_head"], bound["git_head"])
+        self.assertFalse(bound["mutates_authority"])
+
+    def test_snapshot_bound_rejects_session_or_identity_drift_before_observation(self) -> None:
+        class Scope:
+            def assert_ordered(self) -> None:
+                pass
+
+            def assert_context(self, _context: Mapping[str, object]) -> None:
+                pass
+
+            def hold(self) -> AbstractContextManager[object]:
+                return nullcontext()
+
+        class RejectingScope:
+            def assert_ordered(self) -> None:
+                pass
+
+            def assert_context(self, _context: Mapping[str, object]) -> None:
+                raise RuntimeError("stale session")
+
+            def hold(self) -> AbstractContextManager[object]:
+                return nullcontext()
+
+        with self.assertRaisesRegex(GitAuthorityError, "trusted Git session"):
+            self.adapter.snapshot_bound(
+                "discover",
+                CONTEXT,
+                RejectingScope(),
+                expected_branch="master",
+                expected_head="0" * 40,
+            )
+        observed = self.adapter.snapshot("discover", CONTEXT)
+        with self.assertRaisesRegex(GitAuthorityError, "identity changed"):
+            self.adapter.snapshot_bound(
+                "discover",
+                CONTEXT,
+                Scope(),
+                expected_branch=str(observed["git_branch"]),
+                expected_head="0" * 40,
+            )
+
     def test_dirty_or_detached_or_mismatched_context_fails_closed(self) -> None:
         (self.root / "state").write_text("dirty\n")
         with self.assertRaisesRegex(GitAuthorityError, "not clean"):
