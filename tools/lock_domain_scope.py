@@ -9,7 +9,7 @@ from contextlib import AbstractContextManager, contextmanager
 
 from tools.admission_lease import LOCK_ORDER, AdmissionLease
 from tools.handoffctl import CoordinatorLockGuard
-from tools.lock_domain import LockDomainError, LockDomainIdentity
+from tools.lock_domain import LockDomainContract, LockDomainError, LockDomainIdentity
 from tools.mutation_fence import MutationFence
 from tools.rollback_control_store import SQLiteBarrierSessionStore
 
@@ -35,6 +35,29 @@ class LockDomainScope:
         self._authority_fence = authority_fence
         self._lease = lease
         self._common_lock = common_lock
+
+    @classmethod
+    def bind(
+        cls,
+        session_store: SQLiteBarrierSessionStore,
+        authority_fence: MutationFence,
+        lease: AdmissionLease,
+        common_lock: Callable[[], AbstractContextManager[CoordinatorLockGuard]],
+    ) -> LockDomainScope:
+        """Bind a caller-owned scope to canonical descriptors only.
+
+        ``hold`` performs the immediate durable-session and lease recheck.
+        This seam is intentionally not connected to mutation or dispatch.
+        """
+        if not isinstance(session_store, SQLiteBarrierSessionStore):
+            raise LockDomainError("session store is invalid")
+        if not isinstance(authority_fence, MutationFence):
+            raise LockDomainError("authority fence is invalid")
+        if not isinstance(lease, AdmissionLease):
+            raise LockDomainError("admission lease is invalid")
+        with common_lock() as common_guard:
+            identity = LockDomainContract.capture(common_guard, session_store, authority_fence)
+        return cls(identity, session_store, authority_fence, lease, common_lock)
 
     def assert_ordered(self) -> None:
         if LOCK_ORDER != ("common", "control", "authority"):
