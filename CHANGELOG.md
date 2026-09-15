@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## v0.3.8 - 2026-09-15
+
+- Publish the complete formal-runtime vendor closure under a new immutable release tag because
+  the existing v0.3.7 tag targets an earlier coordinator commit.
+
 - Shard oversized generated `STATUS.md` views into deterministic linked pages while keeping the
   complete graph, dependency index and AR inventory discoverable and every file below 200 KiB.
 - Keep Git-backed lifecycle transitions available when unrelated claims are expired or unrelated
