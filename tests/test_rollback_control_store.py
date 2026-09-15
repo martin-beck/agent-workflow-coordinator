@@ -99,6 +99,7 @@ import os
 import signal
 import sqlite3
 import sys
+import time
 from pathlib import Path
 
 from tools.rollback_control_store import SQLiteBarrierSessionStore, SQLiteRollbackControlStore
@@ -136,6 +137,27 @@ if mode == "clean":
     ready_path.write_text(journal_mode + "\n", encoding="utf-8")
     with ready_path.open("rb") as ready:
         os.fsync(ready.fileno())
+    raise SystemExit(0)
+
+if mode == "replace-active-wal-sidecars":
+    from tools.handoffctl import locked
+
+    replace_path = ready_path.with_suffix(".replace")
+    with locked() as guard, store.lock_owned_by_caller(guard), control._connection() as connection:
+        journal_mode = str(connection.execute("PRAGMA journal_mode").fetchone()[0]).lower()
+        if journal_mode != "wal":
+            raise SystemExit("WAL mode was not enabled")
+        ready_path.write_text(journal_mode + "\n", encoding="utf-8")
+        with ready_path.open("rb") as ready:
+            os.fsync(ready.fileno())
+        while not replace_path.exists():
+            time.sleep(0.01)
+        for suffix in ("-wal", "-shm"):
+            sidecar = Path(f"{control_path}{suffix}")
+            sidecar.unlink()
+            sidecar.write_bytes(b"replaced-sidecar")
+            sidecar.chmod(0o600)
+        connection.execute("SELECT count(*) FROM barrier_session").fetchone()
     raise SystemExit(0)
 
 if mode == "kill-during-caller-owned-recheck":
@@ -652,6 +674,28 @@ class RollbackControlStoreTests(unittest.TestCase):
                     state,
                     store.recheck_held_locked(guard, state.identity, state.revision),
                 )
+            self.assertEqual(authority_bytes, authority_path.read_bytes())
+
+    def test_v10_active_wal_sidecar_replacement_fails_closed_before_recheck(self) -> None:
+        """Replacing active WAL/SHM sidecars is rejected before the scope can proceed."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            control_path = root / "control.sqlite"
+            authority_path = root / "authority.sqlite"
+            authority_bytes = b"authority remains untouched after sidecar replacement\n"
+            authority_path.write_bytes(authority_bytes)
+            ready_path = root / "ready"
+            process = self._run_session_process(
+                control_path, authority_path, "replace-active-wal-sidecars", ready_path
+            )
+            self._wait_for_file(ready_path, process)
+            self.assertEqual("wal", ready_path.read_text(encoding="utf-8").strip())
+            self.assertTrue((root / "control.sqlite-wal").exists())
+            self.assertTrue((root / "control.sqlite-shm").exists())
+            ready_path.with_suffix(".replace").touch()
+            stdout, stderr = process.communicate(timeout=10)
+            self.assertNotEqual(0, process.returncode, msg=f"stdout={stdout}; stderr={stderr}")
+            self.assertIn("WAL sidecar identity changed", stderr)
             self.assertEqual(authority_bytes, authority_path.read_bytes())
 
     def test_v10_subprocess_commit_before_outcome_recovers_ambiguously(self) -> None:
