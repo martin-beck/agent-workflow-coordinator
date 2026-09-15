@@ -241,6 +241,29 @@ class GitAuthorityAdapterTests(unittest.TestCase):
         self.assertTrue(result["backend_identity_verified"])
         self.assertTrue(result["git_clean"])
         self.assertFalse(result["mutates_authority"])
+        for phase in ("", "unknown", 1, True):
+            with (
+                self.subTest(phase=phase),
+                self.assertRaisesRegex(GitAuthorityError, "phase is invalid"),
+            ):
+                self.adapter.snapshot(cast(Any, phase), CONTEXT)
+        durable_before = self.session.snapshot()
+        with (
+            patch.object(self.adapter, "_git", side_effect=AssertionError("Git reached")) as git,
+            patch.object(
+                self.adapter, "execute", side_effect=AssertionError("execute reached")
+            ) as execute,
+            self.assertRaisesRegex(GitAuthorityError, "rollback context target"),
+        ):
+            self.adapter.verify_rollback_context(CONTEXT)
+        git.assert_not_called()
+        execute.assert_not_called()
+        self.assertEqual(durable_before, self.session.snapshot())
+        self.assertFalse(self.session.operation_owned_by_current_thread)
+        rollback_context = {**CONTEXT, "target": "rollback"}
+        self.assertFalse(
+            self.adapter.verify_rollback_context(rollback_context)["rollback_context_verified"]
+        )
         with self.assertRaisesRegex(GitAuthorityError, "not implemented"):
             self.adapter.execute("commit", CONTEXT)
 
@@ -301,6 +324,15 @@ class GitAuthorityAdapterTests(unittest.TestCase):
             )
         with self.assertRaisesRegex(GitAuthorityError, "concrete lock-domain"):
             bound(**{**common, "scope": cast(Any, object())})
+        for phase in ("", "unknown", 1, True):
+            with (
+                self.subTest(bound_phase=phase),
+                patch.object(self.adapter, "_git") as git,
+                self.assertRaisesRegex(GitAuthorityError, "phase is invalid"),
+            ):
+                bound(**{**common, "phase": cast(Any, phase)})
+            git.assert_not_called()
+        self.assertFalse(self.session.operation_owned_by_current_thread)
         with (
             patch.object(self.adapter, "_git", wraps=self.adapter._git) as git,
             self.assertRaisesRegex(GitAuthorityError, "phase is invalid"),
@@ -820,7 +852,7 @@ class GitAuthorityAdapterTests(unittest.TestCase):
         self.assertEqual(current, self.session.snapshot())
 
     def test_rollback_recheck_never_authorizes_mutation(self) -> None:
-        result = self.adapter.verify_rollback_context(CONTEXT)
+        result = self.adapter.verify_rollback_context({**CONTEXT, "target": "rollback"})
         self.assertFalse(result["rollback_context_verified"])
 
 
