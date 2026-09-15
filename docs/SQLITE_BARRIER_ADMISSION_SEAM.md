@@ -9,7 +9,15 @@ common-lock, control-store, control-lock, authority, and authority-lock
 descriptor identities. It rejects split paths, duplicate paths, replacement,
 unsafe descriptors, and invalid provisioned bindings. Capturing this identity
 does not acquire a control or authority lock and does not bind any mutation
-caller; v10 session admission and formal correspondence remain pending.
+caller; formal correspondence remains pending.
+
+`LockDomainScope.bind` now requires a concrete `AdmissionLease` and matching
+`AdmissionRecheck`. It captures the durable `BarrierSessionIdentity` while the
+caller owns the common/control locks, then performs a trusted
+`recheck_held_locked` after acquiring the authority lock. A stale, replaced,
+non-held, or authority-drifted session is rejected before the scope yields to
+any adapter. This remains read-only scaffolding: no authority transaction,
+CAS, selector publication, upgrade, apply, or rollback route is wired to it.
 
 ## Ownership and lock order
 

@@ -16,7 +16,12 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any, cast
 
-from tools.admission_lease import AdmissionLease, AdmissionLeaseError, validate_recheck
+from tools.admission_lease import (
+    AdmissionLease,
+    AdmissionLeaseError,
+    AdmissionRecheck,
+    validate_recheck,
+)
 from tools.admitted_control_store import AdmittedControlBinding
 from tools.handoffctl import locked
 from tools.lock_domain import LockDomainContract, LockDomainError
@@ -48,6 +53,18 @@ def identity() -> BarrierSessionIdentity:
     return BarrierSessionIdentity.from_record(record)
 
 
+def lease_recheck(lease: AdmissionLease) -> AdmissionRecheck:
+    return validate_recheck(
+        lease,
+        project_id=lease.project_id,
+        authority_revision=lease.authority_revision,
+        fencing_token=lease.fencing_token,
+        fencing_owner=lease.fencing_owner,
+        durable_barrier_id=lease.durable_barrier_id,
+        revision=lease.revision,
+    )
+
+
 def _scope_process(
     root_text: str,
     start: Any,
@@ -74,7 +91,8 @@ def _scope_process(
     with locked() as guard:
         domain = LockDomainContract.capture(guard, session, fence)
     lease = AdmissionLease(PROJECT, "authority-1", "fence-1", "owner-1", "barrier-1", 1)
-    scope = LockDomainScope(domain, session, fence, lease, locked)
+    recheck = lease_recheck(lease)
+    scope = LockDomainScope(domain, session, fence, lease, recheck, identity(), locked)
     context = {
         "project_id": PROJECT,
         "authority_revision": "authority-1",
@@ -127,7 +145,10 @@ def _binding_abort_process(root_text: str, start: Any) -> None:
             raise AssertionError("aborted binding must not touch backend")
 
     binding = AdmittedControlBinding.bind(
-        Backend(), lease, recheck, LockDomainScope(domain, session, fence, lease, locked)
+        Backend(),
+        lease,
+        recheck,
+        LockDomainScope(domain, session, fence, lease, recheck, identity(), locked),
     )
     start.wait()
     with binding.validated_scope():
@@ -168,7 +189,10 @@ def _fresh_binding_rejection_process(root_text: str, result: Any) -> None:
             raise AssertionError("rejected binding must not touch backend")
 
     binding = AdmittedControlBinding.bind(
-        Backend(), lease, recheck, LockDomainScope(domain, session, fence, lease, locked)
+        Backend(),
+        lease,
+        recheck,
+        LockDomainScope(domain, session, fence, lease, recheck, identity(), locked),
     )
     try:
         with binding.validated_scope():
@@ -211,7 +235,10 @@ def _fresh_binding_reacquire_process(root_text: str, result: Any) -> None:
             raise AssertionError("reacquisition must not touch backend")
 
     binding = AdmittedControlBinding.bind(
-        Backend(), lease, recheck, LockDomainScope(domain, session, fence, lease, locked)
+        Backend(),
+        lease,
+        recheck,
+        LockDomainScope(domain, session, fence, lease, recheck, identity(), locked),
     )
     try:
         with binding.validated_scope():
@@ -259,12 +286,13 @@ def _fresh_recheck_process(
     with locked() as guard:
         domain = LockDomainContract.capture(guard, session, fence)
     lease = AdmissionLease(PROJECT, "authority-1", "fence-1", "owner-1", "barrier-1", 1)
+    recheck = lease_recheck(lease)
     rejected = True
     try:
         _reread_with_optional_transient_failure(session, fail_once_then_retry)
         if crash_after_reread:
             os._exit(19)
-        scope = LockDomainScope(domain, session, fence, lease, locked)
+        scope = LockDomainScope(domain, session, fence, lease, recheck, identity(), locked)
         for _ in range(2):
             try:
                 with scope.hold():
@@ -321,12 +349,15 @@ class LockDomainScopeTests(unittest.TestCase):
         with locked() as guard:
             self.domain = LockDomainContract.capture(guard, self.session, self.fence)
         self.lease = AdmissionLease(PROJECT, "authority-1", "fence-1", "owner-1", "barrier-1", 1)
+        self.recheck = lease_recheck(self.lease)
 
     def tearDown(self) -> None:
         self.directory.cleanup()
 
     def test_scope_proves_durable_session_inside_all_three_locks(self) -> None:
-        scope = LockDomainScope(self.domain, self.session, self.fence, self.lease, locked)
+        scope = LockDomainScope(
+            self.domain, self.session, self.fence, self.lease, self.recheck, identity(), locked
+        )
         events: list[str] = []
         with scope.hold():
             events.append("held")
@@ -334,22 +365,96 @@ class LockDomainScopeTests(unittest.TestCase):
         self.assertEqual(["held"], events)
         self.assertFalse(self.session.operation_owned_by_current_thread)
 
+    def test_hold_performs_trusted_authority_reread_after_lock_acquisition(self) -> None:
+        reads: list[str] = []
+
+        def reread() -> str:
+            reads.append("authority")
+            return "authority-1"
+
+        session = SQLiteBarrierSessionStore(self.store, reread)
+        scope = LockDomainScope.bind(session, self.fence, self.lease, self.recheck, locked)
+        with scope.hold():
+            self.assertTrue(session.operation_owned_by_current_thread)
+        self.assertEqual(["authority", "authority"], reads)
+
+    def test_hold_rejects_trusted_authority_drift_between_rereads(self) -> None:
+        reads = iter(("authority-1", "authority-2"))
+
+        def reread() -> str:
+            return next(reads)
+
+        session = SQLiteBarrierSessionStore(self.store, reread)
+        scope = LockDomainScope.bind(session, self.fence, self.lease, self.recheck, locked)
+        with self.assertRaisesRegex(LockDomainError, "authority revision changed"), scope.hold():
+            self.fail("authority drift must reject before yielding the scope")
+        self.assertFalse(session.operation_owned_by_current_thread)
+
+    def test_hold_releases_locks_when_second_trusted_reread_fails(self) -> None:
+        calls = 0
+
+        def reread() -> str:
+            nonlocal calls
+            calls += 1
+            if calls == 2:
+                raise RuntimeError("authority unavailable")
+            return "authority-1"
+
+        session = SQLiteBarrierSessionStore(self.store, reread)
+        scope = LockDomainScope.bind(session, self.fence, self.lease, self.recheck, locked)
+        with self.assertRaisesRegex(LockDomainError, "recheck failed"), scope.hold():
+            self.fail("failed trusted reread must not yield")
+        self.assertEqual(2, calls)
+        self.assertFalse(session.operation_owned_by_current_thread)
+
     def test_bind_captures_canonical_identity_before_hold(self) -> None:
-        scope = LockDomainScope.bind(self.session, self.fence, self.lease, locked)
+        scope = LockDomainScope.bind(self.session, self.fence, self.lease, self.recheck, locked)
         with scope.hold():
             self.assertTrue(self.session.operation_owned_by_current_thread)
         self.assertFalse(self.session.operation_owned_by_current_thread)
 
     def test_bind_rejects_invalid_caller_components(self) -> None:
         with self.assertRaisesRegex(LockDomainError, "session store"):
-            LockDomainScope.bind(cast(Any, None), self.fence, self.lease, locked)
+            LockDomainScope.bind(cast(Any, None), self.fence, self.lease, self.recheck, locked)
         with self.assertRaisesRegex(LockDomainError, "authority fence"):
-            LockDomainScope.bind(self.session, cast(Any, None), self.lease, locked)
+            LockDomainScope.bind(self.session, cast(Any, None), self.lease, self.recheck, locked)
         with self.assertRaisesRegex(LockDomainError, "admission lease"):
-            LockDomainScope.bind(self.session, self.fence, cast(Any, None), locked)
+            LockDomainScope.bind(self.session, self.fence, cast(Any, None), self.recheck, locked)
+        other = AdmissionLease(PROJECT, "authority-1", "other", "owner-1", "barrier-1", 1)
+        with self.assertRaisesRegex(LockDomainError, "admission recheck"):
+            LockDomainScope.bind(self.session, self.fence, self.lease, lease_recheck(other), locked)
+
+    def test_assert_ordered_rejects_invalid_recheck_and_session_identity(self) -> None:
+        scope = LockDomainScope(
+            self.domain, self.session, self.fence, self.lease, self.recheck, identity(), locked
+        )
+        scope._recheck = cast(AdmissionRecheck, object())
+        with self.assertRaisesRegex(LockDomainError, "recheck"):
+            scope.assert_ordered()
+        scope._recheck = self.recheck
+        scope._session_identity = cast(Any, object())
+        with self.assertRaisesRegex(LockDomainError, "session identity"):
+            scope.assert_ordered()
+
+    def test_hold_rejects_non_guard_common_lock(self) -> None:
+        @contextmanager
+        def invalid_lock() -> Iterator[object]:
+            yield object()
+
+        scope = LockDomainScope(
+            self.domain,
+            self.session,
+            self.fence,
+            self.lease,
+            self.recheck,
+            identity(),
+            cast(Any, invalid_lock),
+        )
+        with self.assertRaisesRegex(RuntimeError, "capability"), scope.hold():
+            self.fail("invalid common lock must not yield")
 
     def test_validated_hold_rejects_context_before_acquiring_scope(self) -> None:
-        scope = LockDomainScope.bind(self.session, self.fence, self.lease, locked)
+        scope = LockDomainScope.bind(self.session, self.fence, self.lease, self.recheck, locked)
         context = {
             "project_id": PROJECT,
             "authority_revision": "authority-1",
@@ -377,7 +482,15 @@ class LockDomainScopeTests(unittest.TestCase):
             AdmissionLease(PROJECT, "authority-1", "other", "owner-1", "barrier-1", 1),
             AdmissionLease(PROJECT, "authority-1", "fence-1", "owner-1", "barrier-1", 2),
         ):
-            scope = LockDomainScope(self.domain, self.session, self.fence, drifted, locked)
+            scope = LockDomainScope(
+                self.domain,
+                self.session,
+                self.fence,
+                drifted,
+                lease_recheck(drifted),
+                identity(),
+                locked,
+            )
             with (
                 self.subTest(drifted=drifted),
                 self.assertRaisesRegex(LockDomainError, "do not match"),
@@ -392,13 +505,17 @@ class LockDomainScopeTests(unittest.TestCase):
         replacement.chmod(0o600)
         self.store.control_lock_path.unlink()
         replacement.replace(self.store.control_lock_path)
-        scope = LockDomainScope(self.domain, self.session, self.fence, self.lease, locked)
+        scope = LockDomainScope(
+            self.domain, self.session, self.fence, self.lease, self.recheck, identity(), locked
+        )
         with self.assertRaisesRegex(LockDomainError, "binding|identity"), scope.hold():
             self.fail("unreachable")
 
     def test_abort_then_recheck_rejects_replaced_authority(self) -> None:
         """A caller abort cannot make a replaced authority descriptor admissible."""
-        scope = LockDomainScope(self.domain, self.session, self.fence, self.lease, locked)
+        scope = LockDomainScope(
+            self.domain, self.session, self.fence, self.lease, self.recheck, identity(), locked
+        )
         with self.assertRaisesRegex(SystemExit, "simulated abort"), scope.hold():
             raise SystemExit("simulated abort")
         self.assertFalse(self.session.operation_owned_by_current_thread)
@@ -414,7 +531,9 @@ class LockDomainScopeTests(unittest.TestCase):
 
     def test_abort_then_recheck_rejects_durable_session_state_change(self) -> None:
         """A durable ambiguous session remains fail-closed after caller abort."""
-        scope = LockDomainScope(self.domain, self.session, self.fence, self.lease, locked)
+        scope = LockDomainScope(
+            self.domain, self.session, self.fence, self.lease, self.recheck, identity(), locked
+        )
         with self.assertRaisesRegex(SystemExit, "simulated abort"), scope.hold():
             raise SystemExit("simulated abort")
         self.assertFalse(self.session.operation_owned_by_current_thread)
@@ -426,7 +545,9 @@ class LockDomainScopeTests(unittest.TestCase):
 
     def test_abort_then_recheck_rejects_replaced_session_identity(self) -> None:
         """A replaced durable authority revision cannot pass the old lease."""
-        scope = LockDomainScope(self.domain, self.session, self.fence, self.lease, locked)
+        scope = LockDomainScope(
+            self.domain, self.session, self.fence, self.lease, self.recheck, identity(), locked
+        )
         with self.assertRaisesRegex(SystemExit, "simulated crash"), scope.hold():
             raise SystemExit("simulated crash")
         self.assertFalse(self.session.operation_owned_by_current_thread)
@@ -486,7 +607,9 @@ class LockDomainScopeTests(unittest.TestCase):
             )
             connection.commit()
 
-        scope = LockDomainScope(self.domain, self.session, self.fence, self.lease, locked)
+        scope = LockDomainScope(
+            self.domain, self.session, self.fence, self.lease, self.recheck, identity(), locked
+        )
         with self.assertRaisesRegex(LockDomainError, "do not match"), scope.hold():
             self.fail("fresh handoff must reject replaced durable session")
         self.assertFalse(self.session.operation_owned_by_current_thread)
@@ -591,7 +714,9 @@ class LockDomainScopeTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ControlStoreError, "authority revision changed"):
             self.session.recheck_held(1)
-        scope = LockDomainScope(self.domain, self.session, self.fence, self.lease, locked)
+        scope = LockDomainScope(
+            self.domain, self.session, self.fence, self.lease, self.recheck, identity(), locked
+        )
         with self.assertRaisesRegex(LockDomainError, "do not match"), scope.hold():
             self.fail("first stale retry must be rejected")
         self.assertFalse(self.session.operation_owned_by_current_thread)
@@ -600,7 +725,15 @@ class LockDomainScopeTests(unittest.TestCase):
         self.assertEqual(
             "authority-retry", fresh_session.recheck_held(1).identity.authority_revision_at_acquire
         )
-        fresh_scope = LockDomainScope(self.domain, fresh_session, self.fence, self.lease, locked)
+        fresh_scope = LockDomainScope(
+            self.domain,
+            fresh_session,
+            self.fence,
+            self.lease,
+            self.recheck,
+            identity(),
+            locked,
+        )
         for retry in range(2):
             with (
                 self.subTest(retry=retry),
@@ -827,7 +960,9 @@ class LockDomainScopeTests(unittest.TestCase):
             with locked() as guard:
                 yield guard
 
-        scope = LockDomainScope.bind(self.session, self.fence, self.lease, counted_lock)
+        scope = LockDomainScope.bind(
+            self.session, self.fence, self.lease, self.recheck, counted_lock
+        )
         common_calls.clear()
         stale_context = {
             "project_id": PROJECT,
@@ -1825,7 +1960,9 @@ class LockDomainScopeTests(unittest.TestCase):
             def __len__(self) -> int:
                 return len(self.payload)
 
-        scope = LockDomainScope.bind(self.session, self.fence, self.lease, counted_lock)
+        scope = LockDomainScope.bind(
+            self.session, self.fence, self.lease, self.recheck, counted_lock
+        )
         common_calls.clear()
         with (
             self.assertRaisesRegex(LockDomainError, "unknown keys"),
