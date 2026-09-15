@@ -168,4 +168,6 @@ class LockDomainScope:
             raise LockDomainError("durable session is not held")
         if state.identity != self._session_identity or state.revision != self._session_revision:
             raise LockDomainError("durable session and lease do not match")
-        self._identity.assert_session_binding(state, self._lease)
+        self._identity.assert_session_binding(
+            state, self._lease, session_revision=self._session_revision
+        )
