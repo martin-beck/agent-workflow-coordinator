@@ -1045,6 +1045,16 @@ class LockDomainScopeTests(unittest.TestCase):
         self.assertEqual([], common_calls)
         self.assertFalse(self.session.operation_owned_by_current_thread)
 
+        null_project_context = dict(stale_context)
+        null_project_context["project_id"] = None
+        with (
+            self.assertRaisesRegex(LockDomainError, "does not match"),
+            scope.validated_hold(null_project_context),
+        ):
+            self.fail("null project identifier must fail before scope acquisition")
+        self.assertEqual([], common_calls)
+        self.assertFalse(self.session.operation_owned_by_current_thread)
+
         non_text_fence_context = dict(stale_context)
         non_text_fence_context["fencing_token"] = 7
         with (
