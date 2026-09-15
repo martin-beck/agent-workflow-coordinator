@@ -65,6 +65,8 @@ class LockDomainScope:
 
     def assert_context(self, context: Mapping[str, object]) -> None:
         """Reject engine context whose immutable lease identity has drifted."""
+        if not isinstance(context, Mapping):
+            raise LockDomainError("engine context must be a mapping")
         required = {
             "project_id": self._lease.project_id,
             "authority_revision": self._lease.authority_revision,
