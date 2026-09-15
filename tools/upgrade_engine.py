@@ -615,6 +615,10 @@ class UpgradeEngine:
         with self._operation_scope(), self._exclusive():
             if self.backend_adapter is None:
                 raise UpgradeError("backend adapter is required for rollback")
+            if getattr(self.backend_adapter, "requires_bound_rollback", False):
+                # Concrete authority adapters must be supplied through a caller-owned
+                # scope/lease binding.  Do not fall back to their unbound snapshot.
+                raise UpgradeError("rollback requires a trusted bound backend capability")
             snapshot = self.backend_adapter.snapshot(
                 "rollback", cast(Mapping[str, object], _freeze(asdict(self.context)))
             )
