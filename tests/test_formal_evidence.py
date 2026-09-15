@@ -394,6 +394,63 @@ class FormalEvidenceTests(unittest.TestCase):
             self.assertEqual("6G", result["resource_bounds"]["swap_max"])
             self.assertEqual(6000, result["resource_bounds"]["timeout_seconds"])
 
+    def test_required_ordinary_attestation_emits_three_gib_profile(self) -> None:
+        script = ROOT / "formal" / "handoffctl" / "attest.py"
+        models = [
+            "HandoffctlBinding",
+            "HandoffctlLocks",
+            "HandoffctlRun",
+            "HandoffctlStorage",
+            "HandoffctlPR",
+            "HandoffctlRecovery",
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            jar = root / "tla.jar"
+            manifest = root / "outcomes.manifest"
+            output = root / "attestation.json"
+            jar.write_bytes(b"test jar")
+            manifest.write_text("".join(f"{model} success\n" for model in models), encoding="utf-8")
+            with (
+                mock.patch.dict(
+                    os.environ,
+                    {
+                        "TLC_CGROUP_MODE": "required",
+                        "TLC_HEAP": "2048m",
+                        "TLC_MEMORY_MAX": "3G",
+                        "TLC_SWAP_MAX": "3G",
+                        "TLC_TIMEOUT_SECONDS": "1200",
+                    },
+                    clear=True,
+                ),
+                mock.patch.object(
+                    sys,
+                    "argv",
+                    [
+                        str(script),
+                        "--tier",
+                        "pr-publication",
+                        "--output",
+                        str(output),
+                        "--jar",
+                        str(jar),
+                        "--manifest",
+                        str(manifest),
+                        "--models",
+                        *models,
+                    ],
+                ),
+                self.assertRaises(SystemExit) as exit_info,
+            ):
+                runpy.run_path(str(script), run_name="__main__")
+            self.assertEqual(exit_info.exception.code, 0)
+            result = json.loads(output.read_text(encoding="utf-8"))
+            self.assertEqual("pr-publication", result["profile"])
+            self.assertEqual("2048m", result["resource_bounds"]["heap"])
+            self.assertEqual("3G", result["resource_bounds"]["memory_max"])
+            self.assertEqual("3G", result["resource_bounds"]["swap_max"])
+            self.assertEqual(1200, result["resource_bounds"]["timeout_seconds"])
+
 
 if __name__ == "__main__":
     unittest.main()
