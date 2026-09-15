@@ -81,10 +81,14 @@ class LockDomainScope:
             raise LockDomainError("engine context mapping is invalid") from error
         if context_keys - set(required):
             raise LockDomainError("engine context schema contains unknown keys")
-        if any(
-            context.get(key) != value or type(context.get(key)) is not type(value)
-            for key, value in required.items()
-        ):
+        try:
+            values_match = any(
+                context.get(key) != value or type(context.get(key)) is not type(value)
+                for key, value in required.items()
+            )
+        except Exception as error:
+            raise LockDomainError("engine context mapping values are invalid") from error
+        if values_match:
             raise LockDomainError("engine context does not match admission lease")
 
     @contextmanager
