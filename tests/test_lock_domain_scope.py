@@ -654,6 +654,16 @@ class LockDomainScopeTests(unittest.TestCase):
         self.assertEqual([], common_calls)
         self.assertFalse(self.session.operation_owned_by_current_thread)
 
+        empty_owner_context = dict(stale_context)
+        empty_owner_context["fencing_owner"] = ""
+        with (
+            self.assertRaisesRegex(LockDomainError, "does not match"),
+            scope.validated_hold(empty_owner_context),
+        ):
+            self.fail("empty fencing owner must fail before scope acquisition")
+        self.assertEqual([], common_calls)
+        self.assertFalse(self.session.operation_owned_by_current_thread)
+
         non_text_owner_context = dict(stale_context)
         non_text_owner_context["fencing_owner"] = 9
         with (
