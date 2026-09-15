@@ -26,6 +26,7 @@ from tools.lock_domain_scope import LockDomainScope
 from tools.mutation_fence import MutationFence, provision, provision_control_binding
 from tools.rollback_control_store import (
     BarrierSessionState,
+    ControlStoreError,
     SQLiteBarrierSessionStore,
     SQLiteRollbackControlStore,
 )
@@ -513,6 +514,37 @@ class GitAuthorityAdapterTests(unittest.TestCase):
         replacement = BarrierSessionState(
             BarrierSessionIdentity.from_record(replacement_record), "held", 1
         )
+        with self.assertRaisesRegex(ControlStoreError, "CAS conflict"):
+            self.session.reconcile_ambiguous(ambiguous.revision - 1, replacement)
+        for field in ("attempt_id", "durable_barrier_id", "fencing_token"):
+            reused_record = dict(replacement_record)
+            reused_record[field] = self._session_identity().as_record()[field]
+            reused_record["identity_digest"] = canonical_barrier_session_digest(reused_record)
+            reused = BarrierSessionState(
+                BarrierSessionIdentity.from_record(reused_record), "held", 1
+            )
+            with (
+                self.subTest(reused_field=field),
+                self.assertRaisesRegex(ControlStoreError, "distinct newer fence"),
+            ):
+                self.session.reconcile_ambiguous(ambiguous.revision, reused)
+        mismatch_store = SQLiteBarrierSessionStore(
+            SQLiteRollbackControlStore(
+                self.session.control_store_path, PROJECT, self.session.authority_path
+            ),
+            lambda: "authority-mismatch",
+        )
+        with self.assertRaisesRegex(ControlStoreError, "replacement authority revision changed"):
+            mismatch_store.reconcile_ambiguous(ambiguous.revision, replacement)
+        with (
+            patch.object(
+                self.session,
+                "_prepared_intents_locked",
+                side_effect=lambda _connection: [("unresolved",)],
+            ),
+            self.assertRaisesRegex(ControlStoreError, "unresolved intent"),
+        ):
+            self.session.reconcile_ambiguous(ambiguous.revision, replacement)
         self.assertEqual(
             replacement, self.session.reconcile_ambiguous(ambiguous.revision, replacement)
         )
