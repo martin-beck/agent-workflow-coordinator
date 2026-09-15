@@ -351,6 +351,7 @@ class SQLiteAuthorityAdapterTests(unittest.TestCase):
             "admission_recheck": self.recheck,
         }
         cases = (
+            ("phase", "", "phase is invalid"),
             ("lease", cast(Any, object()), "trusted admission lease"),
             ("admission_recheck", cast(Any, object()), "trusted admission recheck"),
             ("scope", cast(Any, object()), "concrete lock-domain scope"),
