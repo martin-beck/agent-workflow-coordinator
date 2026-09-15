@@ -203,6 +203,30 @@ class LockDomainScopeTests(unittest.TestCase):
         with self.assertRaisesRegex(LockDomainError, "admission lease"):
             LockDomainScope.bind(self.session, self.fence, cast(Any, None), locked)
 
+    def test_validated_hold_rejects_context_before_acquiring_scope(self) -> None:
+        scope = LockDomainScope.bind(self.session, self.fence, self.lease, locked)
+        context = {
+            "project_id": PROJECT,
+            "authority_revision": "authority-1",
+            "fencing_token": "fence-1",
+            "fencing_owner": "owner-1",
+            "durable_barrier_id": "barrier-1",
+            "state_revision": 1,
+        }
+        with scope.validated_hold(context):
+            self.assertTrue(self.session.operation_owned_by_current_thread)
+        self.assertFalse(self.session.operation_owned_by_current_thread)
+        for key in context:
+            drifted = dict(context)
+            drifted[key] = "drifted" if key != "state_revision" else 2
+            with (
+                self.subTest(key=key),
+                self.assertRaisesRegex(LockDomainError, "does not match"),
+                scope.validated_hold(drifted),
+            ):
+                self.fail("invalid caller context must be rejected before hold")
+            self.assertFalse(self.session.operation_owned_by_current_thread)
+
     def test_scope_rejects_lease_drift_and_releases_control(self) -> None:
         for drifted in (
             AdmissionLease(PROJECT, "authority-1", "other", "owner-1", "barrier-1", 1),
