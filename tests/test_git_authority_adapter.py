@@ -477,7 +477,20 @@ class GitAuthorityAdapterTests(unittest.TestCase):
     def test_typed_session_transition_rejects_then_reacquires_fresh_worker(self) -> None:
         """Typed ambiguous/replacement transitions gate fresh bound workers."""
         observed = self.adapter.snapshot("discover", CONTEXT)
-        ambiguous = self.session.mark_ambiguous(1, "process-death")
+
+        def fail_publication(*_args: Any, **_kwargs: Any) -> None:
+            raise OSError("intent publication unavailable")
+
+        with (
+            patch.object(self.session, "_mark_intent_locked", side_effect=fail_publication),
+            self.assertRaisesRegex(ControlStoreError, "outcome publication is ambiguous"),
+        ):
+            self.session.cas(1, BarrierSessionState(self._session_identity(), "held", 2))
+        ambiguous = self.session.recover_unknown()
+        self.assertIsNotNone(ambiguous)
+        assert ambiguous is not None
+        self.assertEqual("ambiguous", ambiguous.status)
+        durable_before_failures = self.session.snapshot()
 
         context = multiprocessing.get_context("fork")
         result = context.Queue()
@@ -499,6 +512,8 @@ class GitAuthorityAdapterTests(unittest.TestCase):
         self.assertEqual("rejected", outcome[0])
         self.assertIn(outcome[1], {"GitAuthorityError", "LockDomainError"})
         self.assertEqual(0, outcome[3])
+        self.assertFalse(self.session.operation_owned_by_current_thread)
+        self.assertEqual(durable_before_failures, self.session.snapshot())
 
         replacement_record = self._session_identity().as_record()
         replacement_record.update(
@@ -516,6 +531,8 @@ class GitAuthorityAdapterTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(ControlStoreError, "CAS conflict"):
             self.session.reconcile_ambiguous(ambiguous.revision - 1, replacement)
+        self.assertFalse(self.session.operation_owned_by_current_thread)
+        self.assertEqual(durable_before_failures, self.session.snapshot())
         for field in ("attempt_id", "durable_barrier_id", "fencing_token"):
             reused_record = dict(replacement_record)
             reused_record[field] = self._session_identity().as_record()[field]
@@ -528,6 +545,8 @@ class GitAuthorityAdapterTests(unittest.TestCase):
                 self.assertRaisesRegex(ControlStoreError, "distinct newer fence"),
             ):
                 self.session.reconcile_ambiguous(ambiguous.revision, reused)
+            self.assertFalse(self.session.operation_owned_by_current_thread)
+            self.assertEqual(durable_before_failures, self.session.snapshot())
         mismatch_store = SQLiteBarrierSessionStore(
             SQLiteRollbackControlStore(
                 self.session.control_store_path, PROJECT, self.session.authority_path
@@ -536,15 +555,8 @@ class GitAuthorityAdapterTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(ControlStoreError, "replacement authority revision changed"):
             mismatch_store.reconcile_ambiguous(ambiguous.revision, replacement)
-        with (
-            patch.object(
-                self.session,
-                "_prepared_intents_locked",
-                side_effect=lambda _connection: [("unresolved",)],
-            ),
-            self.assertRaisesRegex(ControlStoreError, "unresolved intent"),
-        ):
-            self.session.reconcile_ambiguous(ambiguous.revision, replacement)
+        self.assertFalse(mismatch_store.operation_owned_by_current_thread)
+        self.assertEqual(durable_before_failures, self.session.snapshot())
         self.assertEqual(
             replacement, self.session.reconcile_ambiguous(ambiguous.revision, replacement)
         )
@@ -568,6 +580,43 @@ class GitAuthorityAdapterTests(unittest.TestCase):
             ("success", observed["git_head"], observed["git_branch"]),
             recovered_result.get(timeout=1),
         )
+
+    def test_typed_reconcile_rejects_real_unresolved_intent(self) -> None:
+        """A prepared intent left by publication failure blocks replacement."""
+
+        def fail_publication(*_args: Any, **_kwargs: Any) -> None:
+            raise OSError("intent publication unavailable")
+
+        with (
+            patch.object(self.session, "_mark_intent_locked", side_effect=fail_publication),
+            self.assertRaisesRegex(ControlStoreError, "outcome publication is ambiguous"),
+        ):
+            self.session.cas(1, BarrierSessionState(self._session_identity(), "held", 2))
+        with (
+            patch.object(self.session, "_mark_intent_locked", side_effect=fail_publication),
+            self.assertRaisesRegex(OSError, "intent publication unavailable"),
+        ):
+            self.session.recover_unknown()
+        current = self.session.snapshot()
+        self.assertIsNotNone(current)
+        assert current is not None
+        replacement_record = self._session_identity().as_record()
+        replacement_record.update(
+            {
+                "attempt_id": "attempt-newer",
+                "state_revision": 3,
+                "durable_barrier_id": "barrier-newer",
+                "fencing_token": "fence-newer",
+            }
+        )
+        replacement_record["identity_digest"] = canonical_barrier_session_digest(replacement_record)
+        replacement = BarrierSessionState(
+            BarrierSessionIdentity.from_record(replacement_record), "held", 1
+        )
+        with self.assertRaisesRegex(ControlStoreError, "unresolved intent"):
+            self.session.reconcile_ambiguous(current.revision, replacement)
+        self.assertFalse(self.session.operation_owned_by_current_thread)
+        self.assertEqual(current, self.session.snapshot())
 
     def test_rollback_recheck_never_authorizes_mutation(self) -> None:
         result = self.adapter.verify_rollback_context(CONTEXT)
