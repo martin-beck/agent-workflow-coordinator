@@ -1966,6 +1966,66 @@ class UpgradeEngineTests(unittest.TestCase):
             with engine._exclusive():
                 pass
 
+    def test_bound_rollback_inspection_dispatches_initialized_real_adapters(self) -> None:
+        """Concrete adapter identity is retained without authorizing rollback."""
+        for backend, adapter_type in (
+            ("git", GitAuthorityAdapter),
+            ("sqlite", SQLiteAuthorityAdapter),
+        ):
+            with self.subTest(backend=backend), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                if backend == "git":
+                    adapter = adapter_type(root)
+                else:
+                    authority = root / "authority.sqlite"
+                    authority.write_bytes(b"SQLite format 3\x00")
+                    authority.chmod(0o600)
+                    adapter = adapter_type(authority)
+                context = make_context(f"op-real-inspect-{backend}")
+                context["backend"] = backend
+                context["barrier_identity_digest"] = canonical_barrier_digest(context)
+                context["envelope_digest"] = canonical_envelope_digest(context)
+                scope, lease, recheck = object(), object(), object()
+                calls: list[tuple[object, ...]] = []
+
+                def evidence(
+                    context_arg: Mapping[str, object],
+                    scope_arg: object,
+                    *,
+                    _calls: list[tuple[object, ...]] = calls,
+                    **kwargs: object,
+                ) -> dict[str, object]:
+                    _calls.append(
+                        (context_arg, scope_arg, kwargs["lease"], kwargs["admission_recheck"])
+                    )
+                    return {**context_arg, "rollback_context_verified": False}
+
+                with patch.object(adapter, "verify_rollback_context_bound", side_effect=evidence):
+                    engine = UpgradeEngine(
+                        str(context["operation_id"]),
+                        root / "journal.json",
+                        context,
+                        backend_adapter=adapter,
+                        rollback_bound_verifier=BoundRollbackCapability.bind(
+                            PhaseContext(**cast(dict[str, Any], context)),
+                            adapter,
+                            scope,
+                            lease=lease,
+                            admission_recheck=recheck,
+                        ),
+                    )
+                    engine.plan()
+                    before = (root / "journal.json").read_bytes()
+                    result = engine.inspect_rollback_bound()
+                    self.assertFalse(result["rollback_context_verified"])
+                    self.assertEqual(before, (root / "journal.json").read_bytes())
+                    self.assertEqual(1, len(calls))
+                    self.assertIs(calls[0][1], scope)
+                    self.assertIs(calls[0][2], lease)
+                    self.assertIs(calls[0][3], recheck)
+                    with engine._exclusive():
+                        pass
+
     def test_rollback_rejects_forged_bound_verifier_before_backend_or_handler(self) -> None:
         class ConcreteAdapter(FakeAdapter):
             requires_bound_rollback = True
