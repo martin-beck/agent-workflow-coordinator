@@ -101,6 +101,30 @@ class AdmittedControlStoreTests(unittest.TestCase):
         binding = AdmittedControlBinding.bind(Store(), self.lease, self.recheck, Scope())
         binding.validate()
 
+    def test_validated_scope_rereads_and_cleans_up_without_backend(self) -> None:
+        events: list[str] = []
+
+        class Store:
+            def cas(self, *_args: object, **_kwargs: object) -> dict[str, object]:
+                raise AssertionError("backend must not be touched")
+
+        class Scope:
+            def assert_ordered(self) -> None:
+                events.append("order")
+
+            @contextmanager
+            def hold(self) -> Any:
+                events.append("hold")
+                try:
+                    yield None
+                finally:
+                    events.append("release")
+
+        binding = AdmittedControlBinding.bind(Store(), self.lease, self.recheck, Scope())
+        with binding.validated_scope():
+            events.append("reread")
+        self.assertEqual(["order", "order", "hold", "reread", "release"], events)
+
     def test_typed_binding_rejects_lock_order_failure_before_construction(self) -> None:
         class Store:
             def cas(self, _expected: int, _record: Mapping[str, object]) -> dict[str, object]:

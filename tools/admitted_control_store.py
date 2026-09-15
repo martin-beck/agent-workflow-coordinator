@@ -9,8 +9,8 @@ and authority rereader are integrated and independently reviewed.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
-from contextlib import AbstractContextManager
+from collections.abc import Iterator, Mapping
+from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
@@ -81,6 +81,16 @@ class AdmittedControlBinding:
             raise AdmissionLeaseError("admitted control recheck does not match lease")
         try:
             self.scope.assert_ordered()
+        except (AttributeError, RuntimeError, TypeError) as error:
+            raise AdmissionLeaseError("admitted control scope is invalid") from error
+
+    @contextmanager
+    def validated_scope(self) -> Iterator[None]:
+        """Hold the caller-owned scope for durable reread, without backend use."""
+        self.validate()
+        try:
+            with self.scope.hold():
+                yield None
         except (AttributeError, RuntimeError, TypeError) as error:
             raise AdmissionLeaseError("admitted control scope is invalid") from error
 
