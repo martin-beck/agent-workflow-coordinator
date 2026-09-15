@@ -7,11 +7,12 @@ from __future__ import annotations
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import AbstractContextManager, contextmanager
 
-from tools.admission_lease import LOCK_ORDER, AdmissionLease
+from tools.admission_lease import LOCK_ORDER, AdmissionLease, AdmissionRecheck
 from tools.handoffctl import CoordinatorLockGuard
 from tools.lock_domain import LockDomainContract, LockDomainError, LockDomainIdentity
 from tools.mutation_fence import MutationFence
-from tools.rollback_control_store import SQLiteBarrierSessionStore
+from tools.rollback_control_store import ControlStoreError, SQLiteBarrierSessionStore
+from tools.upgrade_identity import BarrierSessionIdentity
 
 
 class LockDomainScope:
@@ -28,12 +29,16 @@ class LockDomainScope:
         session_store: SQLiteBarrierSessionStore,
         authority_fence: MutationFence,
         lease: AdmissionLease,
+        recheck: AdmissionRecheck,
+        session_identity: BarrierSessionIdentity,
         common_lock: Callable[[], AbstractContextManager[CoordinatorLockGuard]],
     ) -> None:
         self._identity = identity
         self._session_store = session_store
         self._authority_fence = authority_fence
         self._lease = lease
+        self._recheck = recheck
+        self._session_identity = session_identity
         self._common_lock = common_lock
 
     @classmethod
@@ -42,6 +47,7 @@ class LockDomainScope:
         session_store: SQLiteBarrierSessionStore,
         authority_fence: MutationFence,
         lease: AdmissionLease,
+        recheck: AdmissionRecheck,
         common_lock: Callable[[], AbstractContextManager[CoordinatorLockGuard]],
     ) -> LockDomainScope:
         """Bind a caller-owned scope to canonical descriptors only.
@@ -55,13 +61,29 @@ class LockDomainScope:
             raise LockDomainError("authority fence is invalid")
         if not isinstance(lease, AdmissionLease):
             raise LockDomainError("admission lease is invalid")
+        if not isinstance(recheck, AdmissionRecheck) or recheck.lease != lease:
+            raise LockDomainError("admission recheck is invalid")
         with common_lock() as common_guard:
             identity = LockDomainContract.capture(common_guard, session_store, authority_fence)
-        return cls(identity, session_store, authority_fence, lease, common_lock)
+            with session_store.lock_owned_by_caller(common_guard):
+                state = session_store.snapshot_owned_by_caller()
+        return cls(
+            identity,
+            session_store,
+            authority_fence,
+            lease,
+            recheck,
+            state.identity,
+            common_lock,
+        )
 
     def assert_ordered(self) -> None:
         if LOCK_ORDER != ("common", "control", "authority"):
             raise RuntimeError("admission lock order is invalid")
+        if not isinstance(self._recheck, AdmissionRecheck) or self._recheck.lease != self._lease:
+            raise LockDomainError("admission recheck does not match lease")
+        if not isinstance(self._session_identity, BarrierSessionIdentity):
+            raise LockDomainError("durable session identity is invalid")
 
     def assert_context(self, context: Mapping[str, object]) -> None:
         """Reject engine context whose immutable lease identity has drifted."""
@@ -110,13 +132,32 @@ class LockDomainScope:
             if not isinstance(common_guard, CoordinatorLockGuard):
                 raise RuntimeError("common lock capability is invalid")
             self._identity.assert_current(common_guard, self._session_store, self._authority_fence)
-            with (
-                self._session_store.lock_owned_by_caller(common_guard),
-                self._authority_fence.locked(),
-            ):
-                self._identity.assert_current(
-                    common_guard, self._session_store, self._authority_fence
-                )
-                state = self._session_store.snapshot_owned_by_caller()
-                self._identity.assert_session_binding(state, self._lease)
-                yield object()
+            with self._session_store.lock_owned_by_caller(common_guard):
+                self._recheck_session(common_guard)
+                with self._authority_fence.locked():
+                    self._identity.assert_current(
+                        common_guard, self._session_store, self._authority_fence
+                    )
+                    self._recheck_session(common_guard)
+                    yield object()
+
+    def _recheck_session(self, common_guard: CoordinatorLockGuard) -> None:
+        """Reread trusted session evidence while the caller owns control locks."""
+        observed = self._session_store.snapshot_owned_by_caller()
+        if observed.status != "held":
+            raise LockDomainError("durable session is not held")
+        if observed.identity != self._session_identity or observed.revision != self._lease.revision:
+            raise LockDomainError("durable session and lease do not match")
+        try:
+            state = self._session_store.recheck_held_locked(
+                common_guard,
+                self._session_identity,
+                self._lease.revision,
+            )
+        except ControlStoreError as error:
+            raise LockDomainError(f"durable session recheck failed: {error}") from error
+        if state.status != "held":
+            raise LockDomainError("durable session is not held")
+        if state.identity != self._session_identity or state.revision != self._lease.revision:
+            raise LockDomainError("durable session and lease do not match")
+        self._identity.assert_session_binding(state, self._lease)
