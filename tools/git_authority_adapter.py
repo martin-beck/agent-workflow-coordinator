@@ -127,6 +127,12 @@ class GitAuthorityAdapter:
             raise GitAuthorityError("trusted admission recheck is required")
         if admission_recheck.lease != lease:
             raise GitAuthorityError("trusted admission recheck does not match lease")
+        try:
+            validated_context = self._context(context)
+        except GitAuthorityError:
+            raise
+        except Exception as error:
+            raise GitAuthorityError("Git authority context is invalid") from error
         if not isinstance(scope, LockDomainScope):
             raise GitAuthorityError("concrete lock-domain scope is required")
         expected_identity = {
@@ -137,13 +143,11 @@ class GitAuthorityAdapter:
             "durable_barrier_id": lease.durable_barrier_id,
             "state_revision": lease.revision,
         }
-        if any(context.get(name) != value for name, value in expected_identity.items()):
+        if any(validated_context.get(name) != value for name, value in expected_identity.items()):
             raise GitAuthorityError("trusted session identity changed")
         try:
             value = ScopedBackendAdapter(self, scope).snapshot(
-                phase,
-                context,
-                scope_context=expected_identity,
+                phase, validated_context, scope_context=expected_identity
             )
         except GitAuthorityError:
             raise

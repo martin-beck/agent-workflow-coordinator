@@ -371,18 +371,20 @@ class GitAuthorityAdapterTests(unittest.TestCase):
                 expected_head="0" * 40,
             )
         self.session.mark_ambiguous(1, "stale-session")
-        with patch.object(self.adapter, "_git", wraps=self.adapter._git) as git:
-            with self.assertRaisesRegex(GitAuthorityError, "trusted Git session"):
-                self.adapter.snapshot_bound(
-                    "discover",
-                    CONTEXT,
-                    self.scope,
-                    lease=self._lease(),
-                    admission_recheck=self.recheck,
-                    expected_branch=str(observed["git_branch"]),
-                    expected_head=str(observed["git_head"]),
-                )
-            git.assert_not_called()
+        with (
+            patch.object(self.adapter, "_git", wraps=self.adapter._git) as git,
+            self.assertRaisesRegex(GitAuthorityError, "trusted Git session"),
+        ):
+            self.adapter.snapshot_bound(
+                "discover",
+                CONTEXT,
+                self.scope,
+                lease=self._lease(),
+                admission_recheck=self.recheck,
+                expected_branch=str(observed["git_branch"]),
+                expected_head=str(observed["git_head"]),
+            )
+        git.assert_not_called()
 
     def test_dirty_or_detached_or_mismatched_context_fails_closed(self) -> None:
         (self.root / "state").write_text("dirty\n")
@@ -433,6 +435,38 @@ class GitAuthorityAdapterTests(unittest.TestCase):
                     expected_head=str(observed["git_head"]),
                 )
             git.assert_not_called()
+
+    def test_snapshot_bound_rejects_full_context_schema_before_scope(self) -> None:
+        class ScopeMustNotRun:
+            def assert_ordered(self) -> None:
+                raise AssertionError("scope must not run")
+
+            def assert_context(self, _context: Mapping[str, object]) -> None:
+                raise AssertionError("scope must not run")
+
+            def hold(self) -> AbstractContextManager[object]:
+                raise AssertionError("scope must not run")
+
+        observed = self.adapter.snapshot("discover", CONTEXT)
+        invalid_contexts = [
+            {key: value for key, value in CONTEXT.items() if key != "operation_id"},
+            {**CONTEXT, "unexpected": "hostile"},
+            {**CONTEXT, "state_revision": True},
+        ]
+        for invalid in invalid_contexts:
+            with (
+                self.subTest(context=repr(invalid)),
+                self.assertRaisesRegex(GitAuthorityError, "context"),
+            ):
+                self.adapter.snapshot_bound(
+                    "discover",
+                    invalid,
+                    cast(Any, ScopeMustNotRun()),
+                    lease=self._lease(),
+                    admission_recheck=self.recheck,
+                    expected_branch=str(observed["git_branch"]),
+                    expected_head=str(observed["git_head"]),
+                )
 
     def test_process_abort_releases_bound_scope_for_fresh_read_only_worker(self) -> None:
         """A child abort inside snapshot_bound leaves all locks reusable."""
