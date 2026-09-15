@@ -13,6 +13,16 @@ from tools.lock_domain import LockDomainIdentity
 from tools.rollback_control_store import BarrierSessionState
 
 DISABLED_MUTATION_PHASES = frozenset({"commit", "apply", "rollback"})
+_SCOPE_CONTEXT_FIELDS = frozenset(
+    {
+        "project_id",
+        "authority_revision",
+        "fencing_token",
+        "fencing_owner",
+        "durable_barrier_id",
+        "state_revision",
+    }
+)
 
 
 @runtime_checkable
@@ -90,12 +100,27 @@ class ScopedBackendAdapter:
         scope_context: Mapping[str, object] | None = None,
     ) -> dict[str, Any]:
         """Read backend evidence only while the scope is held."""
+        if scope_context is not None:
+            self._validate_scope_context(scope_context)
         self._scope.assert_context(context if scope_context is None else scope_context)
         with self._scope.hold():
             snapshot = self._backend.snapshot(phase, context)
         if not isinstance(snapshot, dict):
             raise TypeError("backend snapshot must be an object")
         return snapshot
+
+    @staticmethod
+    def _validate_scope_context(context: Mapping[str, object]) -> None:
+        """Validate the exact reduced admission identity before entering scope."""
+        if not isinstance(context, Mapping) or set(context) != _SCOPE_CONTEXT_FIELDS:
+            raise TypeError("scope context must contain exactly the admission identity fields")
+        for field in _SCOPE_CONTEXT_FIELDS - {"state_revision"}:
+            value = context.get(field)
+            if type(value) is not str or not value:
+                raise TypeError("scope context identity values are invalid")
+        revision = context.get("state_revision")
+        if type(revision) is not int or revision < 1:
+            raise TypeError("scope context revision is invalid")
 
     def execute(self, phase: str, context: Mapping[str, object]) -> dict[str, Any]:
         """Execute one adapter operation only while the scope is held."""

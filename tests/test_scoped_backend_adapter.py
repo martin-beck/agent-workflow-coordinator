@@ -46,6 +46,53 @@ class Backend:
 
 
 class ScopedBackendAdapterTests(unittest.TestCase):
+    def test_scope_context_is_exact_typed_admission_identity_before_scope_or_backend(self) -> None:
+        class CountingBackend(Backend):
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def snapshot(self, phase: str, context: Mapping[str, object]) -> dict[str, object]:
+                self.calls += 1
+                return super().snapshot(phase, context)
+
+        valid = {
+            "project_id": "project",
+            "authority_revision": "authority",
+            "fencing_token": "fence",
+            "fencing_owner": "owner",
+            "durable_barrier_id": "barrier",
+            "state_revision": 1,
+        }
+        backend = CountingBackend()
+        scope = Scope()
+        adapter = ScopedBackendAdapter(backend, scope)
+        for field in valid:
+            invalid = dict(valid)
+            invalid.pop(field)
+            with (
+                self.subTest(case=f"missing-{field}"),
+                self.assertRaisesRegex(TypeError, "scope context"),
+            ):
+                adapter.snapshot("preflight", {"full": True}, scope_context=invalid)
+        invalid_contexts: list[object] = [
+            {**valid, "unexpected": "value"},
+            {**valid, "state_revision": True},
+            {**valid, "fencing_token": ""},
+            [("project_id", "project")],
+        ]
+        for hostile in invalid_contexts:
+            with (
+                self.subTest(case=repr(hostile)),
+                self.assertRaisesRegex(TypeError, "scope context"),
+            ):
+                adapter.snapshot("preflight", {"full": True}, scope_context=cast(Any, hostile))
+        self.assertEqual([], scope.events)
+        self.assertEqual(0, backend.calls)
+        result = adapter.snapshot("preflight", {"full": True}, scope_context=valid)
+        self.assertEqual("preflight", result["phase"])
+        self.assertEqual(1, backend.calls)
+        self.assertEqual(["context", "held", "released"], scope.events)
+
     def test_adapter_satisfies_upgrade_engine_interface_without_wiring_dispatch(self) -> None:
         self.assertIsInstance(ScopedBackendAdapter(Backend(), Scope()), EngineBackendAdapter)
 
