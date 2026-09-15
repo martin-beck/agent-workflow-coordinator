@@ -13,7 +13,7 @@ import tempfile
 import unittest
 from collections.abc import Callable, Mapping
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 from unittest.mock import patch
 
 from tools import upgrade_engine as upgrade_engine_module
@@ -1869,13 +1869,14 @@ class UpgradeEngineTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as directory:
             context = make_context("op-bound-evidence")
+            adapter = ConcreteAdapter()
             engine = UpgradeEngine(
                 "op-bound-evidence",
                 Path(directory) / "journal.json",
                 context,
-                backend_adapter=ConcreteAdapter(),
+                backend_adapter=adapter,
                 rollback_bound_verifier=BoundRollbackCapability.bind(
-                    PhaseContext(**context), ConcreteAdapter()
+                    PhaseContext(**cast(dict[str, Any], context)), adapter
                 ),
             )
             engine.plan()
@@ -1902,7 +1903,7 @@ class UpgradeEngineTests(unittest.TestCase):
                     Path(directory) / "journal.json",
                     make_context(operation_id),
                     backend_adapter=ConcreteAdapter(),
-                    rollback_bound_verifier=lambda _context: {
+                    rollback_bound_verifier=lambda _context: {  # type: ignore[arg-type]
                         "rollback_context_verified": True
                     },
                 )
@@ -1922,7 +1923,7 @@ class UpgradeEngineTests(unittest.TestCase):
             context = make_context(operation_id)
             wrong = make_context("other-operation")
             capability = BoundRollbackCapability.bind(
-                PhaseContext(**wrong), ConcreteAdapter()
+                PhaseContext(**cast(dict[str, Any], wrong)), ConcreteAdapter()
             )
             with self.assertRaisesRegex(UpgradeError, "identity mismatch"):
                 UpgradeEngine(
@@ -1930,6 +1931,37 @@ class UpgradeEngineTests(unittest.TestCase):
                     journal,
                     context,
                     backend_adapter=ConcreteAdapter(),
+                    rollback_bound_verifier=capability,
+                )
+            self.assertFalse(journal.exists())
+
+    def test_rollback_rejects_capability_bound_to_different_backend(self) -> None:
+        class ConcreteAdapter(FakeAdapter):
+            requires_bound_rollback = True
+
+            def verify_rollback_context_bound(
+                self, _context: Mapping[str, object]
+            ) -> Mapping[str, object]:
+                raise AssertionError("foreign verifier must not run")
+
+            def execute(self, _phase: str, _context: object) -> dict[str, object]:
+                raise AssertionError("execute must remain unreachable")
+
+        with tempfile.TemporaryDirectory() as directory:
+            operation_id = "op-foreign-capability"
+            journal = Path(directory) / "journal.json"
+            context = make_context(operation_id)
+            backend = ConcreteAdapter()
+            foreign = ConcreteAdapter()
+            capability = BoundRollbackCapability.bind(
+                PhaseContext(**cast(dict[str, Any], context)), foreign
+            )
+            with self.assertRaisesRegex(UpgradeError, "backend mismatch"):
+                UpgradeEngine(
+                    operation_id,
+                    journal,
+                    context,
+                    backend_adapter=backend,
                     rollback_bound_verifier=capability,
                 )
             self.assertFalse(journal.exists())

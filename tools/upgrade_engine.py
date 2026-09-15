@@ -222,10 +222,11 @@ class UpgradeEngine:
             rollback_bound_verifier, BoundRollbackCapability
         ):
             raise UpgradeError("trusted bound rollback capability is required")
-        if isinstance(rollback_bound_verifier, BoundRollbackCapability) and not (
-            rollback_bound_verifier.matches(self.context)
-        ):
-            raise UpgradeError("trusted bound rollback capability identity mismatch")
+        if isinstance(rollback_bound_verifier, BoundRollbackCapability):
+            if not rollback_bound_verifier.matches(self.context):
+                raise UpgradeError("trusted bound rollback capability identity mismatch")
+            if rollback_bound_verifier.verifier is not self.backend_adapter:
+                raise UpgradeError("trusted bound rollback capability backend mismatch")
 
     @contextmanager
     def _exclusive(self) -> Iterator[None]:
