@@ -628,7 +628,7 @@ class LockDomainScopeTests(unittest.TestCase):
         self.assertEqual(0, recovered.exitcode)
         self.assertGreater(ends[0], starts[0])
 
-    def test_validated_hold_rejects_stale_context_before_common_lock(self) -> None:
+    def test_validated_hold_rejects_stale_context_before_common_lock(self) -> None:  # noqa: C901
         common_calls: list[str] = []
 
         @contextmanager
@@ -717,6 +717,20 @@ class LockDomainScopeTests(unittest.TestCase):
             scope.validated_hold(cast(Any, ExplodingGetMapping(stale_context))),
         ):
             self.fail("mapping get failures must fail closed before scope acquisition")
+        self.assertEqual([], common_calls)
+        self.assertFalse(self.session.operation_owned_by_current_thread)
+
+        class ExplodingEquality:
+            def __eq__(self, other: object) -> bool:
+                raise RuntimeError(f"comparison unavailable: {other}")
+
+        equality_failure_context = dict(stale_context)
+        equality_failure_context["project_id"] = ExplodingEquality()
+        with (
+            self.assertRaisesRegex(LockDomainError, "mapping values are invalid"),
+            scope.validated_hold(equality_failure_context),
+        ):
+            self.fail("context equality failures must fail closed before scope acquisition")
         self.assertEqual([], common_calls)
         self.assertFalse(self.session.operation_owned_by_current_thread)
 
