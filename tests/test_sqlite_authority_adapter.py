@@ -94,6 +94,12 @@ def _bound_snapshot_worker(root_text: str, mode: str, result: Any) -> None:
             return super().snapshot(phase, context)
 
     adapter = CountingAdapter(authority)
+    if mode == "crash":
+
+        def aborting_snapshot(_phase: str, _context: Mapping[str, object]) -> dict[str, object]:
+            os._exit(17)
+
+        adapter.snapshot = aborting_snapshot  # type: ignore[assignment]
     context = {
         **CONTEXT,
         "project_id": PROJECT,
@@ -285,6 +291,45 @@ class SQLiteAuthorityAdapterTests(unittest.TestCase):
         self.assertEqual(("success", True, 1, False), replacement_result.get(timeout=1))
         self.assertEqual(before, self._durable_state())
         self.assertFalse(self.session.operation_owned_by_current_thread)
+
+    def test_process_abort_inside_bound_scope_releases_locks_for_fresh_worker(self) -> None:
+        ambiguous = self.session.mark_ambiguous(1, "process-abort")
+        replacement_record = self._session_identity().as_record()
+        replacement_record.update(
+            {
+                "attempt_id": "attempt-abort-replacement",
+                "state_revision": 2,
+                "durable_barrier_id": "barrier-new",
+                "fencing_token": "fence-new",
+                "fencing_owner": "owner-new",
+            }
+        )
+        replacement_record["identity_digest"] = canonical_barrier_session_digest(replacement_record)
+        self.session.reconcile_ambiguous(
+            ambiguous.revision,
+            BarrierSessionState(BarrierSessionIdentity.from_record(replacement_record), "held", 1),
+        )
+        before = self._durable_state()
+        context = multiprocessing.get_context("fork")
+        crashed_result = context.Queue()
+        crashed = context.Process(
+            target=_bound_snapshot_worker,
+            args=(str(self.root), "crash", crashed_result),
+        )
+        crashed.start()
+        crashed.join(5)
+        self.assertEqual(17, crashed.exitcode)
+        self.assertFalse(self.session.operation_owned_by_current_thread)
+        fresh_result = context.Queue()
+        fresh = context.Process(
+            target=_bound_snapshot_worker,
+            args=(str(self.root), "replacement", fresh_result),
+        )
+        fresh.start()
+        fresh.join(5)
+        self.assertEqual(0, fresh.exitcode)
+        self.assertEqual(("success", True, 1, False), fresh_result.get(timeout=1))
+        self.assertEqual(before, self._durable_state())
 
     def test_snapshot_bound_rejects_invalid_admission_inputs_before_scope(self) -> None:
         observed = {**CONTEXT, "project_id": PROJECT}
