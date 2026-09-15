@@ -2,6 +2,9 @@
 # SPDX-License-Identifier: MIT
 """Contract-aligned authority and staged-runtime selection helpers."""
 
+# Git observation uses fixed executable and argument forms.
+# ruff: noqa: S603, S607
+
 from __future__ import annotations
 
 import hashlib
@@ -103,8 +106,111 @@ class SQLiteReleaseAuthoritySnapshot:
     foreign_key_violations: int
 
 
+@dataclass(frozen=True, slots=True)
+class GitAuthoritySnapshot:
+    """Read-only, identity-bound facts from one clean Git authority."""
+
+    repository: Path
+    git_directory_identity: tuple[int, int]
+    branch: str
+    head: str
+    requested_ref: str
+    requested_ref_head: str
+    clean: bool
+
+
 def _file_identity(status: os.stat_result) -> tuple[int, int]:
     return status.st_dev, status.st_ino
+
+
+def read_git_authority_snapshot(  # noqa: C901
+    repository: Path, requested_ref: str = "HEAD"
+) -> GitAuthoritySnapshot:
+    """Capture clean, reachable Git identity without invoking mutation commands."""
+    resolved = repository.resolve()
+    git_directory = resolved / ".git"
+    if (
+        not resolved.is_dir()
+        or resolved != repository.absolute()
+        or not git_directory.is_dir()
+        or git_directory.is_symlink()
+    ):
+        raise AuthorityError("Git authority repository is unavailable")
+    if requested_ref != "HEAD" and not re.fullmatch(
+        r"refs/(?:heads|tags)/[A-Za-z0-9._/-]+", requested_ref
+    ):
+        raise AuthorityError("Git authority ref is invalid")
+    try:
+        root_status = resolved.stat()
+        git_status = git_directory.stat()
+        if root_status.st_uid != os.geteuid() or git_status.st_uid != os.geteuid():
+            raise AuthorityError("Git authority root identity is not owner-safe")
+        if root_status.st_mode & 0o022 or git_status.st_mode & 0o022:
+            raise AuthorityError("Git authority root identity is not owner-safe")
+        before = (_file_identity(root_status), _file_identity(git_status))
+    except OSError as error:
+        raise AuthorityError("Git authority identity is unavailable") from error
+
+    def observe(*arguments: str) -> str:
+        try:
+            result = subprocess.run(
+                ["git", "-C", str(resolved), *arguments],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+        except (OSError, subprocess.TimeoutExpired) as error:
+            raise AuthorityError("Git authority inspection failed") from error
+        if result.returncode != 0:
+            raise AuthorityError("Git authority inspection was rejected")
+        return result.stdout.strip()
+
+    def check(*arguments: str) -> None:
+        try:
+            result = subprocess.run(
+                ["git", "-C", str(resolved), *arguments],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+        except (OSError, subprocess.TimeoutExpired) as error:
+            raise AuthorityError("Git authority inspection failed") from error
+        if result.returncode != 0:
+            raise AuthorityError("Git authority ref is not reachable")
+
+    status = observe("status", "--porcelain=v1", "--untracked-files=all")
+    branch = observe("symbolic-ref", "--short", "-q", "HEAD")
+    head = observe("rev-parse", "--verify", "--end-of-options", "HEAD^{commit}")
+    ref = branch if requested_ref == "HEAD" else requested_ref
+    ref_head = observe("rev-parse", "--verify", "--end-of-options", f"{ref}^{{commit}}")
+    ref_name = f"refs/heads/{branch}" if requested_ref == "HEAD" else requested_ref
+    check("merge-base", "--is-ancestor", ref_head, head)
+    try:
+        root_status = resolved.stat()
+        git_status = git_directory.stat()
+        after = (_file_identity(root_status), _file_identity(git_status))
+    except OSError as error:
+        raise AuthorityError("Git authority identity reread failed") from error
+    if before != after:
+        raise AuthorityError("Git authority identity changed")
+    final_status = observe("status", "--porcelain=v1", "--untracked-files=all")
+    final_branch = observe("symbolic-ref", "--short", "-q", "HEAD")
+    final_head = observe("rev-parse", "--verify", "--end-of-options", "HEAD^{commit}")
+    final_ref_head = observe("rev-parse", "--verify", "--end-of-options", f"{ref}^{{commit}}")
+    final_ref_name = f"refs/heads/{final_branch}" if requested_ref == "HEAD" else requested_ref
+    if not branch or not head or not ref_head or status or final_status:
+        raise AuthorityError("Git authority is not clean and branch-bound")
+    if (branch, head, ref_head, ref_name) != (
+        final_branch,
+        final_head,
+        final_ref_head,
+        final_ref_name,
+    ):
+        raise AuthorityError("Git authority observation changed")
+    check("merge-base", "--is-ancestor", final_ref_head, final_head)
+    return GitAuthoritySnapshot(resolved, after[1], branch, head, requested_ref, ref_head, True)
 
 
 def _open_parent(path: Path) -> tuple[int, tuple[int, int]]:
@@ -478,7 +584,7 @@ def inspect_authority() -> dict[str, object]:
     if selection["backend"] == "git":
         try:
             status = subprocess.run(
-                ["git", "status", "--porcelain", "--untracked-files=all"],  # noqa: S607
+                ["git", "status", "--porcelain", "--untracked-files=all"],
                 cwd=handoffctl.ROOT,
                 check=True,
                 capture_output=True,

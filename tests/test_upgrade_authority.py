@@ -2,6 +2,9 @@
 # SPDX-License-Identifier: MIT
 """Tests for the separate versioned runtime selector contract."""
 
+# Test setup invokes fixed Git commands against isolated temporary repositories.
+# ruff: noqa: S603, S607
+
 from __future__ import annotations
 
 import importlib
@@ -22,12 +25,95 @@ from tools.upgrade_authority import (
     SelectorPublicationAmbiguousError,
     commit_runtime_selector,
     commit_runtime_selector_admitted,
+    read_git_authority_snapshot,
     read_runtime_selector,
     reconcile_runtime_selector,
 )
 
 
 class RuntimeSelectorTests(unittest.TestCase):
+    def test_git_snapshot_binds_clean_head_and_requested_ref(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            subprocess.run(["git", "init", "-q", str(root)], check=True)
+            (root / ".git").chmod(0o700)
+            (root / "state").write_text("clean\n")
+            subprocess.run(["git", "-C", str(root), "add", "state"], check=True)
+            subprocess.run(
+                [
+                    "git",
+                    "-C",
+                    str(root),
+                    "-c",
+                    "user.name=test",
+                    "-c",
+                    "user.email=test@example",
+                    "commit",
+                    "-qm",
+                    "init",
+                ],
+                check=True,
+            )
+            snapshot = read_git_authority_snapshot(root, "HEAD")
+            self.assertTrue(snapshot.clean)
+            self.assertEqual(snapshot.head, snapshot.requested_ref_head)
+            self.assertEqual("master", snapshot.branch)
+            subprocess.run(["git", "-C", str(root), "tag", "v1"], check=True)
+            (root / "state").write_text("second\n")
+            subprocess.run(["git", "-C", str(root), "add", "state"], check=True)
+            subprocess.run(
+                [
+                    "git",
+                    "-C",
+                    str(root),
+                    "-c",
+                    "user.name=test",
+                    "-c",
+                    "user.email=test@example",
+                    "commit",
+                    "-qm",
+                    "second",
+                ],
+                check=True,
+            )
+            tagged = read_git_authority_snapshot(root, "refs/tags/v1")
+            self.assertNotEqual(tagged.head, tagged.requested_ref_head)
+            self.assertEqual(snapshot.head, tagged.requested_ref_head)
+
+    def test_git_snapshot_rejects_dirty_detached_or_unreachable_ref(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            subprocess.run(["git", "init", "-q", str(root)], check=True)
+            (root / ".git").chmod(0o700)
+            (root / "state").write_text("clean\n")
+            subprocess.run(["git", "-C", str(root), "add", "state"], check=True)
+            subprocess.run(
+                [
+                    "git",
+                    "-C",
+                    str(root),
+                    "-c",
+                    "user.name=test",
+                    "-c",
+                    "user.email=test@example",
+                    "commit",
+                    "-qm",
+                    "init",
+                ],
+                check=True,
+            )
+            (root / "state").write_text("dirty\n")
+            with self.assertRaisesRegex(AuthorityError, "not clean"):
+                read_git_authority_snapshot(root)
+            (root / "state").write_text("clean\n")
+            subprocess.run(
+                ["git", "-C", str(root), "checkout", "-q", "--detach", "HEAD"], check=True
+            )
+            with self.assertRaisesRegex(AuthorityError, "inspection was rejected"):
+                read_git_authority_snapshot(root)
+            with self.assertRaisesRegex(AuthorityError, "ref is invalid"):
+                read_git_authority_snapshot(root, "--upload-pack=evil")
+
     def test_admitted_selector_publication_requires_typed_ordered_lease(self) -> None:
         class Lease:
             def __init__(self, *, ordered: bool = True) -> None:
@@ -110,7 +196,7 @@ class RuntimeSelectorTests(unittest.TestCase):
 
     def test_handoffctl_script_mode_keeps_fallback(self) -> None:
         root = Path(__file__).resolve().parents[1]
-        result = subprocess.run(  # noqa: S603
+        result = subprocess.run(
             [sys.executable, str(root / "tools" / "handoffctl.py"), "--help"],
             cwd=root,
             check=False,
