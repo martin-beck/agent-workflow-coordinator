@@ -654,6 +654,16 @@ class LockDomainScopeTests(unittest.TestCase):
         self.assertEqual([], common_calls)
         self.assertFalse(self.session.operation_owned_by_current_thread)
 
+        string_revision_context = dict(stale_context)
+        string_revision_context["state_revision"] = "1"
+        with (
+            self.assertRaisesRegex(LockDomainError, "does not match"),
+            scope.validated_hold(string_revision_context),
+        ):
+            self.fail("string state revision must fail before scope acquisition")
+        self.assertEqual([], common_calls)
+        self.assertFalse(self.session.operation_owned_by_current_thread)
+
         float_revision_context = dict(stale_context)
         float_revision_context["state_revision"] = 1.0
         with (
