@@ -131,6 +131,11 @@ class FormalEvidenceTests(unittest.TestCase):
     def test_workflow_separates_fork_pr_publication_and_weekly_tiers(self) -> None:
         workflow = (ROOT / ".github" / "workflows" / "verify.yml").read_text()
         self.assertIn(
+            "tools/handoffctl.py|pyproject.toml|uv.lock|CHANGELOG.md|vendor/",
+            workflow,
+        )
+        self.assertIn('git diff --name-only "$BASE...$HEAD"', workflow)
+        self.assertIn(
             "github.event.pull_request.head.repo.full_name != github.repository", workflow
         )
         self.assertIn("&& 'portable-smoke' || 'pr-publication'", workflow)
