@@ -2020,6 +2020,8 @@ class UpgradeEngineTests(unittest.TestCase):
             self.assertIs(calls[0][1], scope)
             self.assertIs(calls[0][2]["lease"], lease)
             self.assertIs(calls[0][2]["admission_recheck"], recheck)
+            for key, value in expected.items():
+                self.assertEqual(calls[0][2][key], value)
 
 
 if __name__ == "__main__":
