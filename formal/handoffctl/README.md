@@ -172,8 +172,8 @@ fresh exact-head full attestation; neither smaller tier substitutes for it.
 Each model is executed through `tools/tlc_runner.py`, never directly through
 TLC. The runner uses finite workers (`2`), a `4096m` heap for cgroup-contained
 same-repository publication and weekly runs, a `512m` heap for hosted smoke, CPU
-quota (`200%`), process limit (`64`), a 1200-second PR or 6000-second weekly
-per-model deadline, and cgroup memory/swap limits (`6G`/`6G`) for contained runs
+quota (`200%`), process limit (`64`), a 1200-second ordinary PR or 6000-second
+release-sensitive/weekly per-model deadline, and cgroup memory/swap limits (`6G`/`6G`) for contained runs
 and (`3G`/`3G`) for hosted smoke. A canonical host-wide admission lock prevents
 multiple formal jobs from competing for memory while leaving coordinator worker
 processes and leases untouched. A durable per-job queue record survives caller
