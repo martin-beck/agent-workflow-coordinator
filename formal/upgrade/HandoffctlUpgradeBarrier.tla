@@ -21,7 +21,7 @@ Targets == {"new", "rollback"}
 NoTarget == "none"
 TerminalResults == {"none", "new", "rollback"}
 LockStages == {"free", "common", "control", "authority"}
-CASResults == {"none", "accepted", "rejected"}
+CASResults == {"none", "accepted", "rejected", "rollback-rejected"}
 
 VARIABLES
     sessionStatus,
@@ -372,6 +372,21 @@ RequestWrite(p) ==
                   authorityRechecked, casExpected, casObserved,
                   casBaselineRevision, casResult>>
 
+RejectRollbackAdmission(p) ==
+    /\ ControlHeld(p)
+    /\ sessionStatus \in UnsafeStatuses
+    /\ writerPhase[p] # "accepted"
+    /\ casExpected' = [casExpected EXCEPT ![p] = controlRevision]
+    /\ casObserved' = [casObserved EXCEPT ![p] = controlRevision]
+    /\ casBaselineRevision' = [casBaselineRevision EXCEPT ![p] = controlRevision]
+    /\ casResult' = [casResult EXCEPT ![p] = "rollback-rejected"]
+    /\ UNCHANGED <<sessionStatus, activeAttempt, attemptGeneration, fence,
+                  controlRevision, forwardChild, rollbackChild, forwardFailed,
+                  terminalTarget, terminalVerified, freshRuntimeVerified,
+                  writerPhase, writerAcceptedStatus, writerMutations, writerTarget,
+                  lockOwner, lockStage, authorityRevision, freshAuthorityRevision,
+                  authorityRechecked>>
+
 AcceptWrite(p) ==
     /\ writerPhase[p] = "requested"
     /\ sessionStatus \in {"absent", "released"}
@@ -421,6 +436,7 @@ Next ==
           \/ ObserveAuthority(p, 3) \/ RecheckHeld(p)
           \/ RejectStaleCAS(p, 0) \/ RejectStaleCAS(p, 1)
           \/ RejectStaleCAS(p, 2) \/ RejectStaleCAS(p, 3)
+          \/ RejectRollbackAdmission(p)
           \/ RequestWrite(p) \/ AcceptWrite(p)
           \/ RejectWrite(p) \/ FinishWrite(p))
     \/ (\E p \in Processes:
@@ -498,6 +514,12 @@ StaleCASRejected ==
     \A p \in Processes:
         casResult[p] = "rejected" => casExpected[p] # casObserved[p]
 
+RollbackAdmissionRejectedSafe ==
+    \A p \in Processes:
+        casResult[p] = "rollback-rejected" =>
+            /\ casExpected[p] = casObserved[p]
+            /\ writerPhase[p] # "accepted"
+
 WriterDrainOnAcquire ==
     sessionStatus = "held" =>
         \A p \in Processes: writerPhase[p] # "accepted"
@@ -520,6 +542,7 @@ THEOREM Spec => []LockOwnership
 THEOREM Spec => []LockOrder
 THEOREM Spec => []RecheckEvidence
 THEOREM Spec => []StaleCASRejected
+THEOREM Spec => []RollbackAdmissionRejectedSafe
 THEOREM Spec => []WriterDrainOnAcquire
 
 =============================================================================
