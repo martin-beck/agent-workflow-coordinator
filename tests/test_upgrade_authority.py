@@ -215,9 +215,10 @@ class RuntimeSelectorTests(unittest.TestCase):
             ):
                 read_git_authority_snapshot(root)
 
-            with patch(
-                "tools.upgrade_authority.os.geteuid", return_value=os.geteuid() + 1
-            ), self.assertRaisesRegex(AuthorityError, "owner-safe"):
+            with (
+                patch("tools.upgrade_authority.os.geteuid", return_value=os.geteuid() + 1),
+                self.assertRaisesRegex(AuthorityError, "owner-safe"),
+            ):
                 read_git_authority_snapshot(root)
 
             def fail_check(*args: Any, **kwargs: Any) -> Any:
@@ -225,9 +226,10 @@ class RuntimeSelectorTests(unittest.TestCase):
                     raise OSError("git unavailable")
                 return real_run(*args, **kwargs)
 
-            with patch(
-                "tools.upgrade_authority.subprocess.run", side_effect=fail_check
-            ), self.assertRaisesRegex(AuthorityError, "inspection failed"):
+            with (
+                patch("tools.upgrade_authority.subprocess.run", side_effect=fail_check),
+                self.assertRaisesRegex(AuthorityError, "inspection failed"),
+            ):
                 read_git_authority_snapshot(root)
 
     def test_git_snapshot_rejects_identity_and_observation_drift(self) -> None:
@@ -275,9 +277,10 @@ class RuntimeSelectorTests(unittest.TestCase):
                         return subprocess.CompletedProcess(args[0], 0, "0" * 40 + "\n", "")
                 return real_run(*args, **kwargs)
 
-            with patch(
-                "tools.upgrade_authority.subprocess.run", side_effect=drift_head
-            ), self.assertRaisesRegex(AuthorityError, "observation changed"):
+            with (
+                patch("tools.upgrade_authority.subprocess.run", side_effect=drift_head),
+                self.assertRaisesRegex(AuthorityError, "observation changed"),
+            ):
                 read_git_authority_snapshot(root)
 
     def test_admitted_selector_publication_requires_typed_ordered_lease(self) -> None:
