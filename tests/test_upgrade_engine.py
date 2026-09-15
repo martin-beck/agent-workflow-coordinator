@@ -1966,6 +1966,95 @@ class UpgradeEngineTests(unittest.TestCase):
             with engine._exclusive():
                 pass
 
+    def test_bound_rollback_inspection_rejects_without_backend(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            context = make_context("op-no-backend")
+            engine = UpgradeEngine("op-no-backend", Path(directory) / "journal.json", context)
+            with self.assertRaisesRegex(UpgradeError, "required for rollback inspection"):
+                engine.inspect_rollback_bound()
+
+    def test_bound_rollback_inspection_rejects_unbound_backend(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            context = make_context("op-unbound")
+            engine = UpgradeEngine(
+                "op-unbound",
+                Path(directory) / "journal.json",
+                context,
+                backend_adapter=FakeAdapter(),
+            )
+            with self.assertRaisesRegex(UpgradeError, "requires a bound backend"):
+                engine.inspect_rollback_bound()
+
+    def test_bound_rollback_inspection_rejects_missing_capability(self) -> None:
+        class ConcreteAdapter(FakeAdapter):
+            requires_bound_rollback = True
+
+        with tempfile.TemporaryDirectory() as directory:
+            context = make_context("op-no-capability")
+            engine = UpgradeEngine(
+                "op-no-capability",
+                Path(directory) / "journal.json",
+                context,
+                backend_adapter=ConcreteAdapter(),
+            )
+            with self.assertRaisesRegex(UpgradeError, "requires a trusted bound capability"):
+                engine.inspect_rollback_bound()
+
+    def test_bound_rollback_inspection_rejects_verifier_failure_or_authorization(self) -> None:
+        class FailingAdapter(FakeAdapter):
+            requires_bound_rollback = True
+
+            def verify_rollback_context_bound(
+                self, context: Mapping[str, object]
+            ) -> Mapping[str, object]:
+                return context
+
+        with tempfile.TemporaryDirectory() as directory:
+            context = make_context("op-inspection-failure")
+            adapter = FailingAdapter()
+            engine = UpgradeEngine(
+                str(context["operation_id"]),
+                Path(directory) / "journal.json",
+                context,
+                backend_adapter=adapter,
+                rollback_bound_verifier=BoundRollbackCapability.bind(
+                    PhaseContext(**cast(dict[str, Any], context)), adapter
+                ),
+            )
+            engine.plan()
+            capability = engine.rollback_bound_verifier
+            assert capability is not None
+            with (
+                patch.object(
+                    capability.verifier,
+                    "verify_rollback_context_bound",
+                    side_effect=RuntimeError("reread failed"),
+                ),
+                self.assertRaisesRegex(UpgradeError, "trusted bound rollback inspection failed"),
+            ):
+                engine.inspect_rollback_bound()
+
+        class AuthorizingCapability(BoundRollbackCapability):
+            def verify(self, _context: Mapping[str, object]) -> Mapping[str, object]:
+                return {"rollback_context_verified": True}
+
+        with tempfile.TemporaryDirectory() as directory:
+            context = make_context("op-inspection-authorizing")
+            adapter = FailingAdapter()
+            capability = AuthorizingCapability.bind(
+                PhaseContext(**cast(dict[str, Any], context)), adapter
+            )
+            engine = UpgradeEngine(
+                str(context["operation_id"]),
+                Path(directory) / "journal.json",
+                context,
+                backend_adapter=adapter,
+                rollback_bound_verifier=capability,
+            )
+            engine.plan()
+            with self.assertRaisesRegex(UpgradeError, "authorizing"):
+                engine.inspect_rollback_bound()
+
     def test_bound_rollback_inspection_dispatches_initialized_real_adapters(self) -> None:
         """Concrete adapter identity is retained without authorizing rollback."""
         for backend, adapter_type in (
