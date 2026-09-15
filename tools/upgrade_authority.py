@@ -129,12 +129,25 @@ def read_git_authority_snapshot(  # noqa: C901
     """Capture clean, reachable Git identity without invoking mutation commands."""
     resolved = repository.resolve()
     git_directory = resolved / ".git"
-    if not resolved.is_dir() or not git_directory.exists():
+    if (
+        not resolved.is_dir()
+        or resolved != repository.absolute()
+        or not git_directory.is_dir()
+        or git_directory.is_symlink()
+    ):
         raise AuthorityError("Git authority repository is unavailable")
-    if requested_ref != "HEAD" and not re.fullmatch(r"refs/heads/[A-Za-z0-9._/-]+", requested_ref):
+    if requested_ref != "HEAD" and not re.fullmatch(
+        r"refs/(?:heads|tags)/[A-Za-z0-9._/-]+", requested_ref
+    ):
         raise AuthorityError("Git authority ref is invalid")
     try:
-        before = _file_identity(git_directory.stat())
+        root_status = resolved.stat()
+        git_status = git_directory.stat()
+        if root_status.st_uid != os.geteuid() or git_status.st_uid != os.geteuid():
+            raise AuthorityError("Git authority root identity is not owner-safe")
+        if root_status.st_mode & 0o022 or git_status.st_mode & 0o022:
+            raise AuthorityError("Git authority root identity is not owner-safe")
+        before = (_file_identity(root_status), _file_identity(git_status))
     except OSError as error:
         raise AuthorityError("Git authority identity is unavailable") from error
 
@@ -153,12 +166,30 @@ def read_git_authority_snapshot(  # noqa: C901
             raise AuthorityError("Git authority inspection was rejected")
         return result.stdout.strip()
 
+    def check(*arguments: str) -> None:
+        try:
+            result = subprocess.run(
+                ["git", "-C", str(resolved), *arguments],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+        except (OSError, subprocess.TimeoutExpired) as error:
+            raise AuthorityError("Git authority inspection failed") from error
+        if result.returncode != 0:
+            raise AuthorityError("Git authority ref is not reachable")
+
     status = observe("status", "--porcelain=v1", "--untracked-files=all")
     branch = observe("symbolic-ref", "--short", "-q", "HEAD")
-    head = observe("rev-parse", "--verify", "HEAD^{commit}")
-    ref_head = observe("rev-parse", "--verify", f"{requested_ref}^{{commit}}")
+    head = observe("rev-parse", "--verify", "--end-of-options", "HEAD^{commit}")
+    ref = branch if requested_ref == "HEAD" else requested_ref
+    ref_head = observe("rev-parse", "--verify", "--end-of-options", f"{ref}^{{commit}}")
+    check("merge-base", "--is-ancestor", ref_head, head)
     try:
-        after = _file_identity(git_directory.stat())
+        root_status = resolved.stat()
+        git_status = git_directory.stat()
+        after = (_file_identity(root_status), _file_identity(git_status))
     except OSError as error:
         raise AuthorityError("Git authority identity reread failed") from error
     if before != after:
@@ -167,7 +198,7 @@ def read_git_authority_snapshot(  # noqa: C901
         raise AuthorityError("Git authority is not clean and branch-bound")
     if requested_ref != "HEAD" and ref_head != head:
         raise AuthorityError("Git authority requested ref is not the current head")
-    return GitAuthoritySnapshot(resolved, after, branch, head, requested_ref, ref_head, True)
+    return GitAuthoritySnapshot(resolved, after[1], branch, head, requested_ref, ref_head, True)
 
 
 def _open_parent(path: Path) -> tuple[int, tuple[int, int]]:

@@ -36,6 +36,7 @@ class RuntimeSelectorTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             subprocess.run(["git", "init", "-q", str(root)], check=True)
+            (root / ".git").chmod(0o700)
             (root / "state").write_text("clean\n")
             subprocess.run(["git", "-C", str(root), "add", "state"], check=True)
             subprocess.run(
@@ -57,11 +58,15 @@ class RuntimeSelectorTests(unittest.TestCase):
             self.assertTrue(snapshot.clean)
             self.assertEqual(snapshot.head, snapshot.requested_ref_head)
             self.assertEqual("master", snapshot.branch)
+            subprocess.run(["git", "-C", str(root), "tag", "v1"], check=True)
+            tagged = read_git_authority_snapshot(root, "refs/tags/v1")
+            self.assertEqual(snapshot.head, tagged.requested_ref_head)
 
     def test_git_snapshot_rejects_dirty_detached_or_unreachable_ref(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             subprocess.run(["git", "init", "-q", str(root)], check=True)
+            (root / ".git").chmod(0o700)
             (root / "state").write_text("clean\n")
             subprocess.run(["git", "-C", str(root), "add", "state"], check=True)
             subprocess.run(
