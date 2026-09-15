@@ -15,6 +15,18 @@ from typing import Protocol, runtime_checkable
 
 from tools.admission_lease import AdmissionLease, AdmissionLeaseError, AdmissionRecheck
 
+_ADMITTED_RECORD_FIELDS = frozenset(
+    {
+        "project_id",
+        "authority_revision",
+        "fencing_token",
+        "fencing_owner",
+        "durable_barrier_id",
+        "status",
+        "revision",
+    }
+)
+
 
 @runtime_checkable
 class OrderedAdmissionScope(Protocol):
@@ -56,6 +68,8 @@ def admitted_cas(  # noqa: C901
         record_snapshot = dict(record)
     except (TypeError, ValueError) as error:
         raise AdmissionLeaseError("admitted control record is invalid") from error
+    if set(record_snapshot) - _ADMITTED_RECORD_FIELDS:
+        raise AdmissionLeaseError("admitted control record schema contains unknown fields")
     required = {
         "project_id": lease.project_id,
         "authority_revision": lease.authority_revision,
