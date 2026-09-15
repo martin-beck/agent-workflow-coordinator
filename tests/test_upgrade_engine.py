@@ -1825,6 +1825,24 @@ class UpgradeEngineTests(unittest.TestCase):
                 engine.apply(dict.fromkeys(PHASES, handler))
             self.assertFalse(called)
 
+    def test_concrete_rollback_requires_bound_capability_before_backend(self) -> None:
+        class ConcreteAdapter(FakeAdapter):
+            requires_bound_rollback = True
+
+            def snapshot(self, _phase: str, _context: object) -> dict[str, object]:
+                raise AssertionError("unbound rollback snapshot reached")
+
+        with tempfile.TemporaryDirectory() as directory:
+            engine = UpgradeEngine(
+                "op-bound-gate",
+                Path(directory) / "journal.json",
+                make_context("op-bound-gate"),
+                backend_adapter=ConcreteAdapter(),
+            )
+            engine.plan()
+            with self.assertRaisesRegex(UpgradeError, "trusted bound backend capability"):
+                engine.rollback(lambda _step, _state: self.fail("rollback handler reached"))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1059,6 +1059,41 @@ class GitAuthorityAdapterTests(unittest.TestCase):
         self.assertEqual(before, self.session.snapshot())
         self.assertFalse(self.session.operation_owned_by_current_thread)
 
+    def test_bound_rollback_rejects_malformed_admission_before_git(self) -> None:
+        observed = self.adapter.snapshot("discover", CONTEXT)
+        common = {
+            "context": {**CONTEXT, "target": "rollback"},
+            "scope": self.scope,
+            "lease": self.lease,
+            "admission_recheck": self.recheck,
+            "expected_branch": str(observed["git_branch"]),
+            "expected_head": str(observed["git_head"]),
+        }
+        bound = cast(Any, self.adapter.verify_rollback_context_bound)
+        cases = (
+            ("lease", cast(Any, object()), "trusted admission lease"),
+            ("admission_recheck", cast(Any, object()), "trusted admission recheck"),
+            ("scope", cast(Any, object()), "concrete lock-domain scope"),
+            ("context", {**CONTEXT, "target": "unexpected"}, "rollback context target"),
+        )
+        for field, value, message in cases:
+            with self.subTest(field=field):
+                before = self.session.snapshot()
+                with (
+                    patch.object(
+                        self.adapter, "_git", side_effect=AssertionError("Git reached")
+                    ) as git,
+                    patch.object(
+                        self.adapter, "execute", side_effect=AssertionError("execute reached")
+                    ) as execute,
+                    self.assertRaisesRegex(GitAuthorityError, message),
+                ):
+                    bound(**{**common, field: value})
+                git.assert_not_called()
+                execute.assert_not_called()
+                self.assertEqual(before, self.session.snapshot())
+                self.assertFalse(self.session.operation_owned_by_current_thread)
+
 
 if __name__ == "__main__":
     unittest.main()

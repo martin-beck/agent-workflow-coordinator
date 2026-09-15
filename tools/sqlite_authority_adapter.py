@@ -37,6 +37,8 @@ _SUPPORTED_PHASES = frozenset(
 class SQLiteAuthorityAdapter:
     """Read-only integrity evidence adapter; execute remains disabled."""
 
+    requires_bound_rollback = True
+
     def __init__(self, authority: Path) -> None:
         resolved = authority.resolve()
         try:

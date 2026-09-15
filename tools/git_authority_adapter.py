@@ -38,6 +38,8 @@ _SUPPORTED_PHASES = frozenset(
 class GitAuthorityAdapter:
     """Read-only Git evidence adapter; execute remains permanently disabled."""
 
+    requires_bound_rollback = True
+
     def __init__(self, repository: Path) -> None:
         resolved = repository.resolve()
         if not resolved.is_dir():
