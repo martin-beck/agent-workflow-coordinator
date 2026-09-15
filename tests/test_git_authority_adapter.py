@@ -947,6 +947,52 @@ class GitAuthorityAdapterTests(unittest.TestCase):
         self.assertEqual(before_replaced, self.session.snapshot())
         self.assertFalse(self.session.operation_owned_by_current_thread)
 
+    def test_bound_rollback_rejects_tampered_git_results_without_state_change(self) -> None:
+        observed = self.adapter.snapshot("discover", CONTEXT)
+        rollback = {**CONTEXT, "target": "rollback"}
+
+        class TamperedAdapter(GitAuthorityAdapter):
+            field = "phase"
+            replacement: object = "discover"
+
+            def snapshot(self, phase: str, context: Mapping[str, object]) -> dict[str, object]:
+                value = super().snapshot(phase, context)
+                value[self.field] = self.replacement
+                return value
+
+        fields = (
+            ("phase", "discover", "backend phase changed"),
+            ("project_id", "tampered", "backend context identity changed"),
+            ("backend_identity_verified", False, "identity is unverified"),
+            ("git_clean", False, "cleanliness is unverified"),
+            ("mutates_authority", True, "not read-only"),
+        )
+        for field, replacement, message in fields:
+            with self.subTest(field=field):
+                adapter = type(
+                    "RollbackTamperedGitAdapter",
+                    (TamperedAdapter,),
+                    {"field": field, "replacement": replacement},
+                )(self.root)
+                before = self.session.snapshot()
+                with (
+                    patch.object(
+                        adapter, "execute", side_effect=AssertionError("execute reached")
+                    ) as execute,
+                    self.assertRaisesRegex(GitAuthorityError, message),
+                ):
+                    adapter.verify_rollback_context_bound(
+                        rollback,
+                        self.scope,
+                        lease=self.lease,
+                        admission_recheck=self.recheck,
+                        expected_branch=str(observed["git_branch"]),
+                        expected_head=str(observed["git_head"]),
+                    )
+                execute.assert_not_called()
+                self.assertEqual(before, self.session.snapshot())
+                self.assertFalse(self.session.operation_owned_by_current_thread)
+
 
 if __name__ == "__main__":
     unittest.main()
