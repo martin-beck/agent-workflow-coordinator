@@ -246,6 +246,30 @@ class AdmittedControlStoreTests(unittest.TestCase):
             admitted_cas(Store(), 1, self.record, self.lease, self.recheck, Scope())
         self.assertEqual(["order", "hold", "write", "release"], events)
 
+    def test_stale_backend_result_revision_fails_closed_after_scope_release(self) -> None:
+        events: list[str] = []
+
+        class Scope:
+            def assert_ordered(self) -> None:
+                events.append("order")
+
+            @contextmanager
+            def hold(self) -> Any:
+                events.append("hold")
+                try:
+                    yield None
+                finally:
+                    events.append("release")
+
+        class Store:
+            def cas(self, *_args: object, **_kwargs: object) -> dict[str, object]:
+                events.append("write")
+                return {"revision": 1}
+
+        with self.assertRaisesRegex(AdmissionLeaseError, "revision is invalid"):
+            admitted_cas(Store(), 1, self.record, self.lease, self.recheck, Scope())
+        self.assertEqual(["order", "hold", "write", "release"], events)
+
     def test_missing_or_mismatched_contract_objects_fail_closed(self) -> None:
         with self.assertRaisesRegex(AdmissionLeaseError, "lease is required"):
             admitted_cas(None, 1, self.record, None, self.recheck, None)  # type: ignore[arg-type]
