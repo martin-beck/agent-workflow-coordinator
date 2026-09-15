@@ -10,6 +10,7 @@ import sqlite3
 import tempfile
 import time
 import unittest
+from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
@@ -659,6 +660,24 @@ class LockDomainScopeTests(unittest.TestCase):
             scope.validated_hold(stale_context),
         ):
             self.fail("stale context must fail before scope acquisition")
+        self.assertEqual([], common_calls)
+        self.assertFalse(self.session.operation_owned_by_current_thread)
+
+        class ExplodingMapping(Mapping[str, object]):
+            def __getitem__(self, key: str) -> object:
+                raise KeyError(key)
+
+            def __iter__(self) -> Iterator[str]:
+                raise RuntimeError("keys unavailable")
+
+            def __len__(self) -> int:
+                return 0
+
+        with (
+            self.assertRaisesRegex(LockDomainError, "mapping is invalid"),
+            scope.validated_hold(cast(Any, ExplodingMapping())),
+        ):
+            self.fail("hostile mapping must fail closed before scope acquisition")
         self.assertEqual([], common_calls)
         self.assertFalse(self.session.operation_owned_by_current_thread)
 
