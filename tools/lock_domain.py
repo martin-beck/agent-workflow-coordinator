@@ -139,10 +139,10 @@ class LockDomainIdentity:
         )
         if any(left != right for left, right in fields):
             raise LockDomainError("durable session and lease identity do not match")
+        # The lease revision is the identity fence.  The durable row revision
+        # is a separate CAS counter after an ambiguous replacement.
         if identity.state_revision != lease.revision:
             raise LockDomainError("identity revision and lease do not match")
-        if session_state.revision != lease.revision:
-            raise LockDomainError("durable session and lease revision do not match")
 
 
 class LockDomainContract:
