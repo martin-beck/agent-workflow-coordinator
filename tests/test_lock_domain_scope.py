@@ -10,6 +10,7 @@ import sqlite3
 import tempfile
 import time
 import unittest
+from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
 from typing import Any, cast
@@ -625,6 +626,33 @@ class LockDomainScopeTests(unittest.TestCase):
         recovered.join(5)
         self.assertEqual(0, recovered.exitcode)
         self.assertGreater(ends[0], starts[0])
+
+    def test_validated_hold_rejects_stale_context_before_common_lock(self) -> None:
+        common_calls: list[str] = []
+
+        @contextmanager
+        def counted_lock() -> Any:
+            common_calls.append("acquire")
+            with locked() as guard:
+                yield guard
+
+        scope = LockDomainScope.bind(self.session, self.fence, self.lease, counted_lock)
+        common_calls.clear()
+        stale_context = {
+            "project_id": PROJECT,
+            "authority_revision": "authority-stale",
+            "fencing_token": "fence-1",
+            "fencing_owner": "owner-1",
+            "durable_barrier_id": "barrier-1",
+            "state_revision": 1,
+        }
+        with (
+            self.assertRaisesRegex(LockDomainError, "does not match"),
+            scope.validated_hold(stale_context),
+        ):
+            self.fail("stale context must fail before scope acquisition")
+        self.assertEqual([], common_calls)
+        self.assertFalse(self.session.operation_owned_by_current_thread)
 
 
 if __name__ == "__main__":
