@@ -662,6 +662,16 @@ class LockDomainScopeTests(unittest.TestCase):
         self.assertEqual([], common_calls)
         self.assertFalse(self.session.operation_owned_by_current_thread)
 
+        extra_key_context = dict(stale_context)
+        extra_key_context["unexpected"] = "not-authorized"
+        with (
+            self.assertRaisesRegex(LockDomainError, "unknown keys"),
+            scope.validated_hold(extra_key_context),
+        ):
+            self.fail("unknown context keys must fail before scope acquisition")
+        self.assertEqual([], common_calls)
+        self.assertFalse(self.session.operation_owned_by_current_thread)
+
         missing_project_context = dict(stale_context)
         missing_project_context.pop("project_id")
         with (
