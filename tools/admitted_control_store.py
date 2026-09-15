@@ -61,6 +61,8 @@ class AdmittedControlBinding:
         recheck: AdmissionRecheck,
         scope: OrderedAdmissionScope,
     ) -> AdmittedControlBinding:
+        if not callable(getattr(store, "cas", None)):
+            raise AdmissionLeaseError("admitted control store is required")
         if not isinstance(lease, AdmissionLease):
             raise AdmissionLeaseError("admitted control lease is required")
         if not isinstance(recheck, AdmissionRecheck) or recheck.lease != lease:
