@@ -162,6 +162,18 @@ class FormalEvidenceTests(unittest.TestCase):
         ]
         for resource_setting in ("TLC_CGROUP_MODE", "TLC_HEAP", "TLC_TIMEOUT_SECONDS"):
             self.assertIn(resource_setting, formal_step)
+        self.assertIn("needs.scope.outputs.release_sensitive == 'true') && '6000'", formal_step)
+        timeout_expression = workflow[
+            workflow.index("TLC_TIMEOUT_SECONDS:") : workflow.index(
+                "\n", workflow.index("TLC_TIMEOUT_SECONDS:")
+            )
+        ]
+        self.assertLess(
+            timeout_expression.index(
+                "github.event.pull_request.head.repo.full_name != github.repository"
+            ),
+            timeout_expression.index("'6000'"),
+        )
 
     def test_attestation_rejects_failed_formal_outcomes(self) -> None:
         script = ROOT / "formal" / "handoffctl" / "attest.py"
