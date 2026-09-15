@@ -1075,6 +1075,16 @@ class LockDomainScopeTests(unittest.TestCase):
         self.assertEqual([], common_calls)
         self.assertFalse(self.session.operation_owned_by_current_thread)
 
+        null_authority_context = dict(stale_context)
+        null_authority_context["authority_revision"] = None
+        with (
+            self.assertRaisesRegex(LockDomainError, "does not match"),
+            scope.validated_hold(null_authority_context),
+        ):
+            self.fail("null authority revision must fail before scope acquisition")
+        self.assertEqual([], common_calls)
+        self.assertFalse(self.session.operation_owned_by_current_thread)
+
         empty_authority_context = dict(stale_context)
         empty_authority_context["authority_revision"] = ""
         with (
