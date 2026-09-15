@@ -68,11 +68,16 @@ def admitted_cas(  # noqa: C901
         "durable_barrier_id": lease.durable_barrier_id,
         "revision": lease.revision,
     }
-    if any(
-        getattr(recheck, name) != value or type(getattr(recheck, name)) is not type(value)
-        for name, value in recheck_values.items()
-    ):
-        raise AdmissionLeaseError("admitted control recheck evidence does not match lease")
+    try:
+        if any(
+            getattr(recheck, name) != value or type(getattr(recheck, name)) is not type(value)
+            for name, value in recheck_values.items()
+        ):
+            raise AdmissionLeaseError("admitted control recheck evidence does not match lease")
+    except AdmissionLeaseError:
+        raise
+    except Exception as error:
+        raise AdmissionLeaseError("admitted control recheck evidence is invalid") from error
     if not isinstance(scope, OrderedAdmissionScope):
         raise AdmissionLeaseError("admitted control scope is required")
     if type(expected_revision) is not int or expected_revision != lease.revision:

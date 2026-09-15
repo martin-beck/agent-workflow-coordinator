@@ -184,6 +184,29 @@ class AdmittedControlStoreTests(unittest.TestCase):
         finally:
             object.__setattr__(self.recheck, "authority_revision", "authority-1")
 
+    def test_recheck_comparison_failure_is_normalized_before_scope_or_store(self) -> None:
+        class ExplodingEquality:
+            def __eq__(self, _other: object) -> bool:
+                raise RuntimeError("comparison unavailable")
+
+        class Scope:
+            def assert_ordered(self) -> None:
+                raise AssertionError("scope must not be touched")
+
+            def hold(self) -> Any:
+                raise AssertionError("scope must not be touched")
+
+        class Store:
+            def cas(self, *_args: object, **_kwargs: object) -> dict[str, object]:
+                raise AssertionError("store must not be touched")
+
+        object.__setattr__(self.recheck, "authority_revision", ExplodingEquality())
+        try:
+            with self.assertRaisesRegex(AdmissionLeaseError, "evidence is invalid"):
+                admitted_cas(Store(), 1, self.record, self.lease, self.recheck, Scope())
+        finally:
+            object.__setattr__(self.recheck, "authority_revision", "authority-1")
+
     def test_missing_or_mismatched_contract_objects_fail_closed(self) -> None:
         with self.assertRaisesRegex(AdmissionLeaseError, "lease is required"):
             admitted_cas(None, 1, self.record, None, self.recheck, None)  # type: ignore[arg-type]
