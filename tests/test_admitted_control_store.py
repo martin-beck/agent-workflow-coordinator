@@ -112,6 +112,24 @@ class AdmittedControlStoreTests(unittest.TestCase):
         finally:
             object.__setattr__(binding.recheck, "fencing_token", "fence-1")
 
+    def test_typed_binding_rejects_replaced_authority_before_backend(self) -> None:
+        class Store:
+            def cas(self, _expected: int, _record: Mapping[str, object]) -> dict[str, object]:
+                raise AssertionError("backend must not be touched")
+
+        class Scope:
+            def assert_ordered(self) -> None: ...
+
+            def hold(self) -> Any: ...
+
+        binding = AdmittedControlBinding.bind(Store(), self.lease, self.recheck, Scope())
+        object.__setattr__(binding.recheck, "authority_revision", "authority-replaced")
+        try:
+            with self.assertRaisesRegex(AdmissionLeaseError, "evidence does not match"):
+                binding.cas(1, self.record)
+        finally:
+            object.__setattr__(binding.recheck, "authority_revision", "authority-1")
+
     def test_invalid_evidence_fails_before_scope_or_store(self) -> None:
         class Scope:
             def assert_ordered(self) -> None:
