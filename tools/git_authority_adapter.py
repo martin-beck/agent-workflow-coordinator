@@ -85,6 +85,35 @@ class GitAuthorityAdapter:
         )
         return value
 
+    def snapshot_bound(
+        self,
+        phase: str,
+        context: Mapping[str, object],
+        scope: Any,
+        *,
+        expected_branch: str,
+        expected_head: str,
+    ) -> dict[str, Any]:
+        """Read Git identity only inside a trusted session scope.
+
+        The scope performs the durable lease/revision reread immediately before
+        observation.  This remains an evidence-only seam; no Git mutation is
+        reachable from it.
+        """
+        from tools.scoped_backend_adapter import ScopedBackendAdapter
+
+        if type(expected_branch) is not str or not expected_branch:
+            raise GitAuthorityError("expected Git branch identity is invalid")
+        if type(expected_head) is not str or not expected_head:
+            raise GitAuthorityError("expected Git head identity is invalid")
+        try:
+            value = ScopedBackendAdapter(self, scope).snapshot(phase, context)
+        except (TypeError, RuntimeError) as error:
+            raise GitAuthorityError("trusted Git session reread was rejected") from error
+        if value.get("git_branch") != expected_branch or value.get("git_head") != expected_head:
+            raise GitAuthorityError("Git authority identity changed")
+        return value
+
     def verify_rollback_context(self, context: Mapping[str, object]) -> dict[str, Any]:
         """Reread clean Git identity but do not authorize rollback."""
         value = self.snapshot("rollback", context)
