@@ -708,6 +708,18 @@ class LockDomainScopeTests(unittest.TestCase):
         self.assertEqual([], common_calls)
         self.assertFalse(self.session.operation_owned_by_current_thread)
 
+        class ExplodingGetMapping(dict[str, object]):
+            def get(self, key: str, _default: object = None) -> object:
+                raise RuntimeError(f"get unavailable: {key}")
+
+        with (
+            self.assertRaisesRegex(LockDomainError, "mapping values are invalid"),
+            scope.validated_hold(cast(Any, ExplodingGetMapping(stale_context))),
+        ):
+            self.fail("mapping get failures must fail closed before scope acquisition")
+        self.assertEqual([], common_calls)
+        self.assertFalse(self.session.operation_owned_by_current_thread)
+
         extra_key_context = dict(stale_context)
         extra_key_context["unexpected"] = "not-authorized"
         with (
