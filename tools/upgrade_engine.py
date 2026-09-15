@@ -125,13 +125,48 @@ class BoundRollbackCapability:
 
     identity: tuple[object, ...]
     verifier: Any
+    scope: Any = None
+    lease: Any = None
+    admission_recheck: Any = None
+    expected_branch: str | None = None
+    expected_head: str | None = None
 
     @classmethod
-    def bind(cls, context: PhaseContext, verifier: Any) -> BoundRollbackCapability:
+    def bind(
+        cls,
+        context: PhaseContext,
+        verifier: Any,
+        scope: Any = None,
+        *,
+        lease: Any = None,
+        admission_recheck: Any = None,
+        expected_branch: str | None = None,
+        expected_head: str | None = None,
+    ) -> BoundRollbackCapability:
         if not callable(getattr(verifier, "verify_rollback_context_bound", None)):
             raise UpgradeError("bound rollback verifier capability is incomplete")
+        concrete_backend = verifier.__class__.__module__ in {
+            "tools.git_authority_adapter",
+            "tools.sqlite_authority_adapter",
+        }
+        if concrete_backend and (
+            scope is None or lease is None or admission_recheck is None
+        ):
+            raise UpgradeError("concrete rollback capability binding is incomplete")
+        if expected_branch is not None and not isinstance(expected_branch, str):
+            raise UpgradeError("Git rollback branch binding is invalid")
+        if expected_head is not None and not isinstance(expected_head, str):
+            raise UpgradeError("Git rollback head binding is invalid")
         fields = tuple(field for field in CONTEXT_FIELDS if field != "target")
-        return cls(tuple(asdict(context)[field] for field in fields), verifier)
+        return cls(
+            tuple(asdict(context)[field] for field in fields),
+            verifier,
+            scope,
+            lease,
+            admission_recheck,
+            expected_branch,
+            expected_head,
+        )
 
     def matches(self, context: PhaseContext) -> bool:
         values = asdict(context)
@@ -145,7 +180,28 @@ class BoundRollbackCapability:
         identity_fields = tuple(field for field in CONTEXT_FIELDS if field != "target")
         if self.identity != tuple(context[field] for field in identity_fields):
             raise UpgradeError("bound rollback capability context identity mismatch")
-        result = self.verifier.verify_rollback_context_bound(context)
+        concrete_backend = self.verifier.__class__.__module__ in {
+            "tools.git_authority_adapter",
+            "tools.sqlite_authority_adapter",
+        }
+        if concrete_backend:
+            arguments: list[object] = [context, self.scope]
+            keywords: dict[str, object] = {
+                "lease": self.lease,
+                "admission_recheck": self.admission_recheck,
+            }
+            if self.expected_branch is not None or self.expected_head is not None:
+                if self.expected_branch is None or self.expected_head is None:
+                    raise UpgradeError("Git rollback identity binding is incomplete")
+                keywords.update(
+                    expected_branch=self.expected_branch,
+                    expected_head=self.expected_head,
+                )
+            result = self.verifier.verify_rollback_context_bound(
+                *arguments, **keywords
+            )
+        else:
+            result = self.verifier.verify_rollback_context_bound(context)
         if not isinstance(result, Mapping):
             raise UpgradeError("bound rollback verifier result is invalid")
         return {**dict(result), "rollback_context_verified": False}
