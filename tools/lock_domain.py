@@ -113,7 +113,11 @@ class LockDomainIdentity:
             raise LockDomainError("lock-domain identity changed")
 
     def assert_session_binding(
-        self, session_state: BarrierSessionState, lease: AdmissionLease
+        self,
+        session_state: BarrierSessionState,
+        lease: AdmissionLease,
+        *,
+        session_revision: int | None = None,
     ) -> None:
         """Require durable held-session identity to match caller lease evidence."""
         if not isinstance(session_state, BarrierSessionState):
@@ -141,7 +145,8 @@ class LockDomainIdentity:
             raise LockDomainError("durable session and lease identity do not match")
         if identity.state_revision != lease.revision:
             raise LockDomainError("identity revision and lease do not match")
-        if session_state.revision != lease.revision:
+        expected_session_revision = lease.revision if session_revision is None else session_revision
+        if session_state.revision != expected_session_revision:
             raise LockDomainError("durable session and lease revision do not match")
 
 

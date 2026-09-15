@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import multiprocessing
 import os
-import sqlite3
 import subprocess
 import tempfile
 import unittest
@@ -25,7 +24,11 @@ from tools.handoffctl import locked
 from tools.lock_domain import LockDomainContract
 from tools.lock_domain_scope import LockDomainScope
 from tools.mutation_fence import MutationFence, provision, provision_control_binding
-from tools.rollback_control_store import SQLiteBarrierSessionStore, SQLiteRollbackControlStore
+from tools.rollback_control_store import (
+    BarrierSessionState,
+    SQLiteBarrierSessionStore,
+    SQLiteRollbackControlStore,
+)
 from tools.scoped_backend_adapter import ScopedBackendAdapter
 from tools.upgrade_identity import BarrierSessionIdentity, canonical_barrier_session_digest
 
@@ -82,15 +85,28 @@ def _bound_snapshot_process(
     )
     with locked() as guard:
         domain = LockDomainContract.capture(guard, session, fence)
-    lease = AdmissionLease(PROJECT, "authority", "fence", "owner", "barrier", 1)
+    replacement = mode == "replacement"
+    authority_revision = "authority"
+    fencing_token = "fence-replaced" if replacement else "fence"
+    fencing_owner = "owner-replaced" if replacement else "owner"
+    durable_barrier_id = "barrier-replaced" if replacement else "barrier"
+    state_revision = 2 if replacement else 1
+    lease = AdmissionLease(
+        PROJECT,
+        authority_revision,
+        fencing_token,
+        fencing_owner,
+        durable_barrier_id,
+        state_revision,
+    )
     recheck = validate_recheck(
         lease,
         project_id=PROJECT,
-        authority_revision="authority",
-        fencing_token="fence",  # noqa: S106
-        fencing_owner="owner",
-        durable_barrier_id="barrier",
-        revision=1,
+        authority_revision=authority_revision,
+        fencing_token=fencing_token,
+        fencing_owner=fencing_owner,
+        durable_barrier_id=durable_barrier_id,
+        revision=state_revision,
     )
     scope = LockDomainScope.bind(session, fence, lease, recheck, locked)
     adapter = GitAuthorityAdapter(Path(repository_text))
@@ -112,10 +128,18 @@ def _bound_snapshot_process(
 
         adapter_any._git = unexpected_git
 
+    active_context = {
+        **CONTEXT,
+        "authority_revision": authority_revision,
+        "fencing_token": fencing_token,
+        "fencing_owner": fencing_owner,
+        "durable_barrier_id": durable_barrier_id,
+        "state_revision": state_revision,
+    }
     try:
         value = adapter.snapshot_bound(
             "discover",
-            CONTEXT,
+            active_context,
             scope,
             lease=lease,
             admission_recheck=recheck,
@@ -449,26 +473,10 @@ class GitAuthorityAdapterTests(unittest.TestCase):
             recovered_result.get(timeout=1),
         )
 
-    def test_fresh_bound_worker_rejects_replaced_session_before_git_backend(self) -> None:
-        """A fresh worker rejects durable replacement without Git calls."""
+    def test_typed_session_transition_rejects_then_reacquires_fresh_worker(self) -> None:
+        """Typed ambiguous/replacement transitions gate fresh bound workers."""
         observed = self.adapter.snapshot("discover", CONTEXT)
-        changed = self._session_identity().as_record()
-        changed["authority_revision_at_acquire"] = "authority-replaced"
-        changed["state_revision"] = 2
-        changed["identity_digest"] = canonical_barrier_session_digest(changed)
-        with sqlite3.connect(self.session.control_store_path) as connection:
-            connection.execute(
-                "UPDATE barrier_session SET authority_revision_at_acquire=?, "
-                "state_revision=?, identity_digest=?, revision=? WHERE project_id=?",
-                (
-                    changed["authority_revision_at_acquire"],
-                    changed["state_revision"],
-                    changed["identity_digest"],
-                    1,
-                    PROJECT,
-                ),
-            )
-            connection.commit()
+        ambiguous = self.session.mark_ambiguous(1, "process-death")
 
         context = multiprocessing.get_context("fork")
         result = context.Queue()
@@ -490,6 +498,44 @@ class GitAuthorityAdapterTests(unittest.TestCase):
         self.assertEqual("rejected", outcome[0])
         self.assertIn(outcome[1], {"GitAuthorityError", "LockDomainError"})
         self.assertEqual(0, outcome[3])
+
+        replacement_record = self._session_identity().as_record()
+        replacement_record.update(
+            {
+                "attempt_id": "attempt-replacement",
+                "state_revision": 2,
+                "durable_barrier_id": "barrier-replaced",
+                "fencing_token": "fence-replaced",
+                "fencing_owner": "owner-replaced",
+            }
+        )
+        replacement_record["identity_digest"] = canonical_barrier_session_digest(replacement_record)
+        replacement = BarrierSessionState(
+            BarrierSessionIdentity.from_record(replacement_record), "held", 1
+        )
+        self.assertEqual(
+            replacement, self.session.reconcile_ambiguous(ambiguous.revision, replacement)
+        )
+
+        recovered_result = context.Queue()
+        recovered = context.Process(
+            target=_bound_snapshot_process,
+            args=(
+                str(self.root),
+                self.coordination.name,
+                str(observed["git_branch"]),
+                str(observed["git_head"]),
+                "replacement",
+                recovered_result,
+            ),
+        )
+        recovered.start()
+        recovered.join(5)
+        self.assertEqual(0, recovered.exitcode)
+        self.assertEqual(
+            ("success", observed["git_head"], observed["git_branch"]),
+            recovered_result.get(timeout=1),
+        )
 
     def test_rollback_recheck_never_authorizes_mutation(self) -> None:
         result = self.adapter.verify_rollback_context(CONTEXT)

@@ -228,6 +228,8 @@ class LockDomainTests(unittest.TestCase):
         identity = session_identity()
         lease = AdmissionLease(PROJECT, "authority-1", "fence-1", "owner-1", "barrier-1", 3)
         captured.assert_session_binding(BarrierSessionState(identity, "held", 3), lease)
+        with self.assertRaisesRegex(LockDomainError, "revision"):
+            captured.assert_session_binding(BarrierSessionState(identity, "held", 2), lease)
 
         for changed in (
             replace(lease, fencing_token="other"),  # noqa: S106

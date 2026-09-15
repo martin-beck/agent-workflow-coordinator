@@ -32,6 +32,7 @@ class LockDomainScope:
         recheck: AdmissionRecheck,
         session_identity: BarrierSessionIdentity,
         common_lock: Callable[[], AbstractContextManager[CoordinatorLockGuard]],
+        session_revision: int | None = None,
     ) -> None:
         self._identity = identity
         self._session_store = session_store
@@ -40,6 +41,9 @@ class LockDomainScope:
         self._recheck = recheck
         self._session_identity = session_identity
         self._common_lock = common_lock
+        # Lease revision names the identity fence; session_revision names the
+        # durable row CAS revision and can diverge after reconciliation.
+        self._session_revision = lease.revision if session_revision is None else session_revision
 
     @classmethod
     def bind(
@@ -75,6 +79,7 @@ class LockDomainScope:
             recheck,
             state.identity,
             common_lock,
+            state.revision,
         )
 
     def assert_ordered(self) -> None:
@@ -146,18 +151,23 @@ class LockDomainScope:
         observed = self._session_store.snapshot_owned_by_caller()
         if observed.status != "held":
             raise LockDomainError("durable session is not held")
-        if observed.identity != self._session_identity or observed.revision != self._lease.revision:
+        if (
+            observed.identity != self._session_identity
+            or observed.revision != self._session_revision
+        ):
             raise LockDomainError("durable session and lease do not match")
         try:
             state = self._session_store.recheck_held_locked(
                 common_guard,
                 self._session_identity,
-                self._lease.revision,
+                self._session_revision,
             )
         except ControlStoreError as error:
             raise LockDomainError(f"durable session recheck failed: {error}") from error
         if state.status != "held":
             raise LockDomainError("durable session is not held")
-        if state.identity != self._session_identity or state.revision != self._lease.revision:
+        if state.identity != self._session_identity or state.revision != self._session_revision:
             raise LockDomainError("durable session and lease do not match")
-        self._identity.assert_session_binding(state, self._lease)
+        self._identity.assert_session_binding(
+            state, self._lease, session_revision=self._session_revision
+        )
