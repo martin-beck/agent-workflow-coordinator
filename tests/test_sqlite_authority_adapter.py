@@ -20,6 +20,7 @@ from tools.handoffctl import locked
 from tools.lock_domain_scope import LockDomainScope
 from tools.mutation_fence import MutationFence, provision, provision_control_binding
 from tools.rollback_control_store import (
+    BarrierSessionState,
     SQLiteBarrierSessionStore,
     SQLiteRollbackControlStore,
 )
@@ -54,6 +55,76 @@ def _snapshot_process(path_text: str, crash: bool) -> None:
     adapter.snapshot("discover", CONTEXT)
     if crash:
         os._exit(17)
+
+
+def _bound_snapshot_worker(root_text: str, mode: str, result: Any) -> None:
+    root = Path(root_text)
+    authority = root / "authority.sqlite"
+    control = root / "control.sqlite"
+    store = SQLiteRollbackControlStore(control, PROJECT, authority)
+    session = SQLiteBarrierSessionStore(store, lambda: "authority")
+    fence = MutationFence(
+        authority,
+        root / "authority-marker.json",
+        root / "authority-lifecycle.json",
+        root / "authority.lock",
+        control,
+        root / "control-binding.json",
+        store.control_lock_path,
+    )
+    old = AdmissionLease(PROJECT, "authority", "fence", "owner", "barrier", 1)
+    replacement = AdmissionLease(PROJECT, "authority", "fence-new", "owner-new", "barrier-new", 2)
+    lease = old if mode == "stale" else replacement
+    recheck = validate_recheck(
+        lease,
+        project_id=PROJECT,
+        authority_revision=lease.authority_revision,
+        fencing_token=lease.fencing_token,
+        fencing_owner=lease.fencing_owner,
+        durable_barrier_id=lease.durable_barrier_id,
+        revision=lease.revision,
+    )
+    scope = LockDomainScope.bind(session, fence, lease, recheck, locked)
+
+    class CountingAdapter(SQLiteAuthorityAdapter):
+        calls = 0
+
+        def snapshot(self, phase: str, context: Mapping[str, object]) -> dict[str, object]:
+            self.calls += 1
+            return super().snapshot(phase, context)
+
+    adapter = CountingAdapter(authority)
+    context = {
+        **CONTEXT,
+        "project_id": PROJECT,
+        "authority_revision": lease.authority_revision,
+        "fencing_token": lease.fencing_token,
+        "fencing_owner": lease.fencing_owner,
+        "durable_barrier_id": lease.durable_barrier_id,
+        "state_revision": lease.revision,
+    }
+    try:
+        value = adapter.snapshot_bound(
+            "discover", context, scope, lease=lease, admission_recheck=recheck
+        )
+    except Exception as error:
+        result.put(
+            (
+                "rejected",
+                type(error).__name__,
+                adapter.calls,
+                session.operation_owned_by_current_thread,
+            )
+        )
+    else:
+        result.put(
+            (
+                "success",
+                value["sqlite_integrity_verified"],
+                adapter.calls,
+                session.operation_owned_by_current_thread,
+            )
+        )
 
 
 def _hold_exclusive_transaction(path_text: str, ready: object) -> None:
@@ -171,6 +242,48 @@ class SQLiteAuthorityAdapterTests(unittest.TestCase):
         )
         self.assertTrue(result["sqlite_integrity_verified"])
         self.assertFalse(result["mutates_authority"])
+        self.assertFalse(self.session.operation_owned_by_current_thread)
+
+    def test_fresh_workers_reject_stale_and_accept_replacement_before_sqlite(self) -> None:
+        ambiguous = self.session.mark_ambiguous(1, "worker-recovery")
+        replacement_record = self._session_identity().as_record()
+        replacement_record.update(
+            {
+                "attempt_id": "attempt-replacement",
+                "state_revision": 2,
+                "durable_barrier_id": "barrier-new",
+                "fencing_token": "fence-new",
+                "fencing_owner": "owner-new",
+            }
+        )
+        replacement_record["identity_digest"] = canonical_barrier_session_digest(replacement_record)
+        replacement = BarrierSessionState(
+            BarrierSessionIdentity.from_record(replacement_record), "held", 1
+        )
+        self.session.reconcile_ambiguous(ambiguous.revision, replacement)
+        before = self._durable_state()
+        context = multiprocessing.get_context("fork")
+        stale_result = context.Queue()
+        stale = context.Process(
+            target=_bound_snapshot_worker,
+            args=(str(self.root), "stale", stale_result),
+        )
+        stale.start()
+        stale.join(5)
+        self.assertEqual(0, stale.exitcode)
+        self.assertEqual(
+            ("rejected", "SQLiteAuthorityError", 0, False), stale_result.get(timeout=1)
+        )
+        replacement_result = context.Queue()
+        fresh = context.Process(
+            target=_bound_snapshot_worker,
+            args=(str(self.root), "replacement", replacement_result),
+        )
+        fresh.start()
+        fresh.join(5)
+        self.assertEqual(0, fresh.exitcode)
+        self.assertEqual(("success", True, 1, False), replacement_result.get(timeout=1))
+        self.assertEqual(before, self._durable_state())
         self.assertFalse(self.session.operation_owned_by_current_thread)
 
     def test_snapshot_bound_rejects_invalid_admission_inputs_before_scope(self) -> None:
