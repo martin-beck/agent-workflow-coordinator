@@ -647,6 +647,14 @@ class LockDomainScopeTests(unittest.TestCase):
             "state_revision": 1,
         }
         with (
+            self.assertRaisesRegex(LockDomainError, "must be a mapping"),
+            scope.validated_hold(cast(Any, ["not-a-context"])),
+        ):
+            self.fail("non-mapping context must fail before scope acquisition")
+        self.assertEqual([], common_calls)
+        self.assertFalse(self.session.operation_owned_by_current_thread)
+
+        with (
             self.assertRaisesRegex(LockDomainError, "does not match"),
             scope.validated_hold(stale_context),
         ):
