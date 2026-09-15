@@ -149,6 +149,8 @@ class SQLiteAuthorityAdapter:
             value = context.get(field)
             if type(value) is not str or not value:
                 raise SQLiteAuthorityError("SQLite authority context types are invalid")
+        if context.get("target") not in {"new", "rollback"}:
+            raise SQLiteAuthorityError("SQLite authority context target is invalid")
         return dict(context)
 
     def snapshot(self, phase: str, context: Mapping[str, object]) -> dict[str, Any]:
@@ -268,6 +270,27 @@ class SQLiteAuthorityAdapter:
         if context.get("target") != "rollback":
             raise SQLiteAuthorityError("SQLite rollback context target is invalid")
         value = self.snapshot("rollback", context)
+        value["rollback_context_verified"] = False
+        return value
+
+    def verify_rollback_context_bound(
+        self,
+        context: Mapping[str, object],
+        scope: LockDomainScope,
+        *,
+        lease: AdmissionLease,
+        admission_recheck: AdmissionRecheck,
+    ) -> dict[str, Any]:
+        """Reread rollback evidence only inside a trusted scope."""
+        if context.get("target") != "rollback":
+            raise SQLiteAuthorityError("SQLite rollback context target is invalid")
+        value = self.snapshot_bound(
+            "rollback",
+            context,
+            scope,
+            lease=lease,
+            admission_recheck=admission_recheck,
+        )
         value["rollback_context_verified"] = False
         return value
 
