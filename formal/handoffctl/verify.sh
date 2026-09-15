@@ -3,8 +3,8 @@
 # SPDX-License-Identifier: MIT
 set -euo pipefail
 
-if [[ "${1:-}" != "--tier" || ( "${2:-}" != "portable-smoke" && "${2:-}" != "pr-publication" && "${2:-}" != "full-exhaustive" ) || "$#" -ne 2 ]]; then
-    echo "usage: $0 --tier portable-smoke|pr-publication|full-exhaustive" >&2
+if [[ "${1:-}" != "--tier" || ( "${2:-}" != "portable-smoke" && "${2:-}" != "pr-fast" && "${2:-}" != "pr-publication" && "${2:-}" != "full-exhaustive" ) || "$#" -ne 2 ]]; then
+    echo "usage: $0 --tier portable-smoke|pr-fast|pr-publication|full-exhaustive" >&2
     exit 64
 fi
 readonly TIER="$2"
@@ -27,6 +27,10 @@ printf '%s  %s\n' "${TLA_SHA256}" "${JAR}" | sha256sum --check --strict
 run_model() {
     local model="$1"
     local source="${2:-${model}}"
+    # The fast tier has its own reduced configuration over the binding spec.
+    if [[ "${model}" == "HandoffctlFast" ]]; then
+        source=HandoffctlBinding
+    fi
     python3 "${SPEC_DIR}/../../tools/tlc_runner.py" \
         --jar "${JAR}" \
         --model "${SPEC_DIR}/${source}.tla" \
@@ -38,6 +42,9 @@ run_model() {
 if [[ "${TIER}" == "portable-smoke" ]]; then
     # Smoke is deliberately non-exhaustive and never produces full evidence.
     run_model HandoffctlBinding
+elif [[ "${TIER}" == "pr-fast" ]]; then
+    # Deliberately smaller safety-only required merge gate.
+    run_model HandoffctlFast
 elif [[ "${TIER}" == "pr-publication" ]]; then
     # PR publication checks every invariant family. The general lifecycle
     # model uses a one-process configuration; weekly full evidence retains its
@@ -57,4 +64,4 @@ else
     run_model HandoffctlRecovery
 fi
 python3 "${SPEC_DIR}/attest.py" --tier "${TIER}" --output "${ATTESTATION}" --jar "${JAR}" --manifest "${MANIFEST}" \
-    --models $(if [[ "${TIER}" == "portable-smoke" ]]; then echo HandoffctlBinding; elif [[ "${TIER}" == "pr-publication" ]]; then echo HandoffctlBinding HandoffctlLocks HandoffctlRun HandoffctlStorage HandoffctlPR HandoffctlRecovery; else echo HandoffctlBinding HandoffctlLocks HandoffctlRun HandoffctlStorage Handoffctl HandoffctlRecovery; fi)
+    --models $(if [[ "${TIER}" == "portable-smoke" ]]; then echo HandoffctlBinding; elif [[ "${TIER}" == "pr-fast" ]]; then echo HandoffctlFast; elif [[ "${TIER}" == "pr-publication" ]]; then echo HandoffctlBinding HandoffctlLocks HandoffctlRun HandoffctlStorage HandoffctlPR HandoffctlRecovery; else echo HandoffctlBinding HandoffctlLocks HandoffctlRun HandoffctlStorage Handoffctl HandoffctlRecovery; fi)

@@ -106,10 +106,24 @@ class FormalEvidenceTests(unittest.TestCase):
         verify = (FORMAL_ROOT / "verify.sh").read_text(encoding="utf-8")
         self.assertIn("--tier", verify)
         self.assertIn("portable-smoke", verify)
+        self.assertIn("pr-fast", verify)
         self.assertIn("pr-publication", verify)
         self.assertIn("full-exhaustive", verify)
         manifest = json.loads((ROOT / "formal" / "tier-evidence.json").read_text())
         self.assertFalse(manifest["profiles"]["portable-smoke"]["exhaustive"])
+        self.assertFalse(manifest["profiles"]["pr-fast"]["exhaustive"])
+        self.assertEqual(["HandoffctlFast"], manifest["profiles"]["pr-fast"]["models"])
+        self.assertIn("safety-only", manifest["profiles"]["pr-fast"]["claims"])
+        fast_config = (FORMAL_ROOT / "HandoffctlFast.cfg").read_text()
+        self.assertIn("SPECIFICATION Spec", fast_config)
+        self.assertNotIn("PROPERTIES", fast_config)
+        self.assertNotIn("EventuallyBoundCallSucceeds", fast_config)
+        fast_invocations = re.findall(
+            r"^\s*run_model\s+(\w+)(?:\s+(\w+))?\s*$", verify, re.MULTILINE
+        )
+        self.assertIn(
+            ("HandoffctlFast", ""), [(model, source or "") for model, source in fast_invocations]
+        )
         self.assertFalse(manifest["profiles"]["pr-publication"]["exhaustive"])
         self.assertTrue(manifest["profiles"]["full-exhaustive"]["exhaustive"])
         self.assertNotEqual(
@@ -134,9 +148,10 @@ class FormalEvidenceTests(unittest.TestCase):
             "github.event.pull_request.head.repo.full_name != github.repository", workflow
         )
         self.assertIn("&& 'portable-smoke'", workflow)
-        self.assertIn("|| 'pr-publication'", workflow)
+        self.assertIn("|| 'pr-fast'", workflow)
         self.assertIn("&& 'full-exhaustive'", workflow)
         self.assertIn("timeout-minutes: ${{", workflow)
+        self.assertIn("continue-on-error: ${{ github.event_name == 'schedule' }}", workflow)
         self.assertIn("release_sensitive", workflow)
         for release_path in ("pyproject.toml", "uv.lock", "CHANGELOG.md", "tools/vendor.py"):
             self.assertIn(release_path, workflow)
@@ -183,6 +198,10 @@ class FormalEvidenceTests(unittest.TestCase):
         self.assertIn('"${cgroup_dir}/memory.max"', workflow)
         self.assertIn('"${cgroup_dir}/memory.swap.max"', workflow)
         self.assertIn("needs.scope.outputs.release_sensitive == 'true') && '6000'", formal_step)
+        self.assertIn(
+            "github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && 360",
+            workflow,
+        )
         timeout_expression = workflow[
             workflow.index("TLC_TIMEOUT_SECONDS:") : workflow.index(
                 "\n", workflow.index("TLC_TIMEOUT_SECONDS:")
