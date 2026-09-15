@@ -118,8 +118,12 @@ class FormalEvidenceTests(unittest.TestCase):
         self.assertIn("SPECIFICATION Spec", fast_config)
         self.assertNotIn("PROPERTIES", fast_config)
         self.assertNotIn("EventuallyBoundCallSucceeds", fast_config)
-        fast_invocations = re.findall(r"^\s*run_model\s+(\w+)(?:\s+(\w+))?\s*$", verify, re.MULTILINE)
-        self.assertIn(("HandoffctlFast", ""), [(model, source or "") for model, source in fast_invocations])
+        fast_invocations = re.findall(
+            r"^\s*run_model\s+(\w+)(?:\s+(\w+))?\s*$", verify, re.MULTILINE
+        )
+        self.assertIn(
+            ("HandoffctlFast", ""), [(model, source or "") for model, source in fast_invocations]
+        )
         self.assertFalse(manifest["profiles"]["pr-publication"]["exhaustive"])
         self.assertTrue(manifest["profiles"]["full-exhaustive"]["exhaustive"])
         self.assertNotEqual(
@@ -194,7 +198,10 @@ class FormalEvidenceTests(unittest.TestCase):
         self.assertIn('"${cgroup_dir}/memory.max"', workflow)
         self.assertIn('"${cgroup_dir}/memory.swap.max"', workflow)
         self.assertIn("needs.scope.outputs.release_sensitive == 'true') && '6000'", formal_step)
-        self.assertIn("github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && 360", workflow)
+        self.assertIn(
+            "github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && 360",
+            workflow,
+        )
         timeout_expression = workflow[
             workflow.index("TLC_TIMEOUT_SECONDS:") : workflow.index(
                 "\n", workflow.index("TLC_TIMEOUT_SECONDS:")
