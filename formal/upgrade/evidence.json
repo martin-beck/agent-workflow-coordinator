@@ -1,8 +1,8 @@
 {
   "model": "formal/upgrade/UpgradeRecovery.tla",
   "config": "formal/upgrade/UpgradeRecovery.cfg",
-  "model_sha256": "b47a5544fe6aabf48177aaf4d48143059f64375b8f43f091265e74fb3c4d1a3a",
-  "config_sha256": "920eef41219ab0c9eba7b11ed334618fd97a89900a6942d1e0087c950861462f",
+  "model_sha256": "616d53832ac5ec18bf3242d47b2412195eb64adb2b1035235514e06cc3edf2ba",
+  "config_sha256": "47425af53affd104aa5e30d7434cf3e71e3c7b69bccb9b05fbd749d3285991a2",
   "implementation_snapshot": {
     "revision": "be92ec8638301170caa7a09b00a8442c54dfd831",
     "runtime_revision": "be92ec8638301170caa7a09b00a8442c54dfd831",
@@ -53,7 +53,8 @@
       "FunctionalAvailability",
       "NoReplacementBeforeBackup",
       "ReleaseOrder",
-      "RollbackProof"
+      "RollbackProof",
+      "RollbackRequiresBackup"
     ]
   },
   "barrier_model": {
