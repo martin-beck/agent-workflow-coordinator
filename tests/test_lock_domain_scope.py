@@ -1303,6 +1303,16 @@ class LockDomainScopeTests(unittest.TestCase):
         self.assertEqual([], common_calls)
         self.assertFalse(self.session.operation_owned_by_current_thread)
 
+        memoryview_project_context = dict(stale_context)
+        memoryview_project_context["project_id"] = memoryview(PROJECT.encode())
+        with (
+            self.assertRaisesRegex(LockDomainError, "does not match"),
+            scope.validated_hold(memoryview_project_context),
+        ):
+            self.fail("memoryview project identifier must fail before scope acquisition")
+        self.assertEqual([], common_calls)
+        self.assertFalse(self.session.operation_owned_by_current_thread)
+
         set_project_context = dict(stale_context)
         set_project_context["project_id"] = {PROJECT}
         with (
