@@ -75,7 +75,17 @@ class AdmittedControlBinding:
             raise AdmissionLeaseError("admitted control scope is invalid") from error
         return cls(store, lease, recheck, scope)
 
+    def validate(self) -> None:
+        """Preflight the caller-owned binding without touching the backend."""
+        if not isinstance(self.recheck, AdmissionRecheck) or self.recheck.lease != self.lease:
+            raise AdmissionLeaseError("admitted control recheck does not match lease")
+        try:
+            self.scope.assert_ordered()
+        except (AttributeError, RuntimeError, TypeError) as error:
+            raise AdmissionLeaseError("admitted control scope is invalid") from error
+
     def cas(self, expected_revision: int, record: Mapping[str, object]) -> dict[str, object]:
+        self.validate()
         return admitted_cas(
             self.store, expected_revision, record, self.lease, self.recheck, self.scope
         )

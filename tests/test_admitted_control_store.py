@@ -88,6 +88,19 @@ class AdmittedControlStoreTests(unittest.TestCase):
         with self.assertRaisesRegex(AdmissionLeaseError, "store is required"):
             AdmittedControlBinding.bind(object(), self.lease, self.recheck, Scope())  # type: ignore[arg-type]
 
+    def test_typed_binding_validate_is_backend_free(self) -> None:
+        class Store:
+            def cas(self, *_args: object, **_kwargs: object) -> dict[str, object]:
+                raise AssertionError("backend must not be touched")
+
+        class Scope:
+            def assert_ordered(self) -> None: ...
+
+            def hold(self) -> Any: ...
+
+        binding = AdmittedControlBinding.bind(Store(), self.lease, self.recheck, Scope())
+        binding.validate()
+
     def test_typed_binding_rejects_lock_order_failure_before_construction(self) -> None:
         class Store:
             def cas(self, _expected: int, _record: Mapping[str, object]) -> dict[str, object]:
