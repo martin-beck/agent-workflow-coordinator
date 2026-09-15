@@ -114,7 +114,10 @@ def admitted_cas(  # noqa: C901
             result = store.cas(expected_revision, record_snapshot)
             if not isinstance(result, dict):
                 raise AdmissionLeaseError("admitted control store result is invalid")
-            result_revision = result.get("revision")
+            try:
+                result_revision = result.get("revision")
+            except Exception as error:
+                raise AdmissionLeaseError("admitted control store result is invalid") from error
             if "revision" in result and (
                 type(result_revision) is not int or result_revision <= expected_revision
             ):
