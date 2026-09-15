@@ -124,20 +124,26 @@ class BoundRollbackCapability:
     """Typed, identity-bound evidence capability; never authorizes rollback."""
 
     identity: tuple[object, ...]
+    verifier: Any
 
     @classmethod
-    def bind(cls, context: PhaseContext) -> BoundRollbackCapability:
-        return cls(tuple(asdict(context)[field] for field in CONTEXT_FIELDS))
+    def bind(cls, context: PhaseContext, verifier: Any) -> BoundRollbackCapability:
+        if not callable(getattr(verifier, "verify_rollback_context_bound", None)):
+            raise UpgradeError("bound rollback verifier capability is incomplete")
+        return cls(tuple(asdict(context)[field] for field in CONTEXT_FIELDS), verifier)
 
     def matches(self, context: PhaseContext) -> bool:
         values = asdict(context)
         return self.identity == tuple(values[field] for field in CONTEXT_FIELDS)
 
     def verify(self, context: Mapping[str, object]) -> Mapping[str, object]:
-        """Return diagnostic evidence only; this capability cannot authorize."""
+        """Invoke concrete bound verification, but never authorize rollback."""
         if set(context) != set(CONTEXT_FIELDS):
             raise UpgradeError("bound rollback capability context is incomplete")
-        return {**dict(context), "rollback_context_verified": False}
+        result = self.verifier.verify_rollback_context_bound(context)
+        if not isinstance(result, Mapping):
+            raise UpgradeError("bound rollback verifier result is invalid")
+        return {**dict(result), "rollback_context_verified": False}
 
 
 def _freeze(value: object) -> object:

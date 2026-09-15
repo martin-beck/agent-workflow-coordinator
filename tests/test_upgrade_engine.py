@@ -1831,6 +1831,11 @@ class UpgradeEngineTests(unittest.TestCase):
         class ConcreteAdapter(FakeAdapter):
             requires_bound_rollback = True
 
+            def verify_rollback_context_bound(
+                self, context: Mapping[str, object]
+            ) -> Mapping[str, object]:
+                return dict(context)
+
             def snapshot(self, _phase: str, _context: object) -> dict[str, object]:
                 raise AssertionError("unbound rollback snapshot reached")
 
@@ -1851,6 +1856,11 @@ class UpgradeEngineTests(unittest.TestCase):
         class ConcreteAdapter(FakeAdapter):
             requires_bound_rollback = True
 
+            def verify_rollback_context_bound(
+                self, context: Mapping[str, object]
+            ) -> Mapping[str, object]:
+                return dict(context)
+
             def snapshot(self, _phase: str, _context: object) -> dict[str, object]:
                 raise AssertionError("unbound rollback snapshot reached")
 
@@ -1865,7 +1875,7 @@ class UpgradeEngineTests(unittest.TestCase):
                 context,
                 backend_adapter=ConcreteAdapter(),
                 rollback_bound_verifier=BoundRollbackCapability.bind(
-                    PhaseContext(**context)
+                    PhaseContext(**context), ConcreteAdapter()
                 ),
             )
             engine.plan()
@@ -1896,6 +1906,33 @@ class UpgradeEngineTests(unittest.TestCase):
                         "rollback_context_verified": True
                     },
                 )
+
+    def test_rollback_rejects_mismatched_capability_before_journal_activity(self) -> None:
+        class ConcreteAdapter(FakeAdapter):
+            requires_bound_rollback = True
+
+            def verify_rollback_context_bound(
+                self, _context: Mapping[str, object]
+            ) -> Mapping[str, object]:
+                raise AssertionError("mismatched capability must not verify")
+
+        with tempfile.TemporaryDirectory() as directory:
+            operation_id = "op-mismatched-capability"
+            journal = Path(directory) / "journal.json"
+            context = make_context(operation_id)
+            wrong = make_context("other-operation")
+            capability = BoundRollbackCapability.bind(
+                PhaseContext(**wrong), ConcreteAdapter()
+            )
+            with self.assertRaisesRegex(UpgradeError, "identity mismatch"):
+                UpgradeEngine(
+                    operation_id,
+                    journal,
+                    context,
+                    backend_adapter=ConcreteAdapter(),
+                    rollback_bound_verifier=capability,
+                )
+            self.assertFalse(journal.exists())
 
 
 if __name__ == "__main__":
