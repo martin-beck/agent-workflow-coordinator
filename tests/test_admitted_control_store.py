@@ -79,6 +79,21 @@ class AdmittedControlStoreTests(unittest.TestCase):
         self.assertIs(self.lease, binding.lease)
         self.assertIs(self.recheck, binding.recheck)
 
+    def test_typed_binding_rejects_lock_order_failure_before_construction(self) -> None:
+        class Store:
+            def cas(self, _expected: int, _record: Mapping[str, object]) -> dict[str, object]:
+                raise AssertionError("store must not be touched")
+
+        class Scope:
+            def assert_ordered(self) -> None:
+                raise RuntimeError("lock order unavailable")
+
+            def hold(self) -> Any:
+                raise AssertionError("scope hold must not be touched")
+
+        with self.assertRaisesRegex(AdmissionLeaseError, "scope is invalid"):
+            AdmittedControlBinding.bind(Store(), self.lease, self.recheck, Scope())
+
     def test_invalid_evidence_fails_before_scope_or_store(self) -> None:
         class Scope:
             def assert_ordered(self) -> None:

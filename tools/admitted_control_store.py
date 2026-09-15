@@ -67,6 +67,10 @@ class AdmittedControlBinding:
             raise AdmissionLeaseError("admitted control recheck does not match lease")
         if not isinstance(scope, OrderedAdmissionScope):
             raise AdmissionLeaseError("admitted control scope is required")
+        try:
+            scope.assert_ordered()
+        except (AttributeError, RuntimeError, TypeError) as error:
+            raise AdmissionLeaseError("admitted control scope is invalid") from error
         return cls(store, lease, recheck, scope)
 
     def cas(self, expected_revision: int, record: Mapping[str, object]) -> dict[str, object]:
