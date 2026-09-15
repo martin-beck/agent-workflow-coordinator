@@ -7,9 +7,11 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import re
 import runpy
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from typing import Any
@@ -127,6 +129,9 @@ class FormalEvidenceTests(unittest.TestCase):
         self.assertIn("of exhaustive exploration", attest)
         self.assertIn("attestation requires TLC_CGROUP_MODE=required", attest)
         self.assertIn("runner-produced outcome manifest", attest)
+        self.assertIn('effective_bound("TLC_MEMORY_MAX", "3G", boundary)', attest)
+        self.assertIn('effective_bound("TLC_SWAP_MAX", "3G", boundary)', attest)
+        self.assertIn("required attestation needs", attest)
 
     def test_workflow_separates_fork_pr_publication_and_weekly_tiers(self) -> None:
         workflow = (ROOT / ".github" / "workflows" / "verify.yml").read_text()
@@ -223,6 +228,228 @@ class FormalEvidenceTests(unittest.TestCase):
         ):
             runpy.run_path(str(script), run_name="__main__")
         self.assertIn("failed or incomplete formal runs", stderr.getvalue())
+
+    def test_attestation_emits_effective_resource_profile(self) -> None:
+        script = ROOT / "formal" / "handoffctl" / "attest.py"
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            output = root / "attestation.json"
+            jar = root / "tla.jar"
+            manifest = root / "outcomes.manifest"
+            jar.write_bytes(b"test jar")
+            manifest.write_text("HandoffctlBinding success\n", encoding="utf-8")
+            with (
+                mock.patch.dict(
+                    os.environ,
+                    {
+                        "TLC_CGROUP_MODE": "portable",
+                        "TLC_HEAP": "512m",
+                        "TLC_MEMORY_MAX": "3G",
+                        "TLC_SWAP_MAX": "3G",
+                        "TLC_TIMEOUT_SECONDS": "600",
+                    },
+                    clear=False,
+                ),
+                mock.patch.object(
+                    sys,
+                    "argv",
+                    [
+                        str(script),
+                        "--tier",
+                        "portable-smoke",
+                        "--output",
+                        str(output),
+                        "--jar",
+                        str(jar),
+                        "--manifest",
+                        str(manifest),
+                        "--models",
+                        "HandoffctlBinding",
+                    ],
+                ),
+                self.assertRaises(SystemExit) as exit_info,
+            ):
+                runpy.run_path(str(script), run_name="__main__")
+            self.assertEqual(exit_info.exception.code, 0)
+            bounds = json.loads(output.read_text(encoding="utf-8"))["resource_bounds"]
+            self.assertEqual("512m", bounds["heap"])
+            self.assertEqual("3G", bounds["memory_max"])
+            self.assertEqual("3G", bounds["swap_max"])
+            self.assertEqual(600, bounds["timeout_seconds"])
+
+    def test_required_attestation_rejects_missing_or_malformed_bounds(self) -> None:
+        script = ROOT / "formal" / "handoffctl" / "attest.py"
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            jar = root / "tla.jar"
+            manifest = root / "outcomes.manifest"
+            jar.write_bytes(b"test jar")
+            manifest.write_text("HandoffctlBinding success\n", encoding="utf-8")
+            for environment, expected in (
+                ({"TLC_CGROUP_MODE": "required"}, "needs TLC_MEMORY_MAX"),
+                (
+                    {"TLC_CGROUP_MODE": "required", "TLC_MEMORY_MAX": "bad", "TLC_SWAP_MAX": "3G"},
+                    "TLC_MEMORY_MAX must be",
+                ),
+                (
+                    {"TLC_CGROUP_MODE": "required", "TLC_MEMORY_MAX": "6G", "TLC_SWAP_MAX": "bad"},
+                    "TLC_SWAP_MAX must be",
+                ),
+            ):
+                stderr = io.StringIO()
+                with (
+                    mock.patch.dict(os.environ, environment, clear=True),
+                    mock.patch.object(sys, "stderr", stderr),
+                    mock.patch.object(
+                        sys,
+                        "argv",
+                        [
+                            str(script),
+                            "--tier",
+                            "portable-smoke",
+                            "--output",
+                            str(root / "attestation.json"),
+                            "--jar",
+                            str(jar),
+                            "--manifest",
+                            str(manifest),
+                            "--models",
+                            "HandoffctlBinding",
+                        ],
+                    ),
+                    self.assertRaises(SystemExit),
+                ):
+                    runpy.run_path(str(script), run_name="__main__")
+                self.assertIn(expected, stderr.getvalue())
+
+    def test_tier_bound_matrix_uses_explicit_required_profiles(self) -> None:
+        effective_bound = runpy.run_path(str(ROOT / "formal" / "handoffctl" / "attest.py"))[
+            "effective_bound"
+        ]
+        with mock.patch.dict(
+            os.environ,
+            {"TLC_MEMORY_MAX": "6G", "TLC_SWAP_MAX": "6G"},
+            clear=True,
+        ):
+            self.assertEqual("6G", effective_bound("TLC_MEMORY_MAX", "3G", "required"))
+            self.assertEqual("6G", effective_bound("TLC_SWAP_MAX", "3G", "required"))
+        with mock.patch.dict(os.environ, {}, clear=True):
+            self.assertEqual("3G", effective_bound("TLC_MEMORY_MAX", "3G", "portable"))
+            self.assertEqual("3G", effective_bound("TLC_SWAP_MAX", "3G", "portable"))
+
+    def test_required_full_attestation_emits_six_gib_profile(self) -> None:
+        script = ROOT / "formal" / "handoffctl" / "attest.py"
+        models = [
+            "HandoffctlBinding",
+            "HandoffctlLocks",
+            "HandoffctlRun",
+            "HandoffctlStorage",
+            "Handoffctl",
+            "HandoffctlRecovery",
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            jar = root / "tla.jar"
+            manifest = root / "outcomes.manifest"
+            output = root / "attestation.json"
+            jar.write_bytes(b"test jar")
+            manifest.write_text("".join(f"{model} success\n" for model in models), encoding="utf-8")
+            with (
+                mock.patch.dict(
+                    os.environ,
+                    {
+                        "TLC_CGROUP_MODE": "required",
+                        "TLC_HEAP": "4096m",
+                        "TLC_MEMORY_MAX": "6G",
+                        "TLC_SWAP_MAX": "6G",
+                        "TLC_TIMEOUT_SECONDS": "6000",
+                    },
+                    clear=True,
+                ),
+                mock.patch.object(
+                    sys,
+                    "argv",
+                    [
+                        str(script),
+                        "--tier",
+                        "full-exhaustive",
+                        "--output",
+                        str(output),
+                        "--jar",
+                        str(jar),
+                        "--manifest",
+                        str(manifest),
+                        "--models",
+                        *models,
+                    ],
+                ),
+                self.assertRaises(SystemExit) as exit_info,
+            ):
+                runpy.run_path(str(script), run_name="__main__")
+            self.assertEqual(exit_info.exception.code, 0)
+            result = json.loads(output.read_text(encoding="utf-8"))
+            self.assertEqual("full-exhaustive", result["profile"])
+            self.assertEqual("4096m", result["resource_bounds"]["heap"])
+            self.assertEqual("6G", result["resource_bounds"]["memory_max"])
+            self.assertEqual("6G", result["resource_bounds"]["swap_max"])
+            self.assertEqual(6000, result["resource_bounds"]["timeout_seconds"])
+
+    def test_required_ordinary_attestation_emits_three_gib_profile(self) -> None:
+        script = ROOT / "formal" / "handoffctl" / "attest.py"
+        models = [
+            "HandoffctlBinding",
+            "HandoffctlLocks",
+            "HandoffctlRun",
+            "HandoffctlStorage",
+            "HandoffctlPR",
+            "HandoffctlRecovery",
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            jar = root / "tla.jar"
+            manifest = root / "outcomes.manifest"
+            output = root / "attestation.json"
+            jar.write_bytes(b"test jar")
+            manifest.write_text("".join(f"{model} success\n" for model in models), encoding="utf-8")
+            with (
+                mock.patch.dict(
+                    os.environ,
+                    {
+                        "TLC_CGROUP_MODE": "required",
+                        "TLC_HEAP": "2048m",
+                        "TLC_MEMORY_MAX": "3G",
+                        "TLC_SWAP_MAX": "3G",
+                        "TLC_TIMEOUT_SECONDS": "1200",
+                    },
+                    clear=True,
+                ),
+                mock.patch.object(
+                    sys,
+                    "argv",
+                    [
+                        str(script),
+                        "--tier",
+                        "pr-publication",
+                        "--output",
+                        str(output),
+                        "--jar",
+                        str(jar),
+                        "--manifest",
+                        str(manifest),
+                        "--models",
+                        *models,
+                    ],
+                ),
+                self.assertRaises(SystemExit) as exit_info,
+            ):
+                runpy.run_path(str(script), run_name="__main__")
+            self.assertEqual(exit_info.exception.code, 0)
+            result = json.loads(output.read_text(encoding="utf-8"))
+            self.assertEqual("pr-publication", result["profile"])
+            self.assertEqual("2048m", result["resource_bounds"]["heap"])
+            self.assertEqual("3G", result["resource_bounds"]["memory_max"])
+            self.assertEqual("3G", result["resource_bounds"]["swap_max"])
+            self.assertEqual(1200, result["resource_bounds"]["timeout_seconds"])
 
 
 if __name__ == "__main__":
