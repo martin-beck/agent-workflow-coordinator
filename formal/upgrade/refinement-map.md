@@ -20,6 +20,7 @@ contract for the next implementation slice, not an implementation proof.
 | Git backend | production Git adapter and ref/restore tests | model branch exists; production adapter explicitly fail-closed |
 | SQLite backend | `test_wal_cas_and_reload_are_durable`, `test_sidecars_require_private_provisioning_and_stable_regular_identities` | model branch and public tests present; release-specific rereader/refinement pending |
 | Concrete SQLite rereader | `test_concrete_release_rereader_derives_and_rechecks_actual_authority`, selector/projection/sidecar swap tests | public hostile tests present; trace refinement and release orchestration pending |
+| Typed recovery rejection preservation | `test_v10_session_intent_recovery_fences_and_requires_newer_fence` (PR #289) | bounded executable evidence at `99b65e6`; implementation refinement pending |
 
 The names above are resolved against the implementation snapshot recorded in
 `evidence.json`; they are not claims about later source revisions. The model

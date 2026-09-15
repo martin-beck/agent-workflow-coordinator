@@ -13,8 +13,8 @@
     }
   },
   "implementation_snapshot": {
-    "revision": "7cb1c7be8711242ffb551b82db77b90d793600f0",
-    "runtime_revision": "c6999ca684b67365d71d9e0069b71b0cd3c7834c",
+    "revision": "be92ec8638301170caa7a09b00a8442c54dfd831",
+    "runtime_revision": "be92ec8638301170caa7a09b00a8442c54dfd831",
     "status": "descriptor-safe control-store reread and write-route admission evidence; executable apply and rollback remain rejection-only"
   },
   "correspondence": [
@@ -41,6 +41,12 @@
       "implementation_obligation": "Process death or uncertain WAL/control-store outcomes preserve durable write-closed state; recovery must reread and reconcile before a newer fenced session can proceed.",
       "evidence_required": ["sigkill boundaries", "WAL/SHM fault tests", "new-session CAS tests"],
       "status": "obligation-only"
+    },
+    {
+      "model_actions": ["RejectStaleCAS", "AmbiguousIsWriteClosed", "LockOwnership"],
+      "implementation_obligation": "Typed recovery rejection paths release the operation lock and preserve the durable ambiguous snapshot across stale-fence, reused-fence, authority-mismatch, reread-failure, invalid-revision, and unresolved-intent failures.",
+      "evidence_required": ["tests/test_rollback_control_store.py::test_v10_session_intent_recovery_fences_and_requires_newer_fence"],
+      "status": "bounded executable evidence at 99b65e6; implementation refinement pending"
     }
   ],
   "tlc_result": {
