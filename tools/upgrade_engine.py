@@ -754,6 +754,33 @@ class UpgradeEngine:
             self._verified_rollback_context = supplied
             return self._rollback_locked(handler)
 
+    def inspect_rollback_bound(self) -> dict[str, object]:
+        """Return bound rollback evidence without authorizing or journaling rollback.
+
+        This is intentionally separate from :meth:`rollback`: it acquires the
+        same coordination locks and invokes only the typed capability.  The
+        capability's non-authorizing result is preserved, and no handler,
+        journal transition, or backend mutation can be reached.
+        """
+        with self._operation_scope(), self._exclusive():
+            if self.backend_adapter is None:
+                raise UpgradeError("backend adapter is required for rollback inspection")
+            if not getattr(self.backend_adapter, "requires_bound_rollback", False):
+                raise UpgradeError("rollback inspection requires a bound backend capability")
+            if not isinstance(self.rollback_bound_verifier, BoundRollbackCapability):
+                raise UpgradeError("rollback inspection requires a trusted bound capability")
+            context = cast(
+                Mapping[str, object],
+                _freeze({**asdict(self.context), "target": "rollback"}),
+            )
+            try:
+                result = self.rollback_bound_verifier.verify(context)
+            except Exception as error:
+                raise UpgradeError("trusted bound rollback inspection failed") from error
+            if result.get("rollback_context_verified") is not False:
+                raise UpgradeError("rollback inspection capability is authorizing")
+            return dict(result)
+
     def _rollback_locked(self, handler: Handler) -> dict[str, Any]:  # noqa: C901
         value = self._load()
         if self.backend_adapter is None:

@@ -1930,6 +1930,42 @@ class UpgradeEngineTests(unittest.TestCase):
                 engine.rollback(lambda _step, _state: self.fail("rollback handler reached"))
             self.assertEqual(journal_before, (Path(directory) / "journal.json").read_bytes())
 
+    def test_bound_rollback_inspection_returns_evidence_without_journal_or_mutation(self) -> None:
+        class ConcreteAdapter(FakeAdapter):
+            requires_bound_rollback = True
+
+            def verify_rollback_context_bound(
+                self, context: Mapping[str, object]
+            ) -> Mapping[str, object]:
+                return {**context, "rollback_context_verified": False}
+
+            def snapshot(self, _phase: str, _context: object) -> dict[str, object]:
+                raise AssertionError("unbound snapshot reached")
+
+            def execute(self, _phase: str, _context: object) -> dict[str, object]:
+                raise AssertionError("mutation reached")
+
+        with tempfile.TemporaryDirectory() as directory:
+            operation_id = "op-bound-inspection"
+            journal = Path(directory) / "journal.json"
+            adapter = ConcreteAdapter()
+            engine = UpgradeEngine(
+                operation_id,
+                journal,
+                make_context(operation_id),
+                backend_adapter=adapter,
+                rollback_bound_verifier=BoundRollbackCapability.bind(
+                    PhaseContext(**cast(dict[str, Any], make_context(operation_id))), adapter
+                ),
+            )
+            engine.plan()
+            journal_before = journal.read_bytes()
+            evidence = engine.inspect_rollback_bound()
+            self.assertFalse(evidence["rollback_context_verified"])
+            self.assertEqual(journal_before, journal.read_bytes())
+            with engine._exclusive():
+                pass
+
     def test_rollback_rejects_forged_bound_verifier_before_backend_or_handler(self) -> None:
         class ConcreteAdapter(FakeAdapter):
             requires_bound_rollback = True
