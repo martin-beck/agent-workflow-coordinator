@@ -164,6 +164,12 @@ class FormalEvidenceTests(unittest.TestCase):
         self.assertLess(
             tier_expression.index(fork_guard), tier_expression.index("'full-exhaustive'")
         )
+        self.assertNotIn("needs.scope.outputs.release_sensitive", tier_expression)
+        self.assertIn(
+            "|| (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') "
+            "&& 'full-exhaustive' || 'pr-fast'",
+            tier_expression,
+        )
         steps_start = workflow.index("    steps:\n", workflow.index("  verify:\n"))
         job_environment = workflow[
             workflow.index("    env:\n", workflow.index("  verify:\n")) : steps_start
@@ -197,7 +203,7 @@ class FormalEvidenceTests(unittest.TestCase):
         self.assertIn('cgroup_dir="${cgroup_mount%/}${cgroup_relative:-/}"', workflow)
         self.assertIn('"${cgroup_dir}/memory.max"', workflow)
         self.assertIn('"${cgroup_dir}/memory.swap.max"', workflow)
-        self.assertIn("needs.scope.outputs.release_sensitive == 'true') && '6000'", formal_step)
+        self.assertNotIn("needs.scope.outputs.release_sensitive", formal_step)
         self.assertIn(
             "github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && 360",
             workflow,
