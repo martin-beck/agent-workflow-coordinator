@@ -1095,6 +1095,16 @@ class LockDomainScopeTests(unittest.TestCase):
         self.assertEqual([], common_calls)
         self.assertFalse(self.session.operation_owned_by_current_thread)
 
+        tuple_authority_context = dict(stale_context)
+        tuple_authority_context["authority_revision"] = ("authority-stale",)
+        with (
+            self.assertRaisesRegex(LockDomainError, "does not match"),
+            scope.validated_hold(tuple_authority_context),
+        ):
+            self.fail("tuple authority revision must fail before scope acquisition")
+        self.assertEqual([], common_calls)
+        self.assertFalse(self.session.operation_owned_by_current_thread)
+
         non_text_project_context = dict(stale_context)
         non_text_project_context["project_id"] = 111
         with (
