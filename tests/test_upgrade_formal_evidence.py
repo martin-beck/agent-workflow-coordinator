@@ -17,6 +17,46 @@ CONTRACT = ROOT / "formal" / "upgrade" / "v10-refinement-contract.json"
 
 
 class UpgradeFormalEvidenceTests(unittest.TestCase):
+    def test_bound_rollback_inspection_evidence_maps_existing_tests_without_refinement_claim(
+        self,
+    ) -> None:
+        evidence = json.loads(
+            (ROOT / "formal" / "upgrade" / "rollback-inspection-evidence.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.assertEqual("implementation-test", evidence["evidence_class"])
+        self.assertEqual("not-proven", evidence["implementation_refinement"])
+        self.assertEqual(2, len(evidence["formal_obligations"]))
+        revision = subprocess.run(  # noqa: S603
+            ["git", "rev-parse", evidence["implementation_revision"]],  # noqa: S607
+            cwd=ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        tree = subprocess.run(  # noqa: S603
+            ["git", "rev-parse", f"{revision}^{{tree}}"],  # noqa: S607
+            cwd=ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        self.assertEqual(tree, evidence["implementation_tree"])
+        for tests in evidence["tests"].values():
+            for reference in tests:
+                path, selector = reference.split("::", 1)
+                self.assertTrue((ROOT / path).exists(), path)
+                # The file-level check is intentionally lightweight: unittest
+                # selectors contain a class and method, while only the method
+                # token is expected to occur literally in the source.
+                self.assertIn(
+                    selector.rsplit("::", 1)[-1],
+                    (ROOT / path).read_text(encoding="utf-8"),
+                    selector,
+                )
+        self.assertTrue(any("does not authorize" in claim for claim in evidence["claims"]))
+
     def test_recorded_model_and_implementation_hashes_match(self) -> None:
         evidence = json.loads(EVIDENCE.read_text(encoding="utf-8"))
 
