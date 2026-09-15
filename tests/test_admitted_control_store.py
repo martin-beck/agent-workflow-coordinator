@@ -141,6 +141,30 @@ class AdmittedControlStoreTests(unittest.TestCase):
                 with self.assertRaisesRegex(AdmissionLeaseError, "does not match"):
                     admitted_cas(Store(), 1, changed, self.lease, self.recheck, Scope())
 
+    def test_store_failure_releases_admission_scope(self) -> None:
+        events: list[str] = []
+
+        class Scope:
+            def assert_ordered(self) -> None:
+                events.append("order")
+
+            @contextmanager
+            def hold(self) -> Any:
+                events.append("hold")
+                try:
+                    yield None
+                finally:
+                    events.append("release")
+
+        class Store:
+            def cas(self, *_args: object, **_kwargs: object) -> dict[str, object]:
+                events.append("write")
+                raise RuntimeError("store crashed")
+
+        with self.assertRaisesRegex(RuntimeError, "store crashed"):
+            admitted_cas(Store(), 1, self.record, self.lease, self.recheck, Scope())
+        self.assertEqual(["order", "hold", "write", "release"], events)
+
     def test_missing_or_mismatched_contract_objects_fail_closed(self) -> None:
         with self.assertRaisesRegex(AdmissionLeaseError, "lease is required"):
             admitted_cas(None, 1, self.record, None, self.recheck, None)  # type: ignore[arg-type]
