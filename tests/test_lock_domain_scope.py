@@ -80,13 +80,20 @@ def _fresh_recheck_process(
     result: Any,
     crash_after_reread: bool = False,
     crash_after_rejection: bool = False,
+    fail_authority_reread: bool = False,
 ) -> None:
     """Perform a trusted reread in a fresh process, then reject the old lease."""
     root = Path(root_text)
     authority = root / "authority.sqlite"
     control = root / "control.sqlite"
     store = SQLiteRollbackControlStore(control, PROJECT, authority)
-    session = SQLiteBarrierSessionStore(store, lambda: "authority-retry")
+
+    def read_authority() -> str:
+        if fail_authority_reread:
+            raise RuntimeError("authority unavailable")
+        return "authority-retry"
+
+    session = SQLiteBarrierSessionStore(store, read_authority)
     fence = MutationFence(
         authority,
         root / "authority-marker.json",
@@ -115,6 +122,8 @@ def _fresh_recheck_process(
                 if crash_after_rejection:
                     os._exit(23)
                 rejected = True
+    except ControlStoreError:
+        rejected = True
     finally:
         result.put((rejected, not session.operation_owned_by_current_thread))
 
@@ -378,6 +387,18 @@ class LockDomainScopeTests(unittest.TestCase):
         reread_crashed.start()
         reread_crashed.join(5)
         self.assertEqual(19, reread_crashed.exitcode)
+
+        failure_result = context.Queue()
+        reread_failed = context.Process(
+            target=_fresh_recheck_process,
+            args=(self.directory.name, failure_result, False, False, True),
+        )
+        reread_failed.start()
+        reread_failed.join(5)
+        self.assertEqual(0, reread_failed.exitcode)
+        rejected, released = failure_result.get(timeout=1)
+        self.assertTrue(rejected)
+        self.assertTrue(released)
 
         rejection_crashed = context.Process(
             target=_fresh_recheck_process,
