@@ -574,6 +574,7 @@ class GitAuthorityAdapterTests(unittest.TestCase):
             reused = BarrierSessionState(
                 BarrierSessionIdentity.from_record(reused_record), "held", 1
             )
+
             with (
                 self.subTest(reused_field=field),
                 self.assertRaisesRegex(ControlStoreError, "distinct newer fence"),
@@ -614,6 +615,80 @@ class GitAuthorityAdapterTests(unittest.TestCase):
             ("success", observed["git_head"], observed["git_branch"]),
             recovered_result.get(timeout=1),
         )
+
+    def test_snapshot_bound_rejects_backend_equivalence_drift(self) -> None:
+        class TamperedAdapter(GitAuthorityAdapter):
+            def snapshot(self, phase: str, context: Mapping[str, object]) -> dict[str, Any]:
+                value = super().snapshot(phase, context)
+                value["project_id"] = "tampered"
+                return value
+
+        observed = self.adapter.snapshot("discover", CONTEXT)
+        tampered = TamperedAdapter(self.root)
+        with (
+            patch.object(tampered, "execute", side_effect=AssertionError("execute reached")),
+            self.assertRaisesRegex(GitAuthorityError, "backend context identity"),
+        ):
+            tampered.snapshot_bound(
+                "discover",
+                CONTEXT,
+                self.scope,
+                lease=self._lease(),
+                admission_recheck=self.recheck,
+                expected_branch=str(observed["git_branch"]),
+                expected_head=str(observed["git_head"]),
+            )
+        self.assertFalse(self.session.operation_owned_by_current_thread)
+
+    def test_snapshot_bound_rejects_non_read_only_backend_result(self) -> None:
+        class TamperedAdapter(GitAuthorityAdapter):
+            def snapshot(self, phase: str, context: Mapping[str, object]) -> dict[str, Any]:
+                value = super().snapshot(phase, context)
+                value["mutates_authority"] = True
+                return value
+
+        observed = self.adapter.snapshot("discover", CONTEXT)
+        tampered = TamperedAdapter(self.root)
+        with (
+            patch.object(tampered, "execute", side_effect=AssertionError("execute reached")),
+            self.assertRaisesRegex(GitAuthorityError, "not read-only"),
+        ):
+            tampered.snapshot_bound(
+                "discover",
+                CONTEXT,
+                self.scope,
+                lease=self._lease(),
+                admission_recheck=self.recheck,
+                expected_branch=str(observed["git_branch"]),
+                expected_head=str(observed["git_head"]),
+            )
+        self.assertFalse(self.session.operation_owned_by_current_thread)
+
+    def test_snapshot_bound_rejects_boolean_integer_context_substitution(self) -> None:
+        class TamperedAdapter(GitAuthorityAdapter):
+            def snapshot(self, phase: str, context: Mapping[str, object]) -> dict[str, Any]:
+                value = super().snapshot(phase, context)
+                value["state_revision"] = True
+                return value
+
+        observed = self.adapter.snapshot("discover", CONTEXT)
+        tampered = TamperedAdapter(self.root)
+        with (
+            patch.object(tampered, "execute", side_effect=AssertionError("execute reached")),
+            patch.object(tampered, "_git", wraps=tampered._git) as git,
+            self.assertRaisesRegex(GitAuthorityError, "backend context identity"),
+        ):
+            tampered.snapshot_bound(
+                "discover",
+                CONTEXT,
+                self.scope,
+                lease=self._lease(),
+                admission_recheck=self.recheck,
+                expected_branch=str(observed["git_branch"]),
+                expected_head=str(observed["git_head"]),
+            )
+        self.assertEqual(3, git.call_count)
+        self.assertFalse(self.session.operation_owned_by_current_thread)
 
     def test_typed_reconcile_rejects_real_unresolved_intent(self) -> None:
         """A prepared intent left by publication failure blocks replacement."""
