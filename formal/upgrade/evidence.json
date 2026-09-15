@@ -12,7 +12,7 @@
       "tools/validate_upgrade_contract.py": "6c264c4775e4ee1a778181d7e127d9f256c56abd4bfebb02c624e13c289dbc4a",
       "tools/upgrade_contract_runtime.py": "caeb45260b790e7fdf8118ce370558bd26b04035407679df8e9845775e197119",
       "tools/upgrade_commands.py": "5b6360c39fa10979a77a0c6180968598593f56b9ea0c59de60b59c8017e37071",
-      "tools/handoffctl.py": "3fb63c6f8ea46efab3096ef4080d8eb49c916cc8409313bb0343acf43769af35",
+      "tools/handoffctl.py": "97d70980b754eb6bf77918bb7178729caf70d54e07919d97bf67b063f5d00b21",
       "tests/test_upgrade_commands.py": "4eaa65ac1730c9149156ba76e345dcb1f8e2c44a51042e27f2d4a4b4e7634f32",
       "tests/test_upgrade_contract.py": "a7e99dc8b7af5a117245999bd09911af00f25f22e46aba51007939b07ace0570",
       "tools/rollback_control_store.py": "62dcc4535a6b340216ee35bd0a1f90d0edf9957461fb26be00a1941009353921",
