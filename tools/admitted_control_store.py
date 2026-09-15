@@ -107,6 +107,9 @@ def admitted_cas(  # noqa: C901
         raise AdmissionLeaseError("admitted control record values are invalid") from error
     try:
         scope.assert_ordered()
+    except (AttributeError, RuntimeError, TypeError) as error:
+        raise AdmissionLeaseError("admitted control scope is invalid") from error
+    try:
         with scope.hold():
             return store.cas(expected_revision, record_snapshot)
     except (AttributeError, TypeError) as error:
