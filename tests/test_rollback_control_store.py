@@ -128,6 +128,19 @@ identity_record["identity_digest"] = canonical_barrier_session_digest(identity_r
 identity = BarrierSessionIdentity.from_record(identity_record)
 control = SQLiteRollbackControlStore(control_path, project_id, authority_path)
 store = SQLiteBarrierSessionStore(control, lambda: "authority-3")
+
+if mode == "probe-after-sidecar":
+    from tools.handoffctl import locked
+
+    with locked() as guard, store.lock_owned_by_caller(guard), control._connection() as connection:
+        journal_mode = str(connection.execute("PRAGMA journal_mode").fetchone()[0]).lower()
+        if journal_mode != "wal":
+            raise SystemExit("WAL mode was not enabled")
+        ready_path.write_text(journal_mode + "\n", encoding="utf-8")
+        with ready_path.open("rb") as ready:
+            os.fsync(ready.fileno())
+    raise SystemExit(0)
+
 store.create(identity)
 store.bind_child(1, BarrierChildIdentity.bind(identity, "subprocess-forward", "new"))
 
@@ -697,6 +710,22 @@ class RollbackControlStoreTests(unittest.TestCase):
             self.assertNotEqual(0, process.returncode, msg=f"stdout={stdout}; stderr={stderr}")
             self.assertIn("WAL sidecar identity changed", stderr)
             self.assertEqual(authority_bytes, authority_path.read_bytes())
+
+            # The failed connection must have released both locks before a
+            # clean worker can remove the damaged sidecars and reacquire.
+            for suffix in ("-wal", "-shm"):
+                (root / f"control.sqlite{suffix}").unlink(missing_ok=True)
+            fresh_ready = root / "fresh-ready"
+            fresh = self._run_session_process(
+                control_path, authority_path, "probe-after-sidecar", fresh_ready
+            )
+            fresh_stdout, fresh_stderr = fresh.communicate(timeout=10)
+            self.assertEqual(
+                0,
+                fresh.returncode,
+                msg=f"stdout={fresh_stdout}; stderr={fresh_stderr}",
+            )
+            self.assertEqual("wal", fresh_ready.read_text(encoding="utf-8").strip())
 
     def test_v10_subprocess_commit_before_outcome_recovers_ambiguously(self) -> None:
         """Cover post-CAS/pre-outcome death; no authority-fencing claim."""
