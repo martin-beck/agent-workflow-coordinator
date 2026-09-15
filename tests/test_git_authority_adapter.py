@@ -7,6 +7,9 @@
 
 from __future__ import annotations
 
+import multiprocessing
+import os
+import sqlite3
 import subprocess
 import tempfile
 import unittest
@@ -19,6 +22,7 @@ from unittest.mock import patch
 from tools.admission_lease import AdmissionLease, validate_recheck
 from tools.git_authority_adapter import GitAuthorityAdapter, GitAuthorityError
 from tools.handoffctl import locked
+from tools.lock_domain import LockDomainContract
 from tools.lock_domain_scope import LockDomainScope
 from tools.mutation_fence import MutationFence, provision, provision_control_binding
 from tools.rollback_control_store import SQLiteBarrierSessionStore, SQLiteRollbackControlStore
@@ -45,6 +49,83 @@ CONTEXT = {
     "target": "new",
     "envelope_digest": "0" * 64,
 }
+
+
+def _bound_snapshot_process(
+    repository_text: str,
+    coordination_text: str,
+    expected_branch: str,
+    expected_head: str,
+    mode: str,
+    result: Any,
+) -> None:
+    """Run one real bound snapshot in a fresh process.
+
+    ``crash`` aborts from the first Git observation, after ``snapshot_bound``
+    has entered the concrete common/control/authority scope. ``stale`` keeps
+    the backend observable so a call would be reported, but must reject from
+    the durable reread first.
+    """
+    coordination = Path(coordination_text)
+    authority = coordination / "authority.sqlite"
+    control = coordination / "control.sqlite"
+    store = SQLiteRollbackControlStore(control, PROJECT, authority)
+    session = SQLiteBarrierSessionStore(store, lambda: "authority")
+    fence = MutationFence(
+        authority,
+        coordination / "authority-marker.json",
+        coordination / "authority-lifecycle.json",
+        coordination / "authority.lock",
+        control,
+        coordination / "control-binding.json",
+        store.control_lock_path,
+    )
+    with locked() as guard:
+        domain = LockDomainContract.capture(guard, session, fence)
+    lease = AdmissionLease(PROJECT, "authority", "fence", "owner", "barrier", 1)
+    recheck = validate_recheck(
+        lease,
+        project_id=PROJECT,
+        authority_revision="authority",
+        fencing_token="fence",  # noqa: S106
+        fencing_owner="owner",
+        durable_barrier_id="barrier",
+        revision=1,
+    )
+    scope = LockDomainScope.bind(session, fence, lease, recheck, locked)
+    adapter = GitAuthorityAdapter(Path(repository_text))
+    adapter_any: Any = adapter
+
+    if mode == "crash":
+
+        def aborting_git(*_arguments: str) -> str:
+            os._exit(17)
+
+        adapter_any._git = aborting_git
+    elif mode == "stale":
+        calls = 0
+
+        def unexpected_git(*_arguments: str) -> str:
+            nonlocal calls
+            calls += 1
+            raise AssertionError("stale session reached Git backend")
+
+        adapter_any._git = unexpected_git
+
+    try:
+        value = adapter.snapshot_bound(
+            "discover",
+            CONTEXT,
+            scope,
+            lease=lease,
+            admission_recheck=recheck,
+            expected_branch=expected_branch,
+            expected_head=expected_head,
+        )
+    except Exception as error:
+        result.put(("rejected", type(error).__name__, str(error), locals().get("calls", 0)))
+    else:
+        result.put(("success", value["git_head"], value["git_branch"]))
 
 
 class GitAuthorityAdapterTests(unittest.TestCase):
@@ -327,6 +408,88 @@ class GitAuthorityAdapterTests(unittest.TestCase):
                     expected_head=str(observed["git_head"]),
                 )
             git.assert_not_called()
+
+    def test_process_abort_releases_bound_scope_for_fresh_read_only_worker(self) -> None:
+        """A child abort inside snapshot_bound leaves all locks reusable."""
+        observed = self.adapter.snapshot("discover", CONTEXT)
+        context = multiprocessing.get_context("fork")
+        crashed_result = context.Queue()
+        crashed = context.Process(
+            target=_bound_snapshot_process,
+            args=(
+                str(self.root),
+                self.coordination.name,
+                str(observed["git_branch"]),
+                str(observed["git_head"]),
+                "crash",
+                crashed_result,
+            ),
+        )
+        crashed.start()
+        crashed.join(5)
+        self.assertEqual(17, crashed.exitcode)
+
+        recovered_result = context.Queue()
+        recovered = context.Process(
+            target=_bound_snapshot_process,
+            args=(
+                str(self.root),
+                self.coordination.name,
+                str(observed["git_branch"]),
+                str(observed["git_head"]),
+                "success",
+                recovered_result,
+            ),
+        )
+        recovered.start()
+        recovered.join(5)
+        self.assertEqual(0, recovered.exitcode)
+        self.assertEqual(
+            ("success", observed["git_head"], observed["git_branch"]),
+            recovered_result.get(timeout=1),
+        )
+
+    def test_fresh_bound_worker_rejects_replaced_session_before_git_backend(self) -> None:
+        """A fresh worker rejects durable replacement without Git calls."""
+        observed = self.adapter.snapshot("discover", CONTEXT)
+        changed = self._session_identity().as_record()
+        changed["authority_revision_at_acquire"] = "authority-replaced"
+        changed["state_revision"] = 2
+        changed["identity_digest"] = canonical_barrier_session_digest(changed)
+        with sqlite3.connect(self.session.control_store_path) as connection:
+            connection.execute(
+                "UPDATE barrier_session SET authority_revision_at_acquire=?, "
+                "state_revision=?, identity_digest=?, revision=? WHERE project_id=?",
+                (
+                    changed["authority_revision_at_acquire"],
+                    changed["state_revision"],
+                    changed["identity_digest"],
+                    1,
+                    PROJECT,
+                ),
+            )
+            connection.commit()
+
+        context = multiprocessing.get_context("fork")
+        result = context.Queue()
+        fresh = context.Process(
+            target=_bound_snapshot_process,
+            args=(
+                str(self.root),
+                self.coordination.name,
+                str(observed["git_branch"]),
+                str(observed["git_head"]),
+                "stale",
+                result,
+            ),
+        )
+        fresh.start()
+        fresh.join(5)
+        self.assertEqual(0, fresh.exitcode)
+        outcome = result.get(timeout=1)
+        self.assertEqual("rejected", outcome[0])
+        self.assertIn(outcome[1], {"GitAuthorityError", "LockDomainError"})
+        self.assertEqual(0, outcome[3])
 
     def test_rollback_recheck_never_authorizes_mutation(self) -> None:
         result = self.adapter.verify_rollback_context(CONTEXT)
