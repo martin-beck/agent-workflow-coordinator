@@ -33,6 +33,7 @@ if __package__:
         StatusRenderError,
         graph_errors,
         render_status,
+        render_status_pages_from_text,
     )
 else:  # pragma: no cover - direct script execution
     from sqlite_storage import (  # type: ignore[import-not-found,no-redef]
@@ -44,6 +45,7 @@ else:  # pragma: no cover - direct script execution
         StatusRenderError,
         graph_errors,
         render_status,
+        render_status_pages_from_text,
     )
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -989,6 +991,27 @@ def render_status_view(tasks: list[Task]) -> str:
     return render_status(tasks, STATUSES, PRIORITIES, str(project_settings()["project_title"]))
 
 
+def render_status_views(tasks: list[Task]) -> dict[str, str]:
+    """Render the complete status view through the compatibility render hook."""
+    return render_status_pages_from_text(render_status_view(tasks))
+
+
+def status_projection_errors(expected: dict[str, str]) -> list[str]:
+    """Compare status pages and report missing, changed, or orphaned files."""
+    errors = [
+        f"{relative} differs from generated tasks"
+        for relative, content in expected.items()
+        if not (ROOT / relative).exists() or (ROOT / relative).read_text() != content
+    ]
+    expected_paths = {ROOT / relative for relative in expected}
+    errors.extend(
+        f"{status.relative_to(ROOT)} is stale"
+        for status in sorted((ROOT / "status").glob("STATUS-*.md"))
+        if status not in expected_paths
+    )
+    return errors
+
+
 def generated_view_errors(tasks: list[Task]) -> list[str]:
     """Check both task-derived views without allowing renderer errors to escape."""
     errors: list[str] = []
@@ -1000,13 +1023,11 @@ def generated_view_errors(tasks: list[Task]) -> list[str]:
     if not project_settings()["status_view"]:
         return errors
     try:
-        expected_status = render_status_view(tasks)
+        expected_status = render_status_views(tasks)
     except StatusRenderError as error:
         errors.extend(str(error).splitlines())
     else:
-        status = ROOT / "STATUS.md"
-        if not status.exists() or status.read_text() != expected_status:
-            errors.append("STATUS.md differs from generated tasks")
+        errors.extend(status_projection_errors(expected_status))
     return errors
 
 
@@ -1177,6 +1198,9 @@ def generated_paths() -> list[Path]:
     names = ["CURRENT.md", "PROJECT_STATE.md", "WORKTREES.md"]
     if project_settings()["status_view"]:
         names.append("STATUS.md")
+        names.extend(
+            str(path.relative_to(ROOT)) for path in sorted((ROOT / "status").glob("STATUS-*.md"))
+        )
     return [ROOT / name for name in names]
 
 
@@ -1194,7 +1218,8 @@ def write_generated_views(tasks: list[Task], state: Meta) -> None:
     """Atomically refresh every configured generated projection."""
     atomic(ROOT / "CURRENT.md", render_current(tasks))
     if project_settings()["status_view"]:
-        atomic(ROOT / "STATUS.md", render_status_view(tasks))
+        expected = render_status_views(tasks)
+        write_status_views(expected)
     project, worktrees = live_docs(state)
     atomic(ROOT / "PROJECT_STATE.md", project)
     atomic(ROOT / "WORKTREES.md", worktrees)
@@ -1220,7 +1245,9 @@ def reconcile(*, do_commit: bool, push: bool = False) -> bool:
             errors = validate(live=False)
             if errors:
                 raise RuntimeError("validation failed:\n" + "\n".join(errors))
-            touched = changed_paths(before)
+            for path in generated_paths():
+                before.setdefault(path, None)
+            touched = changed_paths(before, include_deleted=True)
             title = project_settings()["project_title"]
             committed = commit(f"chore(state): reconcile {title}", touched) if do_commit else False
             head = run(["git", "-C", str(ROOT), "rev-parse", "HEAD"], check=False).stdout.strip()
@@ -1472,8 +1499,35 @@ def rendered_task_views(tasks: list[Task]) -> dict[Path, str]:
     """Return every enabled task-derived projection for one consistent task snapshot."""
     views = {ROOT / "CURRENT.md": render_current(tasks)}
     if project_settings()["status_view"]:
-        views[ROOT / "STATUS.md"] = render_status_view(tasks)
+        views.update(
+            {ROOT / relative: content for relative, content in render_status_views(tasks).items()}
+        )
     return views
+
+
+def write_status_views(views: dict[str, str]) -> None:
+    """Atomically replace the root status index and remove obsolete shards."""
+    expected_paths = {ROOT / relative for relative in views}
+    for path in generated_paths():
+        if path not in expected_paths and (
+            path.name == "STATUS.md" or path.parent.name == "status"
+        ):
+            path.unlink(missing_ok=True)
+    for relative, content in views.items():
+        atomic(ROOT / relative, content)
+
+
+def write_rendered_task_views(views: dict[Path, str]) -> None:
+    """Write all task views while pruning obsolete status shards."""
+    status_views = {
+        str(target.relative_to(ROOT)): content
+        for target, content in views.items()
+        if target.name == "STATUS.md" or target.parent.name == "status"
+    }
+    write_status_views(status_views)
+    for target, content in views.items():
+        if target.name != "STATUS.md" and target.parent.name != "status":
+            atomic(target, content)
 
 
 def mutate(args: argparse.Namespace, kind: str) -> None:
@@ -1486,10 +1540,12 @@ def mutate(args: argparse.Namespace, kind: str) -> None:
         sync_replica_before_write()
         path, meta, body = locate(args.task)
         require_promotion_preflight(kind)
-        view_paths = rendered_task_views(all_tasks())
         before: dict[Path, str | None] = {path: path.read_text()}
         before.update(
-            {target: target.read_text() if target.exists() else None for target in view_paths}
+            {
+                target: target.read_text() if target.exists() else None
+                for target in generated_paths()
+            }
         )
         committed = False
         note = (
@@ -1523,12 +1579,14 @@ def mutate(args: argparse.Namespace, kind: str) -> None:
         try:
             write_task(path, meta, body)
             views = rendered_task_views(all_tasks())
-            for target, content in views.items():
-                atomic(target, content)
+            write_rendered_task_views(views)
             errors = mutation_errors(path, before)
             if errors:
                 raise RuntimeError("\n".join(errors))
-            committed = commit(f"chore(state): {kind} {args.task}", [path, *views])
+            for target in generated_paths():
+                before.setdefault(target, None)
+            touched = changed_paths(before, include_deleted=True)
+            committed = commit(f"chore(state): {kind} {args.task}", touched)
             push_replica()
         except Exception:
             # A signed local commit is already durable even when replication fails.
@@ -1607,13 +1665,12 @@ def cmd_render_status(*, check: bool) -> None:
     if not project_settings()["status_view"]:
         raise RuntimeError("STATUS.md generation is disabled by .handoffctl.json")
     with locked(exclusive=not check):
-        expected = render_status_view(all_tasks())
-        path = ROOT / "STATUS.md"
+        expected = render_status_views(all_tasks())
         if check:
-            if not path.exists() or path.read_text() != expected:
+            if status_projection_errors(expected):
                 raise RuntimeError("STATUS.md differs from generated tasks")
             return
-        atomic(path, expected)
+        write_status_views(expected)
 
 
 def cmd_doctor(*, live: bool) -> int:

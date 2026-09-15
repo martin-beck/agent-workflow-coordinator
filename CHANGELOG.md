@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Shard oversized generated `STATUS.md` views into deterministic linked pages while keeping the
+  complete graph, dependency index and AR inventory discoverable and every file below 200 KiB.
 - Keep Git-backed lifecycle transitions available when unrelated claims are expired or unrelated
   tracked files already have privacy or size findings, while retaining strict target, graph,
   generated-view, and active owner/branch/worktree validation.
