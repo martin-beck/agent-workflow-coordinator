@@ -285,9 +285,14 @@ class LockDomainScopeTests(unittest.TestCase):
             "authority-retry", fresh_session.recheck_held(1).identity.authority_revision_at_acquire
         )
         fresh_scope = LockDomainScope(self.domain, fresh_session, self.fence, self.lease, locked)
-        with self.assertRaisesRegex(LockDomainError, "do not match"), fresh_scope.hold():
-            self.fail("fresh authority reread must not bless the stale lease")
-        self.assertFalse(fresh_session.operation_owned_by_current_thread)
+        for retry in range(2):
+            with (
+                self.subTest(retry=retry),
+                self.assertRaisesRegex(LockDomainError, "do not match"),
+                fresh_scope.hold(),
+            ):
+                self.fail("fresh authority reread must not bless the stale lease")
+            self.assertFalse(fresh_session.operation_owned_by_current_thread)
 
     def test_two_process_scopes_never_overlap(self) -> None:
         context = multiprocessing.get_context("fork")
