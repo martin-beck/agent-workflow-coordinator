@@ -654,6 +654,16 @@ class LockDomainScopeTests(unittest.TestCase):
         self.assertEqual([], common_calls)
         self.assertFalse(self.session.operation_owned_by_current_thread)
 
+        missing_barrier_context = dict(stale_context)
+        missing_barrier_context.pop("durable_barrier_id")
+        with (
+            self.assertRaisesRegex(LockDomainError, "does not match"),
+            scope.validated_hold(missing_barrier_context),
+        ):
+            self.fail("missing durable barrier identifier must fail before scope acquisition")
+        self.assertEqual([], common_calls)
+        self.assertFalse(self.session.operation_owned_by_current_thread)
+
         missing_owner_context = dict(stale_context)
         missing_owner_context.pop("fencing_owner")
         with (
