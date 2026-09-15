@@ -82,9 +82,15 @@ class ScopedBackendAdapter:
                 backend, scope, identity, current_identity, session_state, lease
             )
 
-    def snapshot(self, phase: str, context: Mapping[str, object]) -> dict[str, Any]:
+    def snapshot(
+        self,
+        phase: str,
+        context: Mapping[str, object],
+        *,
+        scope_context: Mapping[str, object] | None = None,
+    ) -> dict[str, Any]:
         """Read backend evidence only while the scope is held."""
-        self._scope.assert_context(context)
+        self._scope.assert_context(context if scope_context is None else scope_context)
         with self._scope.hold():
             snapshot = self._backend.snapshot(phase, context)
         if not isinstance(snapshot, dict):
