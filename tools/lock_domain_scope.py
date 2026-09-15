@@ -73,7 +73,10 @@ class LockDomainScope:
             "durable_barrier_id": self._lease.durable_barrier_id,
             "state_revision": self._lease.revision,
         }
-        if any(context.get(key) != value for key, value in required.items()):
+        if any(
+            context.get(key) != value or type(context.get(key)) is not type(value)
+            for key, value in required.items()
+        ):
             raise LockDomainError("engine context does not match admission lease")
 
     @contextmanager
