@@ -784,6 +784,50 @@ class SQLiteAuthorityAdapterTests(unittest.TestCase):
         self.assertEqual(before_replaced, self._durable_state())
         self.assertFalse(self.session.operation_owned_by_current_thread)
 
+    def test_bound_rollback_rejects_tampered_sqlite_results_without_state_change(self) -> None:
+        rollback = {**CONTEXT, "project_id": PROJECT, "target": "rollback"}
+
+        class TamperedAdapter(SQLiteAuthorityAdapter):
+            field = "phase"
+            replacement: object = "discover"
+
+            def snapshot(self, phase: str, context: Mapping[str, object]) -> dict[str, object]:
+                value = super().snapshot(phase, context)
+                value[self.field] = self.replacement
+                return value
+
+        fields = (
+            ("phase", "discover", "backend phase changed"),
+            ("project_id", "tampered", "backend context identity changed"),
+            ("backend_identity_verified", False, "identity is unverified"),
+            ("sqlite_integrity_verified", False, "integrity is unverified"),
+            ("sqlite_foreign_keys_verified", False, "foreign keys are unverified"),
+            ("mutates_authority", True, "not read-only"),
+        )
+        for field, replacement, message in fields:
+            with self.subTest(field=field):
+                adapter = type(
+                    "RollbackTamperedSQLiteAdapter",
+                    (TamperedAdapter,),
+                    {"field": field, "replacement": replacement},
+                )(self.authority)
+                before = self._durable_state()
+                with (
+                    patch.object(
+                        adapter, "execute", side_effect=AssertionError("execute reached")
+                    ) as execute,
+                    self.assertRaisesRegex(SQLiteAuthorityError, message),
+                ):
+                    adapter.verify_rollback_context_bound(
+                        rollback,
+                        self.scope,
+                        lease=self.lease,
+                        admission_recheck=self.recheck,
+                    )
+                execute.assert_not_called()
+                self.assertEqual(before, self._durable_state())
+                self.assertFalse(self.session.operation_owned_by_current_thread)
+
 
 if __name__ == "__main__":
     unittest.main()
