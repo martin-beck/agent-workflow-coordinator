@@ -75,6 +75,8 @@ class LockDomainScope:
             "durable_barrier_id": self._lease.durable_barrier_id,
             "state_revision": self._lease.revision,
         }
+        if set(context) - set(required):
+            raise LockDomainError("engine context schema contains unknown keys")
         if any(
             context.get(key) != value or type(context.get(key)) is not type(value)
             for key, value in required.items()
