@@ -14,7 +14,7 @@ model.
 
 The correspondence classification is `not-proven`. Passing TLC establishes the invariants and
 temporal properties below only for the tracked TLA+ specifications under those finite bounds and
-assumptions. The implementation tests are separate evidence that selected Python behavior
+assumptions; these results do not prove implementation refinement. The implementation tests are separate evidence that selected Python behavior
 corresponds to the abstractions; neither evidence source proves implementation refinement or the
 correctness of Python, Git, SQLite, operating-system, kernel, filesystem, or arbitrary wrapped
 commands. The explicit assumptions, non-claims, and limitations in `formal/evidence.json` are part
