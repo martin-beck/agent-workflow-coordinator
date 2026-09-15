@@ -153,6 +153,13 @@ class GitAuthorityAdapter:
             raise
         except (TypeError, RuntimeError) as error:
             raise GitAuthorityError("trusted Git session reread was rejected") from error
+        for field, expected in validated_context.items():
+            if value.get(field) != expected or type(value.get(field)) is not type(expected):
+                raise GitAuthorityError("Git authority backend context identity changed")
+        if value.get("backend_identity_verified") is not True:
+            raise GitAuthorityError("Git authority backend identity is unverified")
+        if value.get("mutates_authority") is not False:
+            raise GitAuthorityError("Git authority backend is not read-only")
         if value.get("git_branch") != expected_branch or value.get("git_head") != expected_head:
             raise GitAuthorityError("Git authority identity changed")
         return value
