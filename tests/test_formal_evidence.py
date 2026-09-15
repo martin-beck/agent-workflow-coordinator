@@ -153,15 +153,35 @@ class FormalEvidenceTests(unittest.TestCase):
         job_environment = workflow[
             workflow.index("    env:\n", workflow.index("  verify:\n")) : steps_start
         ]
-        for resource_setting in ("TLC_CGROUP_MODE", "TLC_HEAP", "TLC_TIMEOUT_SECONDS"):
+        for resource_setting in (
+            "TLC_CGROUP_MODE",
+            "TLC_HEAP",
+            "TLC_MEMORY_MAX",
+            "TLC_SWAP_MAX",
+            "TLC_TIMEOUT_SECONDS",
+        ):
             self.assertNotIn(resource_setting, job_environment)
         formal_step = workflow[
             workflow.index("      - name: Run event-appropriate formal tier\n") : workflow.index(
                 "      - name: Publish exact-head tier attestation\n"
             )
         ]
-        for resource_setting in ("TLC_CGROUP_MODE", "TLC_HEAP", "TLC_TIMEOUT_SECONDS"):
+        for resource_setting in (
+            "TLC_CGROUP_MODE",
+            "TLC_HEAP",
+            "TLC_MEMORY_MAX",
+            "TLC_SWAP_MAX",
+            "TLC_TIMEOUT_SECONDS",
+        ):
             self.assertIn(resource_setting, formal_step)
+        self.assertIn("MemoryMax=6G", workflow)
+        self.assertIn("MemorySwapMax=6G", workflow)
+        self.assertIn("MemTotal", workflow)
+        self.assertIn("/proc/self/cgroup", workflow)
+        self.assertIn("/proc/self/mountinfo", workflow)
+        self.assertIn('cgroup_dir="${cgroup_mount%/}${cgroup_relative:-/}"', workflow)
+        self.assertIn('"${cgroup_dir}/memory.max"', workflow)
+        self.assertIn('"${cgroup_dir}/memory.swap.max"', workflow)
 
     def test_attestation_rejects_failed_formal_outcomes(self) -> None:
         script = ROOT / "formal" / "handoffctl" / "attest.py"

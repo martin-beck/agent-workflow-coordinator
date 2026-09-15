@@ -139,12 +139,34 @@ jobs:
           echo "DBUS_SESSION_BUS_ADDRESS=${bus_address}" >> "$GITHUB_ENV"
           test -S "${runtime_dir}/bus"
           test "$(stat -fc %T /sys/fs/cgroup)" = cgroup2fs
+          required_bytes=$((6 * 1024 * 1024 * 1024))
+          host_bytes=$(awk '/^MemTotal:/ {print $2 * 1024}' /proc/meminfo)
+          test "${host_bytes}" -ge "${required_bytes}"
+          cgroup_relative=$(awk -F: '$1 == "0" {print $3; exit}' /proc/self/cgroup)
+          cgroup_mount=$(awk '$0 ~ / - cgroup2 / {print $5; exit}' /proc/self/mountinfo)
+          test -n "${cgroup_relative}"
+          test -n "${cgroup_mount}"
+          cgroup_dir="${cgroup_mount%/}${cgroup_relative:-/}"
+          test -r "${cgroup_dir}/memory.max"
+          test -r "${cgroup_dir}/memory.swap.max"
+          parent_memory=$(cat "${cgroup_dir}/memory.max")
+          if [[ "${parent_memory}" != max ]]; then
+            test "${parent_memory}" -ge "${required_bytes}"
+          fi
+          parent_swap=$(cat "${cgroup_dir}/memory.swap.max")
+          if [[ "${parent_swap}" != max ]]; then
+            test "${parent_swap}" -ge "${required_bytes}"
+          fi
           XDG_RUNTIME_DIR="${runtime_dir}" DBUS_SESSION_BUS_ADDRESS="${bus_address}" \
-            systemd-run --user --wait --pipe --quiet true
+            systemd-run --user --wait --pipe --quiet --service-type=exec \
+              --property=MemoryMax=6G --property=MemorySwapMax=6G \
+              --property=TasksMax=64 true
       - name: Run event-appropriate formal tier
         env:
           TLC_CGROUP_MODE: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && 'portable' || 'required' }}
-          TLC_HEAP: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && '512m' || '2048m' }}
+          TLC_HEAP: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && '512m' || '4096m' }}
+          TLC_MEMORY_MAX: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && '3G' || '6G' }}
+          TLC_SWAP_MAX: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && '3G' || '6G' }}
           TLC_TIMEOUT_SECONDS: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && '6000' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && '600' || '1200' }}
           TLC_ATTESTATION_PATH: ${{ runner.temp }}/formal-attestation.json
         run: formal/handoffctl/verify.sh --tier "$TLC_TIER"

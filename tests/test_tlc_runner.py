@@ -133,6 +133,21 @@ class TLCAdmissionTests(unittest.TestCase):
             )
         self.assertEqual(command[0], "/usr/bin/systemd-run")
 
+    def test_large_required_profile_has_cgroup_headroom(self) -> None:
+        with patch("tools.tlc_runner.shutil.which", return_value="/usr/bin/systemd-run"):
+            command = build_command(
+                jar=Path("tla.jar"),
+                model=Path("Model.tla"),
+                config=Path("Model.cfg"),
+                metadir=Path("states"),
+                heap="4096m",
+                memory_max="6G",
+                swap_max="6G",
+            )
+        self.assertIn("-Xmx4096m", command)
+        self.assertIn("--property=MemoryMax=6G", command)
+        self.assertIn("--property=MemorySwapMax=6G", command)
+
     def test_rejects_heap_that_exceeds_memory(self) -> None:
         with self.assertRaises(AdmissionError):
             build_command(
