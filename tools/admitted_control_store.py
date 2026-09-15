@@ -31,7 +31,7 @@ class AdmittedControlStore(Protocol):
     def cas(self, expected_revision: int, record: Mapping[str, object]) -> dict[str, object]: ...
 
 
-def admitted_cas(
+def admitted_cas(  # noqa: C901
     store: AdmittedControlStore,
     expected_revision: int,
     record: Mapping[str, object],
@@ -63,8 +63,16 @@ def admitted_cas(
         "fencing_owner": lease.fencing_owner,
         "durable_barrier_id": lease.durable_barrier_id,
     }
-    if any(record_snapshot.get(name) != value for name, value in required.items()):
-        raise AdmissionLeaseError("admitted control record does not match lease")
+    try:
+        if any(
+            record_snapshot.get(name) != value or type(record_snapshot.get(name)) is not type(value)
+            for name, value in required.items()
+        ):
+            raise AdmissionLeaseError("admitted control record does not match lease")
+    except AdmissionLeaseError:
+        raise
+    except Exception as error:
+        raise AdmissionLeaseError("admitted control record values are invalid") from error
     try:
         scope.assert_ordered()
         with scope.hold():
