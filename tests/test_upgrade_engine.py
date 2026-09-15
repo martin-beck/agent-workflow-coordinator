@@ -1854,6 +1854,49 @@ class UpgradeEngineTests(unittest.TestCase):
                 engine.rollback(lambda _step, _state: self.fail("rollback handler reached"))
             self.assertEqual(journal_before, (Path(directory) / "journal.json").read_bytes())
 
+    def test_initialized_git_and_sqlite_adapters_fail_closed_without_bound_scope(self) -> None:
+        """Real adapters cannot fall back to an unscoped engine rollback reread."""
+        for backend, adapter_type in (
+            ("git", GitAuthorityAdapter),
+            ("sqlite", SQLiteAuthorityAdapter),
+        ):
+            with tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                if backend == "git":
+                    adapter = adapter_type(root)
+                else:
+                    authority = root / "authority.sqlite"
+                    authority.write_bytes(b"authority")
+                    authority.chmod(0o600)
+                    adapter = adapter_type(authority)
+                context = make_context(f"op-real-{backend}")
+                context["backend"] = backend
+                context["barrier_identity_digest"] = canonical_barrier_digest(context)
+                context["envelope_digest"] = canonical_envelope_digest(context)
+                engine = UpgradeEngine(
+                    str(context["operation_id"]),
+                    root / "journal.json",
+                    context,
+                    backend_adapter=adapter,
+                )
+                engine.plan()
+                journal_before = (root / "journal.json").read_bytes()
+                with (
+                    patch.object(
+                        adapter, "snapshot", side_effect=AssertionError("snapshot reached")
+                    ) as snapshot,
+                    patch.object(
+                        adapter, "execute", side_effect=AssertionError("execute reached")
+                    ) as execute,
+                    self.assertRaisesRegex(UpgradeError, "trusted bound backend capability"),
+                ):
+                    engine.rollback(lambda _step, _state: self.fail("rollback handler reached"))
+                snapshot.assert_not_called()
+                execute.assert_not_called()
+                self.assertEqual(journal_before, (root / "journal.json").read_bytes())
+                with engine._exclusive():
+                    pass
+
     def test_concrete_rollback_uses_bound_capability_but_stays_non_authorizing(self) -> None:
         class ConcreteAdapter(FakeAdapter):
             requires_bound_rollback = True
