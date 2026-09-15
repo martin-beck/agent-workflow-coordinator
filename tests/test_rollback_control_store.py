@@ -1012,6 +1012,8 @@ class RollbackControlStoreTests(unittest.TestCase):
             self.assertEqual(recovered, store.recover_unknown())
             with self.assertRaisesRegex(ControlStoreError, "distinct newer fence"):
                 store.reconcile_ambiguous(recovered.revision, held)
+            self.assertFalse(store.operation_owned_by_current_thread)
+            self.assertEqual(recovered, store.snapshot())
 
             replacement_record = dict(identity.as_record())
             replacement_record["attempt_id"] = "attempt-new"
@@ -1037,6 +1039,8 @@ class RollbackControlStoreTests(unittest.TestCase):
             )
             with self.assertRaisesRegex(ControlStoreError, "distinct newer fence"):
                 store.reconcile_ambiguous(recovered.revision, reused_fence)
+            self.assertFalse(store.operation_owned_by_current_thread)
+            self.assertEqual(recovered, store.snapshot())
             mismatch_store = SQLiteBarrierSessionStore(
                 SQLiteRollbackControlStore(path, PROJECT), lambda: "authority-other"
             )
@@ -1044,6 +1048,8 @@ class RollbackControlStoreTests(unittest.TestCase):
                 ControlStoreError, "replacement authority revision changed"
             ):
                 mismatch_store.reconcile_ambiguous(recovered.revision, replacement)
+            self.assertFalse(mismatch_store.operation_owned_by_current_thread)
+            self.assertEqual(recovered, mismatch_store.snapshot())
 
             def fail_authority_read() -> str:
                 raise RuntimeError("authority unavailable")
@@ -1053,11 +1059,15 @@ class RollbackControlStoreTests(unittest.TestCase):
             )
             with self.assertRaisesRegex(ControlStoreError, "fresh authority reread failed"):
                 failing_store.reconcile_ambiguous(recovered.revision, replacement)
+            self.assertFalse(failing_store.operation_owned_by_current_thread)
+            self.assertEqual(recovered, failing_store.snapshot())
             invalid_store = SQLiteBarrierSessionStore(
                 SQLiteRollbackControlStore(path, PROJECT), lambda: ""
             )
             with self.assertRaisesRegex(ControlStoreError, "fresh authority revision is invalid"):
                 invalid_store.reconcile_ambiguous(recovered.revision, replacement)
+            self.assertFalse(invalid_store.operation_owned_by_current_thread)
+            self.assertEqual(recovered, invalid_store.snapshot())
             connection = sqlite3.connect(path)
             try:
                 connection.execute(
@@ -1082,6 +1092,8 @@ class RollbackControlStoreTests(unittest.TestCase):
                 connection.close()
             with self.assertRaisesRegex(ControlStoreError, "unresolved intent"):
                 store.reconcile_ambiguous(recovered.revision, replacement)
+            self.assertFalse(store.operation_owned_by_current_thread)
+            self.assertEqual(recovered, store.snapshot())
             connection = sqlite3.connect(path)
             try:
                 connection.execute(
