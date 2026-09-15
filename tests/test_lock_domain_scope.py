@@ -387,6 +387,14 @@ class LockDomainScopeTests(unittest.TestCase):
         rejection_crashed.join(5)
         self.assertEqual(23, rejection_crashed.exitcode)
 
+        rejection_crashed_again = context.Process(
+            target=_fresh_recheck_process,
+            args=(self.directory.name, context.Queue(), False, True),
+        )
+        rejection_crashed_again.start()
+        rejection_crashed_again.join(5)
+        self.assertEqual(23, rejection_crashed_again.exitcode)
+
         result = context.Queue()
         fresh = context.Process(target=_fresh_recheck_process, args=(self.directory.name, result))
         fresh.start()
