@@ -66,6 +66,16 @@ class GitAuthorityAdapter:
         }
         if set(context) != required or context.get("backend") != "git":
             raise GitAuthorityError("Git authority context is incomplete or mismatched")
+        schema_version = context.get("schema_version")
+        if type(schema_version) is not int or schema_version < 1:
+            raise GitAuthorityError("Git authority context types are invalid")
+        state_revision = context.get("state_revision")
+        if type(state_revision) is not int or state_revision < 1:
+            raise GitAuthorityError("Git authority context types are invalid")
+        for field in required - {"schema_version", "state_revision"}:
+            value = context.get(field)
+            if type(value) is not str or not value:
+                raise GitAuthorityError("Git authority context types are invalid")
         return dict(context)
 
     def snapshot(self, phase: str, context: Mapping[str, object]) -> dict[str, Any]:
@@ -135,6 +145,8 @@ class GitAuthorityAdapter:
                 context,
                 scope_context=expected_identity,
             )
+        except GitAuthorityError:
+            raise
         except (TypeError, RuntimeError) as error:
             raise GitAuthorityError("trusted Git session reread was rejected") from error
         if value.get("git_branch") != expected_branch or value.get("git_head") != expected_head:

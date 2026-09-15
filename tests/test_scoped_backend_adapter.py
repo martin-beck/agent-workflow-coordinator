@@ -46,6 +46,157 @@ class Backend:
 
 
 class ScopedBackendAdapterTests(unittest.TestCase):
+    def test_scope_context_is_exact_typed_admission_identity_before_scope_or_backend(self) -> None:
+        class CountingBackend(Backend):
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def snapshot(self, phase: str, context: Mapping[str, object]) -> dict[str, object]:
+                self.calls += 1
+                return super().snapshot(phase, context)
+
+        valid = {
+            "project_id": "project",
+            "authority_revision": "authority",
+            "fencing_token": "fence",
+            "fencing_owner": "owner",
+            "durable_barrier_id": "barrier",
+            "state_revision": 1,
+        }
+        complete = {**valid, "backend": "git", "payload": "unchanged"}
+        backend = CountingBackend()
+        scope = Scope()
+        adapter = ScopedBackendAdapter(backend, scope)
+        for field in valid:
+            invalid = dict(valid)
+            invalid.pop(field)
+            with (
+                self.subTest(case=f"missing-{field}"),
+                self.assertRaisesRegex(TypeError, "scope context"),
+            ):
+                adapter.snapshot("preflight", complete, scope_context=invalid)
+        invalid_contexts: list[object] = [
+            {**valid, "unexpected": "value"},
+            {**valid, "state_revision": True},
+            {**valid, "fencing_token": ""},
+            [("project_id", "project")],
+        ]
+        for hostile in invalid_contexts:
+            with (
+                self.subTest(case=repr(hostile)),
+                self.assertRaisesRegex(TypeError, "scope context"),
+            ):
+                adapter.snapshot("preflight", complete, scope_context=cast(Any, hostile))
+        for field in valid:
+            mismatched = dict(valid)
+            mismatched[field] = True if field == "state_revision" else "different"
+            with (
+                self.subTest(case=f"mismatch-{field}"),
+                self.assertRaisesRegex(TypeError, "identity differs"),
+            ):
+                adapter.snapshot("preflight", complete, scope_context=mismatched)
+        incomplete = dict(valid)
+        incomplete.pop("fencing_owner")
+        with self.assertRaisesRegex(TypeError, "backend context omits"):
+            adapter.snapshot("preflight", {**incomplete, "backend": "git"}, scope_context=valid)
+        for field, value in (("project_id", 1), ("state_revision", True)):
+            mismatched = dict(valid)
+            mismatched[field] = value
+            with (
+                self.subTest(case=f"type-mismatch-{field}"),
+                self.assertRaisesRegex(TypeError, "identity differs"),
+            ):
+                adapter.snapshot("preflight", complete, scope_context=mismatched)
+        self.assertEqual([], scope.events)
+        self.assertEqual(0, backend.calls)
+        result = adapter.snapshot("preflight", complete, scope_context=valid)
+        self.assertEqual("preflight", result["phase"])
+        self.assertEqual(complete, result["context"])
+        self.assertEqual(1, backend.calls)
+        self.assertEqual(["context", "held", "released"], scope.events)
+
+    def test_scope_context_normalizes_hostile_mapping_failures(self) -> None:  # noqa: C901
+        class ExplodingMapping(Mapping[str, object]):
+            def __getitem__(self, _key: str) -> object:
+                raise RuntimeError("hostile get")
+
+            def __iter__(self) -> Iterator[str]:
+                raise RuntimeError("hostile iter")
+
+            def __len__(self) -> int:
+                return 1
+
+        class BackendMustNotRun(Backend):
+            def snapshot(self, _phase: str, _context: Mapping[str, object]) -> dict[str, object]:
+                raise AssertionError("backend must not run")
+
+        scope = Scope()
+        adapter = ScopedBackendAdapter(BackendMustNotRun(), scope)
+        with self.assertRaisesRegex(TypeError, "mappings are invalid"):
+            adapter.snapshot("preflight", {}, scope_context=cast(Any, ExplodingMapping()))
+
+        class ExplodingGetMapping(Mapping[str, object]):
+            def __init__(self) -> None:
+                self._values = {
+                    "project_id": "project",
+                    "authority_revision": "authority",
+                    "fencing_token": "fence",
+                    "fencing_owner": "owner",
+                    "durable_barrier_id": "barrier",
+                    "state_revision": 1,
+                }
+
+            def __getitem__(self, key: str) -> object:
+                return self._values[key]
+
+            def __iter__(self) -> Iterator[str]:
+                return iter(self._values)
+
+            def __len__(self) -> int:
+                return len(self._values)
+
+            def get(self, _key: str, _default: object = None) -> object:
+                raise RuntimeError("hostile get")
+
+        with self.assertRaisesRegex(TypeError, "mappings are invalid"):
+            adapter.snapshot(
+                "preflight",
+                {
+                    "project_id": "project",
+                    "authority_revision": "authority",
+                    "fencing_token": "fence",
+                    "fencing_owner": "owner",
+                    "durable_barrier_id": "barrier",
+                    "state_revision": 1,
+                    "backend": "git",
+                },
+                scope_context=cast(Any, ExplodingGetMapping()),
+            )
+
+        class ExplodingEquality(str):
+            def __eq__(self, _other: object) -> bool:
+                raise RuntimeError("hostile equality")
+
+            def __ne__(self, _other: object) -> bool:
+                raise RuntimeError("hostile inequality")
+
+        hostile_value = ExplodingEquality("project")
+        hostile_context = {
+            "project_id": hostile_value,
+            "authority_revision": "authority",
+            "fencing_token": "fence",
+            "fencing_owner": "owner",
+            "durable_barrier_id": "barrier",
+            "state_revision": 1,
+        }
+        with self.assertRaisesRegex(TypeError, "mappings are invalid"):
+            adapter.snapshot(
+                "preflight",
+                hostile_context,
+                scope_context=hostile_context,
+            )
+        self.assertEqual([], scope.events)
+
     def test_adapter_satisfies_upgrade_engine_interface_without_wiring_dispatch(self) -> None:
         self.assertIsInstance(ScopedBackendAdapter(Backend(), Scope()), EngineBackendAdapter)
 

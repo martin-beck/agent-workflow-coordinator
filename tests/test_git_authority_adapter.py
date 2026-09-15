@@ -196,6 +196,32 @@ class GitAuthorityAdapterTests(unittest.TestCase):
         with self.assertRaisesRegex(GitAuthorityError, "concrete lock-domain"):
             bound(**{**common, "scope": cast(Any, object())})
 
+    def test_snapshot_bound_keeps_full_backend_schema_after_scope_binding(self) -> None:
+        observed = self.adapter.snapshot("discover", CONTEXT)
+        invalid_contexts = [
+            {key: value for key, value in CONTEXT.items() if key != "operation_id"},
+            {**CONTEXT, "operation_id": 3},
+            {**CONTEXT, "unexpected": "hostile"},
+        ]
+        for invalid in invalid_contexts:
+            with patch.object(self.adapter, "_git", wraps=self.adapter._git) as git:
+                with (
+                    self.subTest(context=repr(invalid)),
+                    self.assertRaisesRegex(
+                        GitAuthorityError, "incomplete or mismatched|types are invalid"
+                    ),
+                ):
+                    self.adapter.snapshot_bound(
+                        "discover",
+                        invalid,
+                        self.scope,
+                        lease=self.lease,
+                        admission_recheck=self.recheck,
+                        expected_branch=str(observed["git_branch"]),
+                        expected_head=str(observed["git_head"]),
+                    )
+                git.assert_not_called()
+
     def test_scoped_wrapper_is_the_only_composed_mutation_boundary(self) -> None:
         class Scope:
             def assert_ordered(self) -> None:

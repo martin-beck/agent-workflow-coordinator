@@ -13,6 +13,16 @@ from tools.lock_domain import LockDomainIdentity
 from tools.rollback_control_store import BarrierSessionState
 
 DISABLED_MUTATION_PHASES = frozenset({"commit", "apply", "rollback"})
+_SCOPE_CONTEXT_FIELDS = frozenset(
+    {
+        "project_id",
+        "authority_revision",
+        "fencing_token",
+        "fencing_owner",
+        "durable_barrier_id",
+        "state_revision",
+    }
+)
 
 
 @runtime_checkable
@@ -90,12 +100,62 @@ class ScopedBackendAdapter:
         scope_context: Mapping[str, object] | None = None,
     ) -> dict[str, Any]:
         """Read backend evidence only while the scope is held."""
+        if scope_context is not None:
+            self._validate_scope_context(scope_context, context)
         self._scope.assert_context(context if scope_context is None else scope_context)
         with self._scope.hold():
             snapshot = self._backend.snapshot(phase, context)
         if not isinstance(snapshot, dict):
             raise TypeError("backend snapshot must be an object")
         return snapshot
+
+    @staticmethod
+    def _validate_scope_context(
+        scope_context: Mapping[str, object], full_context: Mapping[str, object]
+    ) -> None:
+        """Validate projected identity against the complete backend context."""
+        if not isinstance(scope_context, Mapping):
+            raise TypeError("scope context must be a mapping")
+        if not isinstance(full_context, Mapping):
+            raise TypeError("backend context must be a mapping")
+        scope_fields = ScopedBackendAdapter._mapping_fields(scope_context, "scope context")
+        full_fields = ScopedBackendAdapter._mapping_fields(full_context, "backend context")
+        if scope_fields != _SCOPE_CONTEXT_FIELDS:
+            raise TypeError("scope context must contain exactly the admission identity fields")
+        if not full_fields >= _SCOPE_CONTEXT_FIELDS:
+            raise TypeError("backend context omits admission identity fields")
+        for field in _SCOPE_CONTEXT_FIELDS:
+            projected = ScopedBackendAdapter._mapping_value(scope_context, field, "scope context")
+            complete = ScopedBackendAdapter._mapping_value(full_context, field, "backend context")
+            ScopedBackendAdapter._validate_identity_field(field, projected, complete)
+
+    @staticmethod
+    def _validate_identity_field(field: str, projected: object, complete: object) -> None:
+        try:
+            matches = type(projected) is type(complete) and projected == complete
+        except Exception as error:
+            raise TypeError("scope context or backend context mappings are invalid") from error
+        if not matches:
+            raise TypeError("scope context identity differs from backend context")
+        if field == "state_revision":
+            if type(projected) is not int or projected < 1:
+                raise TypeError("scope context revision is invalid")
+        elif type(projected) is not str or not projected:
+            raise TypeError("scope context identity values are invalid")
+
+    @staticmethod
+    def _mapping_fields(mapping: Mapping[str, object], label: str) -> set[str]:
+        try:
+            return set(mapping)
+        except Exception as error:
+            raise TypeError(f"{label} or backend context mappings are invalid") from error
+
+    @staticmethod
+    def _mapping_value(mapping: Mapping[str, object], field: str, label: str) -> object:
+        try:
+            return mapping.get(field)
+        except Exception as error:
+            raise TypeError(f"{label} or backend context mappings are invalid") from error
 
     def execute(self, phase: str, context: Mapping[str, object]) -> dict[str, Any]:
         """Execute one adapter operation only while the scope is held."""
