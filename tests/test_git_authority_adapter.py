@@ -664,6 +664,92 @@ class GitAuthorityAdapterTests(unittest.TestCase):
             )
         self.assertFalse(self.session.operation_owned_by_current_thread)
 
+    def test_snapshot_bound_rejects_phase_or_cleanliness_drift(self) -> None:
+        class TamperedAdapter(GitAuthorityAdapter):
+            field = "phase"
+
+            def snapshot(self, phase: str, context: Mapping[str, object]) -> dict[str, Any]:
+                value = super().snapshot(phase, context)
+                value[self.field] = "other" if self.field == "phase" else False
+                return value
+
+        observed = self.adapter.snapshot("discover", CONTEXT)
+        for field, message in (
+            ("phase", "backend phase changed"),
+            ("git_clean", "cleanliness is unverified"),
+        ):
+            with self.subTest(field=field):
+                tampered = type("FieldTamperedAdapter", (TamperedAdapter,), {"field": field})(
+                    self.root
+                )
+                with (
+                    patch.object(
+                        tampered, "execute", side_effect=AssertionError("execute reached")
+                    ),
+                    self.assertRaisesRegex(GitAuthorityError, message),
+                ):
+                    tampered.snapshot_bound(
+                        "discover",
+                        CONTEXT,
+                        self.scope,
+                        lease=self._lease(),
+                        admission_recheck=self.recheck,
+                        expected_branch=str(observed["git_branch"]),
+                        expected_head=str(observed["git_head"]),
+                    )
+                self.assertFalse(self.session.operation_owned_by_current_thread)
+
+    def test_snapshot_bound_requires_exact_result_schema_and_types(self) -> None:
+        fields = {
+            "phase": 1,
+            "backend_identity_verified": 1,
+            "git_head": 1,
+            "git_branch": 1,
+            "git_clean": 1,
+            "mutates_authority": 0,
+        }
+
+        class TamperedAdapter(GitAuthorityAdapter):
+            mode = "wrong"
+            field = "phase"
+            wrong: object = 1
+
+            def snapshot(self, phase: str, context: Mapping[str, object]) -> dict[str, Any]:
+                value = super().snapshot(phase, context)
+                if self.mode == "missing":
+                    value.pop(self.field)
+                elif self.mode == "extra":
+                    value["unexpected"] = True
+                else:
+                    value[self.field] = self.wrong
+                return value
+
+        observed = self.adapter.snapshot("discover", CONTEXT)
+        for mode in ("missing", "extra", "wrong"):
+            for field, wrong in fields.items():
+                with self.subTest(mode=mode, field=field):
+                    adapter = type(
+                        "SchemaTamperedAdapter",
+                        (TamperedAdapter,),
+                        {"mode": mode, "field": field, "wrong": wrong},
+                    )(self.root)
+                    with (
+                        patch.object(
+                            adapter, "execute", side_effect=AssertionError("execute reached")
+                        ),
+                        self.assertRaises(GitAuthorityError),
+                    ):
+                        adapter.snapshot_bound(
+                            "discover",
+                            CONTEXT,
+                            self.scope,
+                            lease=self._lease(),
+                            admission_recheck=self.recheck,
+                            expected_branch=str(observed["git_branch"]),
+                            expected_head=str(observed["git_head"]),
+                        )
+                    self.assertFalse(self.session.operation_owned_by_current_thread)
+
     def test_snapshot_bound_rejects_boolean_integer_context_substitution(self) -> None:
         class TamperedAdapter(GitAuthorityAdapter):
             def snapshot(self, phase: str, context: Mapping[str, object]) -> dict[str, Any]:
