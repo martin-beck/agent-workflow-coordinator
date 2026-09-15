@@ -974,6 +974,16 @@ class LockDomainScopeTests(unittest.TestCase):
         self.assertEqual([], common_calls)
         self.assertFalse(self.session.operation_owned_by_current_thread)
 
+        null_barrier_context = dict(stale_context)
+        null_barrier_context["durable_barrier_id"] = None
+        with (
+            self.assertRaisesRegex(LockDomainError, "does not match"),
+            scope.validated_hold(null_barrier_context),
+        ):
+            self.fail("null durable barrier identifier must fail before scope acquisition")
+        self.assertEqual([], common_calls)
+        self.assertFalse(self.session.operation_owned_by_current_thread)
+
         empty_barrier_context = dict(stale_context)
         empty_barrier_context["durable_barrier_id"] = ""
         with (
