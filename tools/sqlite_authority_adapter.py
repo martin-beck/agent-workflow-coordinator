@@ -11,6 +11,9 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
+from tools.admission_lease import AdmissionLease, AdmissionRecheck
+from tools.lock_domain_scope import LockDomainScope
+
 
 class SQLiteAuthorityError(RuntimeError):
     """SQLite authority evidence is unavailable or mutation was requested."""
@@ -150,6 +153,63 @@ class SQLiteAuthorityAdapter:
                 "mutates_authority": False,
             }
         )
+        return value
+
+    def snapshot_bound(  # noqa: C901
+        self,
+        phase: str,
+        context: Mapping[str, object],
+        scope: LockDomainScope,
+        *,
+        lease: AdmissionLease,
+        admission_recheck: AdmissionRecheck,
+    ) -> dict[str, Any]:
+        """Read SQLite integrity only inside a trusted, identity-bound scope."""
+        from tools.scoped_backend_adapter import ScopedBackendAdapter
+
+        if not isinstance(lease, AdmissionLease):
+            raise SQLiteAuthorityError("trusted admission lease is required")
+        if not isinstance(admission_recheck, AdmissionRecheck):
+            raise SQLiteAuthorityError("trusted admission recheck is required")
+        if admission_recheck.lease != lease:
+            raise SQLiteAuthorityError("trusted admission recheck does not match lease")
+        try:
+            validated_context = self._context(context)
+        except SQLiteAuthorityError:
+            raise
+        except Exception as error:
+            raise SQLiteAuthorityError("SQLite authority context is invalid") from error
+        if not isinstance(scope, LockDomainScope):
+            raise SQLiteAuthorityError("concrete lock-domain scope is required")
+        expected_identity = {
+            "project_id": lease.project_id,
+            "authority_revision": lease.authority_revision,
+            "fencing_token": lease.fencing_token,
+            "fencing_owner": lease.fencing_owner,
+            "durable_barrier_id": lease.durable_barrier_id,
+            "state_revision": lease.revision,
+        }
+        if any(validated_context.get(name) != value for name, value in expected_identity.items()):
+            raise SQLiteAuthorityError("trusted session identity changed")
+        try:
+            value = ScopedBackendAdapter(self, scope).snapshot(
+                phase, validated_context, scope_context=expected_identity
+            )
+        except SQLiteAuthorityError:
+            raise
+        except (TypeError, RuntimeError) as error:
+            raise SQLiteAuthorityError("trusted SQLite session reread was rejected") from error
+        for field, expected in validated_context.items():
+            if value.get(field) != expected or type(value.get(field)) is not type(expected):
+                raise SQLiteAuthorityError("SQLite authority backend context identity changed")
+        if value.get("backend_identity_verified") is not True:
+            raise SQLiteAuthorityError("SQLite authority backend identity is unverified")
+        if value.get("sqlite_integrity_verified") is not True:
+            raise SQLiteAuthorityError("SQLite authority integrity is unverified")
+        if value.get("sqlite_foreign_keys_verified") is not True:
+            raise SQLiteAuthorityError("SQLite authority foreign keys are unverified")
+        if value.get("mutates_authority") is not False:
+            raise SQLiteAuthorityError("SQLite authority backend is not read-only")
         return value
 
     def verify_rollback_context(self, context: Mapping[str, object]) -> dict[str, Any]:
