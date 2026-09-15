@@ -117,6 +117,8 @@ class GitAuthorityAdapter:
         """
         from tools.scoped_backend_adapter import ScopedBackendAdapter
 
+        if type(phase) is not str or not phase:
+            raise GitAuthorityError("Git authority phase is invalid")
         if type(expected_branch) is not str or not expected_branch:
             raise GitAuthorityError("expected Git branch identity is invalid")
         if type(expected_head) is not str or not expected_head:

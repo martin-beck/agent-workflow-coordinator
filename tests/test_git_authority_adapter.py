@@ -301,6 +301,12 @@ class GitAuthorityAdapterTests(unittest.TestCase):
             )
         with self.assertRaisesRegex(GitAuthorityError, "concrete lock-domain"):
             bound(**{**common, "scope": cast(Any, object())})
+        with (
+            patch.object(self.adapter, "_git", wraps=self.adapter._git) as git,
+            self.assertRaisesRegex(GitAuthorityError, "phase is invalid"),
+        ):
+            bound(**{**common, "phase": ""})
+        git.assert_not_called()
 
     def test_snapshot_bound_keeps_full_backend_schema_after_scope_binding(self) -> None:
         observed = self.adapter.snapshot("discover", CONTEXT)

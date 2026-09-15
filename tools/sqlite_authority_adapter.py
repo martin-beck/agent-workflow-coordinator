@@ -167,6 +167,8 @@ class SQLiteAuthorityAdapter:
         """Read SQLite integrity only inside a trusted, identity-bound scope."""
         from tools.scoped_backend_adapter import ScopedBackendAdapter
 
+        if type(phase) is not str or not phase:
+            raise SQLiteAuthorityError("SQLite authority phase is invalid")
         if not isinstance(lease, AdmissionLease):
             raise SQLiteAuthorityError("trusted admission lease is required")
         if not isinstance(admission_recheck, AdmissionRecheck):
