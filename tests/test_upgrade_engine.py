@@ -13,7 +13,7 @@ import tempfile
 import unittest
 from collections.abc import Callable, Mapping
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 from unittest.mock import patch
 
 from tools import upgrade_engine as upgrade_engine_module
@@ -32,7 +32,9 @@ from tools.upgrade_engine import (
     CONTEXT_FIELDS,
     PHASES,
     BackendAdapter,
+    BoundRollbackCapability,
     Handler,
+    PhaseContext,
     UpgradeEngine,
     UpgradeError,
 )
@@ -1829,6 +1831,11 @@ class UpgradeEngineTests(unittest.TestCase):
         class ConcreteAdapter(FakeAdapter):
             requires_bound_rollback = True
 
+            def verify_rollback_context_bound(
+                self, context: Mapping[str, object]
+            ) -> Mapping[str, object]:
+                return dict(context)
+
             def snapshot(self, _phase: str, _context: object) -> dict[str, object]:
                 raise AssertionError("unbound rollback snapshot reached")
 
@@ -1840,8 +1847,124 @@ class UpgradeEngineTests(unittest.TestCase):
                 backend_adapter=ConcreteAdapter(),
             )
             engine.plan()
+            journal_before = (Path(directory) / "journal.json").read_bytes()
             with self.assertRaisesRegex(UpgradeError, "trusted bound backend capability"):
                 engine.rollback(lambda _step, _state: self.fail("rollback handler reached"))
+            self.assertEqual(journal_before, (Path(directory) / "journal.json").read_bytes())
+
+    def test_concrete_rollback_uses_bound_capability_but_stays_non_authorizing(self) -> None:
+        class ConcreteAdapter(FakeAdapter):
+            requires_bound_rollback = True
+
+            def verify_rollback_context_bound(
+                self, context: Mapping[str, object]
+            ) -> Mapping[str, object]:
+                return dict(context)
+
+            def snapshot(self, _phase: str, _context: object) -> dict[str, object]:
+                raise AssertionError("unbound rollback snapshot reached")
+
+            def execute(self, _phase: str, _context: object) -> dict[str, object]:
+                raise AssertionError("rollback execute reached")
+
+        with tempfile.TemporaryDirectory() as directory:
+            context = make_context("op-bound-evidence")
+            adapter = ConcreteAdapter()
+            engine = UpgradeEngine(
+                "op-bound-evidence",
+                Path(directory) / "journal.json",
+                context,
+                backend_adapter=adapter,
+                rollback_bound_verifier=BoundRollbackCapability.bind(
+                    PhaseContext(**cast(dict[str, Any], context)), adapter
+                ),
+            )
+            engine.plan()
+            journal_before = (Path(directory) / "journal.json").read_bytes()
+            with self.assertRaisesRegex(UpgradeError, "did not verify rollback context"):
+                engine.rollback(lambda _step, _state: self.fail("rollback handler reached"))
+            self.assertEqual(journal_before, (Path(directory) / "journal.json").read_bytes())
+
+    def test_rollback_rejects_forged_bound_verifier_before_backend_or_handler(self) -> None:
+        class ConcreteAdapter(FakeAdapter):
+            requires_bound_rollback = True
+
+            def snapshot(self, _phase: str, _context: object) -> dict[str, object]:
+                raise AssertionError("forged verifier must block snapshot")
+
+            def execute(self, _phase: str, _context: object) -> dict[str, object]:
+                raise AssertionError("forged verifier must block execute")
+
+        with tempfile.TemporaryDirectory() as directory:
+            operation_id = "op-forged-verifier"
+            with self.assertRaisesRegex(UpgradeError, "trusted bound rollback capability"):
+                UpgradeEngine(
+                    operation_id,
+                    Path(directory) / "journal.json",
+                    make_context(operation_id),
+                    backend_adapter=ConcreteAdapter(),
+                    rollback_bound_verifier=lambda _context: {  # type: ignore[arg-type]
+                        "rollback_context_verified": True
+                    },
+                )
+
+    def test_rollback_rejects_mismatched_capability_before_journal_activity(self) -> None:
+        class ConcreteAdapter(FakeAdapter):
+            requires_bound_rollback = True
+
+            def verify_rollback_context_bound(
+                self, _context: Mapping[str, object]
+            ) -> Mapping[str, object]:
+                raise AssertionError("mismatched capability must not verify")
+
+        with tempfile.TemporaryDirectory() as directory:
+            operation_id = "op-mismatched-capability"
+            journal = Path(directory) / "journal.json"
+            context = make_context(operation_id)
+            wrong = make_context("other-operation")
+            capability = BoundRollbackCapability.bind(
+                PhaseContext(**cast(dict[str, Any], wrong)), ConcreteAdapter()
+            )
+            with self.assertRaisesRegex(UpgradeError, "identity mismatch"):
+                UpgradeEngine(
+                    operation_id,
+                    journal,
+                    context,
+                    backend_adapter=ConcreteAdapter(),
+                    rollback_bound_verifier=capability,
+                )
+            self.assertFalse(journal.exists())
+
+    def test_rollback_rejects_capability_bound_to_different_backend(self) -> None:
+        class ConcreteAdapter(FakeAdapter):
+            requires_bound_rollback = True
+
+            def verify_rollback_context_bound(
+                self, _context: Mapping[str, object]
+            ) -> Mapping[str, object]:
+                raise AssertionError("foreign verifier must not run")
+
+            def execute(self, _phase: str, _context: object) -> dict[str, object]:
+                raise AssertionError("execute must remain unreachable")
+
+        with tempfile.TemporaryDirectory() as directory:
+            operation_id = "op-foreign-capability"
+            journal = Path(directory) / "journal.json"
+            context = make_context(operation_id)
+            backend = ConcreteAdapter()
+            foreign = ConcreteAdapter()
+            capability = BoundRollbackCapability.bind(
+                PhaseContext(**cast(dict[str, Any], context)), foreign
+            )
+            with self.assertRaisesRegex(UpgradeError, "backend mismatch"):
+                UpgradeEngine(
+                    operation_id,
+                    journal,
+                    context,
+                    backend_adapter=backend,
+                    rollback_bound_verifier=capability,
+                )
+            self.assertFalse(journal.exists())
 
 
 if __name__ == "__main__":
