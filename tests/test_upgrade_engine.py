@@ -1993,18 +1993,18 @@ class UpgradeEngineTests(unittest.TestCase):
             (GitAuthorityAdapter, {"expected_branch": "main", "expected_head": "head"}),
             (SQLiteAuthorityAdapter, {}),
         ):
-            adapter = object.__new__(adapter_type)
-            calls: list[tuple[object, ...]] = []
+            adapter = cast(Any, object.__new__(adapter_type))
+            calls: list[tuple[tuple[object, ...], dict[str, object]]] = []
 
             def verify_bound(
                 *args: object,
-                _calls: list[tuple[object, ...]] = calls,
+                _calls: list[tuple[tuple[object, ...], dict[str, object]]] = calls,
                 **kwargs: object,
             ) -> dict[str, object]:
-                _calls.append((*args, kwargs))
+                _calls.append((args, kwargs))
                 return dict(ROLLBACK_CONTEXT)
 
-            adapter.verify_rollback_context_bound = verify_bound  # type: ignore[method-assign]
+            adapter.verify_rollback_context_bound = verify_bound
             capability = BoundRollbackCapability.bind(
                 context,
                 adapter,
@@ -2016,12 +2016,12 @@ class UpgradeEngineTests(unittest.TestCase):
             result = capability.verify(ROLLBACK_CONTEXT)
             self.assertFalse(result["rollback_context_verified"])
             self.assertEqual(len(calls), 1)
-            self.assertIs(calls[0][0], ROLLBACK_CONTEXT)
-            self.assertIs(calls[0][1], scope)
-            self.assertIs(calls[0][2]["lease"], lease)
-            self.assertIs(calls[0][2]["admission_recheck"], recheck)
+            self.assertIs(calls[0][0][0], ROLLBACK_CONTEXT)
+            self.assertIs(calls[0][0][1], scope)
+            self.assertIs(calls[0][1]["lease"], lease)
+            self.assertIs(calls[0][1]["admission_recheck"], recheck)
             for key, value in expected.items():
-                self.assertEqual(calls[0][2][key], value)
+                self.assertEqual(calls[0][1][key], value)
 
 
 if __name__ == "__main__":
