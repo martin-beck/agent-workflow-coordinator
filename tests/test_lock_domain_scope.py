@@ -82,6 +82,7 @@ def _fresh_recheck_process(
     crash_after_rejection: bool = False,
     fail_authority_reread: bool = False,
     fail_once_then_retry: bool = False,
+    fail_on_second_reread: bool = False,
 ) -> None:
     """Perform a trusted reread in a fresh process, then reject the old lease."""
     root = Path(root_text)
@@ -89,12 +90,14 @@ def _fresh_recheck_process(
     control = root / "control.sqlite"
     store = SQLiteRollbackControlStore(control, PROJECT, authority)
 
-    reread_failures = 0
+    authority_reads = 0
 
     def read_authority() -> str:
-        nonlocal reread_failures
-        if fail_authority_reread or (fail_once_then_retry and reread_failures == 0):
-            reread_failures += 1
+        nonlocal authority_reads
+        authority_reads += 1
+        if fail_authority_reread or (fail_once_then_retry and authority_reads == 1):
+            raise RuntimeError("authority unavailable")
+        if fail_on_second_reread and authority_reads == 2:
             raise RuntimeError("authority unavailable")
         return "authority-retry"
 
@@ -457,6 +460,18 @@ class LockDomainScopeTests(unittest.TestCase):
         recovered.join(5)
         self.assertEqual(0, recovered.exitcode)
         rejected, released = result.get(timeout=1)
+        self.assertTrue(rejected)
+        self.assertTrue(released)
+
+        second_failure_result = context.Queue()
+        second_failure = context.Process(
+            target=_fresh_recheck_process,
+            args=(self.directory.name, second_failure_result, False, False, False, False, True),
+        )
+        second_failure.start()
+        second_failure.join(5)
+        self.assertEqual(0, second_failure.exitcode)
+        rejected, released = second_failure_result.get(timeout=1)
         self.assertTrue(rejected)
         self.assertTrue(released)
 
