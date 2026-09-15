@@ -81,6 +81,7 @@ def _fresh_recheck_process(
     crash_after_reread: bool = False,
     crash_after_rejection: bool = False,
     fail_authority_reread: bool = False,
+    fail_once_then_retry: bool = False,
 ) -> None:
     """Perform a trusted reread in a fresh process, then reject the old lease."""
     root = Path(root_text)
@@ -88,8 +89,12 @@ def _fresh_recheck_process(
     control = root / "control.sqlite"
     store = SQLiteRollbackControlStore(control, PROJECT, authority)
 
+    reread_failures = 0
+
     def read_authority() -> str:
-        if fail_authority_reread:
+        nonlocal reread_failures
+        if fail_authority_reread or (fail_once_then_retry and reread_failures == 0):
+            reread_failures += 1
             raise RuntimeError("authority unavailable")
         return "authority-retry"
 
@@ -108,8 +113,7 @@ def _fresh_recheck_process(
     lease = AdmissionLease(PROJECT, "authority-1", "fence-1", "owner-1", "barrier-1", 1)
     rejected = True
     try:
-        for _ in range(2):
-            session.recheck_held(1)
+        _reread_with_optional_transient_failure(session, fail_once_then_retry)
         if crash_after_reread:
             os._exit(19)
         scope = LockDomainScope(domain, session, fence, lease, locked)
@@ -126,6 +130,17 @@ def _fresh_recheck_process(
         rejected = True
     finally:
         result.put((rejected, not session.operation_owned_by_current_thread))
+
+
+def _reread_with_optional_transient_failure(
+    session: SQLiteBarrierSessionStore, fail_once_then_retry: bool
+) -> None:
+    for _ in range(2):
+        try:
+            session.recheck_held(1)
+        except ControlStoreError:
+            if not fail_once_then_retry:
+                raise
 
 
 class LockDomainScopeTests(unittest.TestCase):
@@ -397,6 +412,51 @@ class LockDomainScopeTests(unittest.TestCase):
         reread_failed.join(5)
         self.assertEqual(0, reread_failed.exitcode)
         rejected, released = failure_result.get(timeout=1)
+        self.assertTrue(rejected)
+        self.assertTrue(released)
+
+    def test_fresh_process_reread_recovers_then_rejects_stale_lease(self) -> None:
+        """A transient reread failure cannot bless a stale lease on retry."""
+        context = multiprocessing.get_context("fork")
+        start = context.Event()
+        starts = context.Array("q", [0], lock=False)
+        ends = context.Array("q", [0], lock=False)
+        crashed = context.Process(
+            target=_scope_process,
+            args=(self.directory.name, start, starts, ends, 0, True),
+        )
+        crashed.start()
+        start.set()
+        crashed.join(5)
+        self.assertEqual(17, crashed.exitcode)
+
+        changed_record = replace(
+            identity(), authority_revision_at_acquire="authority-retry", state_revision=2
+        ).as_record()
+        changed_record["identity_digest"] = canonical_barrier_session_digest(changed_record)
+        with sqlite3.connect(self.store.control_store_path) as connection:
+            connection.execute(
+                "UPDATE barrier_session SET authority_revision_at_acquire=?, "
+                "state_revision=?, identity_digest=?, revision=? WHERE project_id=?",
+                (
+                    changed_record["authority_revision_at_acquire"],
+                    changed_record["state_revision"],
+                    changed_record["identity_digest"],
+                    1,
+                    PROJECT,
+                ),
+            )
+            connection.commit()
+
+        result = context.Queue()
+        recovered = context.Process(
+            target=_fresh_recheck_process,
+            args=(self.directory.name, result, False, False, False, True),
+        )
+        recovered.start()
+        recovered.join(5)
+        self.assertEqual(0, recovered.exitcode)
+        rejected, released = result.get(timeout=1)
         self.assertTrue(rejected)
         self.assertTrue(released)
 
