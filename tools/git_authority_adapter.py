@@ -39,6 +39,7 @@ class GitAuthorityAdapter:
     """Read-only Git evidence adapter; execute remains permanently disabled."""
 
     requires_bound_rollback = True
+    bound_rollback_kind = "git"
 
     def __init__(self, repository: Path) -> None:
         resolved = repository.resolve()
