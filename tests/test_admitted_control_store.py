@@ -207,6 +207,21 @@ class AdmittedControlStoreTests(unittest.TestCase):
         finally:
             object.__setattr__(self.recheck, "authority_revision", "authority-1")
 
+    def test_scope_order_failure_is_normalized_before_store(self) -> None:
+        class Scope:
+            def assert_ordered(self) -> None:
+                raise RuntimeError("lock order unavailable")
+
+            def hold(self) -> Any:
+                raise AssertionError("scope hold must not be touched")
+
+        class Store:
+            def cas(self, *_args: object, **_kwargs: object) -> dict[str, object]:
+                raise AssertionError("store must not be touched")
+
+        with self.assertRaisesRegex(AdmissionLeaseError, "scope is invalid"):
+            admitted_cas(Store(), 1, self.record, self.lease, self.recheck, Scope())
+
     def test_missing_or_mismatched_contract_objects_fail_closed(self) -> None:
         with self.assertRaisesRegex(AdmissionLeaseError, "lease is required"):
             admitted_cas(None, 1, self.record, None, self.recheck, None)  # type: ignore[arg-type]
