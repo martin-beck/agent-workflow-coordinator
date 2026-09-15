@@ -31,7 +31,13 @@ from tools.rollback_control_store import (
     SQLiteRollbackControlStore,
 )
 from tools.scoped_backend_adapter import ScopedBackendAdapter
-from tools.upgrade_identity import BarrierSessionIdentity, canonical_barrier_session_digest
+from tools.upgrade_engine import BoundRollbackCapability, PhaseContext, UpgradeEngine
+from tools.upgrade_identity import (
+    BarrierSessionIdentity,
+    canonical_barrier_digest,
+    canonical_barrier_session_digest,
+    canonical_envelope_digest,
+)
 
 PROJECT = "11111111-1111-4111-8111-111111111111"
 
@@ -247,6 +253,47 @@ class GitAuthorityAdapterTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.coordination.cleanup()
         self.directory.cleanup()
+
+    def test_engine_bound_rollback_inspection_uses_real_scope_and_preserves_journal(self) -> None:
+        context = {**CONTEXT, "operation_id": "op-real-git-inspection", "target": "new"}
+        artifact_root = Path(self.coordination.name) / "artifacts"
+        artifact_root.mkdir()
+        context.update(
+            {
+                "artifact_root": str(artifact_root),
+                "destination": str(artifact_root / "destination"),
+                "manifest": str(artifact_root / "manifest.json"),
+            }
+        )
+        context["barrier_identity_digest"] = canonical_barrier_digest(context)
+        context["envelope_digest"] = canonical_envelope_digest(context)
+        observed = self.adapter.snapshot("discover", context)
+        context["target"] = "new"
+        engine = UpgradeEngine(
+            str(context["operation_id"]),
+            Path(self.coordination.name) / "engine-journal.json",
+            context,
+            backend_adapter=self.adapter,
+            rollback_bound_verifier=BoundRollbackCapability.bind(
+                PhaseContext(**cast(dict[str, Any], context)),
+                self.adapter,
+                self.scope,
+                lease=self.lease,
+                admission_recheck=self.recheck,
+                expected_branch=str(observed["git_branch"]),
+                expected_head=str(observed["git_head"]),
+            ),
+        )
+        engine.plan()
+        before = (Path(self.coordination.name) / "engine-journal.json").read_bytes()
+        result = engine.inspect_rollback_bound()
+        self.assertFalse(result["rollback_context_verified"])
+        self.assertEqual(
+            before, (Path(self.coordination.name) / "engine-journal.json").read_bytes()
+        )
+        self.assertFalse(self.session.operation_owned_by_current_thread)
+        with engine._exclusive():
+            pass
 
     def test_clean_snapshot_is_identity_bound_and_nonmutating(self) -> None:
         result = self.adapter.snapshot("discover", CONTEXT)
