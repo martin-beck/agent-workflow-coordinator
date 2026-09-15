@@ -1355,6 +1355,16 @@ class LockDomainScopeTests(unittest.TestCase):
         self.assertEqual([], common_calls)
         self.assertFalse(self.session.operation_owned_by_current_thread)
 
+        map_fence_context = dict(stale_context)
+        map_fence_context["fencing_token"] = {"token": "fence-1"}
+        with (
+            self.assertRaisesRegex(LockDomainError, "does not match"),
+            scope.validated_hold(map_fence_context),
+        ):
+            self.fail("mapping fencing token must fail before scope acquisition")
+        self.assertEqual([], common_calls)
+        self.assertFalse(self.session.operation_owned_by_current_thread)
+
         non_text_barrier_context = dict(stale_context)
         non_text_barrier_context["durable_barrier_id"] = 13
         with (
