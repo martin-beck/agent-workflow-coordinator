@@ -177,6 +177,49 @@ def _fresh_binding_rejection_process(root_text: str, result: Any) -> None:
         result.put((str(error), not session.operation_owned_by_current_thread))
 
 
+def _fresh_binding_reacquire_process(root_text: str, result: Any) -> None:
+    """Fresh worker reacquires the unchanged durable scope after child death."""
+    root = Path(root_text)
+    control = SQLiteRollbackControlStore(
+        root / "control.sqlite", PROJECT, root / "authority.sqlite"
+    )
+    session = SQLiteBarrierSessionStore(control, lambda: "authority-1")
+    fence = MutationFence(
+        root / "authority.sqlite",
+        root / "authority-marker.json",
+        root / "authority-lifecycle.json",
+        root / "authority.lock",
+        root / "control.sqlite",
+        root / "control-binding.json",
+        control.control_lock_path,
+    )
+    with locked() as guard:
+        domain = LockDomainContract.capture(guard, session, fence)
+    lease = AdmissionLease(PROJECT, "authority-1", "fence-1", "owner-1", "barrier-1", 1)
+    recheck = validate_recheck(
+        lease,
+        project_id=PROJECT,
+        authority_revision="authority-1",
+        fencing_token="fence-1",  # noqa: S106
+        fencing_owner="owner-1",
+        durable_barrier_id="barrier-1",
+        revision=1,
+    )
+
+    class Backend:
+        def cas(self, *_args: object, **_kwargs: object) -> dict[str, object]:
+            raise AssertionError("reacquisition must not touch backend")
+
+    binding = AdmittedControlBinding.bind(
+        Backend(), lease, recheck, LockDomainScope(domain, session, fence, lease, locked)
+    )
+    try:
+        with binding.validated_scope():
+            result.put(("acquired", session.operation_owned_by_current_thread))
+    except (AdmissionLeaseError, LockDomainError) as error:
+        result.put((type(error).__name__, False))
+
+
 def _fresh_recheck_process(
     root_text: str,
     result: Any,
@@ -485,6 +528,29 @@ class LockDomainScopeTests(unittest.TestCase):
         fresh.join(5)
         self.assertEqual(0, fresh.exitcode)
         self.assertEqual(("admitted control scope is invalid", True), result.get())
+        self.assertFalse(self.session.operation_owned_by_current_thread)
+
+    def test_binding_abort_allows_fresh_worker_reacquisition_when_identity_is_unchanged(
+        self,
+    ) -> None:
+        """An aborted holder releases SQLite locks for a clean fresh-worker retry."""
+        context = multiprocessing.get_context("fork")
+        start = context.Event()
+        crashed = context.Process(target=_binding_abort_process, args=(self.directory.name, start))
+        crashed.start()
+        start.set()
+        crashed.join(5)
+        self.assertEqual(29, crashed.exitcode)
+        self.assertFalse(self.session.operation_owned_by_current_thread)
+
+        result = context.Queue()
+        fresh = context.Process(
+            target=_fresh_binding_reacquire_process, args=(self.directory.name, result)
+        )
+        fresh.start()
+        fresh.join(5)
+        self.assertEqual(0, fresh.exitcode)
+        self.assertEqual(("acquired", True), result.get())
         self.assertFalse(self.session.operation_owned_by_current_thread)
 
     def test_repeated_handoff_rereads_authority_before_rejecting_stale_retry(self) -> None:
