@@ -12,6 +12,8 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
+from tools.admission_lease import AdmissionLease
+
 
 class GitAuthorityError(RuntimeError):
     """Git authority evidence is unavailable or a mutation was requested."""
@@ -91,6 +93,7 @@ class GitAuthorityAdapter:
         context: Mapping[str, object],
         scope: Any,
         *,
+        lease: AdmissionLease,
         expected_branch: str,
         expected_head: str,
     ) -> dict[str, Any]:
@@ -106,6 +109,18 @@ class GitAuthorityAdapter:
             raise GitAuthorityError("expected Git branch identity is invalid")
         if type(expected_head) is not str or not expected_head:
             raise GitAuthorityError("expected Git head identity is invalid")
+        if not isinstance(lease, AdmissionLease):
+            raise GitAuthorityError("trusted admission lease is required")
+        expected_identity = {
+            "project_id": lease.project_id,
+            "authority_revision": lease.authority_revision,
+            "fencing_token": lease.fencing_token,
+            "fencing_owner": lease.fencing_owner,
+            "durable_barrier_id": lease.durable_barrier_id,
+            "state_revision": lease.revision,
+        }
+        if any(context.get(name) != value for name, value in expected_identity.items()):
+            raise GitAuthorityError("trusted session identity changed")
         try:
             value = ScopedBackendAdapter(self, scope).snapshot(phase, context)
         except (TypeError, RuntimeError) as error:
