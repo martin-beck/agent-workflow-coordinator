@@ -119,6 +119,27 @@ class PhaseContext:
     envelope_digest: str
 
 
+@dataclass(frozen=True)
+class BoundRollbackCapability:
+    """Typed, identity-bound evidence capability; never authorizes rollback."""
+
+    identity: tuple[object, ...]
+
+    @classmethod
+    def bind(cls, context: PhaseContext) -> BoundRollbackCapability:
+        return cls(tuple(asdict(context)[field] for field in CONTEXT_FIELDS))
+
+    def matches(self, context: PhaseContext) -> bool:
+        values = asdict(context)
+        return self.identity == tuple(values[field] for field in CONTEXT_FIELDS)
+
+    def verify(self, context: Mapping[str, object]) -> Mapping[str, object]:
+        """Return diagnostic evidence only; this capability cannot authorize."""
+        if set(context) != set(CONTEXT_FIELDS):
+            raise UpgradeError("bound rollback capability context is incomplete")
+        return {**dict(context), "rollback_context_verified": False}
+
+
 def _freeze(value: object) -> object:
     """Create a recursively immutable view for untrusted phase handlers."""
     if isinstance(value, dict):
@@ -178,8 +199,7 @@ class UpgradeEngine:
         context: Mapping[str, object],
         lock_path: Path | None = None,
         backend_adapter: BackendAdapter | None = None,
-        rollback_bound_verifier: Callable[[Mapping[str, object]], Mapping[str, object]]
-        | None = None,
+        rollback_bound_verifier: BoundRollbackCapability | None = None,
     ) -> None:
         if not operation_id or ":" in operation_id:
             raise UpgradeError("invalid operation identity")
@@ -192,6 +212,14 @@ class UpgradeEngine:
         supplied = dict(context)
         _validate_context(supplied, operation_id)
         self.context = PhaseContext(**cast(dict[str, Any], supplied))
+        if rollback_bound_verifier is not None and not isinstance(
+            rollback_bound_verifier, BoundRollbackCapability
+        ):
+            raise UpgradeError("trusted bound rollback capability is required")
+        if isinstance(rollback_bound_verifier, BoundRollbackCapability) and not (
+            rollback_bound_verifier.matches(self.context)
+        ):
+            raise UpgradeError("trusted bound rollback capability identity mismatch")
 
     @contextmanager
     def _exclusive(self) -> Iterator[None]:
@@ -622,12 +650,12 @@ class UpgradeEngine:
             if getattr(self.backend_adapter, "requires_bound_rollback", False):
                 # Concrete authority adapters must be supplied through a caller-owned
                 # scope/lease binding.  Do not fall back to their unbound snapshot.
-                if not callable(self.rollback_bound_verifier):
+                if not isinstance(self.rollback_bound_verifier, BoundRollbackCapability):
                     raise UpgradeError("rollback requires a trusted bound backend capability")
                 rollback_context = {**asdict(self.context), "target": "rollback"}
                 try:
                     snapshot = dict(
-                        self.rollback_bound_verifier(
+                        self.rollback_bound_verifier.verify(
                             cast(Mapping[str, object], _freeze(rollback_context))
                         )
                     )

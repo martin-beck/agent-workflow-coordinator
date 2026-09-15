@@ -32,7 +32,9 @@ from tools.upgrade_engine import (
     CONTEXT_FIELDS,
     PHASES,
     BackendAdapter,
+    BoundRollbackCapability,
     Handler,
+    PhaseContext,
     UpgradeEngine,
     UpgradeError,
 )
@@ -1855,27 +1857,45 @@ class UpgradeEngineTests(unittest.TestCase):
             def execute(self, _phase: str, _context: object) -> dict[str, object]:
                 raise AssertionError("rollback execute reached")
 
-        calls: list[Mapping[str, object]] = []
-
-        def bound(context: Mapping[str, object]) -> Mapping[str, object]:
-            calls.append(context)
-            return {**context, "rollback_context_verified": False}
-
         with tempfile.TemporaryDirectory() as directory:
+            context = make_context("op-bound-evidence")
             engine = UpgradeEngine(
                 "op-bound-evidence",
                 Path(directory) / "journal.json",
-                make_context("op-bound-evidence"),
+                context,
                 backend_adapter=ConcreteAdapter(),
-                rollback_bound_verifier=bound,
+                rollback_bound_verifier=BoundRollbackCapability.bind(
+                    PhaseContext(**context)
+                ),
             )
             engine.plan()
             journal_before = (Path(directory) / "journal.json").read_bytes()
             with self.assertRaisesRegex(UpgradeError, "did not verify rollback context"):
                 engine.rollback(lambda _step, _state: self.fail("rollback handler reached"))
             self.assertEqual(journal_before, (Path(directory) / "journal.json").read_bytes())
-        self.assertEqual(1, len(calls))
-        self.assertEqual("rollback", calls[0]["target"])
+
+    def test_rollback_rejects_forged_bound_verifier_before_backend_or_handler(self) -> None:
+        class ConcreteAdapter(FakeAdapter):
+            requires_bound_rollback = True
+
+            def snapshot(self, _phase: str, _context: object) -> dict[str, object]:
+                raise AssertionError("forged verifier must block snapshot")
+
+            def execute(self, _phase: str, _context: object) -> dict[str, object]:
+                raise AssertionError("forged verifier must block execute")
+
+        with tempfile.TemporaryDirectory() as directory:
+            operation_id = "op-forged-verifier"
+            with self.assertRaisesRegex(UpgradeError, "trusted bound rollback capability"):
+                UpgradeEngine(
+                    operation_id,
+                    Path(directory) / "journal.json",
+                    make_context(operation_id),
+                    backend_adapter=ConcreteAdapter(),
+                    rollback_bound_verifier=lambda _context: {
+                        "rollback_context_verified": True
+                    },
+                )
 
 
 if __name__ == "__main__":
