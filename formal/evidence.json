@@ -6,7 +6,7 @@
     "A continuously runnable process is eventually scheduled and a lock holder eventually exits its critical section.",
     "Successful local commits and SQLite transactions have the durability described by the coordinator contract.",
     "The pinned TLC verifier is downloaded successfully and matches its recorded SHA-256 digest.",
-    "Cgroup-contained PR and weekly TLC invocations use a 2048 MiB JVM heap, 256 MiB metaspace, 128 MiB compressed class space, 256 KiB thread stacks, 3072 MiB memory and swap limits, 200 percent CPU quota, and 64 process slots. The PR publication tier has a 1200 second per-model deadline; weekly full-exhaustive has a 6000 second per-model deadline.",
+    "Cgroup-contained same-repository PR and weekly TLC invocations use a 4096 MiB JVM heap, 256 MiB metaspace, 128 MiB compressed class space, 256 KiB thread stacks, 6144 MiB memory and swap limits, 200 percent CPU quota, and 64 process slots after a host-capacity preflight. Fork smoke retains a 512 MiB heap and 3072 MiB address-space limit. Ordinary PR publication has a 1200 second per-model deadline; release-sensitive and weekly full-exhaustive runs have a 6000 second per-model deadline.",
     "Formal jobs use one canonical host-wide flock admission lock and durable per-job queue and outcome records; admission does not stop coordinator workers."
   ],
   "bounds": {
@@ -18,10 +18,10 @@
     "max_worktrees": 2,
     "model_count": 6,
     "tlc_workers": 2,
-    "jvm_heap_mb": 2048,
+    "jvm_heap_mb": 4096,
     "hosted_portable_jvm_heap_mb": 512,
-    "memory_max_mb": 3072,
-    "swap_max_mb": 3072,
+    "memory_max_mb": 6144,
+    "swap_max_mb": 6144,
     "cpu_quota_percent": 200,
     "tasks_max": 64,
     "pr_runtime_max_seconds": 1200,
