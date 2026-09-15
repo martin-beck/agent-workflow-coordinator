@@ -1966,6 +1966,22 @@ class UpgradeEngineTests(unittest.TestCase):
                 )
             self.assertFalse(journal.exists())
 
+    def test_bound_capability_rejects_forged_context_before_concrete_verifier(self) -> None:
+        class ConcreteAdapter(FakeAdapter):
+            def verify_rollback_context_bound(
+                self, _context: Mapping[str, object]
+            ) -> Mapping[str, object]:
+                raise AssertionError("forged context must not reach verifier")
+
+        context = make_context("op-context-forge")
+        capability = BoundRollbackCapability.bind(
+            PhaseContext(**cast(dict[str, Any], context)), ConcreteAdapter()
+        )
+        forged = dict(context)
+        forged["fencing_token"] = "forged"  # noqa: S105
+        with self.assertRaisesRegex(UpgradeError, "context identity mismatch"):
+            capability.verify(forged)
+
 
 if __name__ == "__main__":
     unittest.main()

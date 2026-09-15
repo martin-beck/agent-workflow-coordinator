@@ -130,16 +130,21 @@ class BoundRollbackCapability:
     def bind(cls, context: PhaseContext, verifier: Any) -> BoundRollbackCapability:
         if not callable(getattr(verifier, "verify_rollback_context_bound", None)):
             raise UpgradeError("bound rollback verifier capability is incomplete")
-        return cls(tuple(asdict(context)[field] for field in CONTEXT_FIELDS), verifier)
+        fields = tuple(field for field in CONTEXT_FIELDS if field != "target")
+        return cls(tuple(asdict(context)[field] for field in fields), verifier)
 
     def matches(self, context: PhaseContext) -> bool:
         values = asdict(context)
-        return self.identity == tuple(values[field] for field in CONTEXT_FIELDS)
+        fields = tuple(field for field in CONTEXT_FIELDS if field != "target")
+        return self.identity == tuple(values[field] for field in fields)
 
     def verify(self, context: Mapping[str, object]) -> Mapping[str, object]:
         """Invoke concrete bound verification, but never authorize rollback."""
         if set(context) != set(CONTEXT_FIELDS):
             raise UpgradeError("bound rollback capability context is incomplete")
+        identity_fields = tuple(field for field in CONTEXT_FIELDS if field != "target")
+        if self.identity != tuple(context[field] for field in identity_fields):
+            raise UpgradeError("bound rollback capability context identity mismatch")
         result = self.verifier.verify_rollback_context_bound(context)
         if not isinstance(result, Mapping):
             raise UpgradeError("bound rollback verifier result is invalid")
