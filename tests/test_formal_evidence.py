@@ -118,6 +118,8 @@ class FormalEvidenceTests(unittest.TestCase):
         self.assertIn("SPECIFICATION Spec", fast_config)
         self.assertIn("PROPERTIES", fast_config)
         self.assertIn("EventuallyBoundCallSucceeds", fast_config)
+        fast_invocations = re.findall(r"^\s*run_model\s+(\w+)(?:\s+(\w+))?\s*$", verify, re.MULTILINE)
+        self.assertIn(("HandoffctlFast", ""), [(model, source or "") for model, source in fast_invocations])
         self.assertFalse(manifest["profiles"]["pr-publication"]["exhaustive"])
         self.assertTrue(manifest["profiles"]["full-exhaustive"]["exhaustive"])
         self.assertNotEqual(
