@@ -31,6 +31,28 @@ from tools.upgrade_authority import (
 )
 
 
+def _init_git_repo(root: Path) -> None:
+    subprocess.run(["git", "init", "-q", str(root)], check=True)
+    (root / ".git").chmod(0o700)
+    (root / "state").write_text("clean\n")
+    subprocess.run(["git", "-C", str(root), "add", "state"], check=True)
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(root),
+            "-c",
+            "user.name=test",
+            "-c",
+            "user.email=test@example",
+            "commit",
+            "-qm",
+            "init",
+        ],
+        check=True,
+    )
+
+
 class RuntimeSelectorTests(unittest.TestCase):
     def test_git_snapshot_binds_clean_head_and_requested_ref(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -113,6 +135,150 @@ class RuntimeSelectorTests(unittest.TestCase):
                 read_git_authority_snapshot(root)
             with self.assertRaisesRegex(AuthorityError, "ref is invalid"):
                 read_git_authority_snapshot(root, "--upload-pack=evil")
+
+    def test_git_snapshot_rejects_missing_or_unsafe_repository(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with self.assertRaisesRegex(AuthorityError, "repository is unavailable"):
+                read_git_authority_snapshot(root)
+            subprocess.run(["git", "init", "-q", str(root)], check=True)
+            (root / ".git").chmod(0o777)
+            with self.assertRaisesRegex(AuthorityError, "owner-safe"):
+                read_git_authority_snapshot(root)
+
+    def test_git_snapshot_rejects_unreachable_requested_branch(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            subprocess.run(["git", "init", "-q", str(root)], check=True)
+            (root / ".git").chmod(0o700)
+            (root / "state").write_text("clean\n")
+            subprocess.run(["git", "-C", str(root), "add", "state"], check=True)
+            subprocess.run(
+                [
+                    "git",
+                    "-C",
+                    str(root),
+                    "-c",
+                    "user.name=test",
+                    "-c",
+                    "user.email=test@example",
+                    "commit",
+                    "-qm",
+                    "init",
+                ],
+                check=True,
+            )
+            subprocess.run(
+                ["git", "-C", str(root), "checkout", "-q", "--orphan", "other"], check=True
+            )
+            subprocess.run(["git", "-C", str(root), "rm", "-q", "-rf", "."], check=True)
+            (root / "state").write_text("other\n")
+            subprocess.run(["git", "-C", str(root), "add", "state"], check=True)
+            subprocess.run(
+                [
+                    "git",
+                    "-C",
+                    str(root),
+                    "-c",
+                    "user.name=test",
+                    "-c",
+                    "user.email=test@example",
+                    "commit",
+                    "-qm",
+                    "other",
+                ],
+                check=True,
+            )
+            with self.assertRaisesRegex(AuthorityError, "not reachable"):
+                read_git_authority_snapshot(root, "refs/heads/master")
+
+    def test_git_snapshot_normalizes_observation_and_reachability_failures(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            _init_git_repo(root)
+            with (
+                patch("tools.upgrade_authority.subprocess.run", side_effect=OSError("git")),
+                self.assertRaisesRegex(AuthorityError, "inspection failed"),
+            ):
+                read_git_authority_snapshot(root)
+
+            real_run = subprocess.run
+
+            def reject_reachability(*args: Any, **kwargs: Any) -> Any:
+                if "merge-base" in args[0]:
+                    return subprocess.CompletedProcess(args[0], 1, "", "unreachable")
+                return real_run(*args, **kwargs)
+
+            with (
+                patch("tools.upgrade_authority.subprocess.run", side_effect=reject_reachability),
+                self.assertRaisesRegex(AuthorityError, "not reachable"),
+            ):
+                read_git_authority_snapshot(root)
+
+            with patch(
+                "tools.upgrade_authority.os.geteuid", return_value=os.geteuid() + 1
+            ), self.assertRaisesRegex(AuthorityError, "owner-safe"):
+                read_git_authority_snapshot(root)
+
+            def fail_check(*args: Any, **kwargs: Any) -> Any:
+                if "merge-base" in args[0]:
+                    raise OSError("git unavailable")
+                return real_run(*args, **kwargs)
+
+            with patch(
+                "tools.upgrade_authority.subprocess.run", side_effect=fail_check
+            ), self.assertRaisesRegex(AuthorityError, "inspection failed"):
+                read_git_authority_snapshot(root)
+
+    def test_git_snapshot_rejects_identity_and_observation_drift(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            _init_git_repo(root)
+            real_stat = Path.stat
+            real_identity = upgrade_authority._file_identity
+            initial_identity_seen = False
+
+            def fail_reread(*args: Any, **_kwargs: Any) -> os.stat_result:
+                if initial_identity_seen:
+                    raise OSError("replaced")
+                return real_stat(args[0] if args else root)
+
+            def mark_initial(status: os.stat_result) -> tuple[int, int]:
+                nonlocal initial_identity_seen
+                initial_identity_seen = True
+                return real_identity(status)
+
+            with (
+                patch.object(Path, "stat", side_effect=fail_reread),
+                patch("tools.upgrade_authority._file_identity", side_effect=mark_initial),
+                self.assertRaisesRegex(AuthorityError, "identity reread failed"),
+            ):
+                read_git_authority_snapshot(root)
+
+            with (
+                patch(
+                    "tools.upgrade_authority._file_identity",
+                    side_effect=[(1, 1), (2, 2), (1, 1), (3, 3)],
+                ),
+                self.assertRaisesRegex(AuthorityError, "identity changed"),
+            ):
+                read_git_authority_snapshot(root)
+
+            real_run = subprocess.run
+            head_calls = 0
+
+            def drift_head(*args: Any, **kwargs: Any) -> Any:
+                nonlocal head_calls
+                if "HEAD^{commit}" in args[0]:
+                    head_calls += 1
+                    if head_calls == 2:
+                        return subprocess.CompletedProcess(args[0], 0, "0" * 40 + "\n", "")
+                return real_run(*args, **kwargs)
+
+            with patch(
+                "tools.upgrade_authority.subprocess.run", side_effect=drift_head
+            ), self.assertRaisesRegex(AuthorityError, "observation changed"):
+                read_git_authority_snapshot(root)
 
     def test_admitted_selector_publication_requires_typed_ordered_lease(self) -> None:
         class Lease:
