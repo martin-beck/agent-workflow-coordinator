@@ -1265,6 +1265,16 @@ class LockDomainScopeTests(unittest.TestCase):
         self.assertEqual([], common_calls)
         self.assertFalse(self.session.operation_owned_by_current_thread)
 
+        bytearray_project_context = dict(stale_context)
+        bytearray_project_context["project_id"] = bytearray(PROJECT, "utf-8")
+        with (
+            self.assertRaisesRegex(LockDomainError, "does not match"),
+            scope.validated_hold(bytearray_project_context),
+        ):
+            self.fail("bytearray project identifier must fail before scope acquisition")
+        self.assertEqual([], common_calls)
+        self.assertFalse(self.session.operation_owned_by_current_thread)
+
         non_text_fence_context = dict(stale_context)
         non_text_fence_context["fencing_token"] = 7
         with (
