@@ -12,7 +12,7 @@ import time
 import unittest
 from dataclasses import replace
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from tools.admission_lease import AdmissionLease
 from tools.handoffctl import locked
@@ -188,6 +188,20 @@ class LockDomainScopeTests(unittest.TestCase):
             self.assertTrue(self.session.operation_owned_by_current_thread)
         self.assertEqual(["held"], events)
         self.assertFalse(self.session.operation_owned_by_current_thread)
+
+    def test_bind_captures_canonical_identity_before_hold(self) -> None:
+        scope = LockDomainScope.bind(self.session, self.fence, self.lease, locked)
+        with scope.hold():
+            self.assertTrue(self.session.operation_owned_by_current_thread)
+        self.assertFalse(self.session.operation_owned_by_current_thread)
+
+    def test_bind_rejects_invalid_caller_components(self) -> None:
+        with self.assertRaisesRegex(LockDomainError, "session store"):
+            LockDomainScope.bind(cast(Any, None), self.fence, self.lease, locked)
+        with self.assertRaisesRegex(LockDomainError, "authority fence"):
+            LockDomainScope.bind(self.session, cast(Any, None), self.lease, locked)
+        with self.assertRaisesRegex(LockDomainError, "admission lease"):
+            LockDomainScope.bind(self.session, self.fence, cast(Any, None), locked)
 
     def test_scope_rejects_lease_drift_and_releases_control(self) -> None:
         for drifted in (
