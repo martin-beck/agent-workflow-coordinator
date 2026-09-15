@@ -1104,6 +1104,16 @@ class LockDomainScopeTests(unittest.TestCase):
         self.assertEqual([], common_calls)
         self.assertFalse(self.session.operation_owned_by_current_thread)
 
+        memoryview_owner_context = dict(stale_context)
+        memoryview_owner_context["fencing_owner"] = memoryview(b"owner-1")
+        with (
+            self.assertRaisesRegex(LockDomainError, "does not match"),
+            scope.validated_hold(memoryview_owner_context),
+        ):
+            self.fail("memoryview fencing owner must fail before scope acquisition")
+        self.assertEqual([], common_calls)
+        self.assertFalse(self.session.operation_owned_by_current_thread)
+
         bool_revision_context = dict(stale_context)
         bool_revision_context["authority_revision"] = "authority-1"
         bool_revision_context["state_revision"] = True
