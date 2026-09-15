@@ -1605,6 +1605,46 @@ class LockDomainScopeTests(unittest.TestCase):
         self.assertEqual([], common_calls)
         self.assertFalse(self.session.operation_owned_by_current_thread)
 
+    def test_validated_hold_rejects_unknown_key_from_mapping_adapter(self) -> None:
+        common_calls: list[str] = []
+
+        @contextmanager
+        def counted_lock() -> Any:
+            common_calls.append("acquire")
+            with locked() as guard:
+                yield guard
+
+        class ExtraKeyMapping(Mapping[str, object]):
+            def __init__(self) -> None:
+                self.payload = {
+                    "project_id": PROJECT,
+                    "authority_revision": "authority-1",
+                    "fencing_token": "fence-1",
+                    "fencing_owner": "owner-1",
+                    "durable_barrier_id": "barrier-1",
+                    "state_revision": 1,
+                    "unexpected": "not-authorized",
+                }
+
+            def __getitem__(self, key: str) -> object:
+                return self.payload[key]
+
+            def __iter__(self) -> Iterator[str]:
+                return iter(self.payload)
+
+            def __len__(self) -> int:
+                return len(self.payload)
+
+        scope = LockDomainScope.bind(self.session, self.fence, self.lease, counted_lock)
+        common_calls.clear()
+        with (
+            self.assertRaisesRegex(LockDomainError, "unknown keys"),
+            scope.validated_hold(ExtraKeyMapping()),
+        ):
+            self.fail("unknown adapter keys must fail before scope acquisition")
+        self.assertEqual([], common_calls)
+        self.assertFalse(self.session.operation_owned_by_current_thread)
+
 
 if __name__ == "__main__":
     unittest.main()
