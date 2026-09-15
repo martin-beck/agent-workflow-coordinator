@@ -38,6 +38,7 @@ class SQLiteAuthorityAdapter:
     """Read-only integrity evidence adapter; execute remains disabled."""
 
     requires_bound_rollback = True
+    bound_rollback_kind = "sqlite"
 
     def __init__(self, authority: Path) -> None:
         resolved = authority.resolve()

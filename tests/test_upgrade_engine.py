@@ -17,12 +17,14 @@ from typing import Any, cast
 from unittest.mock import patch
 
 from tools import upgrade_engine as upgrade_engine_module
+from tools.git_authority_adapter import GitAuthorityAdapter
 from tools.rollback_control_store import (
     SQLiteAuthorityRuntimeState,
     SQLiteControlStoreAdapter,
     SQLiteRollbackControlStore,
     bind_control_store,
 )
+from tools.sqlite_authority_adapter import SQLiteAuthorityAdapter
 from tools.upgrade_admission import (
     PREFLIGHT_PREDICATES,
     QUIESCENCE_PREDICATES,
@@ -1965,6 +1967,61 @@ class UpgradeEngineTests(unittest.TestCase):
                     rollback_bound_verifier=capability,
                 )
             self.assertFalse(journal.exists())
+
+    def test_bound_capability_rejects_forged_context_before_concrete_verifier(self) -> None:
+        class ConcreteAdapter(FakeAdapter):
+            def verify_rollback_context_bound(
+                self, _context: Mapping[str, object]
+            ) -> Mapping[str, object]:
+                raise AssertionError("forged context must not reach verifier")
+
+        context = make_context("op-context-forge")
+        capability = BoundRollbackCapability.bind(
+            PhaseContext(**cast(dict[str, Any], context)), ConcreteAdapter()
+        )
+        forged = dict(context)
+        forged["fencing_token"] = "forged"  # noqa: S105
+        with self.assertRaisesRegex(UpgradeError, "context identity mismatch"):
+            capability.verify(forged)
+
+    def test_bound_capability_dispatches_real_backend_signature(self) -> None:
+        context = PhaseContext(**cast(dict[str, Any], ROLLBACK_CONTEXT))
+        scope = object()
+        lease = object()
+        recheck = object()
+        for adapter_type, expected in (
+            (GitAuthorityAdapter, {"expected_branch": "main", "expected_head": "head"}),
+            (SQLiteAuthorityAdapter, {}),
+        ):
+            adapter = object.__new__(adapter_type)
+            calls: list[tuple[object, ...]] = []
+
+            def verify_bound(
+                *args: object,
+                _calls: list[tuple[object, ...]] = calls,
+                **kwargs: object,
+            ) -> dict[str, object]:
+                _calls.append((*args, kwargs))
+                return dict(ROLLBACK_CONTEXT)
+
+            adapter.verify_rollback_context_bound = verify_bound  # type: ignore[method-assign]
+            capability = BoundRollbackCapability.bind(
+                context,
+                adapter,
+                scope,
+                lease=lease,
+                admission_recheck=recheck,
+                **expected,
+            )
+            result = capability.verify(ROLLBACK_CONTEXT)
+            self.assertFalse(result["rollback_context_verified"])
+            self.assertEqual(len(calls), 1)
+            self.assertIs(calls[0][0], ROLLBACK_CONTEXT)
+            self.assertIs(calls[0][1], scope)
+            self.assertIs(calls[0][2]["lease"], lease)
+            self.assertIs(calls[0][2]["admission_recheck"], recheck)
+            for key, value in expected.items():
+                self.assertEqual(calls[0][2][key], value)
 
 
 if __name__ == "__main__":
