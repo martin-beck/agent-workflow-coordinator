@@ -1193,6 +1193,16 @@ class LockDomainScopeTests(unittest.TestCase):
         self.assertEqual([], common_calls)
         self.assertFalse(self.session.operation_owned_by_current_thread)
 
+        memoryview_authority_context = dict(stale_context)
+        memoryview_authority_context["authority_revision"] = memoryview(b"authority-stale")
+        with (
+            self.assertRaisesRegex(LockDomainError, "does not match"),
+            scope.validated_hold(memoryview_authority_context),
+        ):
+            self.fail("memoryview authority revision must fail before scope acquisition")
+        self.assertEqual([], common_calls)
+        self.assertFalse(self.session.operation_owned_by_current_thread)
+
         frozenset_authority_context = dict(stale_context)
         frozenset_authority_context["authority_revision"] = frozenset({"authority-stale"})
         with (
