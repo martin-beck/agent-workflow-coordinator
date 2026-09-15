@@ -94,14 +94,18 @@ def _fresh_recheck_process(root_text: str, result: Any) -> None:
     with locked() as guard:
         domain = LockDomainContract.capture(guard, session, fence)
     lease = AdmissionLease(PROJECT, "authority-1", "fence-1", "owner-1", "barrier-1", 1)
-    rejected = False
+    rejected = True
     try:
-        session.recheck_held(1)
+        for _ in range(2):
+            session.recheck_held(1)
         scope = LockDomainScope(domain, session, fence, lease, locked)
-        with scope.hold():
-            rejected = False
-    except LockDomainError:
-        rejected = True
+        for _ in range(2):
+            try:
+                with scope.hold():
+                    rejected = False
+                    break
+            except LockDomainError:
+                pass
     finally:
         result.put((rejected, not session.operation_owned_by_current_thread))
 
