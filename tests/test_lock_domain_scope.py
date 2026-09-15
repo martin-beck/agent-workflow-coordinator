@@ -1325,6 +1325,16 @@ class LockDomainScopeTests(unittest.TestCase):
         self.assertEqual([], common_calls)
         self.assertFalse(self.session.operation_owned_by_current_thread)
 
+        frozenset_barrier_context = dict(stale_context)
+        frozenset_barrier_context["durable_barrier_id"] = frozenset({"barrier-1"})
+        with (
+            self.assertRaisesRegex(LockDomainError, "does not match"),
+            scope.validated_hold(frozenset_barrier_context),
+        ):
+            self.fail("frozenset durable barrier identifier must fail before scope acquisition")
+        self.assertEqual([], common_calls)
+        self.assertFalse(self.session.operation_owned_by_current_thread)
+
         non_text_barrier_context = dict(stale_context)
         non_text_barrier_context["durable_barrier_id"] = 13
         with (
