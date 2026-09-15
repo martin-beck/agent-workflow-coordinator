@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from contextlib import AbstractContextManager
+from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
 from tools.admission_lease import AdmissionLease, AdmissionLeaseError, AdmissionRecheck
@@ -41,6 +42,37 @@ class AdmittedControlStore(Protocol):
     """Minimal write surface consumed by the uncalled wrapper."""
 
     def cas(self, expected_revision: int, record: Mapping[str, object]) -> dict[str, object]: ...
+
+
+@dataclass(frozen=True)
+class AdmittedControlBinding:
+    """Typed caller-owned binding; intentionally uncalled by production paths."""
+
+    store: AdmittedControlStore
+    lease: AdmissionLease
+    recheck: AdmissionRecheck
+    scope: OrderedAdmissionScope
+
+    @classmethod
+    def bind(
+        cls,
+        store: AdmittedControlStore,
+        lease: AdmissionLease,
+        recheck: AdmissionRecheck,
+        scope: OrderedAdmissionScope,
+    ) -> AdmittedControlBinding:
+        if not isinstance(lease, AdmissionLease):
+            raise AdmissionLeaseError("admitted control lease is required")
+        if not isinstance(recheck, AdmissionRecheck) or recheck.lease != lease:
+            raise AdmissionLeaseError("admitted control recheck does not match lease")
+        if not isinstance(scope, OrderedAdmissionScope):
+            raise AdmissionLeaseError("admitted control scope is required")
+        return cls(store, lease, recheck, scope)
+
+    def cas(self, expected_revision: int, record: Mapping[str, object]) -> dict[str, object]:
+        return admitted_cas(
+            self.store, expected_revision, record, self.lease, self.recheck, self.scope
+        )
 
 
 def admitted_cas(  # noqa: C901
