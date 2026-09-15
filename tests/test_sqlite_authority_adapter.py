@@ -57,7 +57,7 @@ def _snapshot_process(path_text: str, crash: bool) -> None:
         os._exit(17)
 
 
-def _bound_snapshot_worker(root_text: str, mode: str, result: Any) -> None:
+def _bound_snapshot_worker(root_text: str, mode: str, result: Any, rollback: bool = False) -> None:
     root = Path(root_text)
     authority = root / "authority.sqlite"
     control = root / "control.sqlite"
@@ -102,6 +102,7 @@ def _bound_snapshot_worker(root_text: str, mode: str, result: Any) -> None:
         adapter.snapshot = aborting_snapshot  # type: ignore[assignment]
     context = {
         **CONTEXT,
+        "target": "rollback" if rollback else "new",
         "project_id": PROJECT,
         "authority_revision": lease.authority_revision,
         "fencing_token": lease.fencing_token,
@@ -110,9 +111,14 @@ def _bound_snapshot_worker(root_text: str, mode: str, result: Any) -> None:
         "state_revision": lease.revision,
     }
     try:
-        value = adapter.snapshot_bound(
-            "discover", context, scope, lease=lease, admission_recheck=recheck
-        )
+        if rollback:
+            value = adapter.verify_rollback_context_bound(
+                context, scope, lease=lease, admission_recheck=recheck
+            )
+        else:
+            value = adapter.snapshot_bound(
+                "discover", context, scope, lease=lease, admission_recheck=recheck
+            )
     except Exception as error:
         result.put(
             (
@@ -372,7 +378,7 @@ class SQLiteAuthorityAdapterTests(unittest.TestCase):
         crashed_result = context.Queue()
         crashed = context.Process(
             target=_bound_snapshot_worker,
-            args=(str(self.root), "crash", crashed_result),
+            args=(str(self.root), "crash", crashed_result, True),
         )
         crashed.start()
         crashed.join(5)
@@ -381,7 +387,7 @@ class SQLiteAuthorityAdapterTests(unittest.TestCase):
         fresh_result = context.Queue()
         fresh = context.Process(
             target=_bound_snapshot_worker,
-            args=(str(self.root), "replacement", fresh_result),
+            args=(str(self.root), "replacement", fresh_result, True),
         )
         fresh.start()
         fresh.join(5)
@@ -827,6 +833,66 @@ class SQLiteAuthorityAdapterTests(unittest.TestCase):
                 execute.assert_not_called()
                 self.assertEqual(before, self._durable_state())
                 self.assertFalse(self.session.operation_owned_by_current_thread)
+
+    def test_bound_rollback_rejects_authority_and_descriptor_drift_without_execute(self) -> None:
+        rollback = {**CONTEXT, "project_id": PROJECT, "target": "rollback"}
+        drifted = AdmissionLease(PROJECT, "authority-drift", "fence", "owner", "barrier", 1)
+        drifted_recheck = validate_recheck(
+            drifted,
+            project_id=PROJECT,
+            authority_revision="authority-drift",
+            fencing_token="fence",  # noqa: S106
+            fencing_owner="owner",
+            durable_barrier_id="barrier",
+            revision=1,
+        )
+        before = self._durable_state()
+        with (
+            patch.object(
+                self.adapter, "snapshot", side_effect=AssertionError("SQLite reached")
+            ) as snapshot,
+            patch.object(
+                self.adapter, "execute", side_effect=AssertionError("execute reached")
+            ) as execute,
+            self.assertRaisesRegex(SQLiteAuthorityError, "trusted SQLite session reread"),
+        ):
+            self.adapter.verify_rollback_context_bound(
+                {**rollback, "authority_revision": "authority-drift"},
+                self.scope,
+                lease=drifted,
+                admission_recheck=drifted_recheck,
+            )
+        snapshot.assert_not_called()
+        execute.assert_not_called()
+        self.assertEqual(before, self._durable_state())
+        self.assertFalse(self.session.operation_owned_by_current_thread)
+
+        replacement = self.root / "rollback-authority-replacement.sqlite"
+        replacement.write_bytes(self.authority.read_bytes())
+        replacement.chmod(0o600)
+        before_descriptor = (
+            self.authority.read_bytes(),
+            self.session.control_store_path.read_bytes(),
+        )
+        replacement.replace(self.authority)
+        with (
+            patch.object(
+                self.adapter, "execute", side_effect=AssertionError("execute reached")
+            ) as execute,
+            self.assertRaisesRegex(SQLiteAuthorityError, "trusted SQLite session reread"),
+        ):
+            self.adapter.verify_rollback_context_bound(
+                rollback,
+                self.scope,
+                lease=self.lease,
+                admission_recheck=self.recheck,
+            )
+        execute.assert_not_called()
+        self.assertEqual(
+            before_descriptor,
+            (self.authority.read_bytes(), self.session.control_store_path.read_bytes()),
+        )
+        self.assertFalse(self.session.operation_owned_by_current_thread)
 
 
 if __name__ == "__main__":
