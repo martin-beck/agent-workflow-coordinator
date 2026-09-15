@@ -24,7 +24,9 @@ rewrites the coordinator source, Git history, and binding files.
 - `tasks/`: Markdown records with strict JSON front matter.
 - `plans/`: detailed plans referenced by tasks.
 - `CURRENT.md`: deterministic compact queue; never edit directly.
-- `STATUS.md`: optional deterministic portfolio view; never edit directly.
+- `STATUS.md`: optional deterministic portfolio view or, for large projects, a compact index to
+  generated `status/STATUS-####.md` pages; never edit directly. The linked pages together contain
+  the complete graph, dependency index and AR inventory.
 - `PROJECT_STATE.md` and `WORKTREES.md`: generated live observations.
 - `coordinator.vendor.json`: upstream version, commit and SHA-256 for every vendored file.
 

@@ -8,6 +8,7 @@ import datetime as dt
 import importlib.util
 import json
 import multiprocessing
+import re
 import subprocess
 import sys
 import threading
@@ -555,6 +556,52 @@ class HandoffTest(unittest.TestCase):
         self.assertEqual(1, status.count('AR_1101["AR-1101 - Open"]'))
         self.assertIn('subgraph series_11["11 - Additional work"]', status)
         self.assertIn("| [AR-1101](tasks/AR-1101-test.md) | None | None |", status)
+
+    def test_large_status_is_deterministically_sharded_below_limit(self) -> None:
+        payload = "meaningful status context " * 18
+        for number in range(1, 301):
+            self.make_task(
+                f"AR-{number:04d}",
+                summary=payload,
+                next_action=payload,
+            )
+        views = CORE.render_status_views(CORE.all_tasks())
+        self.assertGreater(len(views), 2)
+        self.assertIn("status/STATUS-0001.md", views["STATUS.md"])
+        self.assertNotIn("flowchart LR", views["STATUS.md"])
+        for relative in re.findall(r"\]\((status/STATUS-\d{4}\.md)\)", views["STATUS.md"]):
+            self.assertIn(relative, views)
+        for relative, content in views.items():
+            self.assertLessEqual(len(content.encode()), 200_000, relative)
+        pages = [content for path, content in views.items() if path != "STATUS.md"]
+        combined = "\n".join(pages)
+        self.assertTrue(all("](tasks/" not in page for page in pages))
+        self.assertTrue(any("](../tasks/" in page for page in pages))
+        prefix = (
+            "<!-- This page is generated; the root STATUS.md index links the complete view. -->\n\n"
+        )
+        full = CORE.render_status_view(CORE.all_tasks())
+        self.assertEqual(
+            full,
+            "".join(page.removeprefix(prefix) for page in pages).replace("](../tasks/", "](tasks/"),
+        )
+        for number in range(1, 301):
+            self.assertIn(f"AR-{number:04d}", combined)
+        self.assertEqual(views, CORE.render_status_views(list(reversed(CORE.all_tasks()))))
+
+    def test_status_shards_are_checked_and_stale_pages_are_rejected(self) -> None:
+        payload = "status detail " * 18
+        for number in range(1, 301):
+            self.make_task(f"AR-{number:04d}", summary=payload, next_action=payload)
+        views = CORE.render_status_views(CORE.all_tasks())
+        for relative, content in views.items():
+            CORE.atomic(self.root / relative, content)
+        stale = self.root / "status" / "STATUS-9999.md"
+        stale.write_text("stale")
+        errors = CORE.generated_view_errors(CORE.all_tasks())
+        self.assertIn("status/STATUS-9999.md is stale", errors)
+        stale.unlink()
+        self.assertEqual([], CORE.generated_view_errors(CORE.all_tasks()))
 
     def test_status_rejects_malformed_duplicate_self_missing_and_cycles(self) -> None:
         first = self.make_task("AR-0001")
