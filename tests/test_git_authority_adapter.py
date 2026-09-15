@@ -62,6 +62,7 @@ def _bound_snapshot_process(
     expected_head: str,
     mode: str,
     result: Any,
+    rollback: bool = False,
 ) -> None:
     """Run one real bound snapshot in a fresh process.
 
@@ -131,6 +132,7 @@ def _bound_snapshot_process(
 
     active_context = {
         **CONTEXT,
+        "target": "rollback" if rollback else "new",
         "authority_revision": authority_revision,
         "fencing_token": fencing_token,
         "fencing_owner": fencing_owner,
@@ -138,15 +140,25 @@ def _bound_snapshot_process(
         "state_revision": state_revision,
     }
     try:
-        value = adapter.snapshot_bound(
-            "discover",
-            active_context,
-            scope,
-            lease=lease,
-            admission_recheck=recheck,
-            expected_branch=expected_branch,
-            expected_head=expected_head,
-        )
+        if rollback:
+            value = adapter.verify_rollback_context_bound(
+                active_context,
+                scope,
+                lease=lease,
+                admission_recheck=recheck,
+                expected_branch=expected_branch,
+                expected_head=expected_head,
+            )
+        else:
+            value = adapter.snapshot_bound(
+                "discover",
+                active_context,
+                scope,
+                lease=lease,
+                admission_recheck=recheck,
+                expected_branch=expected_branch,
+                expected_head=expected_head,
+            )
     except Exception as error:
         result.put(("rejected", type(error).__name__, str(error), locals().get("calls", 0)))
     else:
@@ -551,6 +563,7 @@ class GitAuthorityAdapterTests(unittest.TestCase):
                 str(observed["git_head"]),
                 "crash",
                 crashed_result,
+                True,
             ),
         )
         crashed.start()
@@ -567,6 +580,7 @@ class GitAuthorityAdapterTests(unittest.TestCase):
                 str(observed["git_head"]),
                 "success",
                 recovered_result,
+                True,
             ),
         )
         recovered.start()
@@ -992,6 +1006,58 @@ class GitAuthorityAdapterTests(unittest.TestCase):
                 execute.assert_not_called()
                 self.assertEqual(before, self.session.snapshot())
                 self.assertFalse(self.session.operation_owned_by_current_thread)
+
+    def test_bound_rollback_rejects_authority_and_backend_drift_without_execute(self) -> None:
+        observed = self.adapter.snapshot("discover", CONTEXT)
+        rollback = {**CONTEXT, "target": "rollback"}
+        drifted = AdmissionLease(PROJECT, "authority-drift", "fence", "owner", "barrier", 1)
+        drifted_recheck = validate_recheck(
+            drifted,
+            project_id=PROJECT,
+            authority_revision="authority-drift",
+            fencing_token="fence",  # noqa: S106
+            fencing_owner="owner",
+            durable_barrier_id="barrier",
+            revision=1,
+        )
+        before = self.session.snapshot()
+        with (
+            patch.object(self.adapter, "_git", side_effect=AssertionError("Git reached")) as git,
+            patch.object(
+                self.adapter, "execute", side_effect=AssertionError("execute reached")
+            ) as execute,
+            self.assertRaisesRegex(GitAuthorityError, "trusted Git session reread"),
+        ):
+            self.adapter.verify_rollback_context_bound(
+                {**rollback, "authority_revision": "authority-drift"},
+                self.scope,
+                lease=drifted,
+                admission_recheck=drifted_recheck,
+                expected_branch=str(observed["git_branch"]),
+                expected_head=str(observed["git_head"]),
+            )
+        git.assert_not_called()
+        execute.assert_not_called()
+        self.assertEqual(before, self.session.snapshot())
+        self.assertFalse(self.session.operation_owned_by_current_thread)
+
+        with (
+            patch.object(
+                self.adapter, "execute", side_effect=AssertionError("execute reached")
+            ) as execute,
+            self.assertRaisesRegex(GitAuthorityError, "Git authority identity changed"),
+        ):
+            self.adapter.verify_rollback_context_bound(
+                rollback,
+                self.scope,
+                lease=self.lease,
+                admission_recheck=self.recheck,
+                expected_branch=str(observed["git_branch"]),
+                expected_head="0" * 40,
+            )
+        execute.assert_not_called()
+        self.assertEqual(before, self.session.snapshot())
+        self.assertFalse(self.session.operation_owned_by_current_thread)
 
 
 if __name__ == "__main__":
