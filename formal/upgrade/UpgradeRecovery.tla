@@ -118,6 +118,7 @@ FunctionalAvailability == \A op \in Operations: available[op]
 NoReplacementBeforeBackup == \A op \in Operations: runtime[op] = "new" => backup[op]
 ReleaseOrder == \A op \in Operations: barrier[op] = "released" => journal[op] \in {"completed", "rolled_back"}
 RollbackProof == \A op \in Operations: journal[op] = "rolled_back" => target[op] = "rollback" /\ runtime[op] = "old"
+RollbackRequiresBackup == \A op \in Operations: journal[op] = "rolled_back" => backup[op]
 TypeInvariant ==
     /\ phase \in [Operations -> Phases]
     /\ target \in [Operations -> Targets]
@@ -135,4 +136,5 @@ THEOREM Spec => []FunctionalAvailability
 THEOREM Spec => []NoReplacementBeforeBackup
 THEOREM Spec => []ReleaseOrder
 THEOREM Spec => []RollbackProof
+THEOREM Spec => []RollbackRequiresBackup
 ====

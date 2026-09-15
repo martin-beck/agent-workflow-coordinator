@@ -15,6 +15,7 @@ contract for the next implementation slice, not an implementation proof.
 | backup before commit | `test_apply_adapter_fault_boundaries_are_durable_and_fail_closed`, `test_failure_is_durable_and_rollback_can_enter_safe_mode` | public tests present; refinement pending |
 | validate/reopen release order | `test_commit_validate_and_reopen_require_safety_evidence`, `test_releasing_barrier_cannot_be_completed_without_authority_evidence` | public tests present; refinement pending |
 | rollback_started/rollback_verified | `test_rollback_verified_is_durable_before_release_and_revalidated`, `test_successful_rollback_requires_and_writes_terminal_record` | public tests present; refinement pending |
+| terminal rollback requires durable backup | `test_successful_rollback_requires_and_writes_terminal_record`, `test_failure_is_durable_and_rollback_can_enter_safe_mode` | public tests present; refinement pending |
 | `Crash` and ambiguous recovery | `test_sigkill_after_durable_releasing_recovers_without_second_restore`, `test_ambiguous_requires_explicit_newer_reconciliation` | public tests present; refinement pending |
 | `FunctionalAvailability` | `test_loaded_rollback_requires_authority_and_runtime_revalidation`, `test_apply_rejects_failed_state_and_unreconciled_rollback_record` | public tests present; refinement pending |
 | Git backend | production Git adapter and ref/restore tests | model branch exists; production adapter explicitly fail-closed |
