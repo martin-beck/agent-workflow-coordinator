@@ -12,6 +12,11 @@
 - Fence wrapped commands started from a product checkout to the active task's declared worktree
   and branch.
 
+## v0.3.7 - 2026-09-14
+
+- Include the TLC runner and upgrade-runtime tests in vendor snapshots so downstream formal and
+  coverage gates execute the complete shipped coordinator runtime.
+
 ## v0.3.6 - 2026-09-14
 
 - Allow a `superseded` dependency to satisfy readiness only through an explicit,
