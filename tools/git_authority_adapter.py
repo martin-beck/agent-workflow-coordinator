@@ -20,6 +20,21 @@ class GitAuthorityError(RuntimeError):
     """Git authority evidence is unavailable or a mutation was requested."""
 
 
+_SUPPORTED_PHASES = frozenset(
+    {
+        "discover",
+        "preflight",
+        "quiesce",
+        "backup",
+        "stage",
+        "commit",
+        "validate",
+        "reopen",
+        "rollback",
+    }
+)
+
+
 class GitAuthorityAdapter:
     """Read-only Git evidence adapter; execute remains permanently disabled."""
 
@@ -80,6 +95,8 @@ class GitAuthorityAdapter:
 
     def snapshot(self, phase: str, context: Mapping[str, object]) -> dict[str, Any]:
         """Return identity-bound, read-only Git facts; never claim mutability evidence."""
+        if type(phase) is not str or phase not in _SUPPORTED_PHASES:
+            raise GitAuthorityError("Git authority phase is invalid")
         value = self._context(context)
         status = self._git("status", "--porcelain=v1", "--untracked-files=all")
         head = self._git("rev-parse", "--verify", "HEAD")
@@ -117,7 +134,7 @@ class GitAuthorityAdapter:
         """
         from tools.scoped_backend_adapter import ScopedBackendAdapter
 
-        if type(phase) is not str or not phase:
+        if type(phase) is not str or phase not in _SUPPORTED_PHASES:
             raise GitAuthorityError("Git authority phase is invalid")
         if type(expected_branch) is not str or not expected_branch:
             raise GitAuthorityError("expected Git branch identity is invalid")
@@ -192,6 +209,8 @@ class GitAuthorityAdapter:
 
     def verify_rollback_context(self, context: Mapping[str, object]) -> dict[str, Any]:
         """Reread clean Git identity but do not authorize rollback."""
+        if context.get("target") != "rollback":
+            raise GitAuthorityError("Git rollback context target is invalid")
         value = self.snapshot("rollback", context)
         value["rollback_context_verified"] = False
         return value

@@ -228,9 +228,38 @@ class SQLiteAuthorityAdapterTests(unittest.TestCase):
         self.assertTrue(result["sqlite_integrity_verified"])
         self.assertTrue(result["sqlite_foreign_keys_verified"])
         self.assertFalse(result["mutates_authority"])
+        for phase in ("", "unknown", 1, True):
+            with (
+                self.subTest(phase=phase),
+                self.assertRaisesRegex(SQLiteAuthorityError, "phase is invalid"),
+            ):
+                self.adapter.snapshot(cast(Any, phase), CONTEXT)
+        durable_before = self._durable_state()
+        with (
+            patch.object(
+                self.adapter, "snapshot", side_effect=AssertionError("SQLite reached")
+            ) as snapshot,
+            patch.object(
+                self.adapter, "execute", side_effect=AssertionError("execute reached")
+            ) as execute,
+            self.assertRaisesRegex(SQLiteAuthorityError, "rollback context target"),
+        ):
+            self.adapter.verify_rollback_context(CONTEXT)
+        snapshot.assert_not_called()
+        execute.assert_not_called()
+        self.assertEqual(durable_before, self._durable_state())
+        self.assertFalse(self.session.operation_owned_by_current_thread)
+        rollback_context = {**CONTEXT, "target": "rollback"}
+        self.assertFalse(
+            self.adapter.verify_rollback_context(rollback_context)["rollback_context_verified"]
+        )
         with self.assertRaisesRegex(SQLiteAuthorityError, "not implemented"):
             self.adapter.execute("commit", CONTEXT)
-        self.assertFalse(self.adapter.verify_rollback_context(CONTEXT)["rollback_context_verified"])
+        self.assertFalse(
+            self.adapter.verify_rollback_context({**CONTEXT, "target": "rollback"})[
+                "rollback_context_verified"
+            ]
+        )
 
     def test_scoped_wrapper_guards_disabled_execute(self) -> None:
         adapter = ScopedBackendAdapter(self.adapter, Scope())
@@ -352,6 +381,9 @@ class SQLiteAuthorityAdapterTests(unittest.TestCase):
         }
         cases = (
             ("phase", "", "phase is invalid"),
+            ("phase", "unknown", "phase is invalid"),
+            ("phase", 1, "phase is invalid"),
+            ("phase", True, "phase is invalid"),
             ("lease", cast(Any, object()), "trusted admission lease"),
             ("admission_recheck", cast(Any, object()), "trusted admission recheck"),
             ("scope", cast(Any, object()), "concrete lock-domain scope"),
@@ -563,6 +595,8 @@ class SQLiteAuthorityAdapterTests(unittest.TestCase):
             self.adapter.snapshot("discover", CONTEXT)
         with self.assertRaisesRegex(SQLiteAuthorityError, "mismatched"):
             self.adapter.snapshot("discover", {**CONTEXT, "backend": "git"})
+        with self.assertRaisesRegex(SQLiteAuthorityError, "context types"):
+            self.adapter.snapshot("discover", {**CONTEXT, "operation_id": 1})
 
     def test_descriptor_replacement_fails_old_reader_and_fresh_reader_recovers(self) -> None:
         replacement = self.root / "replacement.sqlite"

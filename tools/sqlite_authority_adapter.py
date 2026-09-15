@@ -19,6 +19,21 @@ class SQLiteAuthorityError(RuntimeError):
     """SQLite authority evidence is unavailable or mutation was requested."""
 
 
+_SUPPORTED_PHASES = frozenset(
+    {
+        "discover",
+        "preflight",
+        "quiesce",
+        "backup",
+        "stage",
+        "commit",
+        "validate",
+        "reopen",
+        "rollback",
+    }
+)
+
+
 class SQLiteAuthorityAdapter:
     """Read-only integrity evidence adapter; execute remains disabled."""
 
@@ -124,10 +139,22 @@ class SQLiteAuthorityAdapter:
         }
         if set(context) != required or context.get("backend") != "sqlite":
             raise SQLiteAuthorityError("SQLite authority context is incomplete or mismatched")
+        schema_version = context.get("schema_version")
+        state_revision = context.get("state_revision")
+        if type(schema_version) is not int or schema_version < 1:
+            raise SQLiteAuthorityError("SQLite authority context types are invalid")
+        if type(state_revision) is not int or state_revision < 1:
+            raise SQLiteAuthorityError("SQLite authority context types are invalid")
+        for field in required - {"schema_version", "state_revision"}:
+            value = context.get(field)
+            if type(value) is not str or not value:
+                raise SQLiteAuthorityError("SQLite authority context types are invalid")
         return dict(context)
 
     def snapshot(self, phase: str, context: Mapping[str, object]) -> dict[str, Any]:
         """Return read-only integrity evidence without claiming mutation safety."""
+        if type(phase) is not str or phase not in _SUPPORTED_PHASES:
+            raise SQLiteAuthorityError("SQLite authority phase is invalid")
         value = self._context(context)
         self._check_identity()
         try:
@@ -167,7 +194,7 @@ class SQLiteAuthorityAdapter:
         """Read SQLite integrity only inside a trusted, identity-bound scope."""
         from tools.scoped_backend_adapter import ScopedBackendAdapter
 
-        if type(phase) is not str or not phase:
+        if type(phase) is not str or phase not in _SUPPORTED_PHASES:
             raise SQLiteAuthorityError("SQLite authority phase is invalid")
         if not isinstance(lease, AdmissionLease):
             raise SQLiteAuthorityError("trusted admission lease is required")
@@ -238,6 +265,8 @@ class SQLiteAuthorityAdapter:
         return value
 
     def verify_rollback_context(self, context: Mapping[str, object]) -> dict[str, Any]:
+        if context.get("target") != "rollback":
+            raise SQLiteAuthorityError("SQLite rollback context target is invalid")
         value = self.snapshot("rollback", context)
         value["rollback_context_verified"] = False
         return value
