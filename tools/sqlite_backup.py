@@ -13,6 +13,8 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+from tools.lifecycle_session import LifecycleSession
+
 MANIFEST_VERSION = 1
 MANIFEST_FIELDS = frozenset(
     {
@@ -29,6 +31,20 @@ MANIFEST_FIELDS = frozenset(
 
 class BackupError(RuntimeError):
     """Raised when a SQLite backup or restore cannot be proven safe."""
+
+
+def _check_session(
+    session: LifecycleSession | None, owner: object | None, path: Path, message: str
+) -> None:
+    try:
+        invalid = session is not None and (
+            (owner is not None and not session.belongs_to(owner))
+            or session.capture_identity() != _backup_identity(path)
+        )
+    except (OSError, ValueError) as error:
+        raise BackupError(message) from error
+    if invalid:
+        raise BackupError(message)
 
 
 def _regular(path: Path, label: str) -> None:
@@ -295,9 +311,17 @@ def _install(source: Path, destination: Path, binding: dict[str, Any]) -> None:
         )
 
 
-def backup_database(source: Path, destination: Path, binding: dict[str, Any]) -> dict[str, Any]:
+def backup_database(
+    source: Path,
+    destination: Path,
+    binding: dict[str, Any],
+    *,
+    session: LifecycleSession | None = None,
+    owner: object | None = None,
+) -> dict[str, Any]:
     """Create a verified consistent backup without copying a live main file."""
     _regular(source, "source database")
+    _check_session(session, owner, source, "SQLite lifecycle session is not bound to source")
     if destination.exists() or destination.is_symlink():
         raise BackupError("refusing to overwrite an existing backup")
     _integrity(source, binding)
@@ -320,6 +344,8 @@ def restore_database(
     binding: dict[str, Any],
     *,
     quiesced: bool,
+    session: LifecycleSession | None = None,
+    owner: object | None = None,
 ) -> None:
     """Install a verified backup atomically; refuse restore while writers may run."""
     if not quiesced:
@@ -327,6 +353,7 @@ def restore_database(
     if Path(str(destination) + "-wal").exists() or Path(str(destination) + "-shm").exists():
         raise BackupError("restore requires a checkpointed destination without live WAL sidecars")
     _regular(backup, "backup database")
+    _check_session(session, owner, backup, "SQLite lifecycle session is not bound to backup")
     backup_identity = _backup_identity(backup)
     _validate_manifest(manifest)
     if manifest.get("database_sha256") != _digest(backup):
@@ -334,6 +361,7 @@ def restore_database(
     _integrity(backup, binding)
     if _backup_identity(backup) != backup_identity:
         raise BackupError("backup database changed during restore")
+    _check_session(session, owner, backup, "SQLite lifecycle session changed before install")
     _install(backup, destination, binding)
 
 

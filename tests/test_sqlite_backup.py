@@ -17,6 +17,9 @@ from tempfile import TemporaryDirectory
 from typing import cast
 from unittest.mock import patch
 
+from tools.lifecycle_session import _issue
+from tools.sqlite_authority_adapter import SQLiteAuthorityAdapter
+
 ROOT = Path(__file__).resolve().parents[1]
 SPEC = importlib.util.spec_from_file_location("sqlite_backup", ROOT / "tools/sqlite_backup.py")
 assert SPEC and SPEC.loader
@@ -111,6 +114,55 @@ class SQLiteBackupTests(unittest.TestCase):
         manifest_path = self.root / "backup-manifest.json"
         write_manifest(manifest_path, manifest)
         self.assertIn('"kind": "sqlite-online-backup"', manifest_path.read_text())
+
+    def test_adapter_bound_wrappers_and_foreign_session_reject(self) -> None:
+        """Legacy functions remain compatibility-only when no session is supplied."""
+        self.source.chmod(0o600)
+        adapter = SQLiteAuthorityAdapter(self.source)
+        backup = self.root / "bound-backup.sqlite3"
+        manifest = adapter.backup_bound(backup, BINDING)
+        adapter.restore_bound(backup, self.root / "bound-restored.sqlite3", manifest, BINDING)
+        foreign_path = self.root / "foreign.sqlite3"
+        foreign_path.touch(mode=0o600)
+        foreign = SQLiteAuthorityAdapter(foreign_path)
+        with self.assertRaises(BackupError):
+            MODULE.backup_database(
+                self.source,
+                self.root / "foreign-backup.sqlite3",
+                BINDING,
+                session=foreign.lifecycle_session(),
+                owner=adapter,
+            )
+
+    def test_bound_restore_rejects_same_byte_backup_symlink_before_install(self) -> None:
+        self.source.chmod(0o600)
+        adapter = SQLiteAuthorityAdapter(self.source)
+        backup = self.root / "bound-backup.sqlite3"
+        manifest = adapter.backup_bound(backup, BINDING)
+        original = self.root / "original-backup.sqlite3"
+        original_integrity = MODULE._integrity
+
+        def replace_after_integrity(path: Path, binding: dict[str, object]) -> None:
+            original_integrity(path, binding)
+            backup.rename(original)
+            backup.symlink_to(original)
+
+        destination = self.root / "bound-restored.sqlite3"
+        with (
+            patch.object(MODULE, "_integrity", side_effect=replace_after_integrity),
+            self.assertRaisesRegex(BackupError, "changed before install"),
+        ):
+            MODULE.restore_database(
+                backup,
+                destination,
+                manifest,
+                BINDING,
+                quiesced=True,
+                session=_issue(adapter, backup),
+                owner=adapter,
+            )
+        self.assertFalse(destination.exists())
+        self.assertFalse(list(self.root.glob(".coordinator-*")))
 
     def test_fresh_restore_fault_then_retry_preserves_verified_sqlite_lifecycle(self) -> None:
         backup = self.root / "backup.sqlite3"
