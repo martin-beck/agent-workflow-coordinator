@@ -8,11 +8,62 @@ import os
 import re
 import stat
 from collections.abc import Callable
+from hashlib import sha256
 from pathlib import Path
 
 from tools.upgrade_authority import AuthorityError, read_runtime_selector
 
 _RELEASE = re.compile(r"v[0-9]+\.[0-9]+\.[0-9]+\Z")
+_DIGEST = re.compile(r"[0-9a-f]{64}\Z")
+_MAX_MANIFEST_BYTES = 16 * 1024 * 1024
+
+
+def verify_runtime_manifest(runtime_root: Path, expected_digest: str) -> bool:
+    """Verify the owner-only manifest digest for one staged runtime."""
+    if not isinstance(expected_digest, str) or _DIGEST.fullmatch(expected_digest) is None:
+        raise AuthorityError("runtime manifest digest is invalid")
+    manifest = runtime_root / "runtime-manifest.json"
+    try:
+        parent_before = manifest.parent.lstat()
+        value = manifest.lstat()
+        if (
+            not stat.S_ISREG(value.st_mode)
+            or value.st_uid != os.geteuid()
+            or value.st_nlink != 1
+            or stat.S_IMODE(value.st_mode) != 0o600
+        ):
+            raise AuthorityError("runtime manifest is unsafe")
+        descriptor = os.open(manifest, os.O_RDONLY | os.O_NOFOLLOW)
+        try:
+            opened = os.fstat(descriptor)
+            if (
+                (opened.st_dev, opened.st_ino) != (value.st_dev, value.st_ino)
+                or opened.st_uid != os.geteuid()
+                or stat.S_IMODE(opened.st_mode) != 0o600
+                or opened.st_nlink != 1
+            ):
+                raise AuthorityError("runtime manifest identity changed")
+            hasher = sha256()
+            total = 0
+            while chunk := os.read(descriptor, 65536):
+                total += len(chunk)
+                if total > _MAX_MANIFEST_BYTES:
+                    raise AuthorityError("runtime manifest is too large")
+                hasher.update(chunk)
+            digest = hasher.hexdigest()
+        finally:
+            os.close(descriptor)
+        parent_after = manifest.parent.lstat()
+        if (parent_before.st_dev, parent_before.st_ino) != (
+            parent_after.st_dev,
+            parent_after.st_ino,
+        ):
+            raise AuthorityError("runtime manifest parent identity changed")
+    except OSError as error:
+        raise AuthorityError("runtime manifest is unavailable") from error
+    if digest != expected_digest:
+        raise AuthorityError("runtime manifest digest does not match")
+    return True
 
 
 def resolve_selected_runtime(

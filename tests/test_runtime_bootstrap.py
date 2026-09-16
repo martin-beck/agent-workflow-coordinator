@@ -5,11 +5,14 @@
 from __future__ import annotations
 
 import json
+import os
 import tempfile
 import unittest
+from hashlib import sha256
 from pathlib import Path
+from unittest.mock import patch
 
-from tools.runtime_bootstrap import resolve_selected_runtime
+from tools.runtime_bootstrap import resolve_selected_runtime, verify_runtime_manifest
 from tools.upgrade_authority import AuthorityError, commit_runtime_selector
 
 
@@ -67,6 +70,54 @@ class RuntimeBootstrapTests(unittest.TestCase):
                 resolve_selected_runtime(selector, releases)
             with self.assertRaisesRegex(AuthorityError, "verification failed"):
                 resolve_selected_runtime(selector, releases, lambda _: False)
+
+    def test_manifest_verifier_requires_exact_owner_only_digest(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            runtime = Path(directory)
+            manifest = runtime / "runtime-manifest.json"
+            manifest.write_text('{"release":"v1.2.3"}\n')
+            manifest.chmod(0o600)
+            digest = sha256(manifest.read_bytes()).hexdigest()
+            self.assertTrue(verify_runtime_manifest(runtime, digest))
+            with self.assertRaisesRegex(AuthorityError, "does not match"):
+                verify_runtime_manifest(runtime, "0" * 64)
+            with self.assertRaisesRegex(AuthorityError, "digest is invalid"):
+                verify_runtime_manifest(runtime, "not-a-digest")
+
+    def test_manifest_verifier_rejects_preopen_symlink_replacement(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            runtime = Path(directory)
+            manifest = runtime / "runtime-manifest.json"
+            manifest.write_text('{"release":"v1.2.3"}\n')
+            manifest.chmod(0o600)
+            digest = sha256(manifest.read_bytes()).hexdigest()
+            original_open = os.open
+
+            def replace_then_open(path: str | Path, flags: int) -> int:
+                manifest.unlink()
+                manifest.symlink_to(runtime / "other.json")
+                return original_open(path, flags)
+
+            with (
+                patch("tools.runtime_bootstrap.os.open", side_effect=replace_then_open),
+                self.assertRaisesRegex(AuthorityError, "unavailable"),
+            ):
+                verify_runtime_manifest(runtime, digest)
+
+    def test_manifest_verifier_reads_complete_content_across_short_reads(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            runtime = Path(directory)
+            manifest = runtime / "runtime-manifest.json"
+            manifest.write_text('{"release":"v1.2.3","files":["runtime.py"]}\n')
+            manifest.chmod(0o600)
+            digest = sha256(manifest.read_bytes()).hexdigest()
+            original_read = os.read
+
+            def short_read(descriptor: int, size: int) -> bytes:
+                return original_read(descriptor, min(size, 3))
+
+            with patch("tools.runtime_bootstrap.os.read", side_effect=short_read):
+                self.assertTrue(verify_runtime_manifest(runtime, digest))
 
     def test_rejects_symlinked_release_root_ancestor(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
