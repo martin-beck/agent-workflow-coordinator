@@ -172,6 +172,32 @@ def _session_recovery_waiting_for_sigkill(root_text: str, ready: Any) -> None:
     session.recover_unknown()
 
 
+def _reconcile_waiting_for_sigkill(root_text: str, ready: Any) -> None:
+    """Lose the reply after reconciliation commits before outcome publication."""
+    root = Path(root_text)
+    session = SQLiteBarrierSessionStore(_control(root), lambda: "authority-1")
+    ambiguous = session.snapshot()
+    assert ambiguous is not None
+    replacement = BarrierSessionState(
+        _identity(
+            attempt="attempt-reconciled",
+            state_revision=2,
+            barrier="barrier-reconciled",
+            fence="fence-reconciled",
+            owner="owner-reconciled",
+        ),
+        "held",
+        1,
+    )
+    def wait_before_outcome(*_args: object, **_kwargs: object) -> None:
+        ready.set()
+        multiprocessing.Event().wait()
+
+    session_any: Any = session
+    session_any._mark_intent_locked = wait_before_outcome
+    session.reconcile_ambiguous(ambiguous.revision, replacement)
+
+
 def _route_effect_waiting_for_sigkill(root_text: str, ready: Any) -> None:
     """Pause after a public route's SQL effects and before transaction commit."""
     root = Path(root_text)
@@ -606,6 +632,93 @@ class SQLiteMutationBarrierProcessTests(unittest.TestCase):
         )
         self.session = reopened
         released = self._release(reconciled)
+        self.assertEqual("released", released.status)
+        self.assertEqual(("committed",), self._run_writer())
+        self.assertEqual(2, self._authority_revision()[0])
+
+    def test_sigkill_after_reconciliation_commit_recovers_new_fence_from_history(self) -> None:
+        held = self._create_held()
+        ambiguous = self.session.mark_ambiguous(held.revision, "process-death")
+        self.assertEqual(("ambiguous", 2), (ambiguous.status, ambiguous.revision))
+
+        context = multiprocessing.get_context("fork")
+        ready = context.Event()
+        crashed = context.Process(
+            target=_reconcile_waiting_for_sigkill,
+            args=(self.directory.name, ready),
+        )
+        crashed.start()
+        self.assertTrue(ready.wait(5))
+        self._kill(crashed)
+
+        reopened = SQLiteBarrierSessionStore(_control(self.root), lambda: "authority-1")
+        recovered = reopened.snapshot()
+        assert recovered is not None
+        self.assertEqual(("held", 1), (recovered.status, recovered.revision))
+        self.assertEqual("attempt-reconciled", recovered.identity.attempt_id)
+        self.assertEqual(2, recovered.identity.state_revision)
+        self.assertNotEqual(ambiguous.identity.fencing_token, recovered.identity.fencing_token)
+        with sqlite3.connect(self.control.control_store_path) as connection:
+            history = connection.execute(
+                "SELECT attempt_id,revision,record_json FROM barrier_session_history "
+                "WHERE project_id=?",
+                (PROJECT,),
+            ).fetchall()
+        self.assertEqual(1, len(history))
+        self.assertEqual((ambiguous.identity.attempt_id, ambiguous.revision), history[0][:2])
+        self.assertIn('"status":"ambiguous"', str(history[0][2]))
+
+        with sqlite3.connect(self.control.control_store_path) as connection:
+            intent_before = connection.execute(
+                "SELECT expected_revision,proposed_revision,outcome "
+                "FROM barrier_session_intent WHERE project_id=?",
+                (PROJECT,),
+            ).fetchall()
+            connection.execute(
+                "UPDATE barrier_session_intent SET expected_revision=999 "
+                "WHERE project_id=? AND outcome='prepared'",
+                (PROJECT,),
+            )
+            connection.commit()
+        with self.assertRaisesRegex(Exception, "prepared session intent identity is invalid"):
+            reopened.recover_unknown()
+        self.assertEqual(recovered, reopened.snapshot())
+        with sqlite3.connect(self.control.control_store_path) as connection:
+            intent_after_rejected_recovery = connection.execute(
+                "SELECT expected_revision,proposed_revision,outcome "
+                "FROM barrier_session_intent WHERE project_id=?",
+                (PROJECT,),
+            ).fetchall()
+        self.assertEqual(
+            [
+                (999 if row[2] == "prepared" else row[0], row[1], row[2])
+                for row in intent_before
+            ],
+            intent_after_rejected_recovery,
+        )
+
+        # Restore the exact predecessor revision only to continue the valid
+        # recovery path; the forged attempt above must not mutate any row.
+        with sqlite3.connect(self.control.control_store_path) as connection:
+            connection.execute(
+                "UPDATE barrier_session_intent SET expected_revision=? "
+                "WHERE project_id=? AND outcome='prepared'",
+                (ambiguous.revision, PROJECT),
+            )
+            connection.commit()
+        self.assertEqual(recovered, reopened.recover_unknown())
+
+        self.assertEqual(
+            ("rejected", "MutationFenceError", "authority mutation rejected while barrier is held"),
+            self._run_writer(),
+        )
+        self.assertEqual(1, self._authority_revision()[0])
+        with self.assertRaisesRegex(Exception, "only ambiguous sessions require reconciliation"):
+            reopened.reconcile_ambiguous(ambiguous.revision, recovered)
+        self.assertEqual(recovered, reopened.snapshot())
+
+        self.session = reopened
+        released = self._release(recovered)
         self.assertEqual("released", released.status)
         self.assertEqual(("committed",), self._run_writer())
         self.assertEqual(2, self._authority_revision()[0])
