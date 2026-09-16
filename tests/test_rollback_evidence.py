@@ -7,7 +7,11 @@ import unittest
 from pathlib import Path
 
 from tools.git_authority_adapter import GitAuthorityAdapter
-from tools.rollback_control_store import SQLiteControlStoreAdapter, SQLiteRollbackControlStore
+from tools.rollback_control_store import (
+    ControlStoreError,
+    SQLiteControlStoreAdapter,
+    SQLiteRollbackControlStore,
+)
 from tools.rollback_evidence import RollbackEvidenceError
 from tools.sqlite_authority_adapter import SQLiteAuthorityAdapter
 
@@ -57,6 +61,22 @@ class RollbackEvidenceTests(unittest.TestCase):
             stat = control.control_store_path.stat()
             self.assertEqual(f"{stat.st_dev}:{stat.st_ino}", observation.control_store_identity)
             self.assertEqual(1, observation.control_store_revision)
+            control.cas(1, {**record, "status": "ambiguous", "revision": 2})
+            with self.assertRaises(ControlStoreError):
+                adapter.observe_backup_identity(backup, manifest, context)
+
+    def test_initialized_control_store_inode_replacement_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            authority = root / "authority.sqlite"
+            authority.write_bytes(b"SQLite format 3\x00")
+            authority.chmod(0o600)
+            control = SQLiteRollbackControlStore(root / "control.sqlite", PROJECT, authority)
+            replacement = root / "replacement.sqlite"
+            replacement.write_bytes(b"replaced")
+            control.control_store_path.replace(replacement)
+            with self.assertRaises(ControlStoreError):
+                control.snapshot("op-1")
 
     def test_initialized_adapters_observe_identical_artifacts(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
