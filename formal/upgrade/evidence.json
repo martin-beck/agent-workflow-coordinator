@@ -4,8 +4,8 @@
   "model_sha256": "616d53832ac5ec18bf3242d47b2412195eb64adb2b1035235514e06cc3edf2ba",
   "config_sha256": "47425af53affd104aa5e30d7434cf3e71e3c7b69bccb9b05fbd749d3285991a2",
   "implementation_snapshot": {
-    "revision": "dbc5f87a8cdd30741ab966c77a76d190124c057e",
-    "runtime_revision": "dbc5f87a8cdd30741ab966c77a76d190124c057e",
+    "revision": "4676a9eeb4f9f87fa9339225457134ed7f6a8964",
+    "runtime_revision": "4676a9eeb4f9f87fa9339225457134ed7f6a8964",
     "files": {
       "schema/upgrade-contract.schema.json": "6ef2362107a0c3ff895e6dc96e35899e19b367bebd549b6acee42a680d7a442b",
       "tools/generate_upgrade_contract.py": "b3db939912bed549eaba17a2e064e776ff9119b82287218016100e25e5ad9ba4",
