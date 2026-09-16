@@ -7,12 +7,15 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 
 class RollbackEvidenceError(ValueError):
     """Backup or control-store evidence is unavailable or malformed."""
+
+
+_PROVENANCE_TOKEN = object()
 
 
 @dataclass(frozen=True)
@@ -23,6 +26,7 @@ class BackupObservation:
     manifest_digest: str
     control_store_identity: str
     control_store_revision: int
+    _provenance: object = field(default=None, repr=False, compare=False)
 
     @classmethod
     def from_artifacts(
@@ -81,4 +85,10 @@ class BackupObservation:
             ).hexdigest(),
             control_store_identity,
             control_store_revision,
+            _PROVENANCE_TOKEN,
         )
+
+    @property
+    def has_provenance(self) -> bool:
+        """Whether this value was produced by the validated artifact factory."""
+        return self._provenance is _PROVENANCE_TOKEN

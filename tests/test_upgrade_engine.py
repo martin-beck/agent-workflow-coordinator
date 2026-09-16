@@ -2168,12 +2168,19 @@ class UpgradeEngineTests(unittest.TestCase):
         context = PhaseContext(**cast(dict[str, Any], ROLLBACK_CONTEXT))
         evidence = BoundRollbackCapability.bind(context, adapter)
         capability = RollbackAuthorizationCapability.bind(context, evidence)
-        observation = BackupObservation("bytes", "manifest", "store:1", 4)
+        with tempfile.TemporaryDirectory() as directory:
+            backup = Path(directory) / "backup"
+            manifest = Path(directory) / "manifest.json"
+            backup.write_bytes(b"bytes")
+            manifest.write_text('{"value": "manifest"}', encoding="utf-8")
+            observation = BackupObservation.from_artifacts(
+                backup, manifest, control_store_identity="store:1", control_store_revision=4
+            )
         reread = {
-            "backup_bytes_digest": "bytes",
-            "manifest_digest": "manifest",
-            "control_store_identity": "store:1",
-            "control_store_revision": 4,
+            "backup_bytes_digest": observation.backup_bytes_digest,
+            "manifest_digest": observation.manifest_digest,
+            "control_store_identity": observation.control_store_identity,
+            "control_store_revision": observation.control_store_revision,
         }
         with self.assertRaisesRegex(UpgradeError, "not enabled"):
             capability.preflight(ROLLBACK_CONTEXT, observation, reread)
@@ -2187,7 +2194,9 @@ class UpgradeEngineTests(unittest.TestCase):
                 with self.assertRaisesRegex(UpgradeError, message):
                     capability.preflight(ROLLBACK_CONTEXT, observation, hostile)
         with self.assertRaisesRegex(UpgradeError, "typed observation"):
-            capability.preflight(ROLLBACK_CONTEXT, cast(Any, dict(reread)), reread)
+            capability.preflight(
+                ROLLBACK_CONTEXT, BackupObservation("bytes", "manifest", "store:1", 4), reread
+            )
 
     def test_bound_rollback_inspection_dispatches_initialized_real_adapters(self) -> None:
         """Concrete adapter identity is retained without authorizing rollback."""

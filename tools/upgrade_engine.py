@@ -285,7 +285,11 @@ class RollbackAuthorizationCapability:
         reread: Mapping[str, object],
     ) -> None:
         """Validate adapter-owned backup/CAS evidence without authorizing rollback."""
-        if not isinstance(observation, BackupObservation) or not isinstance(reread, Mapping):
+        if (
+            not isinstance(observation, BackupObservation)
+            or not observation.has_provenance
+            or not isinstance(reread, Mapping)
+        ):
             raise UpgradeError("rollback preflight requires typed observation and reread")
         if not isinstance(context, Mapping) or context.get("target") != "rollback":
             raise UpgradeError("rollback preflight context is invalid")
