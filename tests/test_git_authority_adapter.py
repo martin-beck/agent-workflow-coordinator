@@ -26,6 +26,7 @@ from tools.git_authority_adapter import (
     GitRollbackArtifactBinding,
     GitRollbackSessionState,
 )
+from tools.git_backup import create_backup
 from tools.handoffctl import locked
 from tools.lock_domain import LockDomainContract
 from tools.lock_domain_scope import LockDomainScope
@@ -334,9 +335,10 @@ class GitAuthorityAdapterTests(unittest.TestCase):
             {
                 "artifact_root": str(artifact_root),
                 "destination": str(artifact_root / "destination"),
-                "manifest": str(artifact_root / "manifest.json"),
             }
         )
+        backup = create_backup(self.root, artifact_root / "git-backup", quiesced=True)
+        context.update({"manifest": str(backup / "manifest.json")})
         context["barrier_identity_digest"] = canonical_barrier_digest(context)
         context["envelope_digest"] = canonical_envelope_digest(context)
         observed = self.adapter.snapshot("discover", context)
@@ -428,6 +430,85 @@ class GitAuthorityAdapterTests(unittest.TestCase):
         self.assertFalse(self.session.operation_owned_by_current_thread)
         with self.assertRaisesRegex(GitAuthorityError, "not implemented"):
             self.adapter.execute("commit", CONTEXT)
+
+    def test_preflight_git_verifies_initialized_backup_without_mutation(self) -> None:
+        artifact_root = Path(self.coordination.name) / "artifacts"
+        backup = create_backup(self.root, artifact_root / "git-backup", quiesced=True)
+        observed = self.adapter.snapshot("discover", CONTEXT)
+        context = {
+            **CONTEXT,
+            "target": "rollback",
+            "artifact_root": str(artifact_root),
+            "git_backup_root": str(backup),
+            "manifest": str(backup / "manifest.json"),
+        }
+        before = (self.root / "state").read_bytes()
+        durable_before = self.session.snapshot()
+        result = self.adapter.preflight_git(
+            context,
+            self.scope,
+            lease=self.lease,
+            admission_recheck=self.recheck,
+            expected_branch=str(observed["git_branch"]),
+            expected_head=str(observed["git_head"]),
+        )
+        self.assertEqual(str(observed["git_head"]), result.commit)
+        self.assertGreaterEqual(result.artifact_count, 1)
+        self.assertEqual(before, (self.root / "state").read_bytes())
+        self.assertEqual(durable_before, self.session.snapshot())
+        self.assertFalse(self.session.operation_owned_by_current_thread)
+        with self.assertRaisesRegex(GitAuthorityError, "not implemented"):
+            self.adapter.execute("rollback", context)
+
+    def test_preflight_git_rejects_target_artifact_and_session_drift(self) -> None:
+        artifact_root = Path(self.coordination.name) / "artifacts"
+        backup = create_backup(self.root, artifact_root / "git-backup", quiesced=True)
+        observed = self.adapter.snapshot("discover", CONTEXT)
+        base = {
+            **CONTEXT,
+            "target": "rollback",
+            "artifact_root": str(artifact_root),
+            "git_backup_root": str(backup),
+            "manifest": str(backup / "manifest.json"),
+        }
+        cases = (
+            ({"git_backup_root": str(artifact_root / "missing")}, "manifest is not bound"),
+            ({"git_backup_root": str(self.root)}, "outside artifact root"),
+            ({"target": "new"}, "rollback target"),
+            ({"authority_revision": "foreign"}, "identity changed"),
+        )
+        for changes, message in cases:
+            context = {**base, **changes}
+            with self.subTest(changes=changes), self.assertRaisesRegex(GitAuthorityError, message):
+                self.adapter.preflight_git(
+                    context,
+                    self.scope,
+                    lease=self.lease,
+                    admission_recheck=self.recheck,
+                    expected_branch=str(observed["git_branch"]),
+                    expected_head=str(observed["git_head"]),
+                )
+        second_backup = create_backup(self.root, artifact_root / "git-backup-2", quiesced=True)
+        foreign_manifest = {**base, "git_backup_root": str(second_backup)}
+        with self.assertRaisesRegex(GitAuthorityError, "manifest is not bound"):
+            self.adapter.preflight_git(
+                foreign_manifest,
+                self.scope,
+                lease=self.lease,
+                admission_recheck=self.recheck,
+                expected_branch=str(observed["git_branch"]),
+                expected_head=str(observed["git_head"]),
+            )
+        (backup / "refs.txt").write_text("tampered\n", encoding="utf-8")
+        with self.assertRaisesRegex(GitAuthorityError, "verification failed"):
+            self.adapter.preflight_git(
+                base,
+                self.scope,
+                lease=self.lease,
+                admission_recheck=self.recheck,
+                expected_branch=str(observed["git_branch"]),
+                expected_head=str(observed["git_head"]),
+            )
 
     def test_git_observation_failures_and_invalid_repository_fail_closed(self) -> None:
         with self.assertRaisesRegex(GitAuthorityError, "unavailable"):

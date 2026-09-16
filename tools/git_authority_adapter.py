@@ -353,6 +353,56 @@ class GitAuthorityAdapter:
             git_branch=str(value["git_branch"]),
         )
 
+    def preflight_git(
+        self,
+        context: Mapping[str, object],
+        scope: LockDomainScope,
+        *,
+        lease: AdmissionLease,
+        admission_recheck: AdmissionRecheck,
+        expected_branch: str,
+        expected_head: str,
+    ) -> GitBackupObservation:
+        """Verify a bound Git backup as read-only rollback preflight evidence.
+
+        Session identity is reread through the concrete scope before the
+        verifier is invoked.  This method never calls ``execute`` or any
+        restore/authorization path.
+        """
+        # ``git_backup_root`` is a Git-only artifact binding and is not part
+        # of the shared authority context schema.
+        context_without_artifact = dict(context)
+        context_without_artifact.pop("git_backup_root", None)
+        value = self._context(context_without_artifact)
+        if value.get("target") != "rollback":
+            raise GitAuthorityError("Git preflight requires rollback target")
+        binding_context = dict(context)
+        # The manifest is the canonical Git backup marker in the shared
+        # PhaseContext; derive its containing backup directory rather than
+        # accepting an independent caller-supplied CAS/path identity.
+        binding_context.setdefault(
+            "git_backup_root", str(Path(str(binding_context["manifest"])).parent)
+        )
+        binding = GitRollbackArtifactBinding.bind(binding_context)
+        manifest = Path(str(value["manifest"])).resolve()
+        canonical_manifest = (binding.git_backup_root / "manifest.json").resolve()
+        if manifest != canonical_manifest or not manifest.is_file() or manifest.is_symlink():
+            raise GitAuthorityError("Git rollback manifest is not bound to backup root")
+        session = self.snapshot_bound_reread(
+            value,
+            scope,
+            lease=lease,
+            admission_recheck=admission_recheck,
+            expected_branch=expected_branch,
+            expected_head=expected_head,
+        )
+        try:
+            return GitBackupObservation.from_adapter(self, session, binding.git_backup_root)
+        except GitAuthorityError:
+            raise
+        except Exception as error:
+            raise GitAuthorityError("Git rollback backup verification failed") from error
+
     def verify_rollback_context(self, context: Mapping[str, object]) -> dict[str, Any]:
         """Reread clean Git identity but do not authorize rollback."""
         if context.get("target") != "rollback":

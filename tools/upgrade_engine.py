@@ -927,7 +927,36 @@ class UpgradeEngine:
                 _freeze({**asdict(self.context), "target": "rollback"}),
             )
             try:
-                result = self.rollback_bound_verifier.verify(context)
+                result: Mapping[str, object]
+                if (
+                    self.rollback_bound_verifier.backend_kind == "git"
+                    and self.rollback_bound_verifier.verifier is self.backend_adapter
+                    and callable(getattr(self.backend_adapter, "preflight_git", None))
+                    and self.rollback_bound_verifier.expected_branch is not None
+                    and self.rollback_bound_verifier.expected_head is not None
+                ):
+                    observation = self.backend_adapter.preflight_git(
+                        context,
+                        self.rollback_bound_verifier.scope,
+                        lease=self.rollback_bound_verifier.lease,
+                        admission_recheck=self.rollback_bound_verifier.admission_recheck,
+                        expected_branch=self.rollback_bound_verifier.expected_branch,
+                        expected_head=self.rollback_bound_verifier.expected_head,
+                    )
+                    session = observation.session
+                    result = {
+                        **dict(context),
+                        "phase": "rollback",
+                        "backend_identity_verified": True,
+                        "git_head": session.git_head,
+                        "git_branch": session.git_branch,
+                        "git_clean": True,
+                        "mutates_authority": False,
+                        "rollback_context_verified": False,
+                        "backup_observation": observation,
+                    }
+                else:
+                    result = self.rollback_bound_verifier.verify(context)
             except Exception as error:
                 raise UpgradeError("trusted bound rollback inspection failed") from error
             if result.get("rollback_context_verified") is not False:
