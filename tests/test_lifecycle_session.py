@@ -7,6 +7,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import tools.lifecycle_session as lifecycle_session
 from tools.git_authority_adapter import GitAuthorityAdapter
 from tools.lifecycle_session import LifecycleSession
 from tools.sqlite_authority_adapter import SQLiteAuthorityAdapter
@@ -31,6 +32,7 @@ class LifecycleSessionTests(unittest.TestCase):
             self.assertFalse(sqlite_session.belongs_to(git_adapter))
 
     def test_direct_construction_and_foreign_token_are_rejected(self) -> None:
+        self.assertFalse(hasattr(lifecycle_session, "issue"))
         with self.assertRaises(ValueError):
             LifecycleSession(object(), Path("foreign"), (1, 2), b"caller supplied")
 

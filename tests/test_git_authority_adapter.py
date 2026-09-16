@@ -195,6 +195,14 @@ class GitAuthorityAdapterTests(unittest.TestCase):
         with self.assertRaisesRegex(GitAuthorityError, "artifact path"):
             GitBackupObservation.from_adapter(self.adapter, session, cast(Any, "backup"))
 
+    def test_adapter_owned_backup_wrappers_restore_valid_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            artifact_root = Path(directory)
+            backup = self.adapter.create_backup_bound(artifact_root / "backup", quiesced=True)
+            restored = artifact_root / "restored"
+            self.adapter.restore_backup_bound(backup, restored)
+            self.assertEqual((self.root / "state").read_text(), (restored / "state").read_text())
+
     def test_git_backup_observation_requires_verified_typed_result(self) -> None:
         session = GitRollbackSessionState(
             PROJECT, "authority", 1, "fence", "owner", "barrier", "a" * 40, "main"

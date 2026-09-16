@@ -14,12 +14,22 @@ import tarfile
 import tempfile
 from pathlib import Path, PurePosixPath
 
+from tools.lifecycle_session import LifecycleSession
+
 ARTIFACTS = ("authority.bundle", "tracked-tree.tar", "refs.txt", "index.txt", "tracked-files.txt")
 MANIFEST_FIELDS = {"schema_version", "commit", "quiesced", "artifacts"}
 
 
 class BackupError(RuntimeError):
     """Raised when a backup is incomplete, corrupt, or unsafe to restore."""
+
+
+def _check_lifecycle_session(session: LifecycleSession | None, path: Path, message: str) -> None:
+    if session is not None and session.capture_identity() != (
+        path.stat().st_dev,
+        path.stat().st_ino,
+    ):
+        raise BackupError(message)
 
 
 def _run(args: list[str], cwd: Path) -> str:
@@ -215,7 +225,9 @@ def _write_manifest(path: Path, value: dict[str, object]) -> None:
         ) from error  # pragma: no cover
 
 
-def create_backup(repo: Path, destination: Path, *, quiesced: bool) -> Path:
+def create_backup(
+    repo: Path, destination: Path, *, quiesced: bool, session: LifecycleSession | None = None
+) -> Path:
     """Create complete immutable artifacts from a clean, quiesced authority."""
     if not quiesced:
         raise BackupError("Git backup requires a proven quiesced authority")
@@ -226,6 +238,7 @@ def create_backup(repo: Path, destination: Path, *, quiesced: bool) -> Path:
     if destination.exists():
         raise BackupError("backup destination must not already exist")
     _clean(repo)
+    _check_lifecycle_session(session, repo, "Git lifecycle session is not bound to repository")
     source_state = _source_state(repo, observed_repo)
     destination.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     parent_identity = _parent_identity(destination)
@@ -327,9 +340,12 @@ def verify_backup(backup: Path) -> dict[str, object]:
     return {"commit": manifest["commit"], "verified": True, "artifact_count": len(ARTIFACTS)}
 
 
-def restore_backup(backup: Path, destination: Path) -> None:
+def restore_backup(
+    backup: Path, destination: Path, *, session: LifecycleSession | None = None
+) -> None:
     """Verify completely, then restore into a new destination atomically."""
     _safe_root(backup, "backup")
+    _check_lifecycle_session(session, backup, "Git lifecycle session is not bound to backup")
     backup_identity = backup.stat()
     verify_backup(backup)
     _safe_root(backup, "backup")
@@ -351,6 +367,7 @@ def restore_backup(backup: Path, destination: Path) -> None:
     shutil.rmtree(temporary)
     try:
         _safe_root(backup, "backup")
+        _check_lifecycle_session(session, backup, "Git lifecycle session changed before clone")
         current_identity = backup.stat()
         if (current_identity.st_dev, current_identity.st_ino) != (
             backup_identity.st_dev,
@@ -358,6 +375,9 @@ def restore_backup(backup: Path, destination: Path) -> None:
         ):
             raise BackupError("Git backup directory changed before restore")
         _run(["git", "clone", str(backup / "authority.bundle"), str(temporary)], backup.parent)
+        _check_lifecycle_session(
+            session, backup, "Git lifecycle session changed before publication"
+        )
         if _parent_identity(destination) != parent_identity:
             raise BackupError("Git restore destination parent changed before publication")
         if destination.exists() or destination.is_symlink():
