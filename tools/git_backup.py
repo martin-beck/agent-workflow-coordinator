@@ -53,6 +53,16 @@ def _safe_root(path: Path, label: str) -> None:
         raise BackupError(f"{label} must be a directory")  # pragma: no cover
 
 
+def _safe_parent(path: Path, label: str) -> None:
+    """Reject symlinked parent components before creating or publishing output."""
+    resolved = path.absolute()
+    current = Path(resolved.anchor)
+    for component in resolved.parts[1:-1]:
+        current /= component
+        if current.is_symlink():
+            raise BackupError(f"{label} parent must not contain symlinks")
+
+
 def _valid_hex(value: object, length: int) -> bool:
     return (
         isinstance(value, str)
@@ -152,6 +162,7 @@ def create_backup(repo: Path, destination: Path, *, quiesced: bool) -> Path:
         raise BackupError("Git backup requires a proven quiesced authority")
     repo = repo.resolve()
     _safe_root(destination, "backup destination")
+    _safe_parent(destination, "backup destination")
     if destination.exists():
         raise BackupError("backup destination must not already exist")
     _clean(repo)
@@ -227,6 +238,7 @@ def restore_backup(backup: Path, destination: Path) -> None:
     """Verify completely, then restore into a new destination atomically."""
     verify_backup(backup)
     _safe_root(destination, "restore destination")
+    _safe_parent(destination, "restore destination")
     if destination.exists():
         raise BackupError("restore destination must not already exist")
     destination.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
