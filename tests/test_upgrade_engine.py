@@ -40,6 +40,7 @@ from tools.upgrade_engine import (
     RollbackAuthorizationCapability,
     UpgradeEngine,
     UpgradeError,
+    backup_identity_digest,
 )
 from tools.upgrade_identity import canonical_barrier_digest, canonical_envelope_digest
 
@@ -2117,15 +2118,14 @@ class UpgradeEngineTests(unittest.TestCase):
             "mutates_authority": False,
             "backup_verified": True,
             "restore_roundtrip_verified": True,
+            "backup_identity_digest": backup_identity_digest(ROLLBACK_CONTEXT),
             "rollback_context_verified": False,
         }
         with self.assertRaisesRegex(UpgradeError, "not enabled"):
             capability.authorize(ROLLBACK_CONTEXT, valid_evidence)
         request = capability.validate(ROLLBACK_CONTEXT, valid_evidence)
         self.assertEqual(evidence_capability.identity, request.identity)
-        self.assertEqual(
-            ROLLBACK_CONTEXT["barrier_identity_digest"], request.backup_identity_digest
-        )
+        self.assertEqual(backup_identity_digest(ROLLBACK_CONTEXT), request.backup_identity_digest)
         self.assertEqual(dict(request.context), ROLLBACK_CONTEXT)
         forged = dict(ROLLBACK_CONTEXT)
         forged["fencing_token"] = "forged"  # noqa: S105
@@ -2138,6 +2138,11 @@ class UpgradeEngineTests(unittest.TestCase):
         with self.assertRaisesRegex(UpgradeError, "diagnostic-only"):
             capability.authorize(
                 ROLLBACK_CONTEXT, {**valid_evidence, "rollback_context_verified": True}
+            )
+        with self.assertRaisesRegex(UpgradeError, "backup identity is invalid"):
+            capability.authorize(
+                ROLLBACK_CONTEXT,
+                {**valid_evidence, "backup_identity_digest": "0" * 64},
             )
         for hostile, message in (
             (None, "context or evidence is invalid"),

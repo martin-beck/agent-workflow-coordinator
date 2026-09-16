@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import tempfile
@@ -95,6 +96,17 @@ TOP_LEVEL_FIELDS = {
 }
 RECORD_FIELDS = {"operation_id", "step_id", "phase", "outcome", "result", "error", "context"}
 CONTEXT_FIELDS = ENVELOPE_FIELDS
+
+
+def backup_identity_digest(context: Mapping[str, object]) -> str:
+    """Derive immutable backup identity from bound storage and barrier fields."""
+    payload = {
+        field: context[field]
+        for field in ("source", "destination", "manifest", "barrier_identity_digest")
+    }
+    return hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
 
 
 @dataclass(frozen=True)
@@ -255,6 +267,7 @@ class RollbackAuthorizationCapability:
             "git_clean",
             "sqlite_integrity_verified",
             "sqlite_foreign_keys_verified",
+            "backup_identity_digest",
         }
         required = set(CONTEXT_FIELDS) | {
             "phase",
@@ -263,6 +276,7 @@ class RollbackAuthorizationCapability:
             "rollback_context_verified",
             "backup_verified",
             "restore_roundtrip_verified",
+            "backup_identity_digest",
         }
         if set(evidence) - allowed or not required.issubset(evidence):
             raise UpgradeError("rollback authorization evidence schema is invalid")
@@ -278,6 +292,10 @@ class RollbackAuthorizationCapability:
             raise UpgradeError("rollback authorization evidence identity is unverified")
         if evidence.get("mutates_authority") is not False:
             raise UpgradeError("rollback authorization evidence is mutating")
+        if type(evidence.get("backup_identity_digest")) is not str or evidence.get(
+            "backup_identity_digest"
+        ) != backup_identity_digest(context):
+            raise UpgradeError("rollback authorization backup identity is invalid")
         if (
             evidence.get("backup_verified") is not True
             or evidence.get("restore_roundtrip_verified") is not True
@@ -287,7 +305,7 @@ class RollbackAuthorizationCapability:
             raise UpgradeError("rollback authorization evidence is not diagnostic-only")
         return RollbackAuthorizationRequest(
             self.identity,
-            cast(str, context["barrier_identity_digest"]),
+            backup_identity_digest(context),
             tuple((field, context[field]) for field in CONTEXT_FIELDS),
             tuple((field, evidence[field]) for field in sorted(evidence)),
         )
