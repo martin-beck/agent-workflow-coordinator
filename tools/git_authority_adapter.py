@@ -14,6 +14,7 @@ from typing import Any
 
 from tools.admission_lease import AdmissionLease, AdmissionRecheck
 from tools.lock_domain_scope import LockDomainScope
+from tools.rollback_evidence import BackupObservation
 
 
 class GitAuthorityError(RuntimeError):
@@ -46,6 +47,29 @@ class GitAuthorityAdapter:
         if not resolved.is_dir():
             raise GitAuthorityError("Git authority repository is unavailable")
         self._repository = resolved
+
+    @staticmethod
+    def observe_backup_identity(
+        backup: Path,
+        manifest: Path,
+        *,
+        control_store_identity: str,
+        control_store_revision: int,
+    ) -> BackupObservation:
+        """Read backup artifacts and CAS identity without authorizing restore."""
+        return BackupObservation.from_artifacts(
+            backup,
+            manifest,
+            control_store_identity=control_store_identity,
+            control_store_revision=control_store_revision,
+        )
+
+    @staticmethod
+    def verify_backup_artifact(backup: Path) -> dict[str, object]:
+        """Run the complete read-only Git backup verifier."""
+        from tools.git_backup import verify_backup
+
+        return verify_backup(backup)
 
     def _git(self, *arguments: str) -> str:
         try:

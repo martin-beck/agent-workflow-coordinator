@@ -13,6 +13,7 @@ from typing import Any
 
 from tools.admission_lease import AdmissionLease, AdmissionRecheck
 from tools.lock_domain_scope import LockDomainScope
+from tools.rollback_evidence import BackupObservation
 
 
 class SQLiteAuthorityError(RuntimeError):
@@ -69,6 +70,31 @@ class SQLiteAuthorityAdapter:
             suffix: self._optional_identity(resolved.with_name(resolved.name + suffix))
             for suffix in ("-wal", "-shm")
         }
+
+    @staticmethod
+    def observe_backup_identity(
+        backup: Path,
+        manifest: Path,
+        *,
+        control_store_identity: str,
+        control_store_revision: int,
+    ) -> BackupObservation:
+        """Read backup artifacts and CAS identity without authorizing restore."""
+        return BackupObservation.from_artifacts(
+            backup,
+            manifest,
+            control_store_identity=control_store_identity,
+            control_store_revision=control_store_revision,
+        )
+
+    @staticmethod
+    def verify_backup_artifact(
+        backup: Path, manifest: Mapping[str, object], binding: Mapping[str, object]
+    ) -> dict[str, object]:
+        """Run SQLite manifest, digest, integrity, and FK checks read-only."""
+        from tools.sqlite_backup import verify_backup
+
+        return verify_backup(backup, dict(manifest), dict(binding))
 
     @staticmethod
     def _optional_identity(path: Path) -> tuple[int, int, int, int, int] | None:
