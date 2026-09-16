@@ -13,7 +13,9 @@ import subprocess
 import tarfile
 import tempfile
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from threading import Barrier
 from typing import cast
 from unittest.mock import patch
 
@@ -157,6 +159,61 @@ class GitBackupTests(unittest.TestCase):
             ):
                 restore_backup(backup, root / "restored")
             self.assertFalse((root / "restored").exists())
+
+    def test_restore_interruption_before_publication_leaves_no_destination(self) -> None:
+        """A publication interruption cannot expose a partial restored authority."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            backup = create_backup(self.repo(root), root / "backup", quiesced=True)
+            destination = root / "restored"
+            with (
+                patch.object(Path, "replace", side_effect=OSError("publication interrupted")),
+                self.assertRaises(BackupError),
+            ):
+                restore_backup(backup, destination)
+            self.assertFalse(destination.exists())
+
+    def test_concurrent_restore_collision_preserves_existing_destination(self) -> None:
+        """An absent destination is published by one racing restore only."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            backup = create_backup(self.repo(root), root / "backup", quiesced=True)
+            destination = root / "restored"
+            existence_barrier = Barrier(2)
+            created_staging: list[Path] = []
+            original_safe_root = MODULE._safe_root
+            original_mkdtemp = MODULE.tempfile.mkdtemp
+
+            def gated_safe_root(path: Path, label: str) -> None:
+                original_safe_root(path, label)
+                if path == destination:
+                    existence_barrier.wait(timeout=5)
+
+            def record_mkdtemp(*args: object, **kwargs: object) -> str:
+                path = Path(original_mkdtemp(*args, **kwargs))
+                if path.name.startswith(".git-restore-"):
+                    created_staging.append(path)
+                return str(path)
+
+            with (
+                patch.object(MODULE, "_safe_root", side_effect=gated_safe_root),
+                patch.object(MODULE.tempfile, "mkdtemp", side_effect=record_mkdtemp),
+                ThreadPoolExecutor(max_workers=2) as pool,
+            ):
+                futures = [pool.submit(restore_backup, backup, destination) for _ in range(2)]
+                outcomes: list[type[Exception] | None] = []
+                for future in futures:
+                    try:
+                        future.result()
+                    except Exception as error:
+                        outcomes.append(type(error))
+                    else:
+                        outcomes.append(None)
+
+            self.assertEqual([None, BackupError], outcomes)
+            self.assertEqual("state\n", (destination / "task.md").read_text(encoding="utf-8"))
+            self.assertTrue(created_staging)
+            self.assertTrue(all(not path.exists() for path in created_staging))
 
     def test_archive_path_traversal_and_restore_symlink_fail_closed(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
