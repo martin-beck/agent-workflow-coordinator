@@ -13,6 +13,8 @@ import unittest
 from pathlib import Path
 from typing import Any
 
+from tools.verify_release_contract import verify
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tools"))
 SPEC = importlib.util.spec_from_file_location(
@@ -51,6 +53,16 @@ def transition() -> dict[str, Any]:
 
 
 class UpgradeGeneratorTests(unittest.TestCase):
+    def test_release_contract_verifier_writes_valid_contract(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "transition.json"
+            output = root / "release-contract.json"
+            source.write_text(json.dumps(transition()), encoding="utf-8")
+            result = verify(source, output)
+            self.assertEqual("pass", result["status"])
+            self.assertEqual(transition()["operation_id"], result["operation_id"])
+
     def test_generation_is_deterministic_and_valid(self) -> None:
         first = generate(transition())
         second = generate(transition())
