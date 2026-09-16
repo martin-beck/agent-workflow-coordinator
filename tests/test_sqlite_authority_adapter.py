@@ -346,6 +346,15 @@ class SQLiteAuthorityAdapterTests(unittest.TestCase):
         with self.assertRaisesRegex(SQLiteAuthorityError, "unsupported"):
             executor.execute_generated_operation(operation, self.root / "backup.sqlite", {})
 
+    def test_selector_binding_requires_current_held_barrier_identity(self) -> None:
+        journal = self.root / "selector-journal.json"
+        journal.write_text('{"status":"running","phase":"backup","records":[]}\n')
+        executor = self.adapter.bind_lifecycle_executor(self.session, journal)
+        snapshot = executor.assert_selector_binding("runtime-selector.json", 1, "barrier", "fence")
+        self.assertEqual(1, snapshot.control.identity.state_revision)
+        with self.assertRaisesRegex(SQLiteAuthorityError, "binding is invalid"):
+            executor.assert_selector_binding("runtime-selector.json", 2, "barrier", "fence")
+
     def test_generated_contract_backup_operation_dispatches_directly(self) -> None:
         def release(version: str, seed: str) -> dict[str, str]:
             return {
