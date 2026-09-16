@@ -31,6 +31,7 @@ class SQLiteLifecycleSnapshot:
 
     control: BarrierSessionState
     journal: JournalSnapshot
+    journal_identity: tuple[int, int]
 
 
 _SUPPORTED_PHASES = frozenset(
@@ -86,16 +87,29 @@ class SQLiteLifecycleExecutor:
             with self._session_store.operation_lock():
                 self._adapter._check_identity()
                 control = self._session_store.snapshot_owned_by_caller()
+                journal_identity = self._journal_identity(self._journal)
                 value = json.loads(self._journal.read_text(encoding="utf-8"))
                 journal = JournalSnapshot.from_mapping(cast(Mapping[str, object], value))
+                if self._journal_identity(self._journal) != journal_identity:
+                    raise SQLiteAuthorityError("lifecycle journal identity changed")
                 self._adapter._check_identity()
-                snapshot = SQLiteLifecycleSnapshot(control, journal)
+                snapshot = SQLiteLifecycleSnapshot(control, journal, journal_identity)
                 self._last_snapshot = snapshot
                 return snapshot
         except SQLiteAuthorityError:
             raise
         except Exception as error:
             raise SQLiteAuthorityError("durable lifecycle snapshot failed") from error
+
+    @staticmethod
+    def _journal_identity(path: Path) -> tuple[int, int]:
+        try:
+            value = path.lstat()
+        except OSError as error:
+            raise SQLiteAuthorityError("lifecycle journal is unavailable") from error
+        if not stat.S_ISREG(value.st_mode) or value.st_nlink != 1:
+            raise SQLiteAuthorityError("lifecycle journal is not private and regular")
+        return value.st_dev, value.st_ino
 
     def assert_snapshot_stable(self, expected: SQLiteLifecycleSnapshot) -> SQLiteLifecycleSnapshot:
         """Reread durable state and fail closed if it changed since ``expected``."""
