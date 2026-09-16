@@ -39,6 +39,7 @@ from tools.upgrade_engine import (
     Handler,
     PhaseContext,
     RollbackAuthorizationCapability,
+    SQLiteRollbackObservationCapability,
     UpgradeEngine,
     UpgradeError,
 )
@@ -166,6 +167,25 @@ class FailingAdapter(FakeAdapter):
 
 
 class UpgradeEngineTests(unittest.TestCase):
+    def test_sqlite_observation_capability_rejects_forged_and_invalid_bindings(self) -> None:
+        context = PhaseContext(**cast(dict[str, Any], ROLLBACK_CONTEXT))
+        with self.assertRaisesRegex(TypeError, "must be bound"):
+            SQLiteRollbackObservationCapability()
+        with self.assertRaisesRegex(UpgradeError, "concrete adapter"):
+            SQLiteRollbackObservationCapability.bind(context, cast(Any, FakeAdapter()))
+
+        class Provider:
+            def observe_backup_identity(
+                self, _backup: Path, _manifest: Path, _context: Mapping[str, object]
+            ) -> Any:
+                return None
+
+        capability = object.__new__(SQLiteRollbackObservationCapability)
+        object.__setattr__(capability, "adapter", Provider())
+        object.__setattr__(capability, "identity", ())
+        with self.assertRaisesRegex(UpgradeError, "identity mismatch"):
+            capability.observe({**ROLLBACK_CONTEXT, "operation_id": "foreign"})
+
     def test_journal_process_death_reopens_bound_control_and_rejects_revision_drift(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             journal = Path(directory) / "journal.json"
