@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import multiprocessing
 import os
+import sqlite3
 import subprocess
 import tempfile
 import unittest
@@ -16,8 +17,9 @@ from collections.abc import Mapping
 from contextlib import AbstractContextManager, nullcontext
 from pathlib import Path
 from typing import Any, cast
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
+import tools.sqlite_storage as sqlite_storage
 from tools.admission_lease import AdmissionLease, validate_recheck
 from tools.git_authority_adapter import (
     GitAuthorityAdapter,
@@ -38,7 +40,13 @@ from tools.rollback_control_store import (
     SQLiteRollbackControlStore,
 )
 from tools.scoped_backend_adapter import ScopedBackendAdapter
-from tools.sqlite_storage import SQLiteBackend, SQLiteBackendBinding
+from tools.sqlite_storage import (
+    SQLiteAuthorityBinding,
+    SQLiteBackend,
+    SQLiteBackendBinding,
+    bind_sqlite_backend,
+    create_database,
+)
 from tools.upgrade_engine import (
     BoundRollbackCapability,
     GitRollbackObservationCapability,
@@ -306,8 +314,39 @@ class GitAuthorityAdapterTests(unittest.TestCase):
         self.coordination = tempfile.TemporaryDirectory()
         coord = Path(self.coordination.name)
         authority = coord / "authority.sqlite"
-        authority.write_bytes(b"authority")
-        authority.chmod(0o600)
+        self.authority_tasks = coord / "tasks"
+        self.authority_tasks.mkdir()
+        authority_meta = {
+            "schema_version": 1,
+            "id": "AR-0001",
+            "title": "Authority fixture task",
+            "status": "open",
+            "priority": "P1",
+            "summary": "Ready.",
+            "next_action": "Exercise the bound mutation route.",
+            "task_revision": 1,
+            "updated_at": "2026-09-16T00:00:00+00:00",
+            "owner": "",
+            "claim_expires": "",
+            "worktree_key": "worker-1",
+            "branch": "",
+            "checkpoint_commit": "",
+            "plan": "",
+            "depends_on": [],
+        }
+        self.authority_binding = {
+            "project_id": PROJECT,
+            "state_repository": "owner/state",
+            "product_repository": "owner/product",
+        }
+        create_database(
+            authority,
+            self.authority_binding,
+            [(Path("AR-0001-authority-fixture.md"), authority_meta, "# Authority fixture\n")],
+            imported_at="2026-09-16T00:00:00+00:00",
+            source_backend="git",
+            source_checkpoint="a" * 40,
+        )
         control = coord / "control.sqlite"
         store = SQLiteRollbackControlStore(control, PROJECT, authority)
         self.control_store = store
@@ -348,7 +387,7 @@ class GitAuthorityAdapterTests(unittest.TestCase):
         binding = SQLiteBackendBinding.bind(self.control_store, self.session)
         self.assertEqual(binding.project_id, PROJECT)
         self.assertEqual(binding.fencing_owner, "owner")
-        self.assertEqual(binding.fencing_token, "fence")
+        self.assertEqual(binding.fence, "fence")
         self.assertEqual(binding.revision, 1)
         with self.assertRaises(TypeError):
             SQLiteBackendBinding(self.control_store, self.session, self.session.snapshot())
@@ -393,7 +432,7 @@ class GitAuthorityAdapterTests(unittest.TestCase):
             "state_repository": "owner/state",
             "product_repository": "owner/product",
         }
-        with self.assertRaises(TypeError):
+        with self.assertRaisesRegex(ValueError, "adapter factory"):
             SQLiteBackend(
                 binding.path,
                 backend_meta,
@@ -407,6 +446,567 @@ class GitAuthorityAdapterTests(unittest.TestCase):
                 Path(self.coordination.name),
                 backend_binding=binding,
             )
+
+    def _bound_authority_backend(self) -> SQLiteBackend:
+        control = SQLiteBackendBinding.bind(self.control_store, self.session)
+        authority_path = self.control_store.authority_path
+        assert authority_path is not None
+        authority = SQLiteAuthorityBinding.bind(control, authority_path, self.scope)
+        return bind_sqlite_backend(
+            authority_path,
+            self.authority_binding,
+            self.authority_tasks,
+            authority,
+            self.scope,
+        )
+
+    def test_bound_backend_routes_use_initialized_authority_schema(self) -> None:
+        backend = self._bound_authority_backend()
+        session_before = self.session.snapshot()
+
+        def update_summary(
+            meta: dict[str, Any], _tasks: list[tuple[Path, dict[str, Any], str]]
+        ) -> tuple[str, str]:
+            meta["summary"] = "Mutated through the bound authority route."
+            return "bound mutation", "# Authority fixture\n\nMutation committed.\n"
+
+        backend.mutate(
+            "AR-0001",
+            1,
+            "update",
+            "2026-09-16T00:01:00+00:00",
+            update_summary,
+        )
+
+        backend.update_observations(
+            {"worker-1": {"branch": "feature/test", "head": "b" * 40, "dirty": False}},
+            "2026-09-16T00:02:00+00:00",
+        )
+        backend.append_command_result(
+            "AR-0001",
+            "worker",
+            "c" * 64,
+            0,
+            "EXIT",
+            "2026-09-16T00:03:00+00:00",
+        )
+
+        tasks = backend.load_tasks()
+        self.assertEqual(1, len(tasks))
+        _, meta, body = tasks[0]
+        self.assertEqual(3, meta["task_revision"])
+        self.assertEqual("Mutated through the bound authority route.", meta["summary"])
+        self.assertEqual("feature/test", meta["observed_branch"])
+        self.assertEqual("b" * 40, meta["observed_head"])
+        self.assertFalse(meta["observed_dirty"])
+        self.assertEqual("# Authority fixture\n\nMutation committed.\n", body)
+        projected: list[list[tuple[Path, dict[str, Any], str]]] = []
+        selector_calls: list[str] = []
+        backend.retire(projected.append, lambda: selector_calls.append("retired"))
+        self.assertEqual("AR-0001", projected[0][0][1]["id"])
+        self.assertEqual(["retired"], selector_calls)
+        self.assertEqual(session_before, self.session.snapshot())
+        self.assertFalse(self.session.operation_owned_by_current_thread)
+        with sqlite3.connect(backend.path) as connection:
+            state = connection.execute("SELECT value FROM metadata WHERE key='state'").fetchone()
+            events = connection.execute(
+                "SELECT revision, kind, note FROM events WHERE task_id=? ORDER BY revision",
+                ("AR-0001",),
+            ).fetchall()
+            result = connection.execute(
+                "SELECT owner, argv_sha256, returncode, classification "
+                "FROM command_results WHERE task_id=?",
+                ("AR-0001",),
+            ).fetchone()
+        self.assertEqual(("retired",), state)
+        self.assertEqual((2, "update", "bound mutation"), events[1])
+        self.assertEqual((3, "reconcile", "Recorded live worktree state."), events[2])
+        self.assertEqual(("worker", "c" * 64, 0, "EXIT"), result)
+
+    def test_bound_backend_authority_replacement_rolls_back_without_publication(self) -> None:
+        backend = self._bound_authority_backend()
+        binding = cast(SQLiteAuthorityBinding, backend.backend_binding)
+        authority_path = binding.path
+        displaced = authority_path.with_name("displaced-authority.sqlite")
+        original_assert = SQLiteAuthorityBinding.assert_current
+        rereads = 0
+
+        def replace_before_precommit(current: SQLiteAuthorityBinding) -> None:
+            nonlocal rereads
+            rereads += 1
+            if rereads == 3:
+                authority_path.rename(displaced)
+                authority_path.write_bytes(b"foreign authority")
+            original_assert(current)
+
+        def update_summary(
+            meta: dict[str, Any], _tasks: list[tuple[Path, dict[str, Any], str]]
+        ) -> tuple[str, str]:
+            meta["summary"] = "must roll back"
+            return "must roll back", "# Must not publish\n"
+
+        try:
+            with (
+                patch.object(
+                    SQLiteAuthorityBinding,
+                    "assert_current",
+                    autospec=True,
+                    side_effect=replace_before_precommit,
+                ),
+                self.assertRaisesRegex(
+                    RuntimeError, "SQLite backend binding reread failed"
+                ) as caught,
+            ):
+                backend.mutate(
+                    "AR-0001",
+                    1,
+                    "update",
+                    "2026-09-16T00:01:00+00:00",
+                    update_summary,
+                )
+        finally:
+            authority_path.unlink(missing_ok=True)
+            if displaced.exists():
+                displaced.rename(authority_path)
+
+        self.assertEqual(3, rereads)
+        self.assertIsInstance(caught.exception.__cause__, ControlStoreError)
+        self.assertEqual("authority descriptor identity changed", str(caught.exception.__cause__))
+
+        tasks = backend.load_tasks()
+        self.assertEqual(1, tasks[0][1]["task_revision"])
+        self.assertEqual("Ready.", tasks[0][1]["summary"])
+        self.assertEqual("# Authority fixture\n", tasks[0][2])
+        self.assertFalse(self.session.operation_owned_by_current_thread)
+        with sqlite3.connect(authority_path) as connection:
+            events = connection.execute(
+                "SELECT revision, kind FROM events WHERE task_id=? ORDER BY revision",
+                ("AR-0001",),
+            ).fetchall()
+        self.assertEqual([(1, "import")], events)
+
+    def test_sqlite_control_binding_rejects_stale_durable_variants(self) -> None:
+        binding = SQLiteBackendBinding.bind(self.control_store, self.session)
+        self.assertEqual("fence", binding.fencing_token)
+        self.assertEqual(self.control_store._control_identity, binding.descriptor_identity)
+
+        original_descriptor = self.control_store._control_identity
+        self.control_store._control_identity = (original_descriptor[0], original_descriptor[1] + 1)
+        try:
+            with self.assertRaisesRegex(RuntimeError, "descriptor identity changed"):
+                binding.assert_current()
+        finally:
+            self.control_store._control_identity = original_descriptor
+
+        with (
+            patch.object(self.session, "snapshot", return_value=None),
+            self.assertRaisesRegex(RuntimeError, "session is no longer active"),
+        ):
+            binding.assert_current()
+
+        object.__setattr__(binding, "_revision", 2)
+        try:
+            with self.assertRaisesRegex(RuntimeError, "session identity changed"):
+                binding.assert_current()
+        finally:
+            object.__setattr__(binding, "_revision", 1)
+
+    def test_sqlite_authority_binding_rejects_unsafe_rereads(self) -> None:
+        control = SQLiteBackendBinding.bind(self.control_store, self.session)
+        authority_path = self.control_store.authority_path
+        assert authority_path is not None
+        authority = SQLiteAuthorityBinding.bind(control, authority_path, self.scope)
+        authority_status = authority_path.stat()
+        self.assertEqual(
+            (authority_status.st_dev, authority_status.st_ino), authority.descriptor_identity
+        )
+        with self.assertRaises(TypeError):
+            SQLiteAuthorityBinding(control, authority_path, authority.descriptor_identity, object())
+        with self.assertRaises(AttributeError):
+            authority._path = authority_path.with_name("forged.sqlite")
+
+        displaced = authority_path.with_name("displaced-authority.sqlite")
+        with patch.object(SQLiteBackendBinding, "assert_current", return_value=None):
+            authority_path.rename(displaced)
+            authority_path.symlink_to(displaced)
+            try:
+                with self.assertRaisesRegex(RuntimeError, "descriptor is a symlink"):
+                    authority.assert_current()
+            finally:
+                authority_path.unlink()
+                displaced.rename(authority_path)
+
+            authority_path.rename(displaced)
+            try:
+                with self.assertRaisesRegex(RuntimeError, "descriptor reread failed"):
+                    authority.assert_current()
+            finally:
+                displaced.rename(authority_path)
+
+            authority_path.rename(displaced)
+            authority_path.write_bytes(b"replacement")
+            try:
+                with self.assertRaisesRegex(RuntimeError, "descriptor identity changed"):
+                    authority.assert_current()
+            finally:
+                authority_path.unlink()
+                displaced.rename(authority_path)
+
+    def test_sqlite_authority_binding_rejects_scope_authority_mismatch(self) -> None:
+        control = SQLiteBackendBinding.bind(self.control_store, self.session)
+        authority_path = self.control_store.authority_path
+        assert authority_path is not None
+        foreign_authority = authority_path.with_name("foreign-valid-authority.sqlite")
+        with (
+            sqlite3.connect(authority_path) as source,
+            sqlite3.connect(foreign_authority) as destination,
+        ):
+            source.backup(destination)
+
+        with self.assertRaisesRegex(ValueError, "does not match the admission scope authority"):
+            SQLiteAuthorityBinding.bind(control, foreign_authority, self.scope)
+
+        self.assertEqual(authority_path, self.scope._authority_fence.authority)
+        self.assertEqual(
+            "AR-0001",
+            SQLiteBackend(
+                foreign_authority, self.authority_binding, self.authority_tasks
+            ).load_tasks()[0][1]["id"],
+        )
+
+    def test_sqlite_backend_factory_rejects_foreign_pairings(self) -> None:
+        control = SQLiteBackendBinding.bind(self.control_store, self.session)
+        authority_path = self.control_store.authority_path
+        assert authority_path is not None
+        authority = SQLiteAuthorityBinding.bind(control, authority_path, self.scope)
+        foreign_store = SQLiteRollbackControlStore(
+            Path(self.coordination.name) / "foreign-factory-control.sqlite",
+            PROJECT,
+            authority_path,
+        )
+
+        original_control = self.scope._session_store._control
+        self.scope._session_store._control = foreign_store
+        try:
+            with self.assertRaisesRegex(ValueError, "foreign control store"):
+                SQLiteAuthorityBinding.bind(control, authority_path, self.scope)
+
+            with self.assertRaisesRegex(ValueError, "foreign control store"):
+                bind_sqlite_backend(
+                    authority_path,
+                    self.authority_binding,
+                    self.authority_tasks,
+                    authority,
+                    self.scope,
+                )
+        finally:
+            self.scope._session_store._control = original_control
+
+        original_fence_control = self.scope._authority_fence.control_store
+        self.scope._authority_fence.control_store = foreign_store.control_store_path
+        try:
+            with self.assertRaisesRegex(ValueError, "foreign authority fence"):
+                bind_sqlite_backend(
+                    authority_path,
+                    self.authority_binding,
+                    self.authority_tasks,
+                    authority,
+                    self.scope,
+                )
+        finally:
+            self.scope._authority_fence.control_store = original_fence_control
+
+    def test_sqlite_backend_private_capability_rejects_invalid_construction(self) -> None:
+        control = SQLiteBackendBinding.bind(self.control_store, self.session)
+        authority_path = self.control_store.authority_path
+        assert authority_path is not None
+        authority = SQLiteAuthorityBinding.bind(control, authority_path, self.scope)
+        sentinel = sqlite_storage._FACTORY_SENTINEL
+
+        with self.assertRaisesRegex(TypeError, "SQLite binding capability"):
+            SQLiteBackend(
+                authority_path,
+                self.authority_binding,
+                self.authority_tasks,
+                mutation_scope=nullcontext,
+                backend_binding=cast(Any, object()),
+                _admission_capability=sentinel,
+            )
+        with self.assertRaisesRegex(ValueError, "different database"):
+            SQLiteBackend(
+                authority_path.with_name("alias.sqlite"),
+                self.authority_binding,
+                self.authority_tasks,
+                mutation_scope=nullcontext,
+                backend_binding=authority,
+                _admission_capability=sentinel,
+            )
+        with self.assertRaisesRegex(ValueError, "provisioned mutation scope"):
+            SQLiteBackend(
+                authority_path,
+                self.authority_binding,
+                self.authority_tasks,
+                backend_binding=authority,
+                _admission_capability=sentinel,
+            )
+        control_only = SQLiteBackend(
+            control.path,
+            self.authority_binding,
+            self.authority_tasks,
+            mutation_scope=nullcontext,
+            backend_binding=control,
+            _admission_capability=sentinel,
+        )
+        with (
+            self.assertRaisesRegex(RuntimeError, "dual authority binding"),
+            control_only._transaction(),
+        ):
+            self.fail("control-only mutation must reject before opening SQLite")
+
+    def test_bound_backend_rejects_corrupt_rows_and_missing_routes(self) -> None:
+        backend = self._bound_authority_backend()
+        with sqlite3.connect(backend.path) as connection:
+            original_json = connection.execute(
+                "SELECT meta_json FROM tasks WHERE id=?", ("AR-0001",)
+            ).fetchone()[0]
+            connection.execute("PRAGMA ignore_check_constraints=ON")
+            connection.execute("UPDATE tasks SET meta_json=? WHERE id=?", ("{", "AR-0001"))
+        with self.assertRaisesRegex(sqlite_storage.StorageCorruptionError, "invalid task JSON"):
+            backend.load_tasks()
+
+        with sqlite3.connect(backend.path) as connection:
+            connection.execute(
+                "UPDATE tasks SET meta_json=?, revision=? WHERE id=?",
+                (original_json, 2, "AR-0001"),
+            )
+        with self.assertRaisesRegex(
+            sqlite_storage.StorageCorruptionError, "revision columns disagree"
+        ):
+            backend.load_tasks()
+
+        with sqlite3.connect(backend.path) as connection:
+            connection.execute("UPDATE tasks SET revision=? WHERE id=?", (1, "AR-0001"))
+        with self.assertRaisesRegex(RuntimeError, "unknown task AR-9999"):
+            backend.mutate(
+                "AR-9999",
+                1,
+                "update",
+                "2026-09-16T00:01:00+00:00",
+                lambda _meta, _tasks: ("unused", "unused"),
+            )
+        backend.update_observations(
+            {"different-worker": {"branch": "main", "head": "d" * 40, "dirty": False}},
+            "2026-09-16T00:02:00+00:00",
+        )
+        self.assertEqual(1, backend.load_tasks()[0][1]["task_revision"])
+        self.assertFalse(self.session.operation_owned_by_current_thread)
+
+    def test_sqlite_storage_prerequisite_and_connection_failures_are_bounded(self) -> None:
+        authority_path = cast(Path, self.control_store.authority_path)
+        with patch.object(Path, "read_text", side_effect=OSError("unavailable")):
+            self.assertIsNone(sqlite_storage._mount_type(authority_path))
+        self.assertIsNone(
+            sqlite_storage._mount_type(
+                authority_path,
+                "short - ext4 /dev/test / rw",
+            )
+        )
+        with (
+            patch.object(sqlite3, "sqlite_version_info", (3, 36, 0)),
+            self.assertRaisesRegex(RuntimeError, "SQLite 3.37 or newer"),
+        ):
+            sqlite_storage._require_database(authority_path)
+
+        backend = SQLiteBackend(
+            authority_path,
+            self.authority_binding,
+            self.authority_tasks,
+        )
+        non_wal = MagicMock()
+        non_wal.execute.return_value.fetchone.return_value = ("delete",)
+        with (
+            patch.object(sqlite3, "connect", return_value=non_wal),
+            self.assertRaisesRegex(RuntimeError, "journal mode is not WAL"),
+        ):
+            backend._connect()
+        non_wal.close.assert_called_once()
+
+        failed = MagicMock()
+        failed.execute.side_effect = sqlite3.OperationalError("database is busy")
+        with (
+            patch.object(sqlite3, "connect", return_value=failed),
+            self.assertRaises(sqlite_storage.StorageContentionError),
+        ):
+            backend._connect()
+        failed.close.assert_called_once()
+
+        failed_target = Path(self.coordination.name) / "failed-create.sqlite"
+        with (
+            patch.object(sqlite3, "connect", side_effect=sqlite3.OperationalError("open failed")),
+            self.assertRaisesRegex(RuntimeError, "SQLITE_ERROR"),
+        ):
+            create_database(
+                failed_target,
+                self.authority_binding,
+                [],
+                imported_at="2026-09-16T00:00:00+00:00",
+                source_backend="git",
+                source_checkpoint="e" * 40,
+            )
+        self.assertFalse(failed_target.exists())
+
+    def test_sqlite_bound_routes_reject_conflicts_inactive_and_corrupt_state(self) -> None:
+        backend = self._bound_authority_backend()
+        with sqlite3.connect(backend.path) as connection:
+            connection.execute(
+                "CREATE TRIGGER suppress_task_update BEFORE UPDATE ON tasks "
+                "BEGIN SELECT RAISE(IGNORE); END"
+            )
+        with self.assertRaisesRegex(RuntimeError, "exact-revision update lost its fence"):
+            backend.mutate(
+                "AR-0001",
+                1,
+                "update",
+                "2026-09-16T00:01:00+00:00",
+                lambda _meta, _tasks: ("suppressed", "# Suppressed\n"),
+            )
+        with self.assertRaisesRegex(RuntimeError, "observation update lost its fence"):
+            backend.update_observations(
+                {"worker-1": {"branch": "main", "head": "f" * 40, "dirty": False}},
+                "2026-09-16T00:02:00+00:00",
+            )
+
+        with sqlite3.connect(backend.path) as connection:
+            connection.execute("DROP TRIGGER suppress_task_update")
+            connection.execute("PRAGMA foreign_keys=OFF")
+            connection.execute(
+                "INSERT INTO dependencies(task_id, dependency_id) VALUES (?, ?)",
+                ("AR-0001", "AR-9999"),
+            )
+        self.assertIn("SQLITE_CORRUPT: foreign-key violations", backend.integrity_errors())
+
+        with sqlite3.connect(backend.path) as connection:
+            connection.execute(
+                "DELETE FROM dependencies WHERE task_id=? AND dependency_id=?",
+                ("AR-0001", "AR-9999"),
+            )
+        with (
+            patch.object(backend, "_load", side_effect=sqlite3.OperationalError("malformed")),
+            self.assertRaises(sqlite_storage.StorageCorruptionError),
+        ):
+            backend.load_tasks()
+
+        with sqlite3.connect(backend.path) as connection:
+            connection.execute("UPDATE metadata SET value='retired' WHERE key='state'")
+        with (
+            patch.object(backend, "_verify_binding", return_value=None),
+            self.assertRaisesRegex(RuntimeError, "SQLITE_BACKEND_INACTIVE"),
+            backend._transaction(),
+        ):
+            self.fail("inactive authority must reject before yielding")
+        self.assertFalse(self.session.operation_owned_by_current_thread)
+
+    def test_bound_backend_mutation_boundary_rereads_identity(self) -> None:
+        control = SQLiteBackendBinding.bind(self.control_store, self.session)
+        authority_path = self.control_store.authority_path
+        assert authority_path is not None
+        binding = SQLiteAuthorityBinding.bind(control, authority_path, self.scope)
+        backend_meta = {
+            "project_id": PROJECT,
+            "state_repository": "owner/state",
+            "product_repository": "owner/product",
+        }
+        with self.assertRaisesRegex(ValueError, "adapter factory"):
+            SQLiteBackend(
+                binding.path,
+                backend_meta,
+                Path(self.coordination.name),
+                backend_binding=binding,
+            )
+        backend = bind_sqlite_backend(
+            binding.path, backend_meta, Path(self.coordination.name), binding, self.scope
+        )
+        backend._assert_mutation_binding()
+        with (
+            patch.object(
+                SQLiteBackendBinding, "assert_current", side_effect=RuntimeError("stale session")
+            ),
+            self.assertRaisesRegex(RuntimeError, "stale session"),
+        ):
+            backend._assert_mutation_binding()
+
+    def test_sqlite_backend_factory_requires_ordered_adapter_scope(self) -> None:
+        binding = SQLiteBackendBinding.bind(self.control_store, self.session)
+        backend_meta = {
+            "project_id": PROJECT,
+            "state_repository": "owner/state",
+            "product_repository": "owner/product",
+        }
+        with self.assertRaises(TypeError):
+            bind_sqlite_backend(
+                binding.path, backend_meta, Path(self.coordination.name), binding, nullcontext()
+            )
+        with self.assertRaises(TypeError):
+            bind_sqlite_backend(
+                binding.path, backend_meta, Path(self.coordination.name), binding, self.scope
+            )
+
+    def test_sqlite_authority_binding_captures_and_rechecks_dual_identity(self) -> None:
+        control = SQLiteBackendBinding.bind(self.control_store, self.session)
+        authority_path = self.control_store.authority_path
+        assert authority_path is not None
+        authority = SQLiteAuthorityBinding.bind(control, authority_path, self.scope)
+        authority.assert_current()
+        self.assertEqual(authority.path, authority_path.absolute())
+        bound_backend = bind_sqlite_backend(
+            authority.path,
+            {
+                "project_id": PROJECT,
+                "state_repository": "owner/state",
+                "product_repository": "owner/product",
+            },
+            Path(self.coordination.name),
+            authority,
+            self.scope,
+        )
+        bound_backend._assert_mutation_binding()
+        with self.assertRaises(TypeError):
+            SQLiteAuthorityBinding.bind(control, authority_path, nullcontext())
+        with self.assertRaises(TypeError):
+            SQLiteAuthorityBinding.bind(cast(Any, object()), authority_path, self.scope)
+        missing = authority_path.with_name("missing-authority.sqlite")
+        original_authority = self.scope._authority_fence.authority
+        self.scope._authority_fence.authority = missing
+        try:
+            with self.assertRaisesRegex(ValueError, "regular non-symlink"):
+                SQLiteAuthorityBinding.bind(control, missing, self.scope)
+        finally:
+            self.scope._authority_fence.authority = original_authority
+        symlink = authority_path.with_name("authority-link.sqlite")
+        symlink.symlink_to(authority_path)
+        self.scope._authority_fence.authority = symlink
+        try:
+            with self.assertRaisesRegex(ValueError, "regular non-symlink"):
+                SQLiteAuthorityBinding.bind(control, symlink, self.scope)
+        finally:
+            self.scope._authority_fence.authority = original_authority
+            symlink.unlink()
+        original_control = self.scope._authority_fence.control_store
+        self.scope._authority_fence.control_store = Path(self.coordination.name) / "foreign.sqlite"
+        try:
+            with self.assertRaisesRegex(ValueError, "foreign control"):
+                SQLiteAuthorityBinding.bind(control, authority_path, self.scope)
+        finally:
+            self.scope._authority_fence.control_store = original_control
+        displaced = authority.path.with_name("displaced-authority.sqlite")
+        authority.path.rename(displaced)
+        authority.path.write_bytes(b"foreign")
+        try:
+            with self.assertRaisesRegex(RuntimeError, "reread failed"):
+                authority.assert_current()
+        finally:
+            authority.path.unlink()
+            displaced.rename(authority.path)
 
     def test_engine_bound_rollback_inspection_uses_real_scope_and_preserves_journal(self) -> None:
         context = {**CONTEXT, "operation_id": "op-real-git-inspection", "target": "new"}

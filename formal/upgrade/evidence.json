@@ -20,7 +20,7 @@
       "tests/test_rollback_control_store.py": "1fd52fcc41b40b3375133c9d24017c362f7d164ca1c6c59c448912edfce09919",
       "tests/test_upgrade_identity.py": "0206aef1794ed73ffcdefb4f965f657514f11858d9beb0b2fa92f7dceaaaf905",
       "tools/mutation_fence.py": "f63c42133d980c2eb0ef6c760ad0d32bba74d3ce76547c7c1332866e14e00b3a",
-      "tools/sqlite_storage.py": "776a1509e56df5e9cc92661e9b5a1c8742c556b9eb5db2cdfe8afb0aa4b6124a",
+      "tools/sqlite_storage.py": "26dcbcf7b376505e5df366109a398f59ead58017ca842f76763dfa46595b4086",
       "tests/test_mutation_fence.py": "8d0e6765bc415543476faf51cec325ba700ce30276f264864113c586edbf60fa",
       "tests/test_sqlite_storage.py": "64d38abf3938337aae2e17b76f914b2bd23394f51d1f5058bd1d3dcd6631bd50"
     }
