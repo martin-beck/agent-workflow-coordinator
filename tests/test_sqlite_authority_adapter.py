@@ -290,6 +290,29 @@ class SQLiteAuthorityAdapterTests(unittest.TestCase):
             "durable_record": "operation-id-and-outcome",
         }
         operation_inputs = cast(dict[str, Any], operation["inputs"])
+
+        def reject(mutator: Any, message: str) -> None:
+            candidate = json.loads(json.dumps(operation))
+            mutator(candidate)
+            with self.assertRaisesRegex(SQLiteAuthorityError, message):
+                executor.execute_generated_operation(
+                    candidate, self.root / "rejected.sqlite", {"project_id": PROJECT}
+                )
+
+        reject(lambda value: value.pop("evidence"), "fields are incomplete")
+        reject(lambda value: value.update(timeout_seconds=1), "timeout is invalid")
+        reject(lambda value: value.update(resources=["wrong"]), "resources are invalid")
+        reject(lambda value: value.update(postconditions=["wrong"]), "postconditions are invalid")
+        reject(lambda value: value.update(evidence=["wrong"]), "evidence is invalid")
+        reject(lambda value: value.update(operation_id=""), "identity is invalid")
+        reject(lambda value: value.update(inputs={}), "binding is invalid")
+        reject(lambda value: value["inputs"].update(backend="git"), "binding is invalid")
+        reject(
+            lambda value: value["inputs"].update(backup_operation_id="other"),
+            "identity is invalid",
+        )
+        reject(lambda value: value.update(preconditions=[]), "preconditions are invalid")
+        reject(lambda value: value.update(durable_record="wrong"), "durability contract is invalid")
         operation_inputs["fencing_token"] = "stale-fence"  # noqa: S105
         with self.assertRaisesRegex(SQLiteAuthorityError, "fencing or selector identity"):
             executor.execute_generated_operation(
