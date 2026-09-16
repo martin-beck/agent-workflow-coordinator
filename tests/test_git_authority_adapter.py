@@ -38,6 +38,7 @@ from tools.rollback_control_store import (
     SQLiteRollbackControlStore,
 )
 from tools.scoped_backend_adapter import ScopedBackendAdapter
+from tools.sqlite_storage import SQLiteBackendBinding
 from tools.upgrade_engine import (
     BoundRollbackCapability,
     GitRollbackObservationCapability,
@@ -309,6 +310,7 @@ class GitAuthorityAdapterTests(unittest.TestCase):
         authority.chmod(0o600)
         control = coord / "control.sqlite"
         store = SQLiteRollbackControlStore(control, PROJECT, authority)
+        self.control_store = store
         marker = coord / "authority-marker.json"
         lifecycle = coord / "authority-lifecycle.json"
         authority_lock = coord / "authority.lock"
@@ -341,6 +343,40 @@ class GitAuthorityAdapterTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.coordination.cleanup()
         self.directory.cleanup()
+
+    def test_sqlite_backend_binding_captures_immutable_durable_identity(self) -> None:
+        binding = SQLiteBackendBinding.bind(self.control_store, self.session)
+        self.assertEqual(binding.project_id, PROJECT)
+        self.assertEqual(binding.fencing_owner, "owner")
+        self.assertEqual(binding.fencing_token, "fence")
+        self.assertEqual(binding.revision, 1)
+        with self.assertRaises(TypeError):
+            SQLiteBackendBinding(self.control_store, self.session, self.session.snapshot())
+        with self.assertRaises(AttributeError):
+            binding._owner = "forged"  # type: ignore[attr-defined]
+        # Binding is deliberately not an authorization or mutation surface.
+        self.assertFalse(hasattr(binding, "mutate"))
+        self.assertFalse(hasattr(binding, "authorize"))
+        binding.assert_current()
+
+    def test_sqlite_backend_binding_rejects_foreign_session_and_descriptor_swap(self) -> None:
+        other_path = Path(self.coordination.name) / "foreign-control.sqlite"
+        other_store = SQLiteRollbackControlStore(
+            other_path, PROJECT, self.control_store.authority_path
+        )
+        with self.assertRaises(ValueError):
+            SQLiteBackendBinding.bind(self.control_store, SQLiteBarrierSessionStore(other_store))
+        binding = SQLiteBackendBinding.bind(self.control_store, self.session)
+        original_path = self.control_store.control_store_path
+        displaced = original_path.with_name("displaced-control.sqlite")
+        original_path.rename(displaced)
+        original_path.write_bytes(b"foreign descriptor")
+        try:
+            with self.assertRaisesRegex(RuntimeError, "reread failed"):
+                binding.assert_current()
+        finally:
+            original_path.unlink()
+            displaced.rename(original_path)
 
     def test_engine_bound_rollback_inspection_uses_real_scope_and_preserves_journal(self) -> None:
         context = {**CONTEXT, "operation_id": "op-real-git-inspection", "target": "new"}
