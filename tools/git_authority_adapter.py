@@ -159,7 +159,7 @@ class GitAuthorityAdapter:
         """Restore using this adapter's owned lifecycle session."""
         from tools.git_backup import restore_backup
 
-        restore_backup(backup, destination, session=self.lifecycle_session())
+        restore_backup(backup, destination, session=issue(self, backup))
 
     @staticmethod
     def observe_backup_identity(
