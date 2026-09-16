@@ -175,6 +175,26 @@ def _verify_archive(path: Path) -> None:
         raise BackupError("backup archive cannot be verified") from error  # pragma: no cover
 
 
+def _verify_archive_equivalence(path: Path, checkout: Path) -> None:
+    """Ensure the traversal-safe archive contains exactly the clean checkout files."""
+    try:
+        with tarfile.open(path) as archive:
+            members = archive.getmembers()
+            names = [member.name for member in members]
+            tracked = _run(["git", "ls-files"], checkout).splitlines()
+            if names != tracked:
+                raise BackupError("clean restore archive file set mismatch")
+            for member in members:
+                target = checkout / member.name
+                if not target.is_file() or target.is_symlink():
+                    raise BackupError("clean restore archive file is unsafe")
+                source = archive.extractfile(member)
+                if source is None or source.read() != target.read_bytes():
+                    raise BackupError("clean restore archive content mismatch")
+    except (OSError, tarfile.TarError) as error:  # pragma: no cover - filesystem-dependent
+        raise BackupError("clean restore archive cannot be compared") from error
+
+
 def _write_manifest(path: Path, value: dict[str, object]) -> None:
     temporary = path.with_name(f".{path.name}.tmp")
     try:
@@ -287,6 +307,7 @@ def verify_backup(backup: Path) -> dict[str, object]:
             encoding="utf-8"
         ):
             raise BackupError("clean restore tracked-file set mismatch")  # pragma: no cover
+        _verify_archive_equivalence(backup / "tracked-tree.tar", target)
     _safe_root(backup, "backup")
     current_identity = backup.stat()
     if (current_identity.st_dev, current_identity.st_ino) != (
