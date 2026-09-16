@@ -356,6 +356,16 @@ class SQLiteAuthorityAdapterTests(unittest.TestCase):
             executor.assert_selector_binding("runtime-selector.json", 2, "barrier", "fence")
         with self.assertRaisesRegex(SQLiteAuthorityError, "binding is invalid"):
             executor.assert_selector_binding("runtime-selector.json", True, "barrier", "fence")
+        with self.assertRaisesRegex(SQLiteAuthorityError, "binding is invalid"):
+            executor.assert_selector_binding("../runtime-selector.json", 1, "barrier", "fence")
+        with self.assertRaisesRegex(SQLiteAuthorityError, "binding is invalid"):
+            absolute_selector = str(Path(tempfile.gettempdir()) / "runtime-selector.json")
+            executor.assert_selector_binding(
+                absolute_selector,
+                1,
+                "barrier",
+                "fence",
+            )
         with executor.selector_visibility_scope(
             "runtime-selector.json", 1, "barrier", "fence"
         ) as held:

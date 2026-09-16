@@ -235,6 +235,7 @@ class SQLiteLifecycleExecutor:
         fencing_token: str,
     ) -> None:
         identity = snapshot.control.identity
+        selector_path = Path(selector_ref) if isinstance(selector_ref, str) else None
         if (
             type(expected_state_revision) is not int
             or expected_state_revision < 1
@@ -242,7 +243,10 @@ class SQLiteLifecycleExecutor:
             or identity.state_revision != expected_state_revision
             or identity.durable_barrier_id != barrier_id
             or identity.fencing_token != fencing_token
+            or selector_path is None
             or not selector_ref
+            or selector_path.is_absolute()
+            or ".." in selector_path.parts
         ):
             raise SQLiteAuthorityError("selector publication binding is invalid")
 
