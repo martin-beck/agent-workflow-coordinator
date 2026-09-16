@@ -9,6 +9,7 @@ import tempfile
 import unittest
 from collections.abc import Mapping
 from pathlib import Path
+from typing import Any, cast
 from unittest.mock import patch
 
 from tools.git_authority_adapter import GitAuthorityAdapter
@@ -55,11 +56,11 @@ class RollbackEvidenceTests(unittest.TestCase):
             manifest.write_text("{", encoding="utf-8")
             with self.assertRaisesRegex(RollbackEvidenceError, "must be paths"):
                 BackupObservation.from_artifacts(
-                    str(backup),
+                    cast(Any, str(backup)),
                     manifest,
                     control_store_identity="1:2",
                     control_store_revision=1,
-                )  # type: ignore[arg-type]
+                )
             with self.assertRaisesRegex(RollbackEvidenceError, "unavailable"):
                 BackupObservation.from_artifacts(
                     backup,
@@ -227,10 +228,10 @@ class RollbackEvidenceTests(unittest.TestCase):
             manifest.write_text("{}", encoding="utf-8")
             original_stat = Path.stat
 
-            def fail_control_stat(path: Path, **kwargs: object) -> os.stat_result:
+            def fail_control_stat(path: Path, *, follow_symlinks: bool = True) -> os.stat_result:
                 if path == control.control_store_path:
                     raise OSError("gone")
-                return original_stat(path, **kwargs)
+                return original_stat(path, follow_symlinks=follow_symlinks)
 
             with (
                 patch.object(
