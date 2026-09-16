@@ -342,10 +342,16 @@ def verify_backup(
 ) -> dict[str, Any]:
     """Verify a SQLite backup and manifest without installing or mutating it."""
     _regular(backup, "backup database")
+    backup_identity = _backup_identity(backup)
+    if Path(str(backup) + "-wal").exists() or Path(str(backup) + "-shm").exists():
+        raise BackupError("backup database has live WAL sidecars")
     _validate_manifest(manifest)
     if manifest.get("database_sha256") != _digest(backup):
         raise BackupError("backup manifest is missing or does not match the backup")
     _integrity(backup, binding)
+    _regular(backup, "backup database")
+    if _backup_identity(backup) != backup_identity:
+        raise BackupError("backup database changed during verification")
     return dict(manifest)
 
 
