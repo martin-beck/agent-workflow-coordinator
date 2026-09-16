@@ -182,7 +182,7 @@ class GitAuthorityAdapterTests(unittest.TestCase):
         session = GitRollbackSessionState(
             PROJECT, "authority", 1, "fence", "owner", "barrier", "a" * 40, "main"
         )
-        observation = GitBackupObservation.from_verified(
+        observation = GitBackupObservation._from_verified(
             session, {"commit": "a" * 40, "verified": True, "artifact_count": 5}
         )
         self.assertEqual(session, observation.session)
@@ -195,7 +195,7 @@ class GitAuthorityAdapterTests(unittest.TestCase):
             {"commit": "a" * 40, "verified": True},
         ):
             with self.subTest(result=result), self.assertRaisesRegex(GitAuthorityError, "invalid"):
-                GitBackupObservation.from_verified(session, result)
+                GitBackupObservation._from_verified(session, result)
 
     def test_git_artifact_binding_is_root_scoped_and_git_specific(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

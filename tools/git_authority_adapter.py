@@ -48,7 +48,7 @@ class GitBackupObservation:
         raise TypeError("Git backup observation must be created by the verifier")
 
     @classmethod
-    def from_verified(
+    def _from_verified(
         cls, session: GitRollbackSessionState, result: Mapping[str, object]
     ) -> GitBackupObservation:
         if not isinstance(session, GitRollbackSessionState):
@@ -66,6 +66,21 @@ class GitBackupObservation:
         object.__setattr__(observation, "artifact_count", result["artifact_count"])
         object.__setattr__(observation, "session", session)
         return observation
+
+    @classmethod
+    def from_adapter(
+        cls,
+        adapter: GitAuthorityAdapter,
+        session: GitRollbackSessionState,
+        backup: Path,
+    ) -> GitBackupObservation:
+        """Verify the backup through the concrete adapter before creating evidence."""
+        if not isinstance(adapter, GitAuthorityAdapter):
+            raise GitAuthorityError("Git backup observation requires a concrete adapter")
+        if not isinstance(backup, Path):
+            raise GitAuthorityError("Git backup observation artifact path is invalid")
+        result = adapter.verify_backup_artifact(backup)
+        return cls._from_verified(session, result)
 
 
 @dataclass(frozen=True)
