@@ -62,3 +62,15 @@ class LifecycleSessionTests(unittest.TestCase):
             path.symlink_to(original)
             with self.assertRaisesRegex(ValueError, "must not be a symlink"):
                 session.capture_identity()
+
+    def test_bound_identity_reread_rejects_disappearance(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "authority"
+            path.write_text("original")
+            path.chmod(0o600)
+            Path(directory).chmod(0o700)
+            adapter = SQLiteAuthorityAdapter(path)
+            session = adapter.lifecycle_session()
+            path.unlink()
+            with self.assertRaises(FileNotFoundError):
+                session.capture_identity()
