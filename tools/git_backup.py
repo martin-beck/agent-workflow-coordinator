@@ -367,6 +367,7 @@ def restore_backup(
     shutil.rmtree(temporary)
     try:
         _safe_root(backup, "backup")
+        _check_lifecycle_session(session, backup, "Git lifecycle session changed before clone")
         current_identity = backup.stat()
         if (current_identity.st_dev, current_identity.st_ino) != (
             backup_identity.st_dev,
@@ -374,6 +375,9 @@ def restore_backup(
         ):
             raise BackupError("Git backup directory changed before restore")
         _run(["git", "clone", str(backup / "authority.bundle"), str(temporary)], backup.parent)
+        _check_lifecycle_session(
+            session, backup, "Git lifecycle session changed before publication"
+        )
         if _parent_identity(destination) != parent_identity:
             raise BackupError("Git restore destination parent changed before publication")
         if destination.exists() or destination.is_symlink():
