@@ -250,6 +250,7 @@ class SQLiteAuthorityAdapterTests(unittest.TestCase):
         self.assertEqual("held", snapshot.control.status)
         self.assertEqual(1, snapshot.control.revision)
         self.assertEqual("backup", snapshot.journal.phase)
+        self.assertEqual(2, len(snapshot.journal_identity))
         self.assertEqual([{"outcome": "started"}], snapshot.journal.as_mapping()["records"])
         self.assertFalse(self.session.operation_owned_by_current_thread)
         self.assertEqual(b"clean", self.authority.read_bytes()[-5:])
@@ -326,10 +327,23 @@ class SQLiteAuthorityAdapterTests(unittest.TestCase):
         executor = self.adapter.bind_lifecycle_executor(self.session, journal)
         baseline = executor.snapshot()
         journal.unlink()
-        with self.assertRaisesRegex(SQLiteAuthorityError, "durable lifecycle snapshot failed"):
+        with self.assertRaisesRegex(SQLiteAuthorityError, "lifecycle journal is unavailable"):
             executor.assert_snapshot_stable(baseline)
         self.assertFalse(self.session.operation_owned_by_current_thread)
         self.assertEqual("held", self.session.snapshot().status)  # type: ignore[union-attr]
+
+    def test_bound_lifecycle_executor_rejects_same_bytes_journal_replacement(self) -> None:
+        journal = self.root / "engine-journal.json"
+        content = '{"status":"running","phase":"backup","records":[]}\n'
+        journal.write_text(content, encoding="utf-8")
+        executor = self.adapter.bind_lifecycle_executor(self.session, journal)
+        baseline = executor.snapshot()
+        replacement = self.root / "replacement-journal.json"
+        replacement.write_text(content, encoding="utf-8")
+        replacement.replace(journal)
+        with self.assertRaisesRegex(SQLiteAuthorityError, "durable lifecycle state changed"):
+            executor.assert_snapshot_stable(baseline)
+        self.assertFalse(self.session.operation_owned_by_current_thread)
 
     def test_bound_lifecycle_executor_rejects_reused_stale_baseline(self) -> None:
         journal = self.root / "engine-journal.json"
