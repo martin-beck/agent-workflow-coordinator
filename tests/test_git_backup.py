@@ -213,16 +213,19 @@ class GitBackupTests(unittest.TestCase):
                     )
                     target.addfile(member, io.BytesIO(data))
             mutated_bytes = mutated.getvalue()
-            barrier = Barrier(2)
+            start_barrier = Barrier(2)
+            completion_barrier = Barrier(2)
             original_verify = MODULE._verify_archive
 
             def replace_after_check(path: Path) -> None:
                 original_verify(path)
-                barrier.wait()
+                start_barrier.wait()
+                completion_barrier.wait()
 
             def mutate_archive() -> None:
-                barrier.wait()
+                start_barrier.wait()
                 archive_path.write_bytes(mutated_bytes)
+                completion_barrier.wait()
 
             before = set(Path(tempfile.gettempdir()).glob("handoffctl-restore-*"))
             with ThreadPoolExecutor(max_workers=1) as pool:
