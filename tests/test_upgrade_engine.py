@@ -173,7 +173,7 @@ class UpgradeEngineTests(unittest.TestCase):
             BoundRollbackCapability.bind(context, object())
 
         class Concrete:
-            bound_rollback_kind = "sqlite"
+            bound_rollback_kind: str | None = "sqlite"
 
             def verify_rollback_context_bound(self, _context: Mapping[str, object]) -> Any:
                 return None
