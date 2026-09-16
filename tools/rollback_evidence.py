@@ -40,8 +40,36 @@ class BackupObservation:
         if type(control_store_revision) is not int or control_store_revision < 1:
             raise RollbackEvidenceError("control-store revision is invalid")
         try:
+            backup_stat = backup.stat()
+            manifest_stat = manifest.stat()
+            backup_identity = (
+                backup_stat.st_dev,
+                backup_stat.st_ino,
+                backup_stat.st_size,
+                backup_stat.st_mtime_ns,
+            )
+            manifest_identity = (
+                manifest_stat.st_dev,
+                manifest_stat.st_ino,
+                manifest_stat.st_size,
+                manifest_stat.st_mtime_ns,
+            )
             backup_bytes = backup.read_bytes()
             manifest_value = json.loads(manifest.read_text(encoding="utf-8"))
+            backup_stat = backup.stat()
+            manifest_stat = manifest.stat()
+            if (
+                backup_stat.st_dev,
+                backup_stat.st_ino,
+                backup_stat.st_size,
+                backup_stat.st_mtime_ns,
+            ) != backup_identity or (
+                manifest_stat.st_dev,
+                manifest_stat.st_ino,
+                manifest_stat.st_size,
+                manifest_stat.st_mtime_ns,
+            ) != manifest_identity:
+                raise RollbackEvidenceError("backup artifacts were replaced during observation")
         except (OSError, UnicodeError, json.JSONDecodeError) as error:
             raise RollbackEvidenceError("backup artifacts are unavailable") from error
         if not isinstance(manifest_value, Mapping):
