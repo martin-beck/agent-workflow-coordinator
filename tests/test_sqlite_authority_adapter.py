@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import multiprocessing
 import os
+import shutil
 import sqlite3
 import tempfile
 import unittest
@@ -369,6 +370,33 @@ class SQLiteAuthorityAdapterTests(unittest.TestCase):
         ):
             executor.backup(self.root / "backup.sqlite", {})
         self.assertFalse(journal.exists())
+        self.assertFalse((self.root / "backup.sqlite").exists())
+        self.assertFalse(self.session.operation_owned_by_current_thread)
+
+    def test_bound_lifecycle_executor_rejects_failed_effect_control_replacement(self) -> None:
+        journal = self.root / "engine-journal.json"
+        journal.write_text('{"status":"running","phase":"backup","records":[]}\n', encoding="utf-8")
+        control = self.session.control_store_path
+        foreign = self.root / "foreign-control.sqlite"
+        shutil.copy2(control, foreign)
+        executor = self.adapter.bind_lifecycle_executor(self.session, journal)
+        executor.snapshot()
+
+        def replace_then_fail(_destination: Path, _binding: dict[str, Any]) -> dict[str, Any]:
+            original = self.root / "original-control.sqlite"
+            control.rename(original)
+            foreign.rename(control)
+            raise RuntimeError("injected control replacement")
+
+        try:
+            with (
+                patch.object(self.adapter, "backup_bound", side_effect=replace_then_fail),
+                self.assertRaisesRegex(SQLiteAuthorityError, "lifecycle effect failed"),
+            ):
+                executor.backup(self.root / "backup.sqlite", {})
+        finally:
+            control.unlink(missing_ok=True)
+            (self.root / "original-control.sqlite").rename(control)
         self.assertFalse((self.root / "backup.sqlite").exists())
         self.assertFalse(self.session.operation_owned_by_current_thread)
 
