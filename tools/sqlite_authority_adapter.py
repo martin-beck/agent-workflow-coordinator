@@ -8,10 +8,10 @@ import json
 import os
 import sqlite3
 import stat
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, TypeVar, cast
 
 from tools.admission_lease import AdmissionLease, AdmissionRecheck
 from tools.lifecycle_session import LifecycleSession, _issue
@@ -23,6 +23,9 @@ from tools.upgrade_engine import JournalSnapshot
 
 class SQLiteAuthorityError(RuntimeError):
     """SQLite authority evidence is unavailable or mutation was requested."""
+
+
+_EffectResult = TypeVar("_EffectResult")
 
 
 @dataclass(frozen=True, slots=True)
@@ -85,21 +88,54 @@ class SQLiteLifecycleExecutor:
             raise SQLiteAuthorityError("lifecycle executor is not bound to durable state")
         try:
             with self._session_store.operation_lock():
-                self._adapter._check_identity()
-                control = self._session_store.snapshot_owned_by_caller()
-                journal_identity = self._journal_identity(self._journal)
-                value = json.loads(self._journal.read_text(encoding="utf-8"))
-                journal = JournalSnapshot.from_mapping(cast(Mapping[str, object], value))
-                if self._journal_identity(self._journal) != journal_identity:
-                    raise SQLiteAuthorityError("lifecycle journal identity changed")
-                self._adapter._check_identity()
-                snapshot = SQLiteLifecycleSnapshot(control, journal, journal_identity)
-                self._last_snapshot = snapshot
-                return snapshot
+                return self._snapshot_locked()
         except SQLiteAuthorityError:
             raise
         except Exception as error:
             raise SQLiteAuthorityError("durable lifecycle snapshot failed") from error
+
+    def _snapshot_locked(self) -> SQLiteLifecycleSnapshot:
+        """Capture durable state while the caller already owns the operation lock."""
+        if self._session_store is None or self._journal is None:
+            raise SQLiteAuthorityError("lifecycle executor is not bound to durable state")
+        self._adapter._check_identity()
+        control = self._session_store.snapshot_owned_by_caller()
+        journal_identity = self._journal_identity(self._journal)
+        value = json.loads(self._journal.read_text(encoding="utf-8"))
+        journal = JournalSnapshot.from_mapping(cast(Mapping[str, object], value))
+        if self._journal_identity(self._journal) != journal_identity:
+            raise SQLiteAuthorityError("lifecycle journal identity changed")
+        self._adapter._check_identity()
+        snapshot = SQLiteLifecycleSnapshot(control, journal, journal_identity)
+        self._last_snapshot = snapshot
+        return snapshot
+
+    def _run_effect(self, operation: Callable[[], _EffectResult]) -> _EffectResult:
+        """Run one bound operation with locked before/after durable rereads."""
+        if self._session_store is None or self._journal is None:
+            raise SQLiteAuthorityError("lifecycle executor is not bound to durable state")
+        try:
+            with self._session_store.operation_lock():
+                before = self._snapshot_locked()
+                try:
+                    result = operation()
+                except Exception as error:
+                    try:
+                        self._assert_snapshot_locked(before)
+                    except SQLiteAuthorityError as state_error:
+                        raise state_error from error
+                    raise
+                self._assert_snapshot_locked(before)
+                return result
+        except SQLiteAuthorityError:
+            raise
+        except Exception as error:
+            raise SQLiteAuthorityError("lifecycle effect failed") from error
+
+    def _assert_snapshot_locked(self, expected: SQLiteLifecycleSnapshot) -> None:
+        current = self._snapshot_locked()
+        if current != expected:
+            raise SQLiteAuthorityError("durable lifecycle state changed")
 
     @staticmethod
     def _journal_identity(path: Path) -> tuple[int, int, int, int]:
@@ -124,12 +160,14 @@ class SQLiteLifecycleExecutor:
         return current
 
     def backup(self, destination: Path, binding: dict[str, Any]) -> dict[str, Any]:
-        return self._adapter.backup_bound(destination, binding)
+        return self._run_effect(lambda: self._adapter.backup_bound(destination, binding))
 
     def restore(
         self, backup: Path, destination: Path, manifest: dict[str, Any], binding: dict[str, Any]
     ) -> None:
-        self._adapter.restore_bound(backup, destination, manifest, binding)
+        self._run_effect(
+            lambda: self._adapter.restore_bound(backup, destination, manifest, binding)
+        )
 
 
 class SQLiteAuthorityAdapter:
