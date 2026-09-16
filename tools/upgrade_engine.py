@@ -200,6 +200,84 @@ class BoundRollbackCapability:
         return {**dict(result), "rollback_context_verified": False}
 
 
+@dataclass(frozen=True)
+class RollbackAuthorizationCapability:
+    """Typed placeholder for future rollback authorization.
+
+    This contract validates that an authorization request is tied to the same
+    bound evidence identity, but deliberately never authorizes or dispatches a
+    rollback.  A future implementation must replace the explicit refusal only
+    after the execution and formal contracts are independently complete.
+    """
+
+    identity: tuple[object, ...]
+    evidence_capability: BoundRollbackCapability
+
+    @classmethod
+    def bind(
+        cls, context: PhaseContext, evidence_capability: BoundRollbackCapability
+    ) -> RollbackAuthorizationCapability:
+        if not isinstance(evidence_capability, BoundRollbackCapability):
+            raise UpgradeError("rollback authorization requires bound evidence")
+        if not evidence_capability.matches(context):
+            raise UpgradeError("rollback authorization identity mismatch")
+        return cls(evidence_capability.identity, evidence_capability)
+
+    def authorize(  # noqa: C901
+        self, context: Mapping[str, object], evidence: Mapping[str, object]
+    ) -> None:
+        if not isinstance(context, Mapping) or not isinstance(evidence, Mapping):
+            raise UpgradeError("rollback authorization context or evidence is invalid")
+        if set(context) != set(CONTEXT_FIELDS) or context.get("target") != "rollback":
+            raise UpgradeError("rollback authorization context is invalid")
+        fields = tuple(field for field in CONTEXT_FIELDS if field != "target")
+        if self.identity != tuple(context[field] for field in fields):
+            raise UpgradeError("rollback authorization identity mismatch")
+        allowed = set(CONTEXT_FIELDS) | {
+            "phase",
+            "backend_identity_verified",
+            "mutates_authority",
+            "rollback_context_verified",
+            "backup_verified",
+            "restore_roundtrip_verified",
+            "git_head",
+            "git_branch",
+            "git_clean",
+            "sqlite_integrity_verified",
+            "sqlite_foreign_keys_verified",
+        }
+        required = set(CONTEXT_FIELDS) | {
+            "phase",
+            "backend_identity_verified",
+            "mutates_authority",
+            "rollback_context_verified",
+            "backup_verified",
+            "restore_roundtrip_verified",
+        }
+        if set(evidence) - allowed or not required.issubset(evidence):
+            raise UpgradeError("rollback authorization evidence schema is invalid")
+        if any(
+            evidence.get(field) != context[field]
+            or type(evidence.get(field)) is not type(context[field])
+            for field in CONTEXT_FIELDS
+        ):
+            raise UpgradeError("rollback authorization evidence identity mismatch")
+        if evidence.get("phase") != "rollback" or evidence.get("backend") != context["backend"]:
+            raise UpgradeError("rollback authorization evidence phase or backend is invalid")
+        if evidence.get("backend_identity_verified") is not True:
+            raise UpgradeError("rollback authorization evidence identity is unverified")
+        if evidence.get("mutates_authority") is not False:
+            raise UpgradeError("rollback authorization evidence is mutating")
+        if (
+            evidence.get("backup_verified") is not True
+            or evidence.get("restore_roundtrip_verified") is not True
+        ):
+            raise UpgradeError("rollback authorization evidence lacks backup or restore proof")
+        if evidence.get("rollback_context_verified") is not False:
+            raise UpgradeError("rollback authorization evidence is not diagnostic-only")
+        raise UpgradeError("rollback authorization is not enabled")
+
+
 def _freeze(value: object) -> object:
     """Create a recursively immutable view for untrusted phase handlers."""
     if isinstance(value, dict):
