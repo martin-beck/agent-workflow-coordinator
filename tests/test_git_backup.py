@@ -173,6 +173,25 @@ class GitBackupTests(unittest.TestCase):
             self.assertFalse(destination.exists())
             self.assertFalse(list(redirect.glob(".git-backup-*")))
 
+    def test_parent_identity_stat_failure_is_backup_error(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            destination = Path(directory) / "backup"
+            with (
+                patch.object(Path, "stat", side_effect=OSError("gone")),
+                self.assertRaisesRegex(BackupError, "parent disappeared"),
+            ):
+                MODULE._parent_identity(destination)
+
+    def test_create_temporary_allocation_failure_is_backup_error(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repo = self.repo(root)
+            with (
+                patch.object(MODULE.tempfile, "mkdtemp", side_effect=OSError("full")),
+                self.assertRaisesRegex(BackupError, "temporary allocation failed"),
+            ):
+                create_backup(repo, root / "backup", quiesced=True)
+
     def test_restore_preserves_commit_tree_and_refs_equivalence(self) -> None:
         """A verified backup restores the exact immutable Git authority view."""
         with tempfile.TemporaryDirectory() as directory:

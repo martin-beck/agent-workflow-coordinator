@@ -178,7 +178,10 @@ def create_backup(repo: Path, destination: Path, *, quiesced: bool) -> Path:
     parent_identity = _parent_identity(destination)
     if _parent_identity(destination) != parent_identity:
         raise BackupError("Git backup destination parent changed before allocation")
-    temporary = Path(tempfile.mkdtemp(prefix=".git-backup-", dir=destination.parent))
+    try:
+        temporary = Path(tempfile.mkdtemp(prefix=".git-backup-", dir=destination.parent))
+    except OSError as error:
+        raise BackupError("Git backup temporary allocation failed") from error
     try:
         bundle = temporary / "authority.bundle"
         archive = temporary / "tracked-tree.tar"
