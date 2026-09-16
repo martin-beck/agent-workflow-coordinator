@@ -365,6 +365,19 @@ class LockDomainScopeTests(unittest.TestCase):
         self.assertEqual(["held"], events)
         self.assertFalse(self.session.operation_owned_by_current_thread)
 
+    def test_bound_observer_receives_immutable_reread_events(self) -> None:
+        observed = []
+        scope = LockDomainScope.bind(
+            self.session, self.fence, self.lease, self.recheck, locked, observed.append
+        )
+        with scope.hold():
+            pass
+        self.assertGreaterEqual(len(observed), 2)
+        self.assertTrue(all(event.phase == "scope.reread" for event in observed))
+        self.assertEqual(1, observed[-1].revision)
+        with self.assertRaises(AttributeError):
+            observed[0].revision = 2
+
     def test_hold_performs_trusted_authority_reread_after_lock_acquisition(self) -> None:
         reads: list[str] = []
 
