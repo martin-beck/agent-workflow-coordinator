@@ -201,6 +201,16 @@ class BoundRollbackCapability:
 
 
 @dataclass(frozen=True)
+class RollbackAuthorizationRequest:
+    """Immutable validated request; it carries no execution authority."""
+
+    identity: tuple[object, ...]
+    backup_identity_digest: str
+    context: tuple[tuple[str, object], ...]
+    evidence: tuple[tuple[str, object], ...]
+
+
+@dataclass(frozen=True)
 class RollbackAuthorizationCapability:
     """Typed placeholder for future rollback authorization.
 
@@ -223,9 +233,9 @@ class RollbackAuthorizationCapability:
             raise UpgradeError("rollback authorization identity mismatch")
         return cls(evidence_capability.identity, evidence_capability)
 
-    def authorize(  # noqa: C901
+    def validate(  # noqa: C901
         self, context: Mapping[str, object], evidence: Mapping[str, object]
-    ) -> None:
+    ) -> RollbackAuthorizationRequest:
         if not isinstance(context, Mapping) or not isinstance(evidence, Mapping):
             raise UpgradeError("rollback authorization context or evidence is invalid")
         if set(context) != set(CONTEXT_FIELDS) or context.get("target") != "rollback":
@@ -275,6 +285,16 @@ class RollbackAuthorizationCapability:
             raise UpgradeError("rollback authorization evidence lacks backup or restore proof")
         if evidence.get("rollback_context_verified") is not False:
             raise UpgradeError("rollback authorization evidence is not diagnostic-only")
+        return RollbackAuthorizationRequest(
+            self.identity,
+            cast(str, context["barrier_identity_digest"]),
+            tuple((field, context[field]) for field in CONTEXT_FIELDS),
+            tuple((field, evidence[field]) for field in sorted(evidence)),
+        )
+
+    def authorize(self, context: Mapping[str, object], evidence: Mapping[str, object]) -> None:
+        """Validate a request, then refuse until rollback execution is enabled."""
+        self.validate(context, evidence)
         raise UpgradeError("rollback authorization is not enabled")
 
 

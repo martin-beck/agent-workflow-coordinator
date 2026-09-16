@@ -2121,6 +2121,12 @@ class UpgradeEngineTests(unittest.TestCase):
         }
         with self.assertRaisesRegex(UpgradeError, "not enabled"):
             capability.authorize(ROLLBACK_CONTEXT, valid_evidence)
+        request = capability.validate(ROLLBACK_CONTEXT, valid_evidence)
+        self.assertEqual(evidence_capability.identity, request.identity)
+        self.assertEqual(
+            ROLLBACK_CONTEXT["barrier_identity_digest"], request.backup_identity_digest
+        )
+        self.assertEqual(dict(request.context), ROLLBACK_CONTEXT)
         forged = dict(ROLLBACK_CONTEXT)
         forged["fencing_token"] = "forged"  # noqa: S105
         with self.assertRaisesRegex(UpgradeError, "identity mismatch"):
