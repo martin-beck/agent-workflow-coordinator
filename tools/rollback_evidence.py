@@ -1,0 +1,56 @@
+# Copyright (C) Huawei Technologies Co., Ltd. 2026. All rights reserved.
+# SPDX-License-Identifier: MIT
+"""Typed, read-only rollback backup observations."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from collections.abc import Mapping
+from dataclasses import dataclass
+from pathlib import Path
+
+
+class RollbackEvidenceError(ValueError):
+    """Backup or control-store evidence is unavailable or malformed."""
+
+
+@dataclass(frozen=True)
+class BackupObservation:
+    """Immutable digests derived from observed backup artifacts and CAS facts."""
+
+    backup_bytes_digest: str
+    manifest_digest: str
+    control_store_identity: str
+    control_store_revision: int
+
+    @classmethod
+    def from_artifacts(
+        cls,
+        backup: Path,
+        manifest: Path,
+        *,
+        control_store_identity: str,
+        control_store_revision: int,
+    ) -> BackupObservation:
+        if not isinstance(backup, Path) or not isinstance(manifest, Path):
+            raise RollbackEvidenceError("backup artifacts must be paths")
+        if not isinstance(control_store_identity, str) or not control_store_identity:
+            raise RollbackEvidenceError("control-store identity is invalid")
+        if type(control_store_revision) is not int or control_store_revision < 1:
+            raise RollbackEvidenceError("control-store revision is invalid")
+        try:
+            backup_bytes = backup.read_bytes()
+            manifest_value = json.loads(manifest.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError) as error:
+            raise RollbackEvidenceError("backup artifacts are unavailable") from error
+        if not isinstance(manifest_value, Mapping):
+            raise RollbackEvidenceError("backup manifest is not an object")
+        return cls(
+            hashlib.sha256(backup_bytes).hexdigest(),
+            hashlib.sha256(
+                json.dumps(manifest_value, sort_keys=True, separators=(",", ":")).encode()
+            ).hexdigest(),
+            control_store_identity,
+            control_store_revision,
+        )
