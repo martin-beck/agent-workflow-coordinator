@@ -37,6 +37,7 @@ from tools.upgrade_engine import (
     BoundRollbackCapability,
     Handler,
     PhaseContext,
+    RollbackAuthorizationCapability,
     UpgradeEngine,
     UpgradeError,
 )
@@ -2097,6 +2098,33 @@ class UpgradeEngineTests(unittest.TestCase):
                 with self.assertRaisesRegex(UpgradeError, "incomplete or authorizing"):
                     engine.inspect_rollback_bound()
                 self.assertEqual(before, journal.read_bytes())
+
+    def test_rollback_authorization_contract_rejects_forged_or_incomplete_requests(self) -> None:
+        class EvidenceAdapter(FakeAdapter):
+            def verify_rollback_context_bound(
+                self, context: Mapping[str, object]
+            ) -> Mapping[str, object]:
+                return dict(context)
+
+        adapter = EvidenceAdapter()
+        context = PhaseContext(**cast(dict[str, Any], ROLLBACK_CONTEXT))
+        evidence_capability = BoundRollbackCapability.bind(context, adapter)
+        capability = RollbackAuthorizationCapability.bind(context, evidence_capability)
+        valid_evidence = {**ROLLBACK_CONTEXT, "rollback_context_verified": False}
+        with self.assertRaisesRegex(UpgradeError, "not enabled"):
+            capability.authorize(ROLLBACK_CONTEXT, valid_evidence)
+        forged = dict(ROLLBACK_CONTEXT)
+        forged["fencing_token"] = "forged"  # noqa: S105
+        with self.assertRaisesRegex(UpgradeError, "identity mismatch"):
+            capability.authorize(forged, valid_evidence)
+        incomplete = dict(ROLLBACK_CONTEXT)
+        incomplete.pop("envelope_digest")
+        with self.assertRaisesRegex(UpgradeError, "context is invalid"):
+            capability.authorize(incomplete, valid_evidence)
+        with self.assertRaisesRegex(UpgradeError, "diagnostic-only"):
+            capability.authorize(
+                ROLLBACK_CONTEXT, {**valid_evidence, "rollback_context_verified": True}
+            )
 
     def test_bound_rollback_inspection_dispatches_initialized_real_adapters(self) -> None:
         """Concrete adapter identity is retained without authorizing rollback."""

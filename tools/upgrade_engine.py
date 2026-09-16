@@ -200,6 +200,40 @@ class BoundRollbackCapability:
         return {**dict(result), "rollback_context_verified": False}
 
 
+@dataclass(frozen=True)
+class RollbackAuthorizationCapability:
+    """Typed placeholder for future rollback authorization.
+
+    This contract validates that an authorization request is tied to the same
+    bound evidence identity, but deliberately never authorizes or dispatches a
+    rollback.  A future implementation must replace the explicit refusal only
+    after the execution and formal contracts are independently complete.
+    """
+
+    identity: tuple[object, ...]
+    evidence_capability: BoundRollbackCapability
+
+    @classmethod
+    def bind(
+        cls, context: PhaseContext, evidence_capability: BoundRollbackCapability
+    ) -> RollbackAuthorizationCapability:
+        if not isinstance(evidence_capability, BoundRollbackCapability):
+            raise UpgradeError("rollback authorization requires bound evidence")
+        if not evidence_capability.matches(context):
+            raise UpgradeError("rollback authorization identity mismatch")
+        return cls(evidence_capability.identity, evidence_capability)
+
+    def authorize(self, context: Mapping[str, object], evidence: Mapping[str, object]) -> None:
+        if set(context) != set(CONTEXT_FIELDS) or context.get("target") != "rollback":
+            raise UpgradeError("rollback authorization context is invalid")
+        fields = tuple(field for field in CONTEXT_FIELDS if field != "target")
+        if self.identity != tuple(context[field] for field in fields):
+            raise UpgradeError("rollback authorization identity mismatch")
+        if evidence.get("rollback_context_verified") is not False:
+            raise UpgradeError("rollback authorization evidence is not diagnostic-only")
+        raise UpgradeError("rollback authorization is not enabled")
+
+
 def _freeze(value: object) -> object:
     """Create a recursively immutable view for untrusted phase handlers."""
     if isinstance(value, dict):
