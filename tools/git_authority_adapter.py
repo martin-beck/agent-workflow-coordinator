@@ -11,7 +11,7 @@ import subprocess
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from tools.admission_lease import AdmissionLease, AdmissionRecheck
 from tools.lock_domain_scope import LockDomainScope
@@ -34,6 +34,53 @@ class GitRollbackSessionState:
     durable_barrier_id: str
     git_head: str
     git_branch: str
+
+
+@dataclass(frozen=True, init=False)
+class GitBackupObservation:
+    """Immutable verified Git backup/session evidence."""
+
+    commit: str
+    artifact_count: int
+    session: GitRollbackSessionState
+
+    def __init__(self) -> None:
+        raise TypeError("Git backup observation must be created by the verifier")
+
+    @classmethod
+    def _from_verified(
+        cls, session: GitRollbackSessionState, result: Mapping[str, object]
+    ) -> GitBackupObservation:
+        if not isinstance(session, GitRollbackSessionState):
+            raise GitAuthorityError("Git backup observation session is invalid")
+        if (
+            set(result) != {"commit", "verified", "artifact_count"}
+            or result.get("verified") is not True
+            or result.get("commit") != session.git_head
+            or type(result.get("artifact_count")) is not int
+            or cast(int, result.get("artifact_count")) < 1
+        ):
+            raise GitAuthorityError("Git backup verification result is invalid")
+        observation = object.__new__(cls)
+        object.__setattr__(observation, "commit", session.git_head)
+        object.__setattr__(observation, "artifact_count", result["artifact_count"])
+        object.__setattr__(observation, "session", session)
+        return observation
+
+    @classmethod
+    def from_adapter(
+        cls,
+        adapter: GitAuthorityAdapter,
+        session: GitRollbackSessionState,
+        backup: Path,
+    ) -> GitBackupObservation:
+        """Verify the backup through the concrete adapter before creating evidence."""
+        if not isinstance(adapter, GitAuthorityAdapter):
+            raise GitAuthorityError("Git backup observation requires a concrete adapter")
+        if not isinstance(backup, Path):
+            raise GitAuthorityError("Git backup observation artifact path is invalid")
+        result = adapter.verify_backup_artifact(backup)
+        return cls._from_verified(session, result)
 
 
 @dataclass(frozen=True)

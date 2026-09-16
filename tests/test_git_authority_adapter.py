@@ -22,6 +22,7 @@ from tools.admission_lease import AdmissionLease, validate_recheck
 from tools.git_authority_adapter import (
     GitAuthorityAdapter,
     GitAuthorityError,
+    GitBackupObservation,
     GitRollbackArtifactBinding,
     GitRollbackSessionState,
 )
@@ -177,6 +178,25 @@ def _bound_snapshot_process(
 
 
 class GitAuthorityAdapterTests(unittest.TestCase):
+    def test_git_backup_observation_requires_verified_typed_result(self) -> None:
+        session = GitRollbackSessionState(
+            PROJECT, "authority", 1, "fence", "owner", "barrier", "a" * 40, "main"
+        )
+        observation = GitBackupObservation._from_verified(
+            session, {"commit": "a" * 40, "verified": True, "artifact_count": 5}
+        )
+        self.assertEqual(session, observation.session)
+        with self.assertRaisesRegex(TypeError, "verifier"):
+            GitBackupObservation()
+        for result in (
+            {"commit": "b" * 40, "verified": True, "artifact_count": 5},
+            {"commit": "a" * 40, "verified": False, "artifact_count": 5},
+            {"commit": "a" * 40, "verified": True, "artifact_count": 0},
+            {"commit": "a" * 40, "verified": True},
+        ):
+            with self.subTest(result=result), self.assertRaisesRegex(GitAuthorityError, "invalid"):
+                GitBackupObservation._from_verified(session, result)
+
     def test_git_artifact_binding_is_root_scoped_and_git_specific(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
