@@ -25,8 +25,13 @@ def resolve_selected_runtime(selector: Path, releases_root: Path) -> Path:
     release = selected["active_release"]
     if not isinstance(release, str) or _RELEASE.fullmatch(release) is None:
         raise AuthorityError("runtime selector release identity is invalid")
-    root = releases_root.resolve()
+    root = releases_root.absolute()
     try:
+        component = Path(root.anchor)
+        for part in root.parts[1:]:
+            component /= part
+            if stat.S_ISLNK(component.lstat().st_mode):
+                raise AuthorityError("runtime release root contains a symlink")
         root_stat = root.stat()
         release_path = root / release
         value = release_path.lstat()

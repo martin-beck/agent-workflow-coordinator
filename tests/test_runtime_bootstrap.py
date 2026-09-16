@@ -51,3 +51,16 @@ class RuntimeBootstrapTests(unittest.TestCase):
             )
             with self.assertRaisesRegex(AuthorityError, "identity"):
                 resolve_selected_runtime(selector, releases)
+
+    def test_rejects_symlinked_release_root_ancestor(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            real = root / "real"
+            real.mkdir(mode=0o700)
+            (real / "v1.2.3").mkdir(mode=0o700)
+            selector = root / "runtime-selector.json"
+            commit_runtime_selector(selector, "v1.2.3", "v1.2.2")
+            alias = root / "alias"
+            alias.symlink_to(real, target_is_directory=True)
+            with self.assertRaisesRegex(AuthorityError, "contains a symlink"):
+                resolve_selected_runtime(selector, alias)
