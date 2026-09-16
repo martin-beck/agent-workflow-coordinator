@@ -13,9 +13,9 @@
     }
   },
   "implementation_snapshot": {
-    "revision": "be92ec8638301170caa7a09b00a8442c54dfd831",
-    "runtime_revision": "be92ec8638301170caa7a09b00a8442c54dfd831",
-    "status": "descriptor-safe control-store reread and write-route admission evidence; executable apply and rollback remain rejection-only"
+    "revision": "5c8ea6bddd0b89f35a1b6796ac502938850701d7",
+    "runtime_revision": "5c8ea6bddd0b89f35a1b6796ac502938850701d7",
+    "status": "descriptor-safe control-store reread plus bounded independent-process barrier/write evidence; executable apply and rollback remain rejection-only"
   },
   "correspondence": [
     {
@@ -34,13 +34,13 @@
       "model_actions": ["RequestWrite", "AcceptWrite", "RejectWrite", "FinishWrite"],
       "implementation_obligation": "Every authoritative SQLite mutation route, including tasks, observations, results, migrations, and reconciliation, uses the same fence and cannot bypass it through a separate connection.",
       "evidence_required": ["route inventory", "multiprocess writer rejection", "post-release admission"],
-      "status": "obligation-only"
+      "status": "bounded executable evidence in tests/test_sqlite_mutation_barrier.py; implementation refinement pending"
     },
     {
       "model_actions": ["MarkAmbiguous", "Acquire"],
       "implementation_obligation": "Process death or uncertain WAL/control-store outcomes preserve durable write-closed state; recovery must reread and reconcile before a newer fenced session can proceed.",
       "evidence_required": ["sigkill boundaries", "WAL/SHM fault tests", "new-session CAS tests"],
-      "status": "obligation-only"
+      "status": "bounded executable evidence in tests/test_sqlite_mutation_barrier.py; implementation refinement pending"
     },
     {
       "model_actions": ["RejectStaleCAS", "AmbiguousIsWriteClosed", "LockOwnership"],

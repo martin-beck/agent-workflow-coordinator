@@ -516,9 +516,15 @@ class MutationFence:
             connection = sqlite3.connect(
                 f"file:/proc/self/fd/{descriptor}?mode=ro", uri=True, timeout=10
             )
-            rows = connection.execute(
-                "SELECT status FROM barrier WHERE project_id=?", (project_id,)
-            ).fetchall()
+            from tools.rollback_control_store import (
+                ControlStoreError,
+                SQLiteBarrierSessionStore,
+            )
+
+            try:
+                observed = SQLiteBarrierSessionStore.observe_connection(connection, project_id)
+            except ControlStoreError as error:
+                raise MutationFenceError("durable control barrier state is invalid") from error
             current = os.fstat(descriptor)
             if _identity(current, os.fstat(parent_fd)) != _identity(status, parent):
                 raise MutationFenceError("control store identity changed")
@@ -540,12 +546,9 @@ class MutationFence:
             os.close(parent_fd)
             os.close(binding_descriptor)
             os.close(binding_parent_fd)
-        if len(rows) != 1:
+        if observed is None:
             raise MutationFenceError("durable control barrier is missing or ambiguous")
-        status = rows[0][0]
-        if not isinstance(status, str):
-            raise MutationFenceError("durable control barrier status is invalid")
-        return status
+        return observed.status
 
     @contextmanager
     def locked(self) -> Iterator[None]:

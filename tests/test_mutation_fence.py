@@ -25,6 +25,7 @@ from tools.mutation_fence import (
     provision_control_binding,
 )
 from tools.sqlite_storage import SQLiteBackend, create_database
+from tools.upgrade_identity import canonical_barrier_session_digest
 
 AUTHORITATIVE_MUTATION_ROUTES = (
     "mutate",
@@ -32,6 +33,7 @@ AUTHORITATIVE_MUTATION_ROUTES = (
     "append_command_result",
     "retire",
 )
+BARRIER_PROJECT = "00000000-0000-4000-8000-000000000002"
 
 
 class MutationFenceTests(unittest.TestCase):
@@ -47,8 +49,8 @@ class MutationFenceTests(unittest.TestCase):
         self.lock = self.root / "authority.lock"
         self.control = self.root / "control.sqlite3"
         connection = sqlite3.connect(self.control)
-        connection.execute("CREATE TABLE barrier(project_id TEXT, status TEXT)")
-        connection.execute("INSERT INTO barrier VALUES ('project', 'released')")
+        self._create_barrier_table(connection)
+        self._insert_barrier(connection, "released")
         connection.commit()
         connection.close()
         self.control.chmod(0o600)
@@ -257,8 +259,10 @@ class MutationFenceTests(unittest.TestCase):
             )
 
     def _fenced(self) -> MutationFence:
-        provision(self.authority, self.marker, self.lifecycle, self.lock, "project")
-        provision_control_binding(self.control, self.control_binding, self.control_lock, "project")
+        provision(self.authority, self.marker, self.lifecycle, self.lock, BARRIER_PROJECT)
+        provision_control_binding(
+            self.control, self.control_binding, self.control_lock, BARRIER_PROJECT
+        )
         return MutationFence(
             self.authority,
             self.marker,
@@ -269,11 +273,53 @@ class MutationFenceTests(unittest.TestCase):
             self.control_lock,
         )
 
+    @staticmethod
+    def _create_barrier_table(
+        connection: sqlite3.Connection, *, project_primary_key: bool = True
+    ) -> None:
+        project_constraint = " PRIMARY KEY" if project_primary_key else " NOT NULL"
+        connection.execute(
+            f"""CREATE TABLE barrier_session (
+                schema_version INTEGER NOT NULL,
+                project_id TEXT{project_constraint},
+                attempt_id TEXT NOT NULL,
+                state_revision INTEGER NOT NULL,
+                authority_revision_at_acquire TEXT NOT NULL,
+                durable_barrier_id TEXT NOT NULL,
+                fencing_token TEXT NOT NULL,
+                fencing_owner TEXT NOT NULL,
+                identity_digest TEXT NOT NULL,
+                status TEXT NOT NULL,
+                revision INTEGER NOT NULL,
+                forward_child TEXT,
+                rollback_child TEXT
+            )"""
+        )
+
+    @staticmethod
+    def _insert_barrier(connection: sqlite3.Connection, status: object) -> None:
+        identity: dict[str, object] = {
+            "schema_version": 1,
+            "project_id": BARRIER_PROJECT,
+            "attempt_id": "attempt-1",
+            "state_revision": 1,
+            "authority_revision_at_acquire": "authority-1",
+            "durable_barrier_id": "barrier-1",
+            "fencing_token": "fence-1",
+            "fencing_owner": "owner-1",
+            "identity_digest": "0" * 64,
+        }
+        identity["identity_digest"] = canonical_barrier_session_digest(identity)
+        connection.execute(
+            "INSERT INTO barrier_session VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (*identity.values(), status, 1, None, None),
+        )
+
     def _set_barrier(self, status: str | None) -> None:
         connection = sqlite3.connect(self.control)
-        connection.execute("DELETE FROM barrier WHERE project_id='project'")
+        connection.execute("DELETE FROM barrier_session WHERE project_id=?", (BARRIER_PROJECT,))
         if status is not None:
-            connection.execute("INSERT INTO barrier VALUES ('project', ?)", (status,))
+            self._insert_barrier(connection, status)
         connection.commit()
         connection.close()
 
@@ -312,7 +358,7 @@ class MutationFenceTests(unittest.TestCase):
             pass
         database = self.root / "backend.sqlite3"
         binding = {
-            "project_id": "00000000-0000-4000-8000-000000000001",
+            "project_id": BARRIER_PROJECT,
             "state_repository": "owner/state",
             "product_repository": "owner/product",
         }
@@ -327,7 +373,7 @@ class MutationFenceTests(unittest.TestCase):
         backend_marker = self.root / "backend-marker.json"
         backend_lifecycle = self.root / "backend-lifecycle.json"
         backend_lock = self.root / "backend-authority.lock"
-        provision(database, backend_marker, backend_lifecycle, backend_lock, "project")
+        provision(database, backend_marker, backend_lifecycle, backend_lock, BARRIER_PROJECT)
         backend_fence = MutationFence(
             database,
             backend_marker,
@@ -421,23 +467,27 @@ class MutationFenceTests(unittest.TestCase):
             yield None
 
         connection = sqlite3.connect(self.control)
-        connection.execute("INSERT INTO barrier VALUES ('project', 'released')")
+        connection.execute("DROP TABLE barrier_session")
+        self._create_barrier_table(connection, project_primary_key=False)
+        self._insert_barrier(connection, "released")
+        self._insert_barrier(connection, "released")
         connection.commit()
         connection.close()
         with (
-            self.assertRaisesRegex(MutationFenceError, "missing or ambiguous"),
+            self.assertRaisesRegex(MutationFenceError, "state is invalid"),
             fence.mutation_scope(common),
         ):
             pass
         self._set_barrier("held")
         connection = sqlite3.connect(self.control)
         connection.execute(
-            "UPDATE barrier SET status=? WHERE project_id='project'", (sqlite3.Binary(b"x"),)
+            "UPDATE barrier_session SET status=? WHERE project_id=?",
+            (sqlite3.Binary(b"x"), BARRIER_PROJECT),
         )
         connection.commit()
         connection.close()
         with (
-            self.assertRaisesRegex(MutationFenceError, "status is invalid"),
+            self.assertRaisesRegex(MutationFenceError, "state is invalid"),
             fence.mutation_scope(common),
         ):
             pass
@@ -574,7 +624,7 @@ class MutationFenceTests(unittest.TestCase):
             fence._read_barrier_status()
 
     def test_missing_binding_and_process_busy_are_rejected(self) -> None:
-        provision(self.authority, self.marker, self.lifecycle, self.lock, "project")
+        provision(self.authority, self.marker, self.lifecycle, self.lock, BARRIER_PROJECT)
         incomplete = MutationFence(
             self.authority,
             self.marker,

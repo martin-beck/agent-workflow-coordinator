@@ -1360,7 +1360,8 @@ class SQLiteBarrierSessionStore:
             barrier_identity_digest=decoded["barrier_identity_digest"],
         )
 
-    def _row_state(self, row: tuple[object, ...]) -> BarrierSessionState:
+    @classmethod
+    def _decode_observation(cls, project_id: str, row: tuple[object, ...]) -> BarrierSessionState:
         if len(row) != 13:
             raise ControlStoreError("barrier session row is invalid")
         identity_record = dict(
@@ -1389,14 +1390,29 @@ class SQLiteBarrierSessionStore:
                 identity,
                 cast(str, row[9]),
                 cast(int, row[10]),
-                self._child(row[11]),
-                self._child(row[12]),
+                cls._child(row[11]),
+                cls._child(row[12]),
             )
         except (ControlStoreError, TypeError, ValueError) as error:
             raise ControlStoreError("barrier session state is invalid") from error
-        if identity.project_id != self.project_id:
+        if identity.project_id != project_id:
             raise ControlStoreError("barrier session project binding mismatch")
         return state
+
+    def _row_state(self, row: tuple[object, ...]) -> BarrierSessionState:
+        return self._decode_observation(self.project_id, row)
+
+    @classmethod
+    def observe_connection(
+        cls, connection: sqlite3.Connection, project_id: str
+    ) -> BarrierSessionState | None:
+        """Decode one descriptor-bound row without acquiring another lock."""
+        rows = connection.execute(cls._SELECT, (project_id,)).fetchall()
+        if not rows:
+            return None
+        if len(rows) != 1:
+            raise ControlStoreError("durable barrier session observation is ambiguous")
+        return cls._decode_observation(project_id, tuple(rows[0]))
 
     def _snapshot_locked(self) -> BarrierSessionState | None:
         self._control._require_operation_lock()
