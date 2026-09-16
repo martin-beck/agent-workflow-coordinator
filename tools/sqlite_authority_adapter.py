@@ -35,6 +35,7 @@ class SQLiteLifecycleSnapshot:
     control: BarrierSessionState
     journal: JournalSnapshot
     journal_identity: tuple[int, int, int, int]
+    control_lock_identity: tuple[int, int]
 
 
 _SUPPORTED_PHASES = frozenset(
@@ -106,7 +107,8 @@ class SQLiteLifecycleExecutor:
         if self._journal_identity(self._journal) != journal_identity:
             raise SQLiteAuthorityError("lifecycle journal identity changed")
         self._adapter._check_identity()
-        snapshot = SQLiteLifecycleSnapshot(control, journal, journal_identity)
+        lock_identity = self._lock_identity(self._session_store.control_lock_path)
+        snapshot = SQLiteLifecycleSnapshot(control, journal, journal_identity, lock_identity)
         self._last_snapshot = snapshot
         return snapshot
 
@@ -149,6 +151,16 @@ class SQLiteLifecycleExecutor:
         if not stat.S_ISREG(value.st_mode) or value.st_nlink != 1:
             raise SQLiteAuthorityError("lifecycle journal is not private and regular")
         return parent.st_dev, parent.st_ino, value.st_dev, value.st_ino
+
+    @staticmethod
+    def _lock_identity(path: Path) -> tuple[int, int]:
+        try:
+            value = path.lstat()
+        except OSError as error:
+            raise SQLiteAuthorityError("lifecycle control lock is unavailable") from error
+        if not stat.S_ISREG(value.st_mode) or value.st_nlink != 1:
+            raise SQLiteAuthorityError("lifecycle control lock is not private and regular")
+        return value.st_dev, value.st_ino
 
     def assert_snapshot_stable(self, expected: SQLiteLifecycleSnapshot) -> SQLiteLifecycleSnapshot:
         """Reread durable state and fail closed if it changed since ``expected``."""
