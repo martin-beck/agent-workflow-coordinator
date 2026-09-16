@@ -163,6 +163,82 @@ class GitBackupTests(unittest.TestCase):
             self.assertTrue(original.is_file())
             self.assertTrue(foreign.is_file())
 
+    def test_verify_rejects_archive_content_mismatch_even_with_updated_manifest(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repo = self.repo(root)
+            backup = create_backup(repo, root / "backup", quiesced=True)
+            archive_path = backup / "tracked-tree.tar"
+            rewritten = io.BytesIO()
+            with (
+                tarfile.open(archive_path) as source,
+                tarfile.open(fileobj=rewritten, mode="w") as target,
+            ):
+                for member in source.getmembers():
+                    payload = source.extractfile(member)
+                    data = (
+                        b"tampered\n"
+                        if member.name == "task.md"
+                        else (payload.read() if payload else b"")
+                    )
+                    target.addfile(member, io.BytesIO(data))
+            archive_path.write_bytes(rewritten.getvalue())
+            manifest_path = backup / "manifest.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["artifacts"]["tracked-tree.tar"] = {
+                "sha256": hashlib.sha256(archive_path.read_bytes()).hexdigest(),
+                "size": archive_path.stat().st_size,
+            }
+            manifest_path.write_text(json.dumps(manifest, sort_keys=True), encoding="utf-8")
+            with self.assertRaisesRegex(BackupError, "archive content mismatch"):
+                verify_backup(backup)
+
+    def test_verify_rejects_archive_race_after_safety_check_without_residue(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repo = self.repo(root)
+            backup = create_backup(repo, root / "backup", quiesced=True)
+            archive_path = backup / "tracked-tree.tar"
+            mutated = io.BytesIO()
+            with (
+                tarfile.open(archive_path) as source,
+                tarfile.open(fileobj=mutated, mode="w") as target,
+            ):
+                for member in source.getmembers():
+                    payload = source.extractfile(member)
+                    data = (
+                        b"race mutation\n"
+                        if member.name == "task.md"
+                        else (payload.read() if payload else b"")
+                    )
+                    target.addfile(member, io.BytesIO(data))
+            mutated_bytes = mutated.getvalue()
+            start_barrier = Barrier(2)
+            completion_barrier = Barrier(2)
+            original_verify = MODULE._verify_archive
+
+            def replace_after_check(path: Path) -> None:
+                original_verify(path)
+                start_barrier.wait()
+                completion_barrier.wait()
+
+            def mutate_archive() -> None:
+                start_barrier.wait()
+                archive_path.write_bytes(mutated_bytes)
+                completion_barrier.wait()
+
+            before = set(Path(tempfile.gettempdir()).glob("handoffctl-restore-*"))
+            with ThreadPoolExecutor(max_workers=1) as pool:
+                future = pool.submit(mutate_archive)
+                with (
+                    patch.object(MODULE, "_verify_archive", side_effect=replace_after_check),
+                    self.assertRaisesRegex(BackupError, "archive content mismatch"),
+                ):
+                    verify_backup(backup)
+                future.result()
+            after = set(Path(tempfile.gettempdir()).glob("handoffctl-restore-*"))
+            self.assertEqual(before, after)
+
     def test_restore_rejects_backup_replacement_after_verify(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
