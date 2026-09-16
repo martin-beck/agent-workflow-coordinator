@@ -81,7 +81,7 @@ class SQLiteAuthorityAdapter:
         from tools.sqlite_backup import backup_database
 
         return backup_database(
-            self._authority, destination, binding, session=self.lifecycle_session()
+            self._authority, destination, binding, session=self.lifecycle_session(), owner=self
         )
 
     def restore_bound(
@@ -100,6 +100,7 @@ class SQLiteAuthorityAdapter:
             binding,
             quiesced=True,
             session=_issue(self, backup),
+            owner=self,
         )
 
     @staticmethod
