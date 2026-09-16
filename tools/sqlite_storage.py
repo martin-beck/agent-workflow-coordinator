@@ -57,6 +57,14 @@ class SQLiteBackendBinding:
         "_revision",
         "_session",
     )
+    _control_store: Any
+    _descriptor_identity: tuple[int, int]
+    _fencing_token: str
+    _owner: str
+    _path: Path
+    _project_id: str
+    _revision: int
+    _session: Any
 
     def __init__(
         self, control_store: Any, session: Any, state: Any, capability: object | None = None

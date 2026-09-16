@@ -38,7 +38,7 @@ from tools.rollback_control_store import (
     SQLiteRollbackControlStore,
 )
 from tools.scoped_backend_adapter import ScopedBackendAdapter
-from tools.sqlite_storage import SQLiteBackendBinding
+from tools.sqlite_storage import SQLiteBackend, SQLiteBackendBinding
 from tools.upgrade_engine import (
     BoundRollbackCapability,
     GitRollbackObservationCapability,
@@ -353,7 +353,7 @@ class GitAuthorityAdapterTests(unittest.TestCase):
         with self.assertRaises(TypeError):
             SQLiteBackendBinding(self.control_store, self.session, self.session.snapshot())
         with self.assertRaises(AttributeError):
-            binding._owner = "forged"  # type: ignore[attr-defined]
+            binding._owner = "forged"
         # Binding is deliberately not an authorization or mutation surface.
         self.assertFalse(hasattr(binding, "mutate"))
         self.assertFalse(hasattr(binding, "authorize"))
@@ -377,6 +377,36 @@ class GitAuthorityAdapterTests(unittest.TestCase):
         finally:
             original_path.unlink()
             displaced.rename(original_path)
+
+    def test_sqlite_backend_binding_rejects_untrusted_inputs_and_backend_mismatch(self) -> None:
+        with self.assertRaises(TypeError):
+            SQLiteBackendBinding.bind(object(), object())
+        inactive_path = Path(self.coordination.name) / "inactive-control.sqlite"
+        inactive = SQLiteRollbackControlStore(
+            inactive_path, PROJECT, self.control_store.authority_path
+        )
+        with self.assertRaises(ValueError):
+            SQLiteBackendBinding.bind(inactive, SQLiteBarrierSessionStore(inactive))
+        binding = SQLiteBackendBinding.bind(self.control_store, self.session)
+        backend_meta = {
+            "project_id": PROJECT,
+            "state_repository": "owner/state",
+            "product_repository": "owner/product",
+        }
+        with self.assertRaises(TypeError):
+            SQLiteBackend(
+                binding.path,
+                backend_meta,
+                Path(self.coordination.name),
+                backend_binding=cast(Any, object()),
+            )
+        with self.assertRaises(ValueError):
+            SQLiteBackend(
+                binding.path.with_name("alias.sqlite"),
+                backend_meta,
+                Path(self.coordination.name),
+                backend_binding=binding,
+            )
 
     def test_engine_bound_rollback_inspection_uses_real_scope_and_preserves_journal(self) -> None:
         context = {**CONTEXT, "operation_id": "op-real-git-inspection", "target": "new"}
