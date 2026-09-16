@@ -19,7 +19,11 @@ from typing import Any, cast
 from unittest.mock import patch
 
 from tools.admission_lease import AdmissionLease, validate_recheck
-from tools.git_authority_adapter import GitAuthorityAdapter, GitAuthorityError
+from tools.git_authority_adapter import (
+    GitAuthorityAdapter,
+    GitAuthorityError,
+    GitRollbackSessionState,
+)
 from tools.handoffctl import locked
 from tools.lock_domain import LockDomainContract
 from tools.lock_domain_scope import LockDomainScope
@@ -172,6 +176,30 @@ def _bound_snapshot_process(
 
 
 class GitAuthorityAdapterTests(unittest.TestCase):
+    def test_bound_reread_returns_typed_session_without_cas_arguments(self) -> None:
+        value = {
+            **CONTEXT,
+            "phase": "rollback",
+            "backend_identity_verified": True,
+            "git_head": "a" * 40,
+            "git_branch": "main",
+            "git_clean": True,
+            "mutates_authority": False,
+        }
+        with patch.object(self.adapter, "snapshot_bound", return_value=value) as reread:
+            result = self.adapter.snapshot_bound_reread(
+                CONTEXT,
+                cast(Any, object()),
+                lease=cast(Any, object()),
+                admission_recheck=cast(Any, object()),
+                expected_branch="main",
+                expected_head="a" * 40,
+            )
+        self.assertIsInstance(result, GitRollbackSessionState)
+        self.assertEqual("main", result.git_branch)
+        self.assertEqual("a" * 40, result.git_head)
+        self.assertEqual("rollback", reread.call_args.args[0])
+
     @staticmethod
     def _lease() -> AdmissionLease:
         return AdmissionLease(PROJECT, "authority", "fence", "owner", "barrier", 1)
@@ -485,6 +513,28 @@ class GitAuthorityAdapterTests(unittest.TestCase):
         )
         self.assertEqual(observed["git_head"], bound["git_head"])
         self.assertFalse(bound["mutates_authority"])
+
+    def test_snapshot_bound_reread_real_session_and_rejects_foreign_head(self) -> None:
+        observed = self.adapter.snapshot("rollback", CONTEXT)
+        result = self.adapter.snapshot_bound_reread(
+            CONTEXT,
+            self.scope,
+            lease=self.lease,
+            admission_recheck=self.recheck,
+            expected_branch=str(observed["git_branch"]),
+            expected_head=str(observed["git_head"]),
+        )
+        self.assertEqual(str(observed["git_head"]), result.git_head)
+        self.assertEqual(str(observed["git_branch"]), result.git_branch)
+        with self.assertRaisesRegex(GitAuthorityError, "identity changed"):
+            self.adapter.snapshot_bound_reread(
+                CONTEXT,
+                self.scope,
+                lease=self.lease,
+                admission_recheck=self.recheck,
+                expected_branch=str(observed["git_branch"]),
+                expected_head="0" * 40,
+            )
 
     def test_snapshot_bound_rejects_session_or_identity_drift_before_observation(self) -> None:
         observed = self.adapter.snapshot("discover", CONTEXT)

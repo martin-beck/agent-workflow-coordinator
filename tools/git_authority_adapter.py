@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import subprocess
 from collections.abc import Mapping
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +20,20 @@ from tools.rollback_evidence import BackupObservation
 
 class GitAuthorityError(RuntimeError):
     """Git authority evidence is unavailable or a mutation was requested."""
+
+
+@dataclass(frozen=True)
+class GitRollbackSessionState:
+    """Typed identity returned by a bound read-only Git session reread."""
+
+    project_id: str
+    authority_revision: str
+    state_revision: int
+    fencing_token: str
+    fencing_owner: str
+    durable_barrier_id: str
+    git_head: str
+    git_branch: str
 
 
 _SUPPORTED_PHASES = frozenset(
@@ -235,6 +250,37 @@ class GitAuthorityAdapter:
         if value.get("git_branch") != expected_branch or value.get("git_head") != expected_head:
             raise GitAuthorityError("Git authority identity changed")
         return value
+
+    def snapshot_bound_reread(
+        self,
+        context: Mapping[str, object],
+        scope: LockDomainScope,
+        *,
+        lease: AdmissionLease,
+        admission_recheck: AdmissionRecheck,
+        expected_branch: str,
+        expected_head: str,
+    ) -> GitRollbackSessionState:
+        """Return typed bound session identity without caller CAS fields."""
+        value = self.snapshot_bound(
+            "rollback",
+            context,
+            scope,
+            lease=lease,
+            admission_recheck=admission_recheck,
+            expected_branch=expected_branch,
+            expected_head=expected_head,
+        )
+        return GitRollbackSessionState(
+            project_id=str(value["project_id"]),
+            authority_revision=str(value["authority_revision"]),
+            state_revision=int(value["state_revision"]),
+            fencing_token=str(value["fencing_token"]),
+            fencing_owner=str(value["fencing_owner"]),
+            durable_barrier_id=str(value["durable_barrier_id"]),
+            git_head=str(value["git_head"]),
+            git_branch=str(value["git_branch"]),
+        )
 
     def verify_rollback_context(self, context: Mapping[str, object]) -> dict[str, Any]:
         """Reread clean Git identity but do not authorize rollback."""
