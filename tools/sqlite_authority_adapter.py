@@ -64,6 +64,7 @@ class SQLiteLifecycleExecutor:
         self._adapter = adapter
         self._session_store = session_store
         self._journal = journal
+        self._last_snapshot: SQLiteLifecycleSnapshot | None = None
 
     @classmethod
     def bind(
@@ -88,7 +89,9 @@ class SQLiteLifecycleExecutor:
                 value = json.loads(self._journal.read_text(encoding="utf-8"))
                 journal = JournalSnapshot.from_mapping(cast(Mapping[str, object], value))
                 self._adapter._check_identity()
-                return SQLiteLifecycleSnapshot(control, journal)
+                snapshot = SQLiteLifecycleSnapshot(control, journal)
+                self._last_snapshot = snapshot
+                return snapshot
         except SQLiteAuthorityError:
             raise
         except Exception as error:
@@ -96,6 +99,8 @@ class SQLiteLifecycleExecutor:
 
     def assert_snapshot_stable(self, expected: SQLiteLifecycleSnapshot) -> SQLiteLifecycleSnapshot:
         """Reread durable state and fail closed if it changed since ``expected``."""
+        if expected is not self._last_snapshot:
+            raise SQLiteAuthorityError("lifecycle snapshot belongs to a foreign executor")
         current = self.snapshot()
         if current != expected:
             raise SQLiteAuthorityError("durable lifecycle state changed")
