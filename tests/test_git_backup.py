@@ -392,6 +392,26 @@ class GitBackupTests(unittest.TestCase):
             self.assertEqual("foreign", (destination / "foreign.txt").read_text())
             self.assertFalse(list(root.glob(".git-restore-*")))
 
+    def test_create_rejects_destination_creation_before_publication(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repo = self.repo(root)
+            destination = root / "backup"
+            original_manifest = MODULE._write_manifest
+
+            def create_foreign(path: Path, value: dict[str, object]) -> None:
+                original_manifest(path, value)
+                destination.mkdir()
+                (destination / "foreign.txt").write_text("foreign")
+
+            with (
+                patch.object(MODULE, "_write_manifest", side_effect=create_foreign),
+                self.assertRaisesRegex(BackupError, "destination appeared"),
+            ):
+                create_backup(repo, destination, quiesced=True)
+            self.assertEqual("foreign", (destination / "foreign.txt").read_text())
+            self.assertFalse(list(root.glob(".git-backup-*")))
+
 
 if __name__ == "__main__":
     unittest.main()
