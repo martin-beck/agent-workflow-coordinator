@@ -361,6 +361,19 @@ class SQLiteAuthorityAdapterTests(unittest.TestCase):
         foreign.rename(journal)
         self.assertFalse(self.session.operation_owned_by_current_thread)
 
+    def test_bound_lifecycle_executor_rejects_shared_journal_hardlink(self) -> None:
+        journal = self.root / "engine-journal.json"
+        content = '{"status":"running","phase":"backup","records":[]}\n'
+        journal.write_text(content, encoding="utf-8")
+        executor = self.adapter.bind_lifecycle_executor(self.session, journal)
+        baseline = executor.snapshot()
+        shared = self.root / "shared-journal.json"
+        os.link(journal, shared)
+        with self.assertRaisesRegex(SQLiteAuthorityError, "not private and regular"):
+            executor.assert_snapshot_stable(baseline)
+        shared.unlink()
+        self.assertFalse(self.session.operation_owned_by_current_thread)
+
     def test_bound_lifecycle_executor_rejects_reused_stale_baseline(self) -> None:
         journal = self.root / "engine-journal.json"
         journal.write_text('{"status":"running","phase":"backup","records":[]}\n', encoding="utf-8")
