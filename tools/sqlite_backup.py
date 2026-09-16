@@ -191,6 +191,9 @@ def _install(source: Path, destination: Path, binding: dict[str, Any]) -> None:
     try:
         _copy_online(source, temporary_path, binding)
         temporary_path.chmod(0o600)
+        # Do not allocate a preservation link in a parent that was replaced
+        # while the online copy was running.
+        _assert_parent_identity(destination, parent_identity)
         previous_path = _backup_existing(destination)
         _assert_parent_identity(destination, parent_identity)
         temporary_path.replace(destination)
