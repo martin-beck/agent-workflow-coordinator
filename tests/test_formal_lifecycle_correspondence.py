@@ -93,3 +93,20 @@ class FormalLifecycleCorrespondenceTests(unittest.TestCase):
                     {"event": "retry_verified"},
                 )
             )
+
+    def test_lost_outcome_is_write_closed_and_retryable(self) -> None:
+        """A lost publication outcome maps to rejection, then a verified retry."""
+        self.assertEqual(
+            ("ExecuteReject", "ExecuteSuccess"),
+            validate_runtime_trace(
+                (
+                    {
+                        "event": "publication_failed",
+                        "revision_before": 3,
+                        "revision_after": 3,
+                        "lock_held": True,
+                    },
+                    {"event": "retry_verified", "revision_before": 3, "revision_after": 3},
+                )
+            ),
+        )
