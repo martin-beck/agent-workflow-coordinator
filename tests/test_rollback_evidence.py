@@ -55,13 +55,17 @@ class RollbackEvidenceTests(unittest.TestCase):
             manifest.write_text("{", encoding="utf-8")
             with self.assertRaisesRegex(RollbackEvidenceError, "must be paths"):
                 BackupObservation.from_artifacts(
-                    str(backup), manifest,
-                    control_store_identity="1:2", control_store_revision=1,
+                    str(backup),
+                    manifest,
+                    control_store_identity="1:2",
+                    control_store_revision=1,
                 )  # type: ignore[arg-type]
             with self.assertRaisesRegex(RollbackEvidenceError, "unavailable"):
                 BackupObservation.from_artifacts(
-                    backup, manifest,
-                    control_store_identity="1:2", control_store_revision=1,
+                    backup,
+                    manifest,
+                    control_store_identity="1:2",
+                    control_store_revision=1,
                 )
 
     def test_backup_observation_rejects_replacement_during_stat_recheck(self) -> None:
@@ -90,9 +94,12 @@ class RollbackEvidenceTests(unittest.TestCase):
                 self.assertRaisesRegex(RollbackEvidenceError, "replaced"),
             ):
                 BackupObservation.from_artifacts(
-                    backup, manifest,
-                    control_store_identity="1:2", control_store_revision=1,
+                    backup,
+                    manifest,
+                    control_store_identity="1:2",
+                    control_store_revision=1,
                 )
+
     def test_adapters_invoke_real_backend_backup_verifiers(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -225,18 +232,23 @@ class RollbackEvidenceTests(unittest.TestCase):
                     raise OSError("gone")
                 return original_stat(path, **kwargs)
 
-            with patch.object(
-                control, "_verify_rollback_context_locked", return_value={"revision": 1}
-            ), patch(
-                "pathlib.Path.stat", autospec=True, side_effect=fail_control_stat
-            ), self.assertRaisesRegex(ControlStoreError, "identity reread failed"):
+            with (
+                patch.object(
+                    control, "_verify_rollback_context_locked", return_value={"revision": 1}
+                ),
+                patch("pathlib.Path.stat", autospec=True, side_effect=fail_control_stat),
+                self.assertRaisesRegex(ControlStoreError, "identity reread failed"),
+            ):
                 adapter.observe_backup_identity(backup, manifest, context)
             self.assertFalse(control.operation_owned_by_current_thread)
             with control.operation_lock():
                 pass
-            with patch.object(
-                control, "_verify_rollback_context_locked", return_value={"revision": "one"}
-            ), self.assertRaisesRegex(ControlStoreError, "identity is invalid"):
+            with (
+                patch.object(
+                    control, "_verify_rollback_context_locked", return_value={"revision": "one"}
+                ),
+                self.assertRaisesRegex(ControlStoreError, "identity is invalid"),
+            ):
                 adapter.observe_backup_identity(backup, manifest, context)
             self.assertFalse(control.operation_owned_by_current_thread)
             with control.operation_lock():
