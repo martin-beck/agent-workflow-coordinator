@@ -4,8 +4,8 @@
   "model_sha256": "616d53832ac5ec18bf3242d47b2412195eb64adb2b1035235514e06cc3edf2ba",
   "config_sha256": "47425af53affd104aa5e30d7434cf3e71e3c7b69bccb9b05fbd749d3285991a2",
   "implementation_snapshot": {
-    "revision": "c1e26b8c1a66c2a9f4ce7f61391fa40456efc3b2",
-    "runtime_revision": "c1e26b8c1a66c2a9f4ce7f61391fa40456efc3b2",
+    "revision": "4676a9eeb4f9f87fa9339225457134ed7f6a8964",
+    "runtime_revision": "4676a9eeb4f9f87fa9339225457134ed7f6a8964",
     "files": {
       "schema/upgrade-contract.schema.json": "6ef2362107a0c3ff895e6dc96e35899e19b367bebd549b6acee42a680d7a442b",
       "tools/generate_upgrade_contract.py": "b3db939912bed549eaba17a2e064e776ff9119b82287218016100e25e5ad9ba4",
@@ -15,14 +15,14 @@
       "tools/handoffctl.py": "97d70980b754eb6bf77918bb7178729caf70d54e07919d97bf67b063f5d00b21",
       "tests/test_upgrade_commands.py": "4eaa65ac1730c9149156ba76e345dcb1f8e2c44a51042e27f2d4a4b4e7634f32",
       "tests/test_upgrade_contract.py": "0630ea0c35ad100367a9df0d0682a90b2b0b120057768029fc82fe06a106989c",
-      "tools/rollback_control_store.py": "a6991960e36bc35d667b8fffbbe0baa5df26a192da3b5a4e8f07a61a1d97a2b5",
+      "tools/rollback_control_store.py": "c87dc9b00867de1406d67a226cc04a383d4c4df8116dc32643b9af178048434a",
       "tools/upgrade_identity.py": "44bf4479b28e1b684879f7f000f713e8f5177034e1a2d43a30c09745c9c014a6",
       "tests/test_rollback_control_store.py": "9228c934356fcdf6ed19b4892f1877cde2cc779f680423bd810ba196ca4213d5",
       "tests/test_upgrade_identity.py": "0206aef1794ed73ffcdefb4f965f657514f11858d9beb0b2fa92f7dceaaaf905",
       "tools/mutation_fence.py": "2d314f5a5cc46d0f625135b39ada2d1a464cd35c9d378728c141708df8c0c630",
       "tools/sqlite_storage.py": "96f4fcb45bb7ccc4936185dfc70192d27075232dca91029fe23295ef1e31e58b",
       "tests/test_mutation_fence.py": "e2bcea7b96bddd2509b79ff9c5eefd57001d1502949aba30cbbd50a9169e1cbb",
-      "tests/test_sqlite_mutation_barrier.py": "fc30f015f0a8f957d3e556f5028469dbb7aa45e6513c583ee4c45fec032bad86",
+      "tests/test_sqlite_mutation_barrier.py": "6949425557176bebb3341677d1fed90c0217055bd1d1dcb56bbdf91f60d31fb8",
       "tests/test_sqlite_storage.py": "498949a2fe69dd2b6c92ba3ca56c407fbe3658f86332adac5416a5f1798e1a27"
     }
   },

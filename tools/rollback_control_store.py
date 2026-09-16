@@ -1402,6 +1402,110 @@ class SQLiteBarrierSessionStore:
     def _row_state(self, row: tuple[object, ...]) -> BarrierSessionState:
         return self._decode_observation(self.project_id, row)
 
+    @staticmethod
+    def _prepared_intent_matches(
+        current: BarrierSessionState,
+        intent: tuple[str, str, int, int, str, str],
+    ) -> bool:
+        """Check that one prepared intent belongs to the durable current row."""
+        _, attempt_id, expected_revision, proposed_revision, identity_digest, proposed_status = (
+            intent
+        )
+        matches_current = (
+            proposed_revision == current.revision
+            and expected_revision == current.revision - 1
+            and proposed_status == current.status
+        )
+        matches_interrupted_recovery = (
+            current.status == "ambiguous"
+            and proposed_revision == current.revision - 1
+            and expected_revision == proposed_revision - 1
+            and proposed_status in {"held", "releasing"}
+        )
+        matches_interrupted_reconciliation = (
+            current.status == "held"
+            and proposed_status == "held"
+            and proposed_revision == current.revision
+            and expected_revision == current.revision + 1
+            and attempt_id == current.identity.attempt_id
+            and identity_digest == current.identity.identity_digest
+        )
+        return (
+            attempt_id == current.identity.attempt_id
+            and identity_digest == current.identity.identity_digest
+            and proposed_status in STATUS_TRANSITIONS
+            and (
+                matches_current
+                or matches_interrupted_recovery
+                or matches_interrupted_reconciliation
+            )
+        )
+
+    @staticmethod
+    def _is_interrupted_reconciliation(
+        current: BarrierSessionState,
+        intent: tuple[str, str, int, int, str, str],
+    ) -> bool:
+        """Identify a committed fresh held row lacking outcome publication."""
+        _, _, expected_revision, proposed_revision, _, proposed_status = intent
+        return (
+            current.status == "held"
+            and proposed_status == "held"
+            and proposed_revision == current.revision
+            and expected_revision == current.revision + 1
+        )
+
+    def _reconciliation_history_matches(
+        self,
+        connection: sqlite3.Connection,
+        current: BarrierSessionState,
+        intent: tuple[str, str, int, int, str, str],
+    ) -> bool:
+        """Require the exact typed ambiguous predecessor for a fresh fence."""
+        _, _, expected_revision, _, _, _ = intent
+        row = connection.execute(
+            "SELECT attempt_id,revision,record_json "
+            "FROM barrier_session_history WHERE project_id=? AND revision=?",
+            (self.project_id, expected_revision),
+        ).fetchone()
+        if row is None:
+            return False
+        try:
+            record = json.loads(cast(str, row[2]))
+            if not isinstance(record, dict):
+                return False
+            previous = self._decode_observation(
+                self.project_id,
+                tuple(
+                    record.get(field)
+                    for field in (
+                        "schema_version",
+                        "project_id",
+                        "attempt_id",
+                        "state_revision",
+                        "authority_revision_at_acquire",
+                        "durable_barrier_id",
+                        "fencing_token",
+                        "fencing_owner",
+                        "identity_digest",
+                        "status",
+                        "revision",
+                        "forward_child",
+                        "rollback_child",
+                    )
+                ),
+            )
+        except (ControlStoreError, TypeError, ValueError, json.JSONDecodeError):
+            return False
+        return (
+            row[0] == previous.identity.attempt_id
+            and row[1] == previous.revision
+            and previous.status == "ambiguous"
+            and previous.revision == expected_revision
+            and previous.identity != current.identity
+            and previous.identity.state_revision < current.identity.state_revision
+        )
+
     @classmethod
     def observe_connection(
         cls, connection: sqlite3.Connection, project_id: str
@@ -1680,6 +1784,52 @@ class SQLiteBarrierSessionStore:
                 ) from error
             return supplied
 
+    def _recover_prepared_locked(
+        self,
+        connection: sqlite3.Connection,
+        prepared: list[tuple[str, str, int, int, str, str]],
+    ) -> BarrierSessionState:
+        """Resolve prepared intents while the control-store lock is held."""
+        current = self._snapshot_locked()
+        if current is None:
+            raise ControlStoreError("prepared session intent has no session")
+        if not all(self._prepared_intent_matches(current, intent) for intent in prepared):
+            raise ControlStoreError("prepared session intent identity is invalid")
+        if all(self._is_interrupted_reconciliation(current, intent) for intent in prepared):
+            if not all(
+                self._reconciliation_history_matches(connection, current, intent)
+                for intent in prepared
+            ):
+                raise ControlStoreError("prepared reconciliation history is invalid")
+            connection.execute("BEGIN IMMEDIATE")
+            for intent_id, *_ in prepared:
+                self._mark_intent_locked(connection, intent_id, "reconciled")
+            connection.commit()
+            return current
+        if current.status != "ambiguous":
+            connection.execute("BEGIN IMMEDIATE")
+            connection.execute(
+                "UPDATE barrier_session SET status='ambiguous',revision=? "
+                "WHERE project_id=? AND revision=? AND status IN ('held','releasing')",
+                (current.revision + 1, self.project_id, current.revision),
+            )
+            if connection.execute("SELECT changes()").fetchone()[0] != 1:
+                connection.rollback()
+                raise ControlStoreError("unknown session outcome lost its row fence")
+            current = BarrierSessionState(
+                current.identity,
+                "ambiguous",
+                current.revision + 1,
+                current.forward_child,
+                current.rollback_child,
+            )
+            connection.commit()
+        connection.execute("BEGIN IMMEDIATE")
+        for intent_id, _attempt_id, _expected, _proposed, _digest, _status in prepared:
+            self._mark_intent_locked(connection, intent_id, "ambiguous", "process-death")
+        connection.commit()
+        return current
+
     def recover_unknown(self) -> BarrierSessionState | None:
         """Fence every prepared outcome left by a process death or lost reply."""
         if self.operation_owned_by_current_thread:
@@ -1687,60 +1837,11 @@ class SQLiteBarrierSessionStore:
         with self.operation_lock(), self._control._connection() as connection:
             self._ensure_table(connection)
             prepared = self._prepared_intents_locked(connection)
-            if not prepared:
-                return self._snapshot_locked()
-            current = self._snapshot_locked()
-            if current is None:
-                raise ControlStoreError("prepared session intent has no session")
-            for (
-                _intent_id,
-                attempt_id,
-                expected_revision,
-                proposed_revision,
-                identity_digest,
-                proposed_status,
-            ) in prepared:
-                matches_current = (
-                    proposed_revision == current.revision
-                    and expected_revision == current.revision - 1
-                    and proposed_status == current.status
-                )
-                matches_interrupted_recovery = (
-                    current.status == "ambiguous"
-                    and proposed_revision == current.revision - 1
-                    and expected_revision == proposed_revision - 1
-                    and proposed_status in {"held", "releasing"}
-                )
-                if (
-                    attempt_id != current.identity.attempt_id
-                    or identity_digest != current.identity.identity_digest
-                    or proposed_status not in STATUS_TRANSITIONS
-                    or not (matches_current or matches_interrupted_recovery)
-                ):
-                    raise ControlStoreError("prepared session intent identity is invalid")
-            if current.status != "ambiguous":
-                connection.execute("BEGIN IMMEDIATE")
-                connection.execute(
-                    "UPDATE barrier_session SET status='ambiguous',revision=? "
-                    "WHERE project_id=? AND revision=? AND status IN ('held','releasing')",
-                    (current.revision + 1, self.project_id, current.revision),
-                )
-                if connection.execute("SELECT changes()").fetchone()[0] != 1:
-                    connection.rollback()
-                    raise ControlStoreError("unknown session outcome lost its row fence")
-                current = BarrierSessionState(
-                    current.identity,
-                    "ambiguous",
-                    current.revision + 1,
-                    current.forward_child,
-                    current.rollback_child,
-                )
-                connection.commit()
-            connection.execute("BEGIN IMMEDIATE")
-            for intent_id, _attempt_id, _expected, _proposed, _digest, _status in prepared:
-                self._mark_intent_locked(connection, intent_id, "ambiguous", "process-death")
-            connection.commit()
-            return current
+            return (
+                self._snapshot_locked()
+                if not prepared
+                else self._recover_prepared_locked(connection, prepared)
+            )
 
     def reconcile_ambiguous(  # noqa: C901
         self,
@@ -1784,7 +1885,24 @@ class SQLiteBarrierSessionStore:
                 raise ControlStoreError("fresh authority revision is invalid")
             if fresh_authority_revision != replacement.identity.authority_revision_at_acquire:
                 raise ControlStoreError("replacement authority revision changed")
+            intent_id = uuid.uuid4().hex
             connection.execute("BEGIN IMMEDIATE")
+            connection.execute(
+                "INSERT INTO barrier_session_intent "
+                "(project_id,intent_id,attempt_id,expected_revision,proposed_revision,"
+                "proposed_status,identity_digest,outcome,cause_code) VALUES (?,?,?,?,?,?,?,?,?)",
+                (
+                    self.project_id,
+                    intent_id,
+                    replacement.identity.attempt_id,
+                    expected_revision,
+                    replacement.revision,
+                    replacement.status,
+                    replacement.identity.identity_digest,
+                    "prepared",
+                    None,
+                ),
+            )
             connection.execute(
                 "INSERT OR REPLACE INTO barrier_session_history "
                 "(project_id,attempt_id,revision,record_json) VALUES (?,?,?,?)",
@@ -1821,6 +1939,14 @@ class SQLiteBarrierSessionStore:
                 values,
             )
             connection.commit()
+            try:
+                connection.execute("BEGIN IMMEDIATE")
+                self._mark_intent_locked(connection, intent_id, "reconciled")
+                connection.commit()
+            except Exception as error:
+                raise ControlStoreError(
+                    "barrier session reconciliation outcome is ambiguous; recovery is required"
+                ) from error
             return replacement
 
     def _mark_ambiguous_after_commit_failure(
