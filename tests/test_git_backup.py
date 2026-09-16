@@ -39,7 +39,10 @@ def git(*args: str, cwd: Path) -> None:
 
 def git_output(*args: str, cwd: Path) -> str:
     return subprocess.check_output(  # noqa: S603
-        ["git", *args], cwd=cwd, text=True, stderr=subprocess.STDOUT  # noqa: S607
+        ["git", *args],  # noqa: S607
+        cwd=cwd,
+        text=True,
+        stderr=subprocess.STDOUT,
     )
 
 
