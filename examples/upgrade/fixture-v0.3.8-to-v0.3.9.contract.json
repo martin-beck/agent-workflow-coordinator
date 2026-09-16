@@ -1,0 +1,443 @@
+{
+  "backend": "sqlite",
+  "backend_contracts": [
+    {
+      "authority": [
+        "reachable-objects",
+        "refs",
+        "index",
+        "task-history"
+      ],
+      "backend": "git",
+      "backup": [
+        "object-and-ref-inventory",
+        "binding",
+        "projections"
+      ],
+      "equivalence": "authority-compatible-round-trip",
+      "projections": [
+        "CURRENT.md",
+        "STATUS.md"
+      ],
+      "restore": [
+        "verify-objects",
+        "restore-refs",
+        "verify-history"
+      ],
+      "selector": [
+        "coordinator.backend.json"
+      ]
+    },
+    {
+      "authority": [
+        "database",
+        "wal",
+        "shm"
+      ],
+      "backend": "sqlite",
+      "backup": [
+        "online-backup-api",
+        "binding",
+        "projections"
+      ],
+      "equivalence": "authority-compatible-round-trip",
+      "projections": [
+        "CURRENT.md",
+        "STATUS.md"
+      ],
+      "restore": [
+        "integrity-check",
+        "restore-selector",
+        "verify-history"
+      ],
+      "selector": [
+        "coordinator.backend.json"
+      ],
+      "wal": [
+        "checkpoint-policy",
+        "synchronous-full"
+      ]
+    }
+  ],
+  "from": {
+    "signature_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+    "source_commit": "0000000000000000000000000000000000000000",
+    "tag_object": "1111111111111111111111111111111111111111",
+    "tag_ref": "refs/tags/v0.3.8",
+    "trust_policy_sha256": "3333333333333333333333333333333333333333333333333333333333333333",
+    "vendor_manifest_sha256": "4444444444444444444444444444444444444444444444444444444444444444",
+    "version": "v0.3.8"
+  },
+  "operation_id": "fixture:v0.3.8-to-v0.3.9:001",
+  "phases": [
+    {
+      "id": "discover",
+      "mutates_authority": false,
+      "on_failure": "stop-before-mutation",
+      "operation": {
+        "durable_record": "operation-id-and-outcome",
+        "evidence": [
+          "durable-operation-record"
+        ],
+        "inputs": {
+          "backend": "sqlite",
+          "backup_operation_id": "fixture:v0.3.8-to-v0.3.9:001:backup",
+          "barrier_id": "fixture-barrier",
+          "expected_state_revision": 12,
+          "fencing_token": "fixture-fence",
+          "selector_ref": ".runtime/runtime-selector.json"
+        },
+        "opcode": "release.inspect",
+        "operation_id": "fixture:v0.3.8-to-v0.3.9:001:discover",
+        "postconditions": [
+          "discover-contract-satisfied"
+        ],
+        "preconditions": [
+          "previous-phase-complete"
+        ],
+        "resources": [
+          "maintenance-barrier",
+          "durable-operation-record"
+        ],
+        "timeout_seconds": 300
+      },
+      "order": 1,
+      "requires": []
+    },
+    {
+      "id": "preflight",
+      "mutates_authority": false,
+      "on_failure": "stop-before-mutation",
+      "operation": {
+        "durable_record": "operation-id-and-outcome",
+        "evidence": [
+          "durable-operation-record"
+        ],
+        "inputs": {
+          "backend": "sqlite",
+          "backup_operation_id": "fixture:v0.3.8-to-v0.3.9:001:backup",
+          "barrier_id": "fixture-barrier",
+          "expected_state_revision": 12,
+          "fencing_token": "fixture-fence",
+          "selector_ref": ".runtime/runtime-selector.json"
+        },
+        "opcode": "admission.check",
+        "operation_id": "fixture:v0.3.8-to-v0.3.9:001:preflight",
+        "postconditions": [
+          "preflight-contract-satisfied"
+        ],
+        "preconditions": [
+          "previous-phase-complete"
+        ],
+        "resources": [
+          "maintenance-barrier",
+          "durable-operation-record"
+        ],
+        "timeout_seconds": 300
+      },
+      "order": 2,
+      "requires": [
+        "discover"
+      ]
+    },
+    {
+      "id": "quiesce",
+      "mutates_authority": false,
+      "on_failure": "stop-before-mutation",
+      "operation": {
+        "durable_record": "operation-id-and-outcome",
+        "evidence": [
+          "durable-operation-record"
+        ],
+        "inputs": {
+          "backend": "sqlite",
+          "backup_operation_id": "fixture:v0.3.8-to-v0.3.9:001:backup",
+          "barrier_id": "fixture-barrier",
+          "expected_state_revision": 12,
+          "fencing_token": "fixture-fence",
+          "selector_ref": ".runtime/runtime-selector.json"
+        },
+        "opcode": "barrier.acquire",
+        "operation_id": "fixture:v0.3.8-to-v0.3.9:001:quiesce",
+        "postconditions": [
+          "quiesce-contract-satisfied"
+        ],
+        "preconditions": [
+          "previous-phase-complete"
+        ],
+        "resources": [
+          "maintenance-barrier",
+          "durable-operation-record"
+        ],
+        "timeout_seconds": 300
+      },
+      "order": 3,
+      "requires": [
+        "preflight"
+      ]
+    },
+    {
+      "id": "backup",
+      "mutates_authority": false,
+      "on_failure": "stop-before-mutation",
+      "operation": {
+        "durable_record": "operation-id-and-outcome",
+        "evidence": [
+          "durable-operation-record"
+        ],
+        "inputs": {
+          "backend": "sqlite",
+          "backup_operation_id": "fixture:v0.3.8-to-v0.3.9:001:backup",
+          "barrier_id": "fixture-barrier",
+          "expected_state_revision": 12,
+          "fencing_token": "fixture-fence",
+          "selector_ref": ".runtime/runtime-selector.json"
+        },
+        "opcode": "backend.backup",
+        "operation_id": "fixture:v0.3.8-to-v0.3.9:001:backup",
+        "postconditions": [
+          "backup-contract-satisfied"
+        ],
+        "preconditions": [
+          "previous-phase-complete"
+        ],
+        "resources": [
+          "maintenance-barrier",
+          "durable-operation-record"
+        ],
+        "timeout_seconds": 300
+      },
+      "order": 4,
+      "requires": [
+        "quiesce"
+      ]
+    },
+    {
+      "id": "stage",
+      "mutates_authority": false,
+      "on_failure": "restore-known-good",
+      "operation": {
+        "durable_record": "operation-id-and-outcome",
+        "evidence": [
+          "durable-operation-record"
+        ],
+        "inputs": {
+          "backend": "sqlite",
+          "backup_operation_id": "fixture:v0.3.8-to-v0.3.9:001:backup",
+          "barrier_id": "fixture-barrier",
+          "expected_state_revision": 12,
+          "fencing_token": "fixture-fence",
+          "selector_ref": ".runtime/runtime-selector.json"
+        },
+        "opcode": "runtime.stage",
+        "operation_id": "fixture:v0.3.8-to-v0.3.9:001:stage",
+        "postconditions": [
+          "stage-contract-satisfied"
+        ],
+        "preconditions": [
+          "previous-phase-complete"
+        ],
+        "resources": [
+          "maintenance-barrier",
+          "durable-operation-record"
+        ],
+        "timeout_seconds": 300
+      },
+      "order": 5,
+      "requires": [
+        "backup"
+      ]
+    },
+    {
+      "id": "commit",
+      "mutates_authority": true,
+      "on_failure": "restore-known-good",
+      "operation": {
+        "durable_record": "operation-id-and-outcome",
+        "evidence": [
+          "durable-operation-record"
+        ],
+        "inputs": {
+          "backend": "sqlite",
+          "backup_operation_id": "fixture:v0.3.8-to-v0.3.9:001:backup",
+          "barrier_id": "fixture-barrier",
+          "expected_state_revision": 12,
+          "fencing_token": "fixture-fence",
+          "selector_ref": ".runtime/runtime-selector.json"
+        },
+        "opcode": "authority.atomic_replace",
+        "operation_id": "fixture:v0.3.8-to-v0.3.9:001:commit",
+        "postconditions": [
+          "commit-contract-satisfied"
+        ],
+        "preconditions": [
+          "previous-phase-complete"
+        ],
+        "resources": [
+          "maintenance-barrier",
+          "durable-operation-record"
+        ],
+        "timeout_seconds": 300
+      },
+      "order": 6,
+      "requires": [
+        "quiesce",
+        "backup",
+        "stage"
+      ]
+    },
+    {
+      "id": "validate",
+      "mutates_authority": false,
+      "on_failure": "restore-known-good",
+      "operation": {
+        "durable_record": "operation-id-and-outcome",
+        "evidence": [
+          "durable-operation-record"
+        ],
+        "inputs": {
+          "backend": "sqlite",
+          "backup_operation_id": "fixture:v0.3.8-to-v0.3.9:001:backup",
+          "barrier_id": "fixture-barrier",
+          "expected_state_revision": 12,
+          "fencing_token": "fixture-fence",
+          "selector_ref": ".runtime/runtime-selector.json"
+        },
+        "opcode": "runtime.validate",
+        "operation_id": "fixture:v0.3.8-to-v0.3.9:001:validate",
+        "postconditions": [
+          "validate-contract-satisfied"
+        ],
+        "preconditions": [
+          "previous-phase-complete"
+        ],
+        "resources": [
+          "maintenance-barrier",
+          "durable-operation-record"
+        ],
+        "timeout_seconds": 300
+      },
+      "order": 7,
+      "requires": [
+        "commit"
+      ]
+    },
+    {
+      "id": "reopen",
+      "mutates_authority": false,
+      "on_failure": "safe-mode",
+      "operation": {
+        "durable_record": "operation-id-and-outcome",
+        "evidence": [
+          "durable-operation-record"
+        ],
+        "inputs": {
+          "backend": "sqlite",
+          "backup_operation_id": "fixture:v0.3.8-to-v0.3.9:001:backup",
+          "barrier_id": "fixture-barrier",
+          "expected_state_revision": 12,
+          "fencing_token": "fixture-fence",
+          "selector_ref": ".runtime/runtime-selector.json"
+        },
+        "opcode": "barrier.reopen",
+        "operation_id": "fixture:v0.3.8-to-v0.3.9:001:reopen",
+        "postconditions": [
+          "reopen-contract-satisfied"
+        ],
+        "preconditions": [
+          "previous-phase-complete"
+        ],
+        "resources": [
+          "maintenance-barrier",
+          "durable-operation-record"
+        ],
+        "timeout_seconds": 300
+      },
+      "order": 8,
+      "requires": [
+        "validate"
+      ]
+    }
+  ],
+  "preconditions": [
+    {
+      "effect": "read-only",
+      "evidence": [
+        "release-manifest",
+        "signature-verification"
+      ],
+      "failure_mode": "stop-before-mutation",
+      "id": "RELEASE.AUTHENTICITY",
+      "postconditions": [
+        "release-identity-recorded"
+      ],
+      "preconditions": [
+        "immutable-tag-and-commit",
+        "trusted-signature"
+      ]
+    },
+    {
+      "effect": "validate",
+      "evidence": [
+        "compatibility-matrix"
+      ],
+      "failure_mode": "stop-before-mutation",
+      "id": "BACKEND.COMPATIBILITY",
+      "postconditions": [
+        "backend-round-trip-plan-recorded"
+      ],
+      "preconditions": [
+        "backend-contracts-present",
+        "schema-compatible"
+      ]
+    }
+  ],
+  "rollback": {
+    "ambiguous_external_result": "persist-operation-id-and-reconcile",
+    "backup_integrity": "backend-specific",
+    "equivalence": "authority-compatible-round-trip",
+    "integrity_by_backend": {
+      "git": "git-object-and-ref",
+      "sqlite": "sqlite-integrity-and-backup-api"
+    },
+    "operation": {
+      "durable_record": "operation-id-and-outcome",
+      "evidence": [
+        "durable-operation-record"
+      ],
+      "inputs": {
+        "backend": "sqlite",
+        "backup_operation_id": "fixture:v0.3.8-to-v0.3.9:001:backup",
+        "barrier_id": "fixture-barrier",
+        "expected_state_revision": 12,
+        "fencing_token": "fixture-fence",
+        "selector_ref": ".runtime/runtime-selector.json"
+      },
+      "opcode": "backend.restore",
+      "operation_id": "fixture:v0.3.8-to-v0.3.9:001:rollback",
+      "postconditions": [
+        "rollback-contract-satisfied"
+      ],
+      "preconditions": [
+        "previous-phase-complete"
+      ],
+      "resources": [
+        "maintenance-barrier",
+        "durable-operation-record"
+      ],
+      "timeout_seconds": 300
+    },
+    "reopen_gate": "validate-before-reopen",
+    "required": true
+  },
+  "schema_version": 2,
+  "to": {
+    "signature_sha256": "6666666666666666666666666666666666666666666666666666666666666666",
+    "source_commit": "5555555555555555555555555555555555555555",
+    "tag_object": "7777777777777777777777777777777777777777",
+    "tag_ref": "refs/tags/v0.3.9",
+    "trust_policy_sha256": "8888888888888888888888888888888888888888888888888888888888888888",
+    "vendor_manifest_sha256": "9999999999999999999999999999999999999999999999999999999999999999",
+    "version": "v0.3.9"
+  }
+}
