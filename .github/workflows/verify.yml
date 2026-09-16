@@ -80,10 +80,12 @@ jobs:
     needs: [awq, scope]
     if: ${{ github.event_name != 'pull_request' || needs.scope.outputs.formal_changed == 'true' || needs.scope.outputs.release_sensitive == 'true' }}
     runs-on: ${{ fromJSON((github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && '["self-hosted","Linux","X64","agent-workflow-coordinator-ci"]' || '["ubuntu-24.04"]') }}
-    timeout-minutes: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && 30 || (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && 360 || 30 }}
+    # Weekly scheduled verification is the only exhaustive tier. Pushes,
+    # manual dispatches, and same-repository PRs stay bounded for publication.
+    timeout-minutes: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && 30 || github.event_name == 'schedule' && 360 || 30 }}
     continue-on-error: ${{ github.event_name == 'schedule' }}
     env:
-      TLC_TIER: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && 'portable-smoke' || (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && 'full-exhaustive' || 'pr-fast' }}
+      TLC_TIER: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && 'portable-smoke' || github.event_name == 'schedule' && 'full-exhaustive' || 'pr-fast' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -165,10 +167,10 @@ jobs:
       - name: Run event-appropriate formal tier
         env:
           TLC_CGROUP_MODE: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && 'portable' || 'required' }}
-          TLC_HEAP: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && '512m' || (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && '4096m' || '2048m' }}
-          TLC_MEMORY_MAX: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && '3G' || (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && '6G' || '3G' }}
-          TLC_SWAP_MAX: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && '3G' || (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && '6G' || '3G' }}
-          TLC_TIMEOUT_SECONDS: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && '600' || (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && '6000' || '1200' }}
+          TLC_HEAP: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && '512m' || github.event_name == 'schedule' && '4096m' || '2048m' }}
+          TLC_MEMORY_MAX: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && '3G' || github.event_name == 'schedule' && '6G' || '3G' }}
+          TLC_SWAP_MAX: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && '3G' || github.event_name == 'schedule' && '6G' || '3G' }}
+          TLC_TIMEOUT_SECONDS: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && '600' || github.event_name == 'schedule' && '6000' || '1200' }}
           TLC_ATTESTATION_PATH: ${{ runner.temp }}/formal-attestation.json
         run: formal/handoffctl/verify.sh --tier "$TLC_TIER"
       - name: Publish exact-head tier attestation
