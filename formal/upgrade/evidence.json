@@ -15,13 +15,14 @@
       "tools/handoffctl.py": "97d70980b754eb6bf77918bb7178729caf70d54e07919d97bf67b063f5d00b21",
       "tests/test_upgrade_commands.py": "4eaa65ac1730c9149156ba76e345dcb1f8e2c44a51042e27f2d4a4b4e7634f32",
       "tests/test_upgrade_contract.py": "0630ea0c35ad100367a9df0d0682a90b2b0b120057768029fc82fe06a106989c",
-      "tools/rollback_control_store.py": "dcc22fca8625b9f5f9d87c10f5bf66a4a1d905c063e7c958b99157fabb2bfe56",
+      "tools/rollback_control_store.py": "b44a68046274df04b96a557aaf5157d2c027206a0dd595c14e0306d456bda4da",
       "tools/upgrade_identity.py": "44bf4479b28e1b684879f7f000f713e8f5177034e1a2d43a30c09745c9c014a6",
       "tests/test_rollback_control_store.py": "1fd52fcc41b40b3375133c9d24017c362f7d164ca1c6c59c448912edfce09919",
       "tests/test_upgrade_identity.py": "0206aef1794ed73ffcdefb4f965f657514f11858d9beb0b2fa92f7dceaaaf905",
-      "tools/mutation_fence.py": "f63c42133d980c2eb0ef6c760ad0d32bba74d3ce76547c7c1332866e14e00b3a",
+      "tools/mutation_fence.py": "2d314f5a5cc46d0f625135b39ada2d1a464cd35c9d378728c141708df8c0c630",
       "tools/sqlite_storage.py": "26dcbcf7b376505e5df366109a398f59ead58017ca842f76763dfa46595b4086",
-      "tests/test_mutation_fence.py": "8d0e6765bc415543476faf51cec325ba700ce30276f264864113c586edbf60fa",
+      "tests/test_mutation_fence.py": "e2bcea7b96bddd2509b79ff9c5eefd57001d1502949aba30cbbd50a9169e1cbb",
+      "tests/test_sqlite_mutation_barrier.py": "b2f2204d95be98f57d1e1bc7577ca4e69645c5b0be72ba069184a223e9be3c45",
       "tests/test_sqlite_storage.py": "64d38abf3938337aae2e17b76f914b2bd23394f51d1f5058bd1d3dcd6631bd50"
     }
   },
