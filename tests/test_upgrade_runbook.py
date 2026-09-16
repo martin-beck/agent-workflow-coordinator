@@ -13,6 +13,7 @@ from typing import Any
 
 from tools.generate_upgrade_contract import generate
 from tools.generate_upgrade_runbook import RunbookError, generate_runbooks, main, write_runbooks
+from tools.verify_upgrade_runbook import RunbookVerificationError, verify_runbooks
 
 
 def _release(version: str, seed: str) -> dict[str, str]:
@@ -66,6 +67,25 @@ class UpgradeRunbookTests(unittest.TestCase):
                     "vendor_manifest_sha256",
                 ):
                     self.assertNotIn(release[field], content)
+
+        verify_runbooks(document, fixture)
+
+    def test_checker_rejects_stale_or_aliased_output(self) -> None:
+        document = _contract()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            output = root / "runbooks"
+            write_runbooks(document, output)
+            (output / "agent.md").write_text("stale", encoding="utf-8")
+            with self.assertRaises(RunbookVerificationError):
+                verify_runbooks(document, output)
+            write_runbooks(document, output)
+            target = root / "target.md"
+            target.write_text((output / "agent.md").read_text(encoding="utf-8"), encoding="utf-8")
+            (output / "agent.md").unlink()
+            (output / "agent.md").symlink_to(target)
+            with self.assertRaises(RunbookVerificationError):
+                verify_runbooks(document, output)
 
     def test_generation_is_deterministic_and_contains_safety_gates(self) -> None:
         first = generate_runbooks(_contract())
