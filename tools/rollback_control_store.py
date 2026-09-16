@@ -366,7 +366,10 @@ class SQLiteControlStoreAdapter:
         verifier = getattr(self._delegate, "verify_rollback_context_bound", None)
         if not callable(verifier):
             raise ControlStoreError("bound SQLite authority rereader is unavailable")
-        return verifier(context, scope, lease=lease, admission_recheck=admission_recheck)
+        return cast(
+            Mapping[str, object],
+            verifier(context, scope, lease=lease, admission_recheck=admission_recheck),
+        )
 
     def observe_backup_identity(
         self, backup: Path, manifest: Path, context: Mapping[str, object]
