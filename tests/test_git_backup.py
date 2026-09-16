@@ -111,6 +111,33 @@ class GitBackupTests(unittest.TestCase):
             ):
                 verify_backup(backup)
 
+    def test_verify_rejects_artifact_replacement_before_returning_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repo = self.repo(root)
+            backup = create_backup(repo, root / "backup", quiesced=True)
+            foreign = root / "foreign-refs.txt"
+            foreign.write_text((backup / "refs.txt").read_text(encoding="utf-8"), encoding="utf-8")
+            original_verify = MODULE._verify_artifacts
+            calls = 0
+            original = root / "original-refs.txt"
+
+            def replace_after_first(path: Path, manifest: dict[str, object]) -> None:
+                nonlocal calls
+                original_verify(path, manifest)
+                calls += 1
+                if calls == 1:
+                    (backup / "refs.txt").rename(original)
+                    (backup / "refs.txt").symlink_to(foreign)
+
+            with (
+                patch.object(MODULE, "_verify_artifacts", side_effect=replace_after_first),
+                self.assertRaisesRegex(BackupError, "artifact"),
+            ):
+                verify_backup(backup)
+            self.assertTrue(original.is_file())
+            self.assertTrue(foreign.is_file())
+
     def test_restore_rejects_backup_replacement_after_verify(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

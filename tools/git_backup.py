@@ -283,6 +283,7 @@ def verify_backup(backup: Path) -> dict[str, object]:
         raise BackupError("Git backup directory changed during verification")
     if _sha256(backup / "manifest.json") != manifest_digest:
         raise BackupError("Git backup manifest changed during verification")
+    _verify_artifacts(backup, manifest)
     return {"commit": manifest["commit"], "verified": True, "artifact_count": len(ARTIFACTS)}
 
 
