@@ -1750,6 +1750,16 @@ class SQLiteAuthorityAdapterTests(unittest.TestCase):
         finally:
             self.authority.chmod(0o600)
 
+    def test_authority_descriptor_disappearance_fails_old_reader_closed(self) -> None:
+        adapter = SQLiteAuthorityAdapter(self.authority)
+        hidden = self.authority.with_name(self.authority.name + "-hidden")
+        self.authority.rename(hidden)
+        try:
+            with self.assertRaisesRegex(SQLiteAuthorityError, "identity changed"):
+                adapter.snapshot("discover", CONTEXT)
+        finally:
+            hidden.rename(self.authority)
+
     def test_authority_parent_symlink_substitution_fails_old_reader_closed(self) -> None:
         adapter = SQLiteAuthorityAdapter(self.authority)
         parent = self.authority.parent
