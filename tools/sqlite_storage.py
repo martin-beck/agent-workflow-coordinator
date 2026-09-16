@@ -22,6 +22,7 @@ DURABILITY = "FULL"
 NETWORK_FILESYSTEMS = frozenset(
     {"9p", "afs", "ceph", "cifs", "fuse.sshfs", "gfs2", "glusterfs", "nfs", "nfs4", "smb3"}
 )
+_BACKEND_BINDING_TOKEN = object()
 
 
 class StorageContentionError(RuntimeError):
@@ -30,6 +31,102 @@ class StorageContentionError(RuntimeError):
 
 class StorageCorruptionError(RuntimeError):
     """SQLite reported corruption or a malformed authoritative record."""
+
+
+class SQLiteBackendBinding:
+    """Immutable, adapter-issued binding for a durable SQLite session.
+
+    Legacy ``SQLiteBackend`` construction remains intentionally unbound.  A
+    bound backend can only be issued from the concrete control-store and
+    barrier-session pair, so metadata supplied by a caller cannot manufacture
+    authority or fencing facts.
+
+    The capability is an identity/read-consistency contract only.  It grants
+    no mutation authorization, lock ownership, or fencing authority; those
+    remain responsibilities of the control-store adapter.  Transactional
+    integration is intentionally deferred to a later slice.
+    """
+
+    __slots__ = (
+        "_control_store",
+        "_descriptor_identity",
+        "_fencing_token",
+        "_owner",
+        "_path",
+        "_project_id",
+        "_revision",
+        "_session",
+    )
+
+    def __init__(
+        self, control_store: Any, session: Any, state: Any, capability: object | None = None
+    ) -> None:
+        if capability is not _BACKEND_BINDING_TOKEN:
+            raise TypeError("SQLiteBackendBinding must be issued by bind()")
+        object.__setattr__(self, "_control_store", control_store)
+        object.__setattr__(self, "_session", session)
+        object.__setattr__(self, "_path", Path(control_store.control_store_path))
+        object.__setattr__(self, "_project_id", state.identity.project_id)
+        object.__setattr__(self, "_owner", state.identity.fencing_owner)
+        object.__setattr__(self, "_fencing_token", state.identity.fencing_token)
+        object.__setattr__(self, "_revision", state.revision)
+        object.__setattr__(self, "_descriptor_identity", control_store._control_identity)
+
+    def __setattr__(self, name: str, value: object) -> None:
+        raise AttributeError("SQLiteBackendBinding is immutable")
+
+    @classmethod
+    def bind(cls, control_store: Any, session: Any) -> SQLiteBackendBinding:
+        if not hasattr(control_store, "control_store_path") or not hasattr(session, "snapshot"):
+            raise TypeError("SQLiteBackendBinding requires concrete SQLite stores")
+        if getattr(session, "_control", None) is not control_store:
+            raise ValueError("session is bound to a foreign control store")
+        state = session.snapshot()
+        if state is None or state.status != "held":
+            raise ValueError("an active durable session is required")
+        return cls(control_store, session, state, _BACKEND_BINDING_TOKEN)
+
+    @property
+    def path(self) -> Path:
+        return self._path
+
+    @property
+    def project_id(self) -> str:
+        return self._project_id
+
+    @property
+    def fencing_owner(self) -> str:
+        return self._owner
+
+    @property
+    def fencing_token(self) -> str:
+        return self._fencing_token
+
+    @property
+    def revision(self) -> int:
+        return self._revision
+
+    @property
+    def descriptor_identity(self) -> tuple[int, int]:
+        return self._descriptor_identity
+
+    def assert_current(self) -> None:
+        if self._control_store._control_identity != self._descriptor_identity:
+            raise RuntimeError("SQLite backend descriptor identity changed")
+        try:
+            state = self._session.snapshot()
+        except Exception as error:
+            raise RuntimeError("SQLite backend binding reread failed") from error
+        if state is None or state.status != "held":
+            raise RuntimeError("SQLite backend session is no longer active")
+        identity = state.identity
+        if (
+            identity.project_id != self._project_id
+            or identity.fencing_owner != self._owner
+            or identity.fencing_token != self._fencing_token
+            or state.revision != self._revision
+        ):
+            raise RuntimeError("SQLite backend session identity changed")
 
 
 class Backend(Protocol):
@@ -123,14 +220,23 @@ class SQLiteBackend:
         binding: Meta,
         tasks_root: Path,
         mutation_scope: Callable[[], AbstractContextManager[object]] | None = None,
+        backend_binding: SQLiteBackendBinding | None = None,
     ) -> None:
         self.path = path
         self.binding = binding
         self.tasks_root = tasks_root
         self.mutation_scope = mutation_scope
+        if backend_binding is not None:
+            if not isinstance(backend_binding, SQLiteBackendBinding):
+                raise TypeError("backend_binding must be SQLiteBackendBinding")
+            if backend_binding.path != path:
+                raise ValueError("backend binding targets a different database")
+        self.backend_binding = backend_binding
 
     def _connect(self, *, read_only: bool = False) -> sqlite3.Connection:
         _require_database(self.path)
+        if self.backend_binding is not None:
+            self.backend_binding.assert_current()
         target = f"file:{self.path}?mode=ro" if read_only else str(self.path)
         connection: sqlite3.Connection | None = None
         try:
