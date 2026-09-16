@@ -36,6 +36,30 @@ class GitRollbackSessionState:
     git_branch: str
 
 
+@dataclass(frozen=True)
+class GitRollbackArtifactBinding:
+    """Immutable Git backup path captured beneath the bound artifact root."""
+
+    artifact_root: Path
+    git_backup_root: Path
+
+    @classmethod
+    def bind(cls, context: Mapping[str, object]) -> GitRollbackArtifactBinding:
+        root = context.get("artifact_root")
+        backup = context.get("git_backup_root")
+        if not isinstance(root, str) or not isinstance(backup, str):
+            raise GitAuthorityError("Git rollback artifact binding is incomplete")
+        root_path = Path(root).resolve()
+        backup_path = Path(backup).resolve()
+        try:
+            backup_path.relative_to(root_path)
+        except ValueError as error:
+            raise GitAuthorityError(
+                "Git rollback artifact path is outside artifact root"
+            ) from error
+        return cls(root_path, backup_path)
+
+
 _SUPPORTED_PHASES = frozenset(
     {
         "discover",

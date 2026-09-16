@@ -22,6 +22,7 @@ from tools.admission_lease import AdmissionLease, validate_recheck
 from tools.git_authority_adapter import (
     GitAuthorityAdapter,
     GitAuthorityError,
+    GitRollbackArtifactBinding,
     GitRollbackSessionState,
 )
 from tools.handoffctl import locked
@@ -176,6 +177,20 @@ def _bound_snapshot_process(
 
 
 class GitAuthorityAdapterTests(unittest.TestCase):
+    def test_git_artifact_binding_is_root_scoped_and_git_specific(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            context = {"artifact_root": str(root), "git_backup_root": str(root / "backup")}
+            binding = GitRollbackArtifactBinding.bind(context)
+            self.assertEqual(root.resolve(), binding.artifact_root)
+            self.assertEqual((root / "backup").resolve(), binding.git_backup_root)
+            with self.assertRaisesRegex(GitAuthorityError, "incomplete"):
+                GitRollbackArtifactBinding.bind({"artifact_root": str(root)})
+            with self.assertRaisesRegex(GitAuthorityError, "outside"):
+                GitRollbackArtifactBinding.bind(
+                    {"artifact_root": str(root), "git_backup_root": str(root.parent / "foreign")}
+                )
+
     def test_bound_reread_returns_typed_session_without_cas_arguments(self) -> None:
         value = {
             **CONTEXT,
