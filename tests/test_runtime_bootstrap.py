@@ -104,6 +104,21 @@ class RuntimeBootstrapTests(unittest.TestCase):
             ):
                 verify_runtime_manifest(runtime, digest)
 
+    def test_manifest_verifier_reads_complete_content_across_short_reads(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            runtime = Path(directory)
+            manifest = runtime / "runtime-manifest.json"
+            manifest.write_text('{"release":"v1.2.3","files":["runtime.py"]}\n')
+            manifest.chmod(0o600)
+            digest = sha256(manifest.read_bytes()).hexdigest()
+            original_read = os.read
+
+            def short_read(descriptor: int, size: int) -> bytes:
+                return original_read(descriptor, min(size, 3))
+
+            with patch("tools.runtime_bootstrap.os.read", side_effect=short_read):
+                self.assertTrue(verify_runtime_manifest(runtime, digest))
+
     def test_rejects_symlinked_release_root_ancestor(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

@@ -15,6 +15,7 @@ from tools.upgrade_authority import AuthorityError, read_runtime_selector
 
 _RELEASE = re.compile(r"v[0-9]+\.[0-9]+\.[0-9]+\Z")
 _DIGEST = re.compile(r"[0-9a-f]{64}\Z")
+_MAX_MANIFEST_BYTES = 16 * 1024 * 1024
 
 
 def verify_runtime_manifest(runtime_root: Path, expected_digest: str) -> bool:
@@ -42,7 +43,14 @@ def verify_runtime_manifest(runtime_root: Path, expected_digest: str) -> bool:
                 or opened.st_nlink != 1
             ):
                 raise AuthorityError("runtime manifest identity changed")
-            digest = sha256(os.read(descriptor, opened.st_size)).hexdigest()
+            hasher = sha256()
+            total = 0
+            while chunk := os.read(descriptor, 65536):
+                total += len(chunk)
+                if total > _MAX_MANIFEST_BYTES:
+                    raise AuthorityError("runtime manifest is too large")
+                hasher.update(chunk)
+            digest = hasher.hexdigest()
         finally:
             os.close(descriptor)
         parent_after = manifest.parent.lstat()
