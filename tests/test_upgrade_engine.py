@@ -2183,9 +2183,9 @@ class UpgradeEngineTests(unittest.TestCase):
             ) -> BackupObservation:
                 return observation
 
-        with self.assertRaisesRegex(UpgradeError, "not enabled"):
+        with self.assertRaisesRegex(UpgradeError, "bound observation provider"):
             capability.preflight(ROLLBACK_CONTEXT, Provider())
-        with self.assertRaisesRegex(UpgradeError, "provenance"):
+        with self.assertRaisesRegex(UpgradeError, "bound observation provider"):
 
             class ForgedProvider:
                 def observe_backup_identity(

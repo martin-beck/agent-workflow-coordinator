@@ -15,7 +15,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Protocol, cast, runtime_checkable
 
-from tools.rollback_evidence import BackupObservation
+from tools.rollback_evidence import _OBSERVATION_PROVIDER_TOKEN, BackupObservation
 from tools.upgrade_admission import (
     admit_preflight,
     admit_quiesced,
@@ -57,6 +57,9 @@ class BackendAdapter(Protocol):
 @runtime_checkable
 class RollbackObservationProvider(Protocol):
     """Adapter-owned, lock-scoped source of typed rollback observations."""
+
+    @property
+    def observation_provider_token(self) -> object: ...
 
     def observe_backup_identity(
         self, backup: Path, manifest: Path, context: Mapping[str, object]
@@ -293,7 +296,11 @@ class RollbackAuthorizationCapability:
         provider: RollbackObservationProvider,
     ) -> None:
         """Validate adapter-owned backup/CAS evidence without authorizing rollback."""
-        if not isinstance(provider, RollbackObservationProvider):
+        if (
+            not isinstance(provider, RollbackObservationProvider)
+            or getattr(provider, "observation_provider_token", None)
+            is not _OBSERVATION_PROVIDER_TOKEN
+        ):
             raise UpgradeError("rollback preflight requires a bound observation provider")
         if not isinstance(context, Mapping) or context.get("target") != "rollback":
             raise UpgradeError("rollback preflight context is invalid")

@@ -29,7 +29,7 @@ from tools.handoffctl import (
     coordinator_lock_path,
     locked,
 )
-from tools.rollback_evidence import BackupObservation
+from tools.rollback_evidence import _OBSERVATION_PROVIDER_TOKEN, BackupObservation
 from tools.upgrade_authority import inspect_sqlite_release_authority
 from tools.upgrade_identity import (
     ENVELOPE_FIELDS,
@@ -337,6 +337,11 @@ class SQLiteControlStoreAdapter:
         self._store = store
         self._authority_runtime = authority_runtime
         self._release_authorization: _ReleaseAuthorization | None = None
+        self._observation_provider_token = _OBSERVATION_PROVIDER_TOKEN
+
+    @property
+    def observation_provider_token(self) -> object:
+        return self._observation_provider_token
 
     def snapshot(self, phase: str, context: Mapping[str, object]) -> Mapping[str, object]:
         return self._delegate.snapshot(phase, context)

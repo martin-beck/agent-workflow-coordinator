@@ -16,6 +16,7 @@ class RollbackEvidenceError(ValueError):
 
 
 _PROVENANCE_TOKEN = object()
+_OBSERVATION_PROVIDER_TOKEN = object()
 
 
 @dataclass(frozen=True)
