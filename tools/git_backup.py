@@ -201,6 +201,8 @@ def create_backup(repo: Path, destination: Path, *, quiesced: bool) -> Path:
             },
         }
         _write_manifest(temporary / "manifest.json", manifest)
+        if destination.exists() or destination.is_symlink():
+            raise BackupError("Git backup destination appeared before publication")
         temporary.replace(destination)
         descriptor = os.open(destination.parent, os.O_DIRECTORY)
         try:
