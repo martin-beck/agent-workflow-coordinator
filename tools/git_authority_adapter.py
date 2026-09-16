@@ -47,6 +47,11 @@ class GitBackupObservation:
     def __init__(self) -> None:
         raise TypeError("Git backup observation must be created by the verifier")
 
+    @property
+    def has_provenance(self) -> bool:
+        """Backend-neutral marker: only verifier-produced values are exposed."""
+        return True
+
     @classmethod
     def _from_verified(
         cls, session: GitRollbackSessionState, result: Mapping[str, object]
