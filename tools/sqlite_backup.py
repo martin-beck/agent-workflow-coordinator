@@ -134,6 +134,11 @@ def _backup_existing(destination: Path) -> Path | None:
     if not destination.exists():
         return None
     _regular(destination, "existing destination")
+    try:
+        destination_status = destination.stat()
+    except OSError as error:
+        raise BackupError("existing destination disappeared") from error
+    destination_identity = (destination_status.st_dev, destination_status.st_ino)
     descriptor, previous = tempfile.mkstemp(
         prefix=".coordinator-previous-", suffix=".sqlite3", dir=destination.parent
     )
@@ -142,8 +147,14 @@ def _backup_existing(destination: Path) -> Path | None:
     try:
         previous_path.unlink()
         os.link(destination, previous_path)
-    except OSError as error:
+        current_status = destination.stat()
+        current_identity = (current_status.st_dev, current_status.st_ino)
+        if current_identity != destination_identity:
+            raise BackupError("existing destination changed during preservation")
+    except (OSError, BackupError) as error:
         _unlink(previous_path)
+        if isinstance(error, BackupError):
+            raise
         raise BackupError("failed to preserve existing SQLite destination") from error
     return previous_path
 
