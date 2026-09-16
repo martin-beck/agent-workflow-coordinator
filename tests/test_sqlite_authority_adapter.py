@@ -1788,6 +1788,19 @@ class SQLiteAuthorityAdapterTests(unittest.TestCase):
             foreign.rmdir()
             moved.rename(parent)
 
+    def test_authority_parent_same_target_symlink_fails_old_reader_closed(self) -> None:
+        adapter = SQLiteAuthorityAdapter(self.authority)
+        parent = self.authority.parent
+        moved = parent.with_name(parent.name + "-original")
+        parent.rename(moved)
+        parent.symlink_to(moved, target_is_directory=True)
+        try:
+            with self.assertRaisesRegex(SQLiteAuthorityError, "identity changed"):
+                adapter.snapshot("discover", CONTEXT)
+        finally:
+            parent.unlink()
+            moved.rename(parent)
+
     def test_authority_parent_disappearance_fails_old_reader_closed(self) -> None:
         adapter = SQLiteAuthorityAdapter(self.authority)
         parent = self.authority.parent
