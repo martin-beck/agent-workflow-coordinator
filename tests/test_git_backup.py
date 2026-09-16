@@ -91,6 +91,26 @@ class GitBackupTests(unittest.TestCase):
             self.assertTrue(original.is_dir())
             self.assertTrue(replacement.is_dir())
 
+    def test_verify_rejects_manifest_mutation_before_returning_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repo = self.repo(root)
+            backup = create_backup(repo, root / "backup", quiesced=True)
+            original_archive = MODULE._verify_archive
+
+            def mutate_after_archive(path: Path) -> None:
+                original_archive(path)
+                manifest_path = backup / "manifest.json"
+                value = json.loads(manifest_path.read_text(encoding="utf-8"))
+                value["quiesced"] = False
+                manifest_path.write_text(json.dumps(value, sort_keys=True), encoding="utf-8")
+
+            with (
+                patch.object(MODULE, "_verify_archive", side_effect=mutate_after_archive),
+                self.assertRaisesRegex(BackupError, "manifest changed during verification"),
+            ):
+                verify_backup(backup)
+
     def test_restore_rejects_backup_replacement_after_verify(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

@@ -253,6 +253,7 @@ def verify_backup(backup: Path) -> dict[str, object]:
     _safe_root(backup, "backup")
     backup_identity = backup.stat()
     manifest = _manifest(backup)
+    manifest_digest = _sha256(backup / "manifest.json")
     _verify_artifacts(backup, manifest)
     _verify_archive(backup / "tracked-tree.tar")
     with tempfile.TemporaryDirectory(prefix="handoffctl-restore-") as directory:
@@ -280,6 +281,8 @@ def verify_backup(backup: Path) -> dict[str, object]:
         backup_identity.st_ino,
     ):
         raise BackupError("Git backup directory changed during verification")
+    if _sha256(backup / "manifest.json") != manifest_digest:
+        raise BackupError("Git backup manifest changed during verification")
     return {"commit": manifest["commit"], "verified": True, "artifact_count": len(ARTIFACTS)}
 
 
