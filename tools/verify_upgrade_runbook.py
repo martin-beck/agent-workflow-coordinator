@@ -38,14 +38,16 @@ def _private_values(document: dict[str, Any]) -> set[str]:
     return values
 
 
-def verify_runbooks(document: dict[str, Any], output: Path) -> None:
-    """Verify exact deterministic output and reject private contract values."""
-    try:
-        expected = generate_runbooks(document)
-    except RunbookError as error:
-        raise RunbookVerificationError("contract cannot generate runbooks") from error
+def _read_outputs(expected: dict[str, str], output: Path) -> dict[str, str]:
     if output.is_symlink() or not output.is_dir():
         raise RunbookVerificationError("runbook output must be a non-aliased directory")
+    expected_names = set(expected)
+    try:
+        actual_names = {entry.name for entry in output.iterdir()}
+    except OSError as error:
+        raise RunbookVerificationError("runbook output directory is unreadable") from error
+    if actual_names != expected_names:
+        raise RunbookVerificationError("runbook output directory contains unexpected entries")
     actual: dict[str, str] = {}
     for name in expected:
         path = output / name
@@ -55,6 +57,16 @@ def verify_runbooks(document: dict[str, Any], output: Path) -> None:
             actual[name] = path.read_text(encoding="utf-8")
         except (OSError, UnicodeError) as error:
             raise RunbookVerificationError(f"generated output is unreadable: {name}") from error
+    return actual
+
+
+def verify_runbooks(document: dict[str, Any], output: Path) -> None:
+    """Verify exact deterministic output and reject private contract values."""
+    try:
+        expected = generate_runbooks(document)
+    except RunbookError as error:
+        raise RunbookVerificationError("contract cannot generate runbooks") from error
+    actual = _read_outputs(expected, output)
     if actual != expected:
         raise RunbookVerificationError("generated runbook output differs from the contract")
     private = _private_values(document)

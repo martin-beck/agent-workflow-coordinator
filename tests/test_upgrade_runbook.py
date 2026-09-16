@@ -80,6 +80,10 @@ class UpgradeRunbookTests(unittest.TestCase):
             with self.assertRaises(RunbookVerificationError):
                 verify_runbooks(document, output)
             write_runbooks(document, output)
+            (output / "stale.md").write_text("old output", encoding="utf-8")
+            with self.assertRaises(RunbookVerificationError):
+                verify_runbooks(document, output)
+            (output / "stale.md").unlink()
             target = root / "target.md"
             target.write_text((output / "agent.md").read_text(encoding="utf-8"), encoding="utf-8")
             (output / "agent.md").unlink()
