@@ -283,6 +283,16 @@ class SQLiteAuthorityAdapterTests(unittest.TestCase):
         with self.assertRaisesRegex(SQLiteAuthorityError, "foreign executor"):
             foreign_executor.assert_snapshot_stable(baseline)
 
+    def test_bound_lifecycle_executor_stability_reread_rejects_control_revision_drift(self) -> None:
+        journal = self.root / "engine-journal.json"
+        journal.write_text('{"status":"running","phase":"backup","records":[]}\n', encoding="utf-8")
+        executor = self.adapter.bind_lifecycle_executor(self.session, journal)
+        baseline = executor.snapshot()
+        self.session.mark_ambiguous(1, "injected-failure")
+        with self.assertRaisesRegex(SQLiteAuthorityError, "durable lifecycle state changed"):
+            executor.assert_snapshot_stable(baseline)
+        self.assertFalse(self.session.operation_owned_by_current_thread)
+
     def test_bound_lifecycle_executor_rejects_authority_drift_on_final_reread(self) -> None:
         journal = self.root / "engine-journal.json"
         journal.write_text('{"status":"running","phase":"backup","records":[]}\n', encoding="utf-8")
