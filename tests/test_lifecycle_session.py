@@ -74,3 +74,18 @@ class LifecycleSessionTests(unittest.TestCase):
             path.unlink()
             with self.assertRaises(FileNotFoundError):
                 session.capture_identity()
+
+    def test_bound_identity_reread_detects_regular_file_replacement(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "authority"
+            path.write_text("original")
+            path.chmod(0o600)
+            Path(directory).chmod(0o700)
+            adapter = SQLiteAuthorityAdapter(path)
+            session = adapter.lifecycle_session()
+            replacement = Path(directory) / "replacement"
+            replacement.write_text("replacement")
+            path.unlink()
+            replacement.rename(path)
+            with self.assertRaisesRegex(ValueError, "identity changed"):
+                session.capture_identity()

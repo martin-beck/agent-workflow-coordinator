@@ -14,6 +14,7 @@ EVENT_ACTIONS = {
     "publication_failed": "ExecuteReject",
     "restore_failed": "ExecuteReject",
     "retry_verified": "ExecuteSuccess",
+    "reconcile": "ExecuteSuccess",
 }
 INVARIANT_PREDICATES = {
     "NoReplacementBeforeBackup": "ProjectionAtomicity",

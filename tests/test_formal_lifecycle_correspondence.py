@@ -73,3 +73,23 @@ class FormalLifecycleCorrespondenceTests(unittest.TestCase):
         self.assertEqual(64, len(cast(str, provenance["model_sha256"])))
         self.assertEqual(64, len(cast(str, provenance["config_sha256"])))
         self.assertEqual(INVARIANT_PREDICATES, provenance["invariants"])
+
+    def test_runtime_invariant_failures_are_rejected(self) -> None:
+        with self.assertRaisesRegex(ValueError, "LockSafety"):
+            validate_runtime_trace(
+                (
+                    {
+                        "event": "restore_failed",
+                        "revision_before": 1,
+                        "revision_after": 1,
+                        "lock_held": False,
+                    },
+                )
+            )
+        with self.assertRaisesRegex(ValueError, "ReconcileRequiresFence"):
+            validate_runtime_trace(
+                (
+                    {"event": "reconcile", "fenced": False},
+                    {"event": "retry_verified"},
+                )
+            )
