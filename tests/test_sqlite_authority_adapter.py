@@ -354,6 +354,10 @@ class SQLiteAuthorityAdapterTests(unittest.TestCase):
         self.assertEqual(1, snapshot.control.identity.state_revision)
         with self.assertRaisesRegex(SQLiteAuthorityError, "binding is invalid"):
             executor.assert_selector_binding("runtime-selector.json", 2, "barrier", "fence")
+        with executor.selector_visibility_scope(
+            "runtime-selector.json", 1, "barrier", "fence"
+        ) as held:
+            self.assertEqual(snapshot, held)
 
     def test_generated_contract_backup_operation_dispatches_directly(self) -> None:
         def release(version: str, seed: str) -> dict[str, str]:
