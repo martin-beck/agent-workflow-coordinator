@@ -208,6 +208,30 @@ class SQLiteLifecycleExecutor:
     def backup(self, destination: Path, binding: dict[str, Any]) -> dict[str, Any]:
         return self._run_effect(lambda: self._adapter.backup_bound(destination, binding))
 
+    def assert_selector_binding(
+        self,
+        selector_ref: str,
+        expected_state_revision: int,
+        barrier_id: str,
+        fencing_token: str,
+    ) -> SQLiteLifecycleSnapshot:
+        """Return a stable held-session snapshot for selector publication.
+
+        This is deliberately a read-only admission seam: selector mutation is
+        still disabled until an adapter can perform the publication atomically.
+        """
+        snapshot = self.snapshot()
+        identity = snapshot.control.identity
+        if (
+            snapshot.control.status != "held"
+            or identity.state_revision != expected_state_revision
+            or identity.durable_barrier_id != barrier_id
+            or identity.fencing_token != fencing_token
+            or not selector_ref
+        ):
+            raise SQLiteAuthorityError("selector publication binding is invalid")
+        return snapshot
+
     def execute_generated_operation(
         self,
         operation: Mapping[str, object],
