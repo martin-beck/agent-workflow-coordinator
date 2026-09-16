@@ -7,6 +7,7 @@ from __future__ import annotations
 import os
 import re
 import stat
+from collections.abc import Callable
 from pathlib import Path
 
 from tools.upgrade_authority import AuthorityError, read_runtime_selector
@@ -14,7 +15,11 @@ from tools.upgrade_authority import AuthorityError, read_runtime_selector
 _RELEASE = re.compile(r"v[0-9]+\.[0-9]+\.[0-9]+\Z")
 
 
-def resolve_selected_runtime(selector: Path, releases_root: Path) -> Path:
+def resolve_selected_runtime(
+    selector: Path,
+    releases_root: Path,
+    verify_authenticity: Callable[[Path], bool] | None = None,
+) -> Path:
     """Resolve one selected release without executing or mutating anything.
 
     The selector and release directory must be owner-only regular objects.  A
@@ -22,6 +27,8 @@ def resolve_selected_runtime(selector: Path, releases_root: Path) -> Path:
     and hard-link aliases are rejected before a caller can execute the result.
     """
     selected = read_runtime_selector(selector)
+    if verify_authenticity is None:
+        raise AuthorityError("runtime authenticity verifier is required")
     release = selected["active_release"]
     if not isinstance(release, str) or _RELEASE.fullmatch(release) is None:
         raise AuthorityError("runtime selector release identity is invalid")
@@ -46,4 +53,10 @@ def resolve_selected_runtime(selector: Path, releases_root: Path) -> Path:
         or stat.S_IMODE(value.st_mode) != 0o700
     ):
         raise AuthorityError("selected runtime release is unsafe")
+    try:
+        verified = verify_authenticity(release_path)
+    except Exception as error:
+        raise AuthorityError("runtime authenticity verification failed") from error
+    if verified is not True:
+        raise AuthorityError("runtime authenticity verification failed")
     return release_path
