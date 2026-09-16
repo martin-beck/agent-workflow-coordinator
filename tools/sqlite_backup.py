@@ -36,6 +36,16 @@ def _regular(path: Path, label: str) -> None:
         raise BackupError(f"{label} must be a regular file")
 
 
+def _safe_parent(path: Path, label: str) -> None:
+    """Reject symlinked lexical ancestors before allocating output files."""
+    absolute = path.absolute()
+    current = Path(absolute.anchor)
+    for component in absolute.parts[1:-1]:
+        current /= component
+        if current.is_symlink():
+            raise BackupError(f"{label} parent must not contain symlinks")
+
+
 def _digest(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as stream:
@@ -151,6 +161,7 @@ def _cleanup(paths: tuple[Path | None, ...]) -> None:
 
 
 def _install(source: Path, destination: Path, binding: dict[str, Any]) -> None:
+    _safe_parent(destination, "SQLite destination")
     try:
         destination.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         descriptor, temporary = tempfile.mkstemp(
