@@ -40,6 +40,6 @@ class LifecycleSession:
         return identity
 
 
-def issue(owner: object, path: Path) -> LifecycleSession:
+def _issue(owner: object, path: Path) -> LifecycleSession:
     status = path.stat()
     return LifecycleSession(owner, path, (status.st_dev, status.st_ino), _TOKEN)

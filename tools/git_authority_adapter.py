@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any, cast
 
 from tools.admission_lease import AdmissionLease, AdmissionRecheck
-from tools.lifecycle_session import LifecycleSession, issue
+from tools.lifecycle_session import LifecycleSession, _issue
 from tools.lock_domain_scope import LockDomainScope
 from tools.rollback_evidence import BackupObservation
 
@@ -142,7 +142,7 @@ class GitAuthorityAdapter:
 
     def lifecycle_session(self) -> LifecycleSession:
         """Return an opaque session bound to this adapter's repository."""
-        return issue(self, self._repository)
+        return _issue(self, self._repository)
 
     def create_backup_bound(self, destination: Path, *, quiesced: bool) -> Path:
         """Create a Git backup using this adapter's owned lifecycle session."""
@@ -159,7 +159,7 @@ class GitAuthorityAdapter:
         """Restore using this adapter's owned lifecycle session."""
         from tools.git_backup import restore_backup
 
-        restore_backup(backup, destination, session=issue(self, backup))
+        restore_backup(backup, destination, session=_issue(self, backup))
 
     @staticmethod
     def observe_backup_identity(

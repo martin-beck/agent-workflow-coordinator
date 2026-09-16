@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from tools.admission_lease import AdmissionLease, AdmissionRecheck
-from tools.lifecycle_session import LifecycleSession, issue
+from tools.lifecycle_session import LifecycleSession, _issue
 from tools.lock_domain_scope import LockDomainScope
 from tools.rollback_evidence import BackupObservation
 
@@ -75,7 +75,7 @@ class SQLiteAuthorityAdapter:
 
     def lifecycle_session(self) -> LifecycleSession:
         """Return an opaque session bound to this adapter's authority."""
-        return issue(self, self._authority)
+        return _issue(self, self._authority)
 
     @staticmethod
     def observe_backup_identity(
