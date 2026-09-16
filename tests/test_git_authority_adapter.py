@@ -178,6 +178,15 @@ def _bound_snapshot_process(
 
 
 class GitAuthorityAdapterTests(unittest.TestCase):
+    def test_git_backup_observation_rejects_foreign_adapter_and_path(self) -> None:
+        session = GitRollbackSessionState(
+            PROJECT, "authority", 1, "fence", "owner", "barrier", "a" * 40, "main"
+        )
+        with self.assertRaisesRegex(GitAuthorityError, "concrete adapter"):
+            GitBackupObservation.from_adapter(cast(Any, object()), session, Path("backup"))
+        with self.assertRaisesRegex(GitAuthorityError, "artifact path"):
+            GitBackupObservation.from_adapter(self.adapter, session, cast(Any, "backup"))
+
     def test_git_backup_observation_requires_verified_typed_result(self) -> None:
         session = GitRollbackSessionState(
             PROJECT, "authority", 1, "fence", "owner", "barrier", "a" * 40, "main"
