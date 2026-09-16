@@ -267,6 +267,7 @@ def _validate_manifest(manifest: dict[str, Any]) -> None:
 def write_manifest(path: Path, manifest: dict[str, Any]) -> None:
     """Write a deterministic manifest without accepting non-JSON values."""
     _validate_manifest(manifest)
+    _safe_parent(path, "SQLite manifest")
     try:
         path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         descriptor, temporary = tempfile.mkstemp(
