@@ -307,6 +307,33 @@ class SQLiteAuthorityAdapterTests(unittest.TestCase):
         self.assertFalse((self.root / "backup.sqlite").exists())
         self.assertFalse(self.session.operation_owned_by_current_thread)
 
+    def test_bound_lifecycle_executor_rejects_failed_restore_journal_mutation(self) -> None:
+        journal = self.root / "engine-journal.json"
+        journal.write_text(
+            '{"status":"running","phase":"rollback","records":[]}\n', encoding="utf-8"
+        )
+        executor = self.adapter.bind_lifecycle_executor(self.session, journal)
+        executor.snapshot()
+
+        def mutate_then_fail(
+            _backup: Path,
+            _destination: Path,
+            _manifest: dict[str, Any],
+            _binding: dict[str, Any],
+        ) -> None:
+            journal.write_text(
+                '{"status":"failed","phase":"rollback","records":[]}\n', encoding="utf-8"
+            )
+            raise RuntimeError("injected restore journal mutation")
+
+        with (
+            patch.object(self.adapter, "restore_bound", side_effect=mutate_then_fail),
+            self.assertRaisesRegex(SQLiteAuthorityError, "durable lifecycle state changed"),
+        ):
+            executor.restore(self.root / "backup.sqlite", self.root / "destination.sqlite", {}, {})
+        self.assertFalse((self.root / "destination.sqlite").exists())
+        self.assertFalse(self.session.operation_owned_by_current_thread)
+
     def test_bound_lifecycle_executor_rejects_failed_effect_control_mutation(self) -> None:
         journal = self.root / "engine-journal.json"
         journal.write_text('{"status":"running","phase":"backup","records":[]}\n', encoding="utf-8")
