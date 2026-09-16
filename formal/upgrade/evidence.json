@@ -4,8 +4,8 @@
   "model_sha256": "616d53832ac5ec18bf3242d47b2412195eb64adb2b1035235514e06cc3edf2ba",
   "config_sha256": "47425af53affd104aa5e30d7434cf3e71e3c7b69bccb9b05fbd749d3285991a2",
   "implementation_snapshot": {
-    "revision": "5c8ea6bddd0b89f35a1b6796ac502938850701d7",
-    "runtime_revision": "5c8ea6bddd0b89f35a1b6796ac502938850701d7",
+    "revision": "487a2cb5e49cccc27a12a3500b710b843aa49097",
+    "runtime_revision": "487a2cb5e49cccc27a12a3500b710b843aa49097",
     "files": {
       "schema/upgrade-contract.schema.json": "6ef2362107a0c3ff895e6dc96e35899e19b367bebd549b6acee42a680d7a442b",
       "tools/generate_upgrade_contract.py": "b3db939912bed549eaba17a2e064e776ff9119b82287218016100e25e5ad9ba4",
@@ -20,10 +20,10 @@
       "tests/test_rollback_control_store.py": "1fd52fcc41b40b3375133c9d24017c362f7d164ca1c6c59c448912edfce09919",
       "tests/test_upgrade_identity.py": "0206aef1794ed73ffcdefb4f965f657514f11858d9beb0b2fa92f7dceaaaf905",
       "tools/mutation_fence.py": "2d314f5a5cc46d0f625135b39ada2d1a464cd35c9d378728c141708df8c0c630",
-      "tools/sqlite_storage.py": "26dcbcf7b376505e5df366109a398f59ead58017ca842f76763dfa46595b4086",
+      "tools/sqlite_storage.py": "96f4fcb45bb7ccc4936185dfc70192d27075232dca91029fe23295ef1e31e58b",
       "tests/test_mutation_fence.py": "e2bcea7b96bddd2509b79ff9c5eefd57001d1502949aba30cbbd50a9169e1cbb",
-      "tests/test_sqlite_mutation_barrier.py": "b2f2204d95be98f57d1e1bc7577ca4e69645c5b0be72ba069184a223e9be3c45",
-      "tests/test_sqlite_storage.py": "64d38abf3938337aae2e17b76f914b2bd23394f51d1f5058bd1d3dcd6631bd50"
+      "tests/test_sqlite_mutation_barrier.py": "f3ff5aa3af7ab369b507551d561b6729982477e25c9a4467b21ca931437a16fb",
+      "tests/test_sqlite_storage.py": "498949a2fe69dd2b6c92ba3ca56c407fbe3658f86332adac5416a5f1798e1a27"
     }
   },
   "design_snapshot": {

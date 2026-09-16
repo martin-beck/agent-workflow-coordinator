@@ -183,6 +183,47 @@ def _route_effect_waiting_for_sigkill(root_text: str, ready: Any) -> None:
     backend.mutate("AR-0001", 1, "update", "2026-09-16T15:11:00+00:00", update_summary)
 
 
+def _route_effect_waiting_for_sidecar_fault(
+    root_text: str, ready: Any, resume: Any, result: Any
+) -> None:
+    """Pause a real mutation after WAL effects so its sidecars can be replaced."""
+    root = Path(root_text)
+    backend = _backend(root, _fence(root, _control(root)))
+    original_assert = backend._assert_mutation_binding
+    checks = 0
+
+    def wait_before_commit() -> None:
+        nonlocal checks
+        checks += 1
+        original_assert()
+        if checks == 2:
+            ready.set()
+            if not resume.wait(5):
+                raise RuntimeError("authority sidecar fault injection timed out")
+
+    backend_any: Any = backend
+    backend_any._assert_mutation_binding = wait_before_commit
+
+    def update_summary(
+        meta: dict[str, Any], _tasks: list[tuple[Path, dict[str, Any], str]]
+    ) -> tuple[str, str]:
+        meta["summary"] = "must roll back after WAL replacement"
+        return "replace active WAL", "# Must not persist\n"
+
+    try:
+        backend.mutate(
+            "AR-0001",
+            1,
+            "update",
+            "2026-09-16T15:12:00+00:00",
+            update_summary,
+        )
+    except Exception as error:
+        result.put(("rejected", type(error).__name__, str(error)))
+    else:
+        result.put(("committed",))
+
+
 class SQLiteMutationBarrierProcessTests(unittest.TestCase):
     def setUp(self) -> None:
         self.directory = tempfile.TemporaryDirectory()
@@ -338,6 +379,49 @@ class SQLiteMutationBarrierProcessTests(unittest.TestCase):
         self.assertEqual(released, self.session.snapshot())
         self.assertEqual(("committed",), self._run_writer())
         self.assertEqual(2, self._authority_revision()[0])
+
+    def test_active_authority_wal_replacement_rejects_without_publication(self) -> None:
+        released = self._release(self._create_held())
+        context = multiprocessing.get_context("fork")
+        ready = context.Event()
+        resume = context.Event()
+        result = context.Queue()
+        writer = context.Process(
+            target=_route_effect_waiting_for_sidecar_fault,
+            args=(self.directory.name, ready, resume, result),
+        )
+        writer.start()
+        self.assertTrue(ready.wait(5))
+
+        for suffix in ("-wal", "-shm"):
+            sidecar = Path(f"{self.authority}{suffix}")
+            self.assertTrue(sidecar.is_file())
+            sidecar.unlink()
+            sidecar.write_bytes(b"hostile authority sidecar replacement")
+            sidecar.chmod(0o600)
+        resume.set()
+        writer.join(5)
+        self.assertEqual(0, writer.exitcode)
+        outcome = cast(tuple[str, ...], result.get(timeout=1))
+        self.assertEqual("rejected", outcome[0])
+        self.assertNotEqual(("committed",), outcome)
+
+        for suffix in ("-wal", "-shm"):
+            Path(f"{self.authority}{suffix}").unlink(missing_ok=True)
+        revision, meta_json = self._authority_revision()
+        self.assertEqual(1, revision)
+        self.assertIn('"summary": "Ready."', meta_json)
+        self.assertNotIn("must roll back after WAL replacement", meta_json)
+        with sqlite3.connect(self.authority) as connection:
+            self.assertEqual(
+                [(1, "import")],
+                connection.execute(
+                    "SELECT revision, kind FROM events WHERE task_id='AR-0001' ORDER BY revision"
+                ).fetchall(),
+            )
+            self.assertEqual(("ok",), connection.execute("PRAGMA integrity_check").fetchone())
+        self.assertEqual(released, self.session.snapshot())
+        self.assertEqual(("committed",), self._run_writer())
 
     def test_forged_released_row_rejects_before_authority_mutation(self) -> None:
         held = self._create_held()

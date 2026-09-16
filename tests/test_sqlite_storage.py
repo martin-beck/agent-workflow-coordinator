@@ -21,6 +21,7 @@ from typing import Any, Literal
 from unittest.mock import patch
 
 from tools.sqlite_storage import (
+    SQLiteAuthorityBinding,
     SQLiteBackend,
     StorageContentionError,
     _translate,
@@ -156,6 +157,48 @@ def revision_stress_worker(
 
 
 class SQLiteStorageTest(unittest.TestCase):
+    def test_authority_sidecar_descriptor_failures_are_fail_closed(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            root.chmod(0o700)
+            authority = root / "authority.sqlite"
+            authority.write_bytes(b"authority")
+            parent = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            try:
+                with self.assertRaisesRegex(RuntimeError, "sidecar is unavailable"):
+                    SQLiteAuthorityBinding._open_retained(parent, "missing-wal", "sidecar")
+
+                hardlink_source = root / "hardlink-source"
+                hardlink_source.write_bytes(b"unsafe")
+                os.link(hardlink_source, root / "unsafe-wal")
+                with self.assertRaisesRegex(RuntimeError, "sidecar is unsafe"):
+                    SQLiteAuthorityBinding._open_retained(parent, "unsafe-wal", "sidecar")
+
+                retained = root / "retained-wal"
+                retained.write_bytes(b"retained")
+                descriptor, identity = SQLiteAuthorityBinding._open_retained(
+                    parent, retained.name, "sidecar"
+                )
+                try:
+                    retained.unlink()
+                    with self.assertRaisesRegex(RuntimeError, "sidecar is unavailable"):
+                        SQLiteAuthorityBinding._assert_retained(
+                            parent, retained.name, descriptor, identity, "sidecar"
+                        )
+                    retained.write_bytes(b"replacement")
+                    with self.assertRaisesRegex(RuntimeError, "sidecar identity changed"):
+                        SQLiteAuthorityBinding._assert_retained(
+                            parent, retained.name, descriptor, identity, "sidecar"
+                        )
+                finally:
+                    os.close(descriptor)
+
+                Path(f"{authority}-wal").write_bytes(b"wal")
+                with self.assertRaisesRegex(RuntimeError, "sidecar is unavailable"):
+                    SQLiteAuthorityBinding._open_sidecar_set(parent, authority)
+            finally:
+                os.close(parent)
+
     def setUp(self) -> None:
         self.temporary = TemporaryDirectory()
         self.root = Path(self.temporary.name)
