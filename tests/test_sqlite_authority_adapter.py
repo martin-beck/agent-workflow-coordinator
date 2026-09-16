@@ -715,6 +715,38 @@ class SQLiteAuthorityAdapterTests(unittest.TestCase):
         self.assertFalse((self.root / "destination.sqlite").exists())
         self.assertFalse(self.session.operation_owned_by_current_thread)
 
+    def test_bound_lifecycle_executor_rejects_failed_restore_authority_shm_sidecar(self) -> None:
+        journal = self.root / "engine-journal.json"
+        journal.write_text(
+            '{"status":"running","phase":"rollback","records":[]}\n', encoding="utf-8"
+        )
+        sidecar = Path(str(self.authority) + "-shm")
+        executor = self.adapter.bind_lifecycle_executor(self.session, journal)
+        executor.snapshot()
+
+        def sidecar_then_fail(
+            _backup: Path,
+            _destination: Path,
+            _manifest: dict[str, Any],
+            _binding: dict[str, Any],
+        ) -> None:
+            sidecar.write_bytes(b"foreign authority SHM sidecar")
+            sidecar.chmod(0o600)
+            raise RuntimeError("injected restore authority SHM sidecar")
+
+        try:
+            with (
+                patch.object(self.adapter, "restore_bound", side_effect=sidecar_then_fail),
+                self.assertRaisesRegex(SQLiteAuthorityError, "authority identity changed"),
+            ):
+                executor.restore(
+                    self.root / "backup.sqlite", self.root / "destination.sqlite", {}, {}
+                )
+        finally:
+            sidecar.unlink(missing_ok=True)
+        self.assertFalse((self.root / "destination.sqlite").exists())
+        self.assertFalse(self.session.operation_owned_by_current_thread)
+
     def test_bound_lifecycle_executor_rejects_failed_effect_control_mutation(self) -> None:
         journal = self.root / "engine-journal.json"
         journal.write_text('{"status":"running","phase":"backup","records":[]}\n', encoding="utf-8")
