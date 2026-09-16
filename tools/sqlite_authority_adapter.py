@@ -31,7 +31,7 @@ class SQLiteLifecycleSnapshot:
 
     control: BarrierSessionState
     journal: JournalSnapshot
-    journal_identity: tuple[int, int]
+    journal_identity: tuple[int, int, int, int]
 
 
 _SUPPORTED_PHASES = frozenset(
@@ -102,14 +102,17 @@ class SQLiteLifecycleExecutor:
             raise SQLiteAuthorityError("durable lifecycle snapshot failed") from error
 
     @staticmethod
-    def _journal_identity(path: Path) -> tuple[int, int]:
+    def _journal_identity(path: Path) -> tuple[int, int, int, int]:
         try:
+            parent = path.parent.lstat()
             value = path.lstat()
         except OSError as error:
             raise SQLiteAuthorityError("lifecycle journal is unavailable") from error
+        if not stat.S_ISDIR(parent.st_mode):
+            raise SQLiteAuthorityError("lifecycle journal parent is not a directory")
         if not stat.S_ISREG(value.st_mode) or value.st_nlink != 1:
             raise SQLiteAuthorityError("lifecycle journal is not private and regular")
-        return value.st_dev, value.st_ino
+        return parent.st_dev, parent.st_ino, value.st_dev, value.st_ino
 
     def assert_snapshot_stable(self, expected: SQLiteLifecycleSnapshot) -> SQLiteLifecycleSnapshot:
         """Reread durable state and fail closed if it changed since ``expected``."""

@@ -250,7 +250,7 @@ class SQLiteAuthorityAdapterTests(unittest.TestCase):
         self.assertEqual("held", snapshot.control.status)
         self.assertEqual(1, snapshot.control.revision)
         self.assertEqual("backup", snapshot.journal.phase)
-        self.assertEqual(2, len(snapshot.journal_identity))
+        self.assertEqual(4, len(snapshot.journal_identity))
         self.assertEqual([{"outcome": "started"}], snapshot.journal.as_mapping()["records"])
         self.assertFalse(self.session.operation_owned_by_current_thread)
         self.assertEqual(b"clean", self.authority.read_bytes()[-5:])
@@ -372,6 +372,28 @@ class SQLiteAuthorityAdapterTests(unittest.TestCase):
         with self.assertRaisesRegex(SQLiteAuthorityError, "not private and regular"):
             executor.assert_snapshot_stable(baseline)
         shared.unlink()
+        self.assertFalse(self.session.operation_owned_by_current_thread)
+
+    def test_bound_lifecycle_executor_rejects_journal_parent_symlink(self) -> None:
+        journal_parent = self.root / "journal-root"
+        journal_parent.mkdir()
+        journal = journal_parent / "engine-journal.json"
+        content = '{"status":"running","phase":"backup","records":[]}\n'
+        journal.write_text(content, encoding="utf-8")
+        executor = self.adapter.bind_lifecycle_executor(self.session, journal)
+        baseline = executor.snapshot()
+        foreign_parent = self.root / "foreign-journal-root"
+        foreign_parent.mkdir()
+        (foreign_parent / journal.name).write_text(content, encoding="utf-8")
+        original_parent = self.root / "journal-root-original"
+        journal_parent.rename(original_parent)
+        journal_parent.symlink_to(foreign_parent, target_is_directory=True)
+        try:
+            with self.assertRaisesRegex(SQLiteAuthorityError, "parent is not a directory"):
+                executor.assert_snapshot_stable(baseline)
+        finally:
+            journal_parent.unlink()
+            original_parent.rename(journal_parent)
         self.assertFalse(self.session.operation_owned_by_current_thread)
 
     def test_bound_lifecycle_executor_rejects_reused_stale_baseline(self) -> None:
