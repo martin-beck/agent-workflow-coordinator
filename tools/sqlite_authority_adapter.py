@@ -36,6 +36,21 @@ _SUPPORTED_PHASES = frozenset(
 )
 
 
+class SQLiteLifecycleExecutor:
+    """Concrete adapter-owned backup/restore executor; no phase authorization."""
+
+    def __init__(self, adapter: SQLiteAuthorityAdapter) -> None:
+        self._adapter = adapter
+
+    def backup(self, destination: Path, binding: dict[str, Any]) -> dict[str, Any]:
+        return self._adapter.backup_bound(destination, binding)
+
+    def restore(
+        self, backup: Path, destination: Path, manifest: dict[str, Any], binding: dict[str, Any]
+    ) -> None:
+        self._adapter.restore_bound(backup, destination, manifest, binding)
+
+
 class SQLiteAuthorityAdapter:
     """Read-only integrity evidence adapter; execute remains disabled."""
 
@@ -76,6 +91,9 @@ class SQLiteAuthorityAdapter:
     def lifecycle_session(self) -> LifecycleSession:
         """Return an opaque session bound to this adapter's authority."""
         return _issue(self, self._authority)
+
+    def lifecycle_executor(self) -> SQLiteLifecycleExecutor:
+        return SQLiteLifecycleExecutor(self)
 
     def backup_bound(self, destination: Path, binding: dict[str, Any]) -> dict[str, Any]:
         from tools.sqlite_backup import backup_database
