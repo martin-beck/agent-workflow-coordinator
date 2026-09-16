@@ -63,6 +63,14 @@ def _safe_parent(path: Path, label: str) -> None:
             raise BackupError(f"{label} parent must not contain symlinks")
 
 
+def _parent_identity(path: Path) -> tuple[int, int]:
+    try:
+        status = path.parent.stat()
+    except OSError as error:
+        raise BackupError("Git restore destination parent disappeared") from error
+    return status.st_dev, status.st_ino
+
+
 def _valid_hex(value: object, length: int) -> bool:
     return (
         isinstance(value, str)
@@ -259,6 +267,9 @@ def restore_backup(backup: Path, destination: Path) -> None:
     if destination.exists():
         raise BackupError("restore destination must not already exist")
     destination.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    parent_identity = _parent_identity(destination)
+    if _parent_identity(destination) != parent_identity:
+        raise BackupError("Git restore destination parent changed before allocation")
     temporary = Path(tempfile.mkdtemp(prefix=".git-restore-", dir=destination.parent))
     shutil.rmtree(temporary)
     try:
@@ -270,6 +281,8 @@ def restore_backup(backup: Path, destination: Path) -> None:
         ):
             raise BackupError("Git backup directory changed before restore")
         _run(["git", "clone", str(backup / "authority.bundle"), str(temporary)], backup.parent)
+        if _parent_identity(destination) != parent_identity:
+            raise BackupError("Git restore destination parent changed before publication")
         temporary.replace(destination)
         descriptor = os.open(destination.parent, os.O_DIRECTORY)
         try:
