@@ -88,6 +88,15 @@ class SQLiteAuthorityAdapter:
         )
 
     @staticmethod
+    def verify_backup_artifact(
+        backup: Path, manifest: Mapping[str, object], binding: Mapping[str, object]
+    ) -> dict[str, object]:
+        """Run SQLite manifest, digest, integrity, and FK checks read-only."""
+        from tools.sqlite_backup import verify_backup
+
+        return verify_backup(backup, dict(manifest), dict(binding))
+
+    @staticmethod
     def _optional_identity(path: Path) -> tuple[int, int, int, int, int] | None:
         try:
             value = path.stat()

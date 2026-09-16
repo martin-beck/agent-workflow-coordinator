@@ -64,6 +64,13 @@ class GitAuthorityAdapter:
             control_store_revision=control_store_revision,
         )
 
+    @staticmethod
+    def verify_backup_artifact(backup: Path) -> dict[str, object]:
+        """Run the complete read-only Git backup verifier."""
+        from tools.git_backup import verify_backup
+
+        return verify_backup(backup)
+
     def _git(self, *arguments: str) -> str:
         try:
             result = subprocess.run(

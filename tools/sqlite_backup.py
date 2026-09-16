@@ -226,6 +226,18 @@ def restore_database(
     _install(backup, destination, binding)
 
 
+def verify_backup(
+    backup: Path, manifest: dict[str, Any], binding: dict[str, Any]
+) -> dict[str, Any]:
+    """Verify a SQLite backup and manifest without installing or mutating it."""
+    _regular(backup, "backup database")
+    _validate_manifest(manifest)
+    if manifest.get("database_sha256") != _digest(backup):
+        raise BackupError("backup manifest is missing or does not match the backup")
+    _integrity(backup, binding)
+    return dict(manifest)
+
+
 def _validate_manifest(manifest: dict[str, Any]) -> None:
     if set(manifest) != MANIFEST_FIELDS:
         raise BackupError("backup manifest has unknown or missing fields")
