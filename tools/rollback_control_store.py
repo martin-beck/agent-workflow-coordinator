@@ -29,7 +29,7 @@ from tools.handoffctl import (
     coordinator_lock_path,
     locked,
 )
-from tools.rollback_evidence import BackupObservation
+from tools.rollback_evidence import _OBSERVATION_PROVIDER_TOKEN, BackupObservation
 from tools.upgrade_authority import inspect_sqlite_release_authority
 from tools.upgrade_identity import (
     ENVELOPE_FIELDS,
@@ -337,6 +337,11 @@ class SQLiteControlStoreAdapter:
         self._store = store
         self._authority_runtime = authority_runtime
         self._release_authorization: _ReleaseAuthorization | None = None
+        self._observation_provider_token = _OBSERVATION_PROVIDER_TOKEN
+
+    @property
+    def observation_provider_token(self) -> object:
+        return self._observation_provider_token
 
     def snapshot(self, phase: str, context: Mapping[str, object]) -> Mapping[str, object]:
         return self._delegate.snapshot(phase, context)
@@ -348,6 +353,20 @@ class SQLiteControlStoreAdapter:
         if self._store.operation_owned_by_current_thread:
             return self._store._verify_rollback_context_locked(context)
         return self._store.verify_rollback_context(context)
+
+    def verify_rollback_context_bound(
+        self,
+        context: Mapping[str, object],
+        scope: object,
+        *,
+        lease: object,
+        admission_recheck: object,
+    ) -> Mapping[str, object]:
+        """Forward bound authority reread while retaining the control-store binding."""
+        verifier = getattr(self._delegate, "verify_rollback_context_bound", None)
+        if not callable(verifier):
+            raise ControlStoreError("bound SQLite authority rereader is unavailable")
+        return verifier(context, scope, lease=lease, admission_recheck=admission_recheck)
 
     def observe_backup_identity(
         self, backup: Path, manifest: Path, context: Mapping[str, object]

@@ -15,6 +15,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Protocol, cast, runtime_checkable
 
+from tools.rollback_evidence import BackupObservation
 from tools.upgrade_admission import (
     admit_preflight,
     admit_quiesced,
@@ -51,6 +52,57 @@ class BackendAdapter(Protocol):
     ) -> Mapping[str, object] | None: ...
 
     def execute(self, phase: str, context: Mapping[str, object]) -> Mapping[str, object]: ...
+
+
+@runtime_checkable
+class RollbackObservationProvider(Protocol):
+    """Adapter-owned, lock-scoped source of typed rollback observations."""
+
+    @property
+    def observation_provider_token(self) -> object: ...
+
+    def observe_backup_identity(
+        self, backup: Path, manifest: Path, context: Mapping[str, object]
+    ) -> BackupObservation: ...
+
+
+@dataclass(frozen=True, init=False)
+class SQLiteRollbackObservationCapability:
+    """Instance-bound SQLite observation authority; never authorizes rollback."""
+
+    adapter: object
+    identity: tuple[object, ...]
+
+    def __init__(self) -> None:
+        raise TypeError("SQLite rollback observation capability must be bound")
+
+    @classmethod
+    def bind(
+        cls, context: PhaseContext, adapter: RollbackObservationProvider
+    ) -> SQLiteRollbackObservationCapability:
+        from tools.rollback_control_store import SQLiteControlStoreAdapter
+
+        if not isinstance(adapter, SQLiteControlStoreAdapter):
+            raise UpgradeError("SQLite rollback observation requires a concrete adapter")
+        fields = tuple(field for field in CONTEXT_FIELDS if field != "target")
+        capability = object.__new__(cls)
+        object.__setattr__(capability, "adapter", adapter)
+        object.__setattr__(
+            capability, "identity", tuple(asdict(context)[field] for field in fields)
+        )
+        return capability
+
+    def observe(self, context: Mapping[str, object]) -> BackupObservation:
+        fields = tuple(field for field in CONTEXT_FIELDS if field != "target")
+        if self.identity != tuple(context.get(field) for field in fields):
+            raise UpgradeError("SQLite rollback observation context identity mismatch")
+        backup = context.get("destination")
+        manifest = context.get("manifest")
+        if not isinstance(backup, str) or not isinstance(manifest, str):
+            raise UpgradeError("rollback preflight artifact paths are invalid")
+        return cast(RollbackObservationProvider, self.adapter).observe_backup_identity(
+            Path(backup), Path(manifest), context
+        )
 
 
 REQUIRED_EVIDENCE = {
@@ -275,6 +327,29 @@ class RollbackAuthorizationCapability:
             raise UpgradeError("rollback authorization evidence lacks backup or restore proof")
         if evidence.get("rollback_context_verified") is not False:
             raise UpgradeError("rollback authorization evidence is not diagnostic-only")
+        raise UpgradeError("rollback authorization is not enabled")
+
+    def preflight(
+        self,
+        context: Mapping[str, object],
+        provider: SQLiteRollbackObservationCapability,
+    ) -> None:
+        """Validate adapter-owned backup/CAS evidence without authorizing rollback."""
+        if not isinstance(provider, SQLiteRollbackObservationCapability):
+            raise UpgradeError("rollback preflight requires a bound observation provider")
+        if provider.adapter is not self.evidence_capability.verifier:
+            raise UpgradeError("rollback preflight provider is bound to a foreign adapter")
+        if not isinstance(context, Mapping) or context.get("target") != "rollback":
+            raise UpgradeError("rollback preflight context is invalid")
+        identity_fields = tuple(field for field in CONTEXT_FIELDS if field != "target")
+        if self.identity != tuple(context.get(field) for field in identity_fields):
+            raise UpgradeError("rollback preflight context identity mismatch")
+        try:
+            observation = provider.observe(context)
+        except Exception as error:
+            raise UpgradeError("rollback preflight observation failed") from error
+        if not observation.has_provenance:
+            raise UpgradeError("rollback preflight observation provenance is invalid")
         raise UpgradeError("rollback authorization is not enabled")
 
 
