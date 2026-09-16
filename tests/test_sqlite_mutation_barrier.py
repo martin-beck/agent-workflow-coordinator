@@ -189,6 +189,7 @@ def _reconcile_waiting_for_sigkill(root_text: str, ready: Any) -> None:
         "held",
         1,
     )
+
     def wait_before_outcome(*_args: object, **_kwargs: object) -> None:
         ready.set()
         multiprocessing.Event().wait()
@@ -690,10 +691,7 @@ class SQLiteMutationBarrierProcessTests(unittest.TestCase):
                 (PROJECT,),
             ).fetchall()
         self.assertEqual(
-            [
-                (999 if row[2] == "prepared" else row[0], row[1], row[2])
-                for row in intent_before
-            ],
+            [(999 if row[2] == "prepared" else row[0], row[1], row[2]) for row in intent_before],
             intent_after_rejected_recovery,
         )
 

@@ -1476,21 +1476,24 @@ class SQLiteBarrierSessionStore:
                 return False
             previous = self._decode_observation(
                 self.project_id,
-                tuple(record.get(field) for field in (
-                    "schema_version",
-                    "project_id",
-                    "attempt_id",
-                    "state_revision",
-                    "authority_revision_at_acquire",
-                    "durable_barrier_id",
-                    "fencing_token",
-                    "fencing_owner",
-                    "identity_digest",
-                    "status",
-                    "revision",
-                    "forward_child",
-                    "rollback_child",
-                )),
+                tuple(
+                    record.get(field)
+                    for field in (
+                        "schema_version",
+                        "project_id",
+                        "attempt_id",
+                        "state_revision",
+                        "authority_revision_at_acquire",
+                        "durable_barrier_id",
+                        "fencing_token",
+                        "fencing_owner",
+                        "identity_digest",
+                        "status",
+                        "revision",
+                        "forward_child",
+                        "rollback_child",
+                    )
+                ),
             )
         except (ControlStoreError, TypeError, ValueError, json.JSONDecodeError):
             return False
@@ -1834,8 +1837,10 @@ class SQLiteBarrierSessionStore:
         with self.operation_lock(), self._control._connection() as connection:
             self._ensure_table(connection)
             prepared = self._prepared_intents_locked(connection)
-            return self._snapshot_locked() if not prepared else self._recover_prepared_locked(
-                connection, prepared
+            return (
+                self._snapshot_locked()
+                if not prepared
+                else self._recover_prepared_locked(connection, prepared)
             )
 
     def reconcile_ambiguous(  # noqa: C901
