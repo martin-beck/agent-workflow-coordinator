@@ -44,6 +44,8 @@ class JournalSnapshot:
 
     @classmethod
     def from_mapping(cls, value: Mapping[str, object]) -> JournalSnapshot:
+        if not isinstance(value, Mapping):
+            raise ValueError("journal snapshot must be a mapping")
         if set(value) != {"status", "phase", "records"}:
             raise ValueError("journal snapshot fields are invalid")
         status, phase, records = value["status"], value["phase"], value["records"]
@@ -53,13 +55,14 @@ class JournalSnapshot:
             isinstance(record, Mapping) for record in records
         ):
             raise ValueError("journal snapshot records are invalid")
-        return cls(status, phase, tuple(dict(record) for record in records))
+        immutable_records = tuple(cast(Mapping[str, object], _freeze(record)) for record in records)
+        return cls(status, phase, immutable_records)
 
     def as_mapping(self) -> dict[str, object]:
         return {
             "status": self.status,
             "phase": self.phase,
-            "records": [dict(record) for record in self.records],
+            "records": [_thaw(record) for record in self.records],
         }
 
 
@@ -455,10 +458,19 @@ class RollbackAuthorizationCapability:
 
 def _freeze(value: object) -> object:
     """Create a recursively immutable view for untrusted phase handlers."""
-    if isinstance(value, dict):
-        return MappingProxyType({str(key): _freeze(item) for key, item in value.items()})
-    if isinstance(value, list):
+    if isinstance(value, Mapping):
+        return MappingProxyType({key: _freeze(item) for key, item in value.items()})
+    if isinstance(value, (list, tuple)):
         return tuple(_freeze(item) for item in value)
+    return value
+
+
+def _thaw(value: object) -> object:
+    """Return a detached JSON-compatible copy of an immutable snapshot value."""
+    if isinstance(value, Mapping):
+        return {key: _thaw(item) for key, item in value.items()}
+    if isinstance(value, tuple):
+        return [_thaw(item) for item in value]
     return value
 
 
