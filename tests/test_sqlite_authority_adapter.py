@@ -285,6 +285,27 @@ class SQLiteAuthorityAdapterTests(unittest.TestCase):
         self.assertEqual(before, executor.snapshot())
         self.assertFalse(self.session.operation_owned_by_current_thread)
 
+    def test_bound_lifecycle_executor_rejects_failed_effect_journal_mutation(self) -> None:
+        journal = self.root / "engine-journal.json"
+        journal.write_text('{"status":"running","phase":"backup","records":[]}\n', encoding="utf-8")
+        executor = self.adapter.bind_lifecycle_executor(self.session, journal)
+        before = executor.snapshot()
+
+        def mutate_then_fail(_destination: Path, _binding: dict[str, Any]) -> dict[str, Any]:
+            journal.write_text(
+                '{"status":"failed","phase":"backup","records":[]}\n', encoding="utf-8"
+            )
+            raise RuntimeError("injected journal mutation")
+
+        with (
+            patch.object(self.adapter, "backup_bound", side_effect=mutate_then_fail),
+            self.assertRaisesRegex(SQLiteAuthorityError, "durable lifecycle state changed"),
+        ):
+            executor.backup(self.root / "backup.sqlite", {})
+        self.assertNotEqual(before.journal, executor.snapshot().journal)
+        self.assertFalse((self.root / "backup.sqlite").exists())
+        self.assertFalse(self.session.operation_owned_by_current_thread)
+
     def test_unbound_lifecycle_executor_cannot_snapshot_durable_state(self) -> None:
         executor = self.adapter.lifecycle_executor()
         with self.assertRaisesRegex(SQLiteAuthorityError, "not bound to durable state"):
