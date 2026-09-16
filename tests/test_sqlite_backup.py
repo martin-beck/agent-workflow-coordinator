@@ -673,6 +673,25 @@ class SQLiteBackupTests(unittest.TestCase):
         self.assertFalse(destination.exists())
         self.assertFalse(list(self.root.glob(".coordinator-*")))
 
+    def test_backup_disappearance_during_restore_is_backup_error(self) -> None:
+        backup = self.root / "backup.sqlite3"
+        manifest = backup_database(self.source, backup, BINDING)
+        destination = self.root / "restored.sqlite3"
+        original_integrity = MODULE._integrity
+
+        def remove_after_integrity(path: Path, binding: dict[str, object]) -> None:
+            original_integrity(path, binding)
+            if path == backup:
+                backup.unlink()
+
+        with (
+            patch.object(MODULE, "_integrity", side_effect=remove_after_integrity),
+            self.assertRaisesRegex(BackupError, "backup database disappeared"),
+        ):
+            restore_database(backup, destination, manifest, BINDING, quiesced=True)
+        self.assertFalse(destination.exists())
+        self.assertFalse(list(self.root.glob(".coordinator-*")))
+
 
 if __name__ == "__main__":
     unittest.main()
