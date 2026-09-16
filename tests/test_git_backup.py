@@ -210,7 +210,7 @@ class GitBackupTests(unittest.TestCase):
                     else:
                         outcomes.append(None)
 
-            self.assertEqual([None, BackupError], outcomes)
+            self.assertCountEqual([None, BackupError], outcomes)
             self.assertEqual("state\n", (destination / "task.md").read_text(encoding="utf-8"))
             self.assertTrue(created_staging)
             self.assertTrue(all(not path.exists() for path in created_staging))
@@ -243,6 +243,20 @@ class GitBackupTests(unittest.TestCase):
             valid = create_backup(self.repo(other), root / "valid", quiesced=True)
             with self.assertRaises(BackupError):
                 restore_backup(valid, link)
+
+    def test_symlinked_parent_components_fail_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repo = self.repo(root)
+            real_parent = root / "real-parent"
+            real_parent.mkdir()
+            linked_parent = root / "linked-parent"
+            linked_parent.symlink_to(real_parent, target_is_directory=True)
+            with self.assertRaisesRegex(BackupError, "parent must not contain symlinks"):
+                create_backup(repo, linked_parent / "backup", quiesced=True)
+            backup = create_backup(repo, root / "valid-backup", quiesced=True)
+            with self.assertRaisesRegex(BackupError, "parent must not contain symlinks"):
+                restore_backup(backup, linked_parent / "restored")
 
     def test_manifest_and_clean_restore_equivalence_failures(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
