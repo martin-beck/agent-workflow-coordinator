@@ -1,28 +1,29 @@
 # Copyright (C) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 # SPDX-License-Identifier: MIT
 
-"""Keep the documented backup lifecycle mapping aligned with the TLA model."""
+"""Executable mapping from lifecycle traces to TLA action outcomes."""
 
 import unittest
-from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+from tools.formal_correspondence import INVARIANTS, validate_trace
 
 
 class FormalLifecycleCorrespondenceTests(unittest.TestCase):
-    def test_lifecycle_mapping_names_existing_model_actions(self) -> None:
-        model = (ROOT / "formal/handoffctl/Handoffctl.tla").read_text(encoding="utf-8")
-        mapping = (ROOT / "formal/handoffctl/LIFECYCLE_CORRESPONDENCE.md").read_text(
-            encoding="utf-8"
+    def test_success_and_failure_traces_map_to_named_actions(self) -> None:
+        self.assertEqual(("ExecuteSuccess",), validate_trace(("backup_verified",)))
+        self.assertEqual(
+            ("ExecuteReject", "ExecuteSuccess"),
+            validate_trace(("publication_failed", "retry_verified")),
         )
-        self.assertIn("ExecuteSuccess(p)", model)
-        self.assertIn("ExecuteReject(p)", model)
-        self.assertIn("ExecuteSuccess(p)", mapping)
-        self.assertIn("ExecuteReject(p)", mapping)
 
-    def test_mapping_explicitly_remains_non_authorizing(self) -> None:
-        mapping = (ROOT / "formal/handoffctl/LIFECYCLE_CORRESPONDENCE.md").read_text(
-            encoding="utf-8"
+    def test_invalid_nonterminal_and_unknown_traces_fail_closed(self) -> None:
+        with self.assertRaises(ValueError):
+            validate_trace(("publication_failed", "backup_verified"))
+        with self.assertRaises(ValueError):
+            validate_trace(("unknown",))
+
+    def test_required_invariant_names_are_explicit(self) -> None:
+        self.assertEqual(
+            ("NoReplacementBeforeBackup", "AmbiguousIsWriteClosed", "ReconcileRequiresFence"),
+            INVARIANTS,
         )
-        self.assertIn("through the phase machine", mapping)
-        self.assertIn("execute rollback authorization", mapping)
