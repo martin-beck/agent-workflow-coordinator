@@ -2184,7 +2184,7 @@ class UpgradeEngineTests(unittest.TestCase):
                 return observation
 
         with self.assertRaisesRegex(UpgradeError, "bound observation provider"):
-            capability.preflight(ROLLBACK_CONTEXT, Provider())
+            capability.preflight(ROLLBACK_CONTEXT, cast(Any, Provider()))
         with self.assertRaisesRegex(UpgradeError, "bound observation provider"):
 
             class ForgedProvider:
@@ -2193,7 +2193,7 @@ class UpgradeEngineTests(unittest.TestCase):
                 ) -> BackupObservation:
                     return BackupObservation("bytes", "manifest", "store:1", 4)
 
-            capability.preflight(ROLLBACK_CONTEXT, ForgedProvider())
+            capability.preflight(ROLLBACK_CONTEXT, cast(Any, ForgedProvider()))
 
     def test_bound_rollback_inspection_dispatches_initialized_real_adapters(self) -> None:
         """Concrete adapter identity is retained without authorizing rollback."""
