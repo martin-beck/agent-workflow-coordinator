@@ -336,6 +336,21 @@ class SQLiteBackupTests(unittest.TestCase):
         with self.assertRaises(BackupError):
             backup_database(link, self.root / "backup.sqlite3", BINDING)
 
+    def test_symlinked_destination_parent_is_rejected_before_install(self) -> None:
+        real_parent = self.root / "real-parent"
+        real_parent.mkdir()
+        linked_parent = self.root / "linked-parent"
+        linked_parent.symlink_to(real_parent, target_is_directory=True)
+        with self.assertRaisesRegex(BackupError, "parent must not contain symlinks"):
+            backup_database(self.source, linked_parent / "backup.sqlite3", BINDING)
+
+        backup = self.root / "backup.sqlite3"
+        manifest = backup_database(self.source, backup, BINDING)
+        destination = linked_parent / "restored.sqlite3"
+        with self.assertRaisesRegex(BackupError, "parent must not contain symlinks"):
+            restore_database(backup, destination, manifest, BINDING, quiesced=True)
+        self.assertFalse((real_parent / "restored.sqlite3").exists())
+
 
 if __name__ == "__main__":
     unittest.main()
