@@ -2132,8 +2132,13 @@ class UpgradeEngineTests(unittest.TestCase):
             ),
             "rollback_context_verified": False,
         }
+        typed = RollbackBackupEvidence.from_observations(
+            ROLLBACK_CONTEXT, b"backup-v1", {"manifest": "v1"}, "control-store-1", 1
+        )
         with self.assertRaisesRegex(UpgradeError, "not enabled"):
-            capability.authorize(ROLLBACK_CONTEXT, valid_evidence)
+            capability.authorize(ROLLBACK_CONTEXT, typed)
+        with self.assertRaisesRegex(UpgradeError, "typed evidence"):
+            capability.authorize(ROLLBACK_CONTEXT, valid_evidence)  # type: ignore[arg-type]
         request = capability.validate(ROLLBACK_CONTEXT, valid_evidence)
         self.assertEqual(evidence_capability.identity, request.identity)
         self.assertEqual(valid_evidence["backup_identity_digest"], request.backup_identity_digest)
@@ -2141,25 +2146,20 @@ class UpgradeEngineTests(unittest.TestCase):
         forged = dict(ROLLBACK_CONTEXT)
         forged["fencing_token"] = "forged"  # noqa: S105
         with self.assertRaisesRegex(UpgradeError, "identity mismatch"):
-            capability.authorize(forged, valid_evidence)
+            capability.validate(forged, valid_evidence)
         incomplete = dict(ROLLBACK_CONTEXT)
         incomplete.pop("envelope_digest")
         with self.assertRaisesRegex(UpgradeError, "context is invalid"):
-            capability.authorize(incomplete, valid_evidence)
+            capability.validate(incomplete, valid_evidence)
         with self.assertRaisesRegex(UpgradeError, "diagnostic-only"):
-            capability.authorize(
+            capability.validate(
                 ROLLBACK_CONTEXT, {**valid_evidence, "rollback_context_verified": True}
             )
         with self.assertRaisesRegex(UpgradeError, "backup identity is invalid"):
-            capability.authorize(
+            capability.validate(
                 ROLLBACK_CONTEXT,
                 {**valid_evidence, "backup_bytes_digest": "0" * 64},
             )
-        typed = RollbackBackupEvidence.from_observations(
-            ROLLBACK_CONTEXT, b"backup-v1", {"manifest": "v1"}, "control-store-1", 1
-        )
-        with self.assertRaisesRegex(UpgradeError, "not enabled"):
-            capability.authorize(ROLLBACK_CONTEXT, typed)
         self.assertNotEqual(
             typed.backup_bytes_digest,
             RollbackBackupEvidence.from_observations(
@@ -2200,7 +2200,7 @@ class UpgradeEngineTests(unittest.TestCase):
             ({**valid_evidence, "control_store_revision": True}, "backup identity is invalid"),
         ):
             with self.subTest(hostile=hostile), self.assertRaisesRegex(UpgradeError, message):
-                capability.authorize(ROLLBACK_CONTEXT, hostile)  # type: ignore[arg-type]
+                capability.validate(ROLLBACK_CONTEXT, hostile)  # type: ignore[arg-type]
 
     def test_bound_rollback_inspection_dispatches_initialized_real_adapters(self) -> None:
         """Concrete adapter identity is retained without authorizing rollback."""

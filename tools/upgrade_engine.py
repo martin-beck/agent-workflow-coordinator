@@ -12,6 +12,7 @@ import time
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import AbstractContextManager, contextmanager, nullcontext
 from dataclasses import asdict, dataclass
+from dataclasses import field as dataclass_field
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Protocol, cast, runtime_checkable
@@ -96,6 +97,7 @@ TOP_LEVEL_FIELDS = {
 }
 RECORD_FIELDS = {"operation_id", "step_id", "phase", "outcome", "result", "error", "context"}
 CONTEXT_FIELDS = ENVELOPE_FIELDS
+_ROLLBACK_EVIDENCE_TOKEN = object()
 
 
 def backup_identity_digest(
@@ -244,6 +246,11 @@ class RollbackBackupEvidence:
     manifest_digest: str
     control_store_identity: str
     control_store_revision: int
+    _token: object = dataclass_field(default=None, repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        if self._token is not _ROLLBACK_EVIDENCE_TOKEN:
+            raise UpgradeError("rollback backup evidence requires trusted provenance")
 
     @classmethod
     def from_observations(
@@ -268,6 +275,7 @@ class RollbackBackupEvidence:
             ).hexdigest(),
             control_store_identity,
             control_store_revision,
+            _ROLLBACK_EVIDENCE_TOKEN,
         )
 
     def as_mapping(self) -> dict[str, object]:
@@ -405,6 +413,8 @@ class RollbackAuthorizationCapability:
 
     def authorize(self, context: Mapping[str, object], evidence: Mapping[str, object]) -> None:
         """Validate a request, then refuse until rollback execution is enabled."""
+        if not isinstance(evidence, RollbackBackupEvidence):
+            raise UpgradeError("rollback authorization requires typed evidence")
         self.validate(context, evidence)
         raise UpgradeError("rollback authorization is not enabled")
 
