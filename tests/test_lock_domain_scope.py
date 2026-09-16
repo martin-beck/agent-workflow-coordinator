@@ -24,6 +24,7 @@ from tools.admission_lease import (
 )
 from tools.admitted_control_store import AdmittedControlBinding
 from tools.handoffctl import locked
+from tools.lifecycle_trace import LifecycleEvent
 from tools.lock_domain import LockDomainContract, LockDomainError
 from tools.lock_domain_scope import LockDomainScope
 from tools.mutation_fence import MutationFence, provision, provision_control_binding
@@ -365,6 +366,33 @@ class LockDomainScopeTests(unittest.TestCase):
         self.assertEqual(["held"], events)
         self.assertFalse(self.session.operation_owned_by_current_thread)
 
+    def test_bound_observer_receives_immutable_reread_events(self) -> None:
+        observed: list[LifecycleEvent] = []
+        scope = LockDomainScope.bind(
+            self.session,
+            self.fence,
+            self.lease,
+            self.recheck,
+            locked,
+            lambda event: observed.append(event),
+        )
+        with scope.hold():
+            pass
+        self.assertGreaterEqual(len(observed), 2)
+        self.assertTrue(all(event.phase == "scope.reread" for event in observed))
+        self.assertEqual(1, observed[-1].revision)
+        with self.assertRaises(AttributeError):
+            observed[0].revision = 2  # type: ignore[misc]
+        self.assertEqual(PROJECT, observed[0].project_id)
+        self.assertEqual(identity().identity_digest, observed[0].session_digest)
+        self.assertEqual("fence-1", observed[0].fencing_token)
+
+    def test_lifecycle_event_cannot_be_forged_directly(self) -> None:
+        with self.assertRaisesRegex(TypeError, "scope-issued"):
+            LifecycleEvent(
+                "scope.reread", 1, "owner-1", "authority", PROJECT, "digest", "fence", object()
+            )
+
     def test_hold_performs_trusted_authority_reread_after_lock_acquisition(self) -> None:
         reads: list[str] = []
 
@@ -385,9 +413,18 @@ class LockDomainScopeTests(unittest.TestCase):
             return next(reads)
 
         session = SQLiteBarrierSessionStore(self.store, reread)
-        scope = LockDomainScope.bind(session, self.fence, self.lease, self.recheck, locked)
+        events: list[LifecycleEvent] = []
+        scope = LockDomainScope.bind(
+            session,
+            self.fence,
+            self.lease,
+            self.recheck,
+            locked,
+            lambda event: events.append(event),
+        )
         with self.assertRaisesRegex(LockDomainError, "authority revision changed"), scope.hold():
             self.fail("authority drift must reject before yielding the scope")
+        self.assertEqual(1, len(events))
         self.assertFalse(session.operation_owned_by_current_thread)
 
     def test_hold_releases_locks_when_second_trusted_reread_fails(self) -> None:

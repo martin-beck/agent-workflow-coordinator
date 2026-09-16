@@ -9,6 +9,7 @@ from contextlib import AbstractContextManager, contextmanager
 
 from tools.admission_lease import LOCK_ORDER, AdmissionLease, AdmissionRecheck
 from tools.handoffctl import CoordinatorLockGuard
+from tools.lifecycle_trace import LifecycleObserver, _issue_event
 from tools.lock_domain import LockDomainContract, LockDomainError, LockDomainIdentity
 from tools.mutation_fence import MutationFence
 from tools.rollback_control_store import ControlStoreError, SQLiteBarrierSessionStore
@@ -33,6 +34,7 @@ class LockDomainScope:
         session_identity: BarrierSessionIdentity,
         common_lock: Callable[[], AbstractContextManager[CoordinatorLockGuard]],
         session_revision: int | None = None,
+        observer: LifecycleObserver | None = None,
     ) -> None:
         self._identity = identity
         self._session_store = session_store
@@ -44,6 +46,8 @@ class LockDomainScope:
         # Lease revision names the identity fence; session_revision names the
         # durable row CAS revision and can diverge after reconciliation.
         self._session_revision = lease.revision if session_revision is None else session_revision
+        self._observer = observer
+        self._event_token = object()
 
     @classmethod
     def bind(
@@ -53,6 +57,7 @@ class LockDomainScope:
         lease: AdmissionLease,
         recheck: AdmissionRecheck,
         common_lock: Callable[[], AbstractContextManager[CoordinatorLockGuard]],
+        observer: LifecycleObserver | None = None,
     ) -> LockDomainScope:
         """Bind a caller-owned scope to canonical descriptors only.
 
@@ -80,6 +85,7 @@ class LockDomainScope:
             state.identity,
             common_lock,
             state.revision,
+            observer,
         )
 
     def assert_ordered(self) -> None:
@@ -171,3 +177,16 @@ class LockDomainScope:
         self._identity.assert_session_binding(
             state, self._lease, session_revision=self._session_revision
         )
+        if self._observer is not None:
+            self._observer(
+                _issue_event(
+                    self._event_token,
+                    "scope.reread",
+                    state.revision,
+                    self._lease.fencing_owner,
+                    "authority",
+                    self._lease.project_id,
+                    state.identity.identity_digest,
+                    self._lease.fencing_token,
+                )
+            )
