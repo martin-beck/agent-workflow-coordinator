@@ -36,6 +36,7 @@ from tools.upgrade_engine import (
     PHASES,
     BackendAdapter,
     BoundRollbackCapability,
+    GitRollbackObservationCapability,
     Handler,
     PhaseContext,
     RollbackAuthorizationCapability,
@@ -2255,6 +2256,33 @@ class UpgradeEngineTests(unittest.TestCase):
                     return BackupObservation("bytes", "manifest", "store:1", 4)
 
             capability.preflight(ROLLBACK_CONTEXT, cast(Any, ForgedProvider()))
+
+    def test_git_observation_capability_is_concrete_and_identity_bound(self) -> None:
+        context = PhaseContext(**cast(dict[str, Any], ROLLBACK_CONTEXT))
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            adapter = GitAuthorityAdapter(root)
+            with self.assertRaisesRegex(UpgradeError, "concrete adapter"):
+                GitRollbackObservationCapability.bind(
+                    context,
+                    cast(Any, object()),
+                    cast(Any, object()),
+                    lease=cast(Any, object()),
+                    admission_recheck=cast(Any, object()),
+                    expected_branch="main",
+                    expected_head="head",
+                )
+            capability = GitRollbackObservationCapability.bind(
+                context,
+                adapter,
+                cast(Any, object()),
+                lease=cast(Any, object()),
+                admission_recheck=cast(Any, object()),
+                expected_branch="main",
+                expected_head="head",
+            )
+            with self.assertRaisesRegex(UpgradeError, "identity mismatch"):
+                capability.observe({**ROLLBACK_CONTEXT, "operation_id": "foreign"})
 
     def test_bound_rollback_inspection_dispatches_initialized_real_adapters(self) -> None:
         """Concrete adapter identity is retained without authorizing rollback."""

@@ -38,7 +38,14 @@ from tools.rollback_control_store import (
     SQLiteRollbackControlStore,
 )
 from tools.scoped_backend_adapter import ScopedBackendAdapter
-from tools.upgrade_engine import BoundRollbackCapability, PhaseContext, UpgradeEngine
+from tools.upgrade_engine import (
+    BoundRollbackCapability,
+    GitRollbackObservationCapability,
+    PhaseContext,
+    RollbackAuthorizationCapability,
+    UpgradeEngine,
+    UpgradeError,
+)
 from tools.upgrade_identity import (
     BarrierSessionIdentity,
     canonical_barrier_digest,
@@ -509,6 +516,42 @@ class GitAuthorityAdapterTests(unittest.TestCase):
                 expected_branch=str(observed["git_branch"]),
                 expected_head=str(observed["git_head"]),
             )
+
+    def test_authorization_preflight_consumes_git_provenance_then_refuses(self) -> None:
+        artifact_root = Path(self.coordination.name) / "artifacts"
+        backup = create_backup(self.root, artifact_root / "git-backup", quiesced=True)
+        observed = self.adapter.snapshot("discover", CONTEXT)
+        context = {
+            **CONTEXT,
+            "target": "rollback",
+            "artifact_root": str(artifact_root),
+            "manifest": str(backup / "manifest.json"),
+        }
+        phase_context = PhaseContext(**cast(dict[str, Any], context))
+        bound = BoundRollbackCapability.bind(
+            phase_context,
+            self.adapter,
+            self.scope,
+            lease=self.lease,
+            admission_recheck=self.recheck,
+            expected_branch=str(observed["git_branch"]),
+            expected_head=str(observed["git_head"]),
+        )
+        authorization = RollbackAuthorizationCapability.bind(phase_context, bound)
+        provider = GitRollbackObservationCapability.bind(
+            phase_context,
+            self.adapter,
+            self.scope,
+            lease=self.lease,
+            admission_recheck=self.recheck,
+            expected_branch=str(observed["git_branch"]),
+            expected_head=str(observed["git_head"]),
+        )
+        before = self.session.snapshot()
+        with self.assertRaisesRegex(UpgradeError, "authorization is not enabled"):
+            authorization.preflight(context, provider)
+        self.assertEqual(before, self.session.snapshot())
+        self.assertFalse(self.session.operation_owned_by_current_thread)
 
     def test_git_observation_failures_and_invalid_repository_fail_closed(self) -> None:
         with self.assertRaisesRegex(GitAuthorityError, "unavailable"):
