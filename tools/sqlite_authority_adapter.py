@@ -77,6 +77,31 @@ class SQLiteAuthorityAdapter:
         """Return an opaque session bound to this adapter's authority."""
         return _issue(self, self._authority)
 
+    def backup_bound(self, destination: Path, binding: dict[str, Any]) -> dict[str, Any]:
+        from tools.sqlite_backup import backup_database
+
+        return backup_database(
+            self._authority, destination, binding, session=self.lifecycle_session()
+        )
+
+    def restore_bound(
+        self,
+        backup: Path,
+        destination: Path,
+        manifest: dict[str, Any],
+        binding: dict[str, Any],
+    ) -> None:
+        from tools.sqlite_backup import restore_database
+
+        restore_database(
+            backup,
+            destination,
+            manifest,
+            binding,
+            quiesced=True,
+            session=_issue(self, backup),
+        )
+
     @staticmethod
     def observe_backup_identity(
         backup: Path,
