@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any, cast
 
 from tools.admission_lease import AdmissionLease, AdmissionRecheck
+from tools.lifecycle_session import LifecycleSession, issue
 from tools.lock_domain_scope import LockDomainScope
 from tools.rollback_evidence import BackupObservation
 
@@ -138,6 +139,10 @@ class GitAuthorityAdapter:
         if not resolved.is_dir():
             raise GitAuthorityError("Git authority repository is unavailable")
         self._repository = resolved
+
+    def lifecycle_session(self) -> LifecycleSession:
+        """Return an opaque session bound to this adapter's repository."""
+        return issue(self, self._repository)
 
     @staticmethod
     def observe_backup_identity(

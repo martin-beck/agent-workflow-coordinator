@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from tools.admission_lease import AdmissionLease, AdmissionRecheck
+from tools.lifecycle_session import LifecycleSession, issue
 from tools.lock_domain_scope import LockDomainScope
 from tools.rollback_evidence import BackupObservation
 
@@ -58,6 +59,7 @@ class SQLiteAuthorityAdapter:
         ):
             raise SQLiteAuthorityError("SQLite authority descriptor is unsafe")
         self._authority = resolved
+        self._session_identity = (descriptor.st_dev, descriptor.st_ino)
         self._parent_identity = (parent.st_dev, parent.st_ino)
         self._descriptor_identity = (
             descriptor.st_dev,
@@ -70,6 +72,10 @@ class SQLiteAuthorityAdapter:
             suffix: self._optional_identity(resolved.with_name(resolved.name + suffix))
             for suffix in ("-wal", "-shm")
         }
+
+    def lifecycle_session(self) -> LifecycleSession:
+        """Return an opaque session bound to this adapter's authority."""
+        return issue(self, self._authority)
 
     @staticmethod
     def observe_backup_identity(
