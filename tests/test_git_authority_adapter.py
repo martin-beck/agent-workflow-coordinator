@@ -517,6 +517,33 @@ class GitAuthorityAdapterTests(unittest.TestCase):
                 expected_head=str(observed["git_head"]),
             )
 
+    def test_preflight_git_failure_releases_scope_and_preserves_session(self) -> None:
+        """A verifier failure cannot strand locks or alter durable session state."""
+        artifact_root = Path(self.coordination.name) / "failure-artifacts"
+        backup = create_backup(self.root, artifact_root / "git-backup", quiesced=True)
+        observed = self.adapter.snapshot("discover", CONTEXT)
+        context = {
+            **CONTEXT,
+            "target": "rollback",
+            "artifact_root": str(artifact_root),
+            "manifest": str(backup / "manifest.json"),
+        }
+        (backup / "refs.txt").write_text("tampered\n", encoding="utf-8")
+        before = self.session.snapshot()
+        with self.assertRaisesRegex(GitAuthorityError, "verification failed"):
+            self.adapter.preflight_git(
+                context,
+                self.scope,
+                lease=self.lease,
+                admission_recheck=self.recheck,
+                expected_branch=str(observed["git_branch"]),
+                expected_head=str(observed["git_head"]),
+            )
+        self.assertEqual(before, self.session.snapshot())
+        self.assertFalse(self.session.operation_owned_by_current_thread)
+        with self.scope.hold():
+            pass
+
     def test_authorization_preflight_consumes_git_provenance_then_refuses(self) -> None:
         artifact_root = Path(self.coordination.name) / "artifacts"
         backup = create_backup(self.root, artifact_root / "git-backup", quiesced=True)
