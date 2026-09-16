@@ -130,6 +130,17 @@ def _copy_online(source: Path, temporary: Path, binding: dict[str, Any]) -> None
     _integrity(temporary, binding)
 
 
+def _source_identity(source: Path) -> tuple[int, int]:
+    if not source.exists():
+        raise BackupError("source database disappeared")
+    _regular(source, "source database")
+    try:
+        status = source.stat()
+    except OSError as error:
+        raise BackupError("source database disappeared") from error
+    return status.st_dev, status.st_ino
+
+
 def _backup_existing(destination: Path) -> Path | None:
     if not destination.exists():
         return None
@@ -230,7 +241,10 @@ def _install(source: Path, destination: Path, binding: dict[str, Any]) -> None:
     previous_path: Path | None = None
     replaced = False
     try:
+        source_identity = _source_identity(source)
         _copy_online(source, temporary_path, binding)
+        if _source_identity(source) != source_identity:
+            raise BackupError("source database changed during backup")
         temporary_path.chmod(0o600)
         # Do not allocate a preservation link in a parent that was replaced
         # while the online copy was running.
