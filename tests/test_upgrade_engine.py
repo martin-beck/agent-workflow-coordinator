@@ -2121,6 +2121,8 @@ class UpgradeEngineTests(unittest.TestCase):
         }
         with self.assertRaisesRegex(UpgradeError, "not enabled"):
             capability.authorize(ROLLBACK_CONTEXT, valid_evidence)
+        with self.assertRaisesRegex(UpgradeError, "context or evidence is invalid"):
+            capability.authorize(None, valid_evidence)  # type: ignore[arg-type]
         forged = dict(ROLLBACK_CONTEXT)
         forged["fencing_token"] = "forged"  # noqa: S105
         with self.assertRaisesRegex(UpgradeError, "identity mismatch"):
@@ -2135,6 +2137,7 @@ class UpgradeEngineTests(unittest.TestCase):
             )
         for hostile, message in (
             (None, "context or evidence is invalid"),
+            (object(), "context or evidence is invalid"),
             (
                 {key: value for key, value in valid_evidence.items() if key != "phase"},
                 "schema is invalid",
@@ -2143,7 +2146,12 @@ class UpgradeEngineTests(unittest.TestCase):
             ({**valid_evidence, "backend": "git"}, "evidence identity mismatch"),
             ({**valid_evidence, "phase": "discover"}, "phase or backend is invalid"),
             ({**valid_evidence, "mutates_authority": True}, "evidence is mutating"),
+            ({**valid_evidence, "backend_identity_verified": False}, "identity is unverified"),
             ({**valid_evidence, "backup_verified": False}, "lacks backup or restore proof"),
+            (
+                {**valid_evidence, "restore_roundtrip_verified": False},
+                "lacks backup or restore proof",
+            ),
         ):
             with self.subTest(hostile=hostile), self.assertRaisesRegex(UpgradeError, message):
                 capability.authorize(ROLLBACK_CONTEXT, hostile)  # type: ignore[arg-type]
