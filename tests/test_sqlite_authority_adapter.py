@@ -1750,6 +1750,22 @@ class SQLiteAuthorityAdapterTests(unittest.TestCase):
         finally:
             self.authority.chmod(0o600)
 
+    def test_authority_parent_symlink_substitution_fails_old_reader_closed(self) -> None:
+        adapter = SQLiteAuthorityAdapter(self.authority)
+        parent = self.authority.parent
+        moved = parent.with_name(parent.name + "-original")
+        foreign = parent.with_name(parent.name + "-foreign")
+        parent.rename(moved)
+        foreign.mkdir(mode=0o700)
+        parent.symlink_to(foreign, target_is_directory=True)
+        try:
+            with self.assertRaisesRegex(SQLiteAuthorityError, "identity changed"):
+                adapter.snapshot("discover", CONTEXT)
+        finally:
+            parent.unlink()
+            foreign.rmdir()
+            moved.rename(parent)
+
     def test_existing_shm_sidecar_symlink_fails_old_reader_closed(self) -> None:
         sidecar = self.authority.with_name(self.authority.name + "-shm")
         sidecar.write_bytes(b"shm")
