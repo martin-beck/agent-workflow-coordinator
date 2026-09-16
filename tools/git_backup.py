@@ -210,6 +210,7 @@ def create_backup(repo: Path, destination: Path, *, quiesced: bool) -> Path:
 def verify_backup(backup: Path) -> dict[str, object]:
     """Verify hashes, bundle reachability, refs, and clean-checkout equivalence."""
     _safe_root(backup, "backup")
+    backup_identity = backup.stat()
     manifest = _manifest(backup)
     _verify_artifacts(backup, manifest)
     _verify_archive(backup / "tracked-tree.tar")
@@ -231,6 +232,13 @@ def verify_backup(backup: Path) -> dict[str, object]:
             encoding="utf-8"
         ):
             raise BackupError("clean restore tracked-file set mismatch")  # pragma: no cover
+    _safe_root(backup, "backup")
+    current_identity = backup.stat()
+    if (current_identity.st_dev, current_identity.st_ino) != (
+        backup_identity.st_dev,
+        backup_identity.st_ino,
+    ):
+        raise BackupError("Git backup directory changed during verification")
     return {"commit": manifest["commit"], "verified": True, "artifact_count": len(ARTIFACTS)}
 
 
