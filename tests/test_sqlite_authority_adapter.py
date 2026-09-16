@@ -475,13 +475,13 @@ class SQLiteAuthorityAdapterTests(unittest.TestCase):
         self.assertFalse((self.root / "destination.sqlite").exists())
         self.assertFalse(self.session.operation_owned_by_current_thread)
 
-    def test_bound_lifecycle_executor_rejects_failed_restore_control_sidecar(self) -> None:
+    def test_bound_lifecycle_executor_rejects_failed_restore_control_shm_sidecar(self) -> None:
         journal = self.root / "engine-journal.json"
         journal.write_text(
             '{"status":"running","phase":"rollback","records":[]}\n', encoding="utf-8"
         )
         control = self.session.control_store_path
-        sidecar = Path(str(control) + "-wal")
+        sidecar = Path(str(control) + "-shm")
         executor = self.adapter.bind_lifecycle_executor(self.session, journal)
         executor.snapshot()
 
@@ -491,9 +491,9 @@ class SQLiteAuthorityAdapterTests(unittest.TestCase):
             _manifest: dict[str, Any],
             _binding: dict[str, Any],
         ) -> None:
-            sidecar.write_bytes(b"foreign WAL sidecar")
+            sidecar.write_bytes(b"foreign SHM sidecar")
             sidecar.chmod(0o600)
-            raise RuntimeError("injected restore control sidecar")
+            raise RuntimeError("injected restore control SHM sidecar")
 
         try:
             with (
