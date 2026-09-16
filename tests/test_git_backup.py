@@ -365,6 +365,33 @@ class GitBackupTests(unittest.TestCase):
             with self.assertRaises(BackupError):
                 verify_backup(backup)
 
+    def test_restore_rejects_destination_creation_before_publication(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repo = self.repo(root)
+            backup = create_backup(repo, root / "backup", quiesced=True)
+            destination = root / "restored"
+            original_run = MODULE._run
+            clone_count = 0
+
+            def create_after_clone(command: list[str], cwd: Path) -> str:
+                nonlocal clone_count
+                result = cast(str, original_run(command, cwd))
+                if command[:2] == ["git", "clone"]:
+                    clone_count += 1
+                    if clone_count == 2:
+                        destination.mkdir()
+                        (destination / "foreign.txt").write_text("foreign")
+                return result
+
+            with (
+                patch.object(MODULE, "_run", side_effect=create_after_clone),
+                self.assertRaisesRegex(BackupError, "destination appeared"),
+            ):
+                restore_backup(backup, destination)
+            self.assertEqual("foreign", (destination / "foreign.txt").read_text())
+            self.assertFalse(list(root.glob(".git-restore-*")))
+
 
 if __name__ == "__main__":
     unittest.main()

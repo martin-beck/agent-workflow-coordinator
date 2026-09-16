@@ -283,6 +283,8 @@ def restore_backup(backup: Path, destination: Path) -> None:
         _run(["git", "clone", str(backup / "authority.bundle"), str(temporary)], backup.parent)
         if _parent_identity(destination) != parent_identity:
             raise BackupError("Git restore destination parent changed before publication")
+        if destination.exists() or destination.is_symlink():
+            raise BackupError("restore destination appeared before publication")
         temporary.replace(destination)
         descriptor = os.open(destination.parent, os.O_DIRECTORY)
         try:
