@@ -39,6 +39,7 @@ from tools.upgrade_engine import (
     Handler,
     PhaseContext,
     RollbackAuthorizationCapability,
+    SQLiteRollbackObservationCapability,
     UpgradeEngine,
     UpgradeError,
 )
@@ -166,6 +167,66 @@ class FailingAdapter(FakeAdapter):
 
 
 class UpgradeEngineTests(unittest.TestCase):
+    def test_bound_capability_rejects_incomplete_bindings_and_contexts(self) -> None:
+        context = PhaseContext(**cast(dict[str, Any], ROLLBACK_CONTEXT))
+        with self.assertRaisesRegex(UpgradeError, "capability is incomplete"):
+            BoundRollbackCapability.bind(context, object())
+
+        class Concrete:
+            bound_rollback_kind: str | None = "sqlite"
+
+            def verify_rollback_context_bound(self, _context: Mapping[str, object]) -> Any:
+                return None
+
+        with self.assertRaisesRegex(UpgradeError, "binding is incomplete"):
+            BoundRollbackCapability.bind(context, Concrete())
+        with self.assertRaisesRegex(UpgradeError, "branch binding is invalid"):
+            BoundRollbackCapability.bind(
+                context,
+                Concrete(),
+                object(),
+                lease=object(),
+                admission_recheck=object(),
+                expected_branch=cast(Any, 1),
+            )
+        with self.assertRaisesRegex(UpgradeError, "head binding is invalid"):
+            BoundRollbackCapability.bind(
+                context,
+                Concrete(),
+                object(),
+                lease=object(),
+                admission_recheck=object(),
+                expected_head=cast(Any, 1),
+            )
+
+        class Generic(Concrete):
+            bound_rollback_kind = None
+
+        capability = BoundRollbackCapability.bind(context, Generic())
+        with self.assertRaisesRegex(UpgradeError, "context is incomplete"):
+            capability.verify({})
+        with self.assertRaisesRegex(UpgradeError, "identity mismatch"):
+            capability.verify({**ROLLBACK_CONTEXT, "operation_id": "foreign"})
+
+    def test_sqlite_observation_capability_rejects_forged_and_invalid_bindings(self) -> None:
+        context = PhaseContext(**cast(dict[str, Any], ROLLBACK_CONTEXT))
+        with self.assertRaisesRegex(TypeError, "must be bound"):
+            SQLiteRollbackObservationCapability()
+        with self.assertRaisesRegex(UpgradeError, "concrete adapter"):
+            SQLiteRollbackObservationCapability.bind(context, cast(Any, FakeAdapter()))
+
+        class Provider:
+            def observe_backup_identity(
+                self, _backup: Path, _manifest: Path, _context: Mapping[str, object]
+            ) -> Any:
+                return None
+
+        capability = object.__new__(SQLiteRollbackObservationCapability)
+        object.__setattr__(capability, "adapter", Provider())
+        object.__setattr__(capability, "identity", ())
+        with self.assertRaisesRegex(UpgradeError, "identity mismatch"):
+            capability.observe({**ROLLBACK_CONTEXT, "operation_id": "foreign"})
+
     def test_journal_process_death_reopens_bound_control_and_rejects_revision_drift(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             journal = Path(directory) / "journal.json"
