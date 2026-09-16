@@ -2,11 +2,14 @@
 # SPDX-License-Identifier: MIT
 
 import json
+import sqlite3
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
 
 from tools.git_authority_adapter import GitAuthorityAdapter
+from tools.git_backup import create_backup
 from tools.rollback_control_store import (
     ControlStoreError,
     SQLiteControlStoreAdapter,
@@ -14,11 +17,61 @@ from tools.rollback_control_store import (
 )
 from tools.rollback_evidence import RollbackEvidenceError
 from tools.sqlite_authority_adapter import SQLiteAuthorityAdapter, SQLiteAuthorityError
+from tools.sqlite_backup import backup_database
 
 PROJECT = "11111111-1111-4111-8111-111111111111"
 
 
 class RollbackEvidenceTests(unittest.TestCase):
+    def test_adapters_invoke_real_backend_backup_verifiers(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repo = root / "repo"
+            repo.mkdir()
+            for args in (
+                ("init", "-q"),
+                ("config", "user.email", "test@example.invalid"),
+                ("config", "user.name", "test"),
+            ):
+                subprocess.run(["git", *args], cwd=repo, check=True)  # noqa: S603, S607
+            (repo / "state").write_text("ok\n", encoding="utf-8")
+            subprocess.run(["git", "add", "state"], cwd=repo, check=True)  # noqa: S607
+            subprocess.run(["git", "commit", "-qm", "initial"], cwd=repo, check=True)  # noqa: S607
+            git_backup = create_backup(repo, root / "git-backup", quiesced=True)
+            self.assertTrue(GitAuthorityAdapter.verify_backup_artifact(git_backup)["verified"])
+
+            binding = {
+                "project_id": PROJECT,
+                "state_repository": "owner/state",
+                "product_repository": "owner/product",
+            }
+            source = root / "source.sqlite"
+            connection = sqlite3.connect(source)
+            connection.executescript(
+                "CREATE TABLE metadata(key TEXT PRIMARY KEY, value TEXT NOT NULL);"
+                "CREATE TABLE records(id INTEGER PRIMARY KEY, body TEXT NOT NULL);"
+            )
+            connection.executemany(
+                "INSERT INTO metadata VALUES (?, ?)",
+                [
+                    ("schema_version", "1"),
+                    ("backend", "sqlite"),
+                    ("project_id", PROJECT),
+                    ("state_repository", "owner/state"),
+                    ("product_repository", "owner/product"),
+                    ("state", "active"),
+                ],
+            )
+            connection.execute("INSERT INTO records(body) VALUES ('ok')")
+            connection.commit()
+            connection.close()
+            sqlite_backup = root / "sqlite-backup.sqlite"
+            manifest = backup_database(source, sqlite_backup, binding)
+            self.assertEqual(
+                manifest,
+                SQLiteAuthorityAdapter.verify_backup_artifact(sqlite_backup, manifest, binding),
+            )
+
     def test_initialized_sqlite_control_store_binds_observation_identity(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
