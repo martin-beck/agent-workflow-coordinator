@@ -112,6 +112,25 @@ class SQLiteBackupTests(unittest.TestCase):
         write_manifest(manifest_path, manifest)
         self.assertIn('"kind": "sqlite-online-backup"', manifest_path.read_text())
 
+    def test_fresh_restore_fault_then_retry_preserves_verified_sqlite_lifecycle(self) -> None:
+        backup = self.root / "backup.sqlite3"
+        manifest = backup_database(self.source, backup, BINDING)
+        with closing(sqlite3.connect(self.source)) as connection:
+            source_dump = list(connection.iterdump())
+        manifest_snapshot = dict(manifest)
+        destination = self.root / "fresh.sqlite3"
+        with (
+            patch.object(Path, "replace", side_effect=OSError("publication interrupted")),
+            self.assertRaisesRegex(BackupError, "online SQLite backup or installation failed"),
+        ):
+            restore_database(backup, destination, manifest, BINDING, quiesced=True)
+        self.assertFalse(destination.exists())
+        self.assertFalse(list(self.root.glob(".coordinator-*")))
+        self.assertEqual(manifest_snapshot, manifest)
+        restore_database(backup, destination, manifest, BINDING, quiesced=True)
+        with closing(sqlite3.connect(destination)) as connection:
+            self.assertEqual(source_dump, list(connection.iterdump()))
+
     def test_restore_requires_quiescence_and_refuses_existing_backup(self) -> None:
         backup = self.root / "backup.sqlite3"
         manifest = backup_database(self.source, backup, BINDING)
