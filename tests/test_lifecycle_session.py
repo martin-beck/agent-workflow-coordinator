@@ -32,4 +32,19 @@ class LifecycleSessionTests(unittest.TestCase):
 
     def test_direct_construction_and_foreign_token_are_rejected(self) -> None:
         with self.assertRaises(ValueError):
-            LifecycleSession(object(), (1, 2), b"caller supplied")
+            LifecycleSession(object(), Path("foreign"), (1, 2), b"caller supplied")
+
+    def test_bound_identity_reread_rejects_real_replacement(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "authority"
+            path.write_text("original")
+            path.chmod(0o600)
+            Path(directory).chmod(0o700)
+            adapter = SQLiteAuthorityAdapter(path)
+            session = adapter.lifecycle_session()
+            replacement = Path(directory) / "replacement"
+            replacement.write_text("replacement")
+            path.rename(Path(directory) / "original")
+            path.symlink_to(replacement)
+            with self.assertRaisesRegex(ValueError, "identity changed"):
+                session.capture_identity()
