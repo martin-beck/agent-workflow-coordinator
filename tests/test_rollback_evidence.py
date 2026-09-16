@@ -6,13 +6,16 @@ import sqlite3
 import subprocess
 import tempfile
 import unittest
+from collections.abc import Mapping
 from pathlib import Path
 
 from tools.git_authority_adapter import GitAuthorityAdapter
 from tools.git_backup import BackupError as GitBackupError
 from tools.git_backup import create_backup
 from tools.rollback_control_store import (
+    AuthorityRuntimeRereader,
     ControlStoreError,
+    SQLiteAuthorityRuntimeState,
     SQLiteControlStoreAdapter,
     SQLiteRollbackControlStore,
 )
@@ -22,6 +25,22 @@ from tools.sqlite_backup import BackupError as SQLiteBackupError
 from tools.sqlite_backup import backup_database
 
 PROJECT = "11111111-1111-4111-8111-111111111111"
+
+
+class NoopAuthorityRuntimeRereader(AuthorityRuntimeRereader):
+    def reread_rollback(
+        self, context: Mapping[str, object], _result: Mapping[str, object]
+    ) -> SQLiteAuthorityRuntimeState:
+        return SQLiteAuthorityRuntimeState(
+            backend="sqlite",
+            project_id=str(context["project_id"]),
+            authority_revision=str(context["authority_revision"]),
+            fencing_token=str(context["fencing_token"]),
+            target="rollback",
+            integrity_check="ok",
+            foreign_key_violations=0,
+            backend_roundtrip="sqlite",
+        )
 
 
 class RollbackEvidenceTests(unittest.TestCase):
@@ -120,7 +139,9 @@ class RollbackEvidenceTests(unittest.TestCase):
             backup.write_bytes(b"backup")
             manifest.write_text(json.dumps({"version": 1}), encoding="utf-8")
             adapter = SQLiteControlStoreAdapter(
-                SQLiteAuthorityAdapter(authority), control, object()
+                SQLiteAuthorityAdapter(authority),
+                control,
+                NoopAuthorityRuntimeRereader(),
             )
             observation = adapter.observe_backup_identity(backup, manifest, context)
             stat = control.control_store_path.stat()
