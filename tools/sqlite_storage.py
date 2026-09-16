@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+import stat
 import tempfile
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import AbstractContextManager, contextmanager, nullcontext
@@ -213,6 +214,128 @@ class SQLiteAuthorityBinding:
         if (status.st_dev, status.st_ino) != self._identity:
             raise RuntimeError("SQLite authority descriptor identity changed")
 
+    @staticmethod
+    def _open_retained(parent: int, name: str, label: str) -> tuple[int, tuple[int, int]]:
+        try:
+            descriptor = os.open(name, os.O_RDWR | os.O_NOFOLLOW, dir_fd=parent)
+        except OSError as error:
+            raise RuntimeError(f"SQLite authority {label} is unavailable") from error
+        status = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(status.st_mode)
+            or status.st_nlink != 1
+            or status.st_uid != os.geteuid()
+        ):
+            os.close(descriptor)
+            raise RuntimeError(f"SQLite authority {label} is unsafe")
+        return descriptor, (status.st_dev, status.st_ino)
+
+    @staticmethod
+    def _assert_retained(
+        parent: int,
+        name: str,
+        descriptor: int,
+        expected: tuple[int, int],
+        label: str,
+    ) -> None:
+        retained = os.fstat(descriptor)
+        try:
+            current = os.stat(name, dir_fd=parent, follow_symlinks=False)
+        except OSError as error:
+            raise RuntimeError(f"SQLite authority {label} is unavailable") from error
+        if (
+            not stat.S_ISREG(current.st_mode)
+            or current.st_nlink != 1
+            or current.st_uid != os.geteuid()
+            or (retained.st_dev, retained.st_ino) != expected
+            or (current.st_dev, current.st_ino) != expected
+        ):
+            raise RuntimeError(f"SQLite authority {label} identity changed")
+
+    @classmethod
+    def _open_sidecar_set(
+        cls, parent: int, path: Path
+    ) -> tuple[dict[str, int], dict[str, tuple[int, int]]]:
+        descriptors: dict[str, int] = {}
+        identities: dict[str, tuple[int, int]] = {}
+        try:
+            for suffix in ("-wal", "-shm"):
+                descriptor, identity = cls._open_retained(parent, path.name + suffix, "sidecar")
+                descriptors[suffix] = descriptor
+                identities[suffix] = identity
+        except Exception:
+            for descriptor in descriptors.values():
+                os.close(descriptor)
+            raise
+        return descriptors, identities
+
+    @classmethod
+    def _assert_retained_set(
+        cls,
+        parent: int,
+        path: Path,
+        authority_descriptor: int,
+        authority_identity: tuple[int, int],
+        descriptors: dict[str, int],
+        identities: dict[str, tuple[int, int]],
+    ) -> None:
+        cls._assert_retained(
+            parent, path.name, authority_descriptor, authority_identity, "descriptor"
+        )
+        for suffix, descriptor in descriptors.items():
+            cls._assert_retained(
+                parent, path.name + suffix, descriptor, identities[suffix], "sidecar"
+            )
+
+    @staticmethod
+    @contextmanager
+    def _hold_path_sidecars(
+        path: Path, assert_authority: Callable[[], None]
+    ) -> Iterator[Callable[[], None]]:
+        """Retain and recheck active WAL/SHM descriptors for one transaction."""
+        parent_descriptor = -1
+        authority_descriptor = -1
+        descriptors: dict[str, int] = {}
+        identities: dict[str, tuple[int, int]] = {}
+        try:
+            parent_descriptor = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            parent_status = os.fstat(parent_descriptor)
+            parent_identity = (parent_status.st_dev, parent_status.st_ino)
+            authority_descriptor, authority_identity = SQLiteAuthorityBinding._open_retained(
+                parent_descriptor, path.name, "descriptor"
+            )
+            descriptors, identities = SQLiteAuthorityBinding._open_sidecar_set(
+                parent_descriptor, path
+            )
+
+            def assert_current() -> None:
+                assert_authority()
+                current_parent = os.fstat(parent_descriptor)
+                if (current_parent.st_dev, current_parent.st_ino) != parent_identity:
+                    raise RuntimeError("SQLite authority sidecar parent identity changed")
+                SQLiteAuthorityBinding._assert_retained_set(
+                    parent_descriptor,
+                    path,
+                    authority_descriptor,
+                    authority_identity,
+                    descriptors,
+                    identities,
+                )
+
+            assert_current()
+            yield assert_current
+        finally:
+            for descriptor in descriptors.values():
+                os.close(descriptor)
+            if authority_descriptor >= 0:
+                os.close(authority_descriptor)
+            if parent_descriptor >= 0:
+                os.close(parent_descriptor)
+
+    def hold_sidecars(self) -> AbstractContextManager[Callable[[], None]]:
+        """Bind one dual-authority transaction to its live sidecars."""
+        return self._hold_path_sidecars(self._path, self.assert_current)
+
 
 class Backend(Protocol):
     """Contract shared by authoritative storage implementations."""
@@ -389,13 +512,23 @@ class SQLiteBackend:
         connection = self._connect()
         try:
             connection.execute("BEGIN IMMEDIATE")
-            state = connection.execute("SELECT value FROM metadata WHERE key='state'").fetchone()
-            if state is None or state[0] != "active":
-                raise RuntimeError("SQLITE_BACKEND_INACTIVE: retry using the selected backend")
-            self._assert_mutation_binding()
-            yield connection
-            self._assert_mutation_binding()
-            connection.commit()
+            sidecar_scope = (
+                self.backend_binding.hold_sidecars()
+                if isinstance(self.backend_binding, SQLiteAuthorityBinding)
+                else SQLiteAuthorityBinding._hold_path_sidecars(self.path, lambda: None)
+            )
+            with sidecar_scope as assert_sidecars:
+                state = connection.execute(
+                    "SELECT value FROM metadata WHERE key='state'"
+                ).fetchone()
+                if state is None or state[0] != "active":
+                    raise RuntimeError("SQLITE_BACKEND_INACTIVE: retry using the selected backend")
+                self._assert_mutation_binding()
+                yield connection
+                self._assert_mutation_binding()
+                assert_sidecars()
+                connection.commit()
+                assert_sidecars()
         except sqlite3.Error as error:
             connection.rollback()
             raise _translate(error) from error
