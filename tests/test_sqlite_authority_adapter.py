@@ -293,6 +293,26 @@ class SQLiteAuthorityAdapterTests(unittest.TestCase):
             executor.assert_snapshot_stable(baseline)
         self.assertFalse(self.session.operation_owned_by_current_thread)
 
+    def test_bound_lifecycle_executor_stability_reread_rejects_authority_replacement(self) -> None:
+        journal = self.root / "engine-journal.json"
+        journal.write_text('{"status":"running","phase":"backup","records":[]}\n', encoding="utf-8")
+        executor = self.adapter.bind_lifecycle_executor(self.session, journal)
+        baseline = executor.snapshot()
+        original = self.root / "authority-original.sqlite"
+        foreign = self.root / "authority-foreign.sqlite"
+        self.authority.rename(original)
+        try:
+            foreign.write_bytes(b"foreign authority content")
+            foreign.chmod(0o600)
+            foreign.rename(self.authority)
+            with self.assertRaisesRegex(SQLiteAuthorityError, "authority identity changed"):
+                executor.assert_snapshot_stable(baseline)
+        finally:
+            self.authority.unlink(missing_ok=True)
+            original.rename(self.authority)
+        self.assertEqual(b"clean", self.authority.read_bytes()[-5:])
+        self.assertFalse(self.session.operation_owned_by_current_thread)
+
     def test_bound_lifecycle_executor_rejects_authority_drift_on_final_reread(self) -> None:
         journal = self.root / "engine-journal.json"
         journal.write_text('{"status":"running","phase":"backup","records":[]}\n', encoding="utf-8")
