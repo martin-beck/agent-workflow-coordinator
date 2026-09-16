@@ -24,6 +24,7 @@ from tools.rollback_control_store import (
     SQLiteRollbackControlStore,
     bind_control_store,
 )
+from tools.rollback_evidence import BackupObservation
 from tools.sqlite_authority_adapter import SQLiteAuthorityAdapter
 from tools.upgrade_admission import (
     PREFLIGHT_PREDICATES,
@@ -2155,6 +2156,38 @@ class UpgradeEngineTests(unittest.TestCase):
         ):
             with self.subTest(hostile=hostile), self.assertRaisesRegex(UpgradeError, message):
                 capability.authorize(ROLLBACK_CONTEXT, hostile)  # type: ignore[arg-type]
+
+    def test_rollback_authorization_preflight_requires_bound_observation_and_cas(self) -> None:
+        class EvidenceAdapter(FakeAdapter):
+            def verify_rollback_context_bound(
+                self, context: Mapping[str, object]
+            ) -> Mapping[str, object]:
+                return dict(context)
+
+        adapter = EvidenceAdapter()
+        context = PhaseContext(**cast(dict[str, Any], ROLLBACK_CONTEXT))
+        evidence = BoundRollbackCapability.bind(context, adapter)
+        capability = RollbackAuthorizationCapability.bind(context, evidence)
+        observation = BackupObservation("bytes", "manifest", "store:1", 4)
+        reread = {
+            "backup_bytes_digest": "bytes",
+            "manifest_digest": "manifest",
+            "control_store_identity": "store:1",
+            "control_store_revision": 4,
+        }
+        with self.assertRaisesRegex(UpgradeError, "not enabled"):
+            capability.preflight(ROLLBACK_CONTEXT, observation, reread)
+        for name, changed, message in (
+            ("control_store_revision", 5, "stale"),
+            ("backup_bytes_digest", "changed", "backup evidence changed"),
+            ("manifest_digest", "changed", "manifest evidence changed"),
+        ):
+            with self.subTest(name=name):
+                hostile = {**reread, name: changed}
+                with self.assertRaisesRegex(UpgradeError, message):
+                    capability.preflight(ROLLBACK_CONTEXT, observation, hostile)
+        with self.assertRaisesRegex(UpgradeError, "typed observation"):
+            capability.preflight(ROLLBACK_CONTEXT, cast(Any, dict(reread)), reread)
 
     def test_bound_rollback_inspection_dispatches_initialized_real_adapters(self) -> None:
         """Concrete adapter identity is retained without authorizing rollback."""

@@ -15,6 +15,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Protocol, cast, runtime_checkable
 
+from tools.rollback_evidence import BackupObservation
 from tools.upgrade_admission import (
     admit_preflight,
     admit_quiesced,
@@ -275,6 +276,31 @@ class RollbackAuthorizationCapability:
             raise UpgradeError("rollback authorization evidence lacks backup or restore proof")
         if evidence.get("rollback_context_verified") is not False:
             raise UpgradeError("rollback authorization evidence is not diagnostic-only")
+        raise UpgradeError("rollback authorization is not enabled")
+
+    def preflight(
+        self,
+        context: Mapping[str, object],
+        observation: BackupObservation,
+        reread: Mapping[str, object],
+    ) -> None:
+        """Validate adapter-owned backup/CAS evidence without authorizing rollback."""
+        if not isinstance(observation, BackupObservation) or not isinstance(reread, Mapping):
+            raise UpgradeError("rollback preflight requires typed observation and reread")
+        if not isinstance(context, Mapping) or context.get("target") != "rollback":
+            raise UpgradeError("rollback preflight context is invalid")
+        identity_fields = tuple(field for field in CONTEXT_FIELDS if field != "target")
+        if self.identity != tuple(context.get(field) for field in identity_fields):
+            raise UpgradeError("rollback preflight context identity mismatch")
+        if (
+            reread.get("control_store_identity") != observation.control_store_identity
+            or reread.get("control_store_revision") != observation.control_store_revision
+        ):
+            raise UpgradeError("rollback preflight control-store reread is stale")
+        if reread.get("backup_bytes_digest") != observation.backup_bytes_digest:
+            raise UpgradeError("rollback preflight backup evidence changed")
+        if reread.get("manifest_digest") != observation.manifest_digest:
+            raise UpgradeError("rollback preflight manifest evidence changed")
         raise UpgradeError("rollback authorization is not enabled")
 
 
