@@ -472,7 +472,7 @@ class GitAuthorityAdapterTests(unittest.TestCase):
             "manifest": str(backup / "manifest.json"),
         }
         cases = (
-            ({"git_backup_root": str(artifact_root / "missing")}, "backup verification failed"),
+            ({"git_backup_root": str(artifact_root / "missing")}, "manifest is not bound"),
             ({"git_backup_root": str(self.root)}, "outside artifact root"),
             ({"target": "new"}, "rollback target"),
             ({"authority_revision": "foreign"}, "identity changed"),
@@ -488,6 +488,17 @@ class GitAuthorityAdapterTests(unittest.TestCase):
                     expected_branch=str(observed["git_branch"]),
                     expected_head=str(observed["git_head"]),
                 )
+        second_backup = create_backup(self.root, artifact_root / "git-backup-2", quiesced=True)
+        foreign_manifest = {**base, "git_backup_root": str(second_backup)}
+        with self.assertRaisesRegex(GitAuthorityError, "manifest is not bound"):
+            self.adapter.preflight_git(
+                foreign_manifest,
+                self.scope,
+                lease=self.lease,
+                admission_recheck=self.recheck,
+                expected_branch=str(observed["git_branch"]),
+                expected_head=str(observed["git_head"]),
+            )
         (backup / "refs.txt").write_text("tampered\n", encoding="utf-8")
         with self.assertRaisesRegex(GitAuthorityError, "verification failed"):
             self.adapter.preflight_git(

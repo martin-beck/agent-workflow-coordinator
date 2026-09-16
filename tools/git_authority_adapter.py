@@ -384,6 +384,10 @@ class GitAuthorityAdapter:
             "git_backup_root", str(Path(str(binding_context["manifest"])).parent)
         )
         binding = GitRollbackArtifactBinding.bind(binding_context)
+        manifest = Path(str(value["manifest"])).resolve()
+        canonical_manifest = (binding.git_backup_root / "manifest.json").resolve()
+        if manifest != canonical_manifest or not manifest.is_file() or manifest.is_symlink():
+            raise GitAuthorityError("Git rollback manifest is not bound to backup root")
         session = self.snapshot_bound_reread(
             value,
             scope,
