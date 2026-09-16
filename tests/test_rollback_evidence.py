@@ -26,7 +26,13 @@ from tools.rollback_evidence import BackupObservation, RollbackEvidenceError
 from tools.sqlite_authority_adapter import SQLiteAuthorityAdapter, SQLiteAuthorityError
 from tools.sqlite_backup import BackupError as SQLiteBackupError
 from tools.sqlite_backup import backup_database
-from tools.upgrade_engine import PhaseContext, SQLiteRollbackObservationCapability
+from tools.upgrade_engine import (
+    BoundRollbackCapability,
+    PhaseContext,
+    RollbackAuthorizationCapability,
+    SQLiteRollbackObservationCapability,
+    UpgradeError,
+)
 
 PROJECT = "11111111-1111-4111-8111-111111111111"
 
@@ -207,6 +213,22 @@ class RollbackEvidenceTests(unittest.TestCase):
             )
             observed_again = capability.observe(context)
             self.assertEqual(observation, observed_again)
+            bound = BoundRollbackCapability.bind(
+                PhaseContext(**cast(dict[str, Any], context)),
+                adapter,
+                object(),
+                lease=object(),
+                admission_recheck=object(),
+            )
+            authorization = RollbackAuthorizationCapability.bind(
+                PhaseContext(**cast(dict[str, Any], context)), bound
+            )
+            before = (root / "control.sqlite").read_bytes()
+            with self.assertRaisesRegex(UpgradeError, "not enabled"):
+                authorization.preflight(context, capability)
+            self.assertEqual(before, (root / "control.sqlite").read_bytes())
+            with self.assertRaisesRegex(UpgradeError, "identity mismatch"):
+                capability.observe({**context, "operation_id": "foreign"})
             stat = control.control_store_path.stat()
             self.assertEqual(f"{stat.st_dev}:{stat.st_ino}", observation.control_store_identity)
             self.assertEqual(1, observation.control_store_revision)
