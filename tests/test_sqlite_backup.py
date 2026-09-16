@@ -577,6 +577,51 @@ class SQLiteBackupTests(unittest.TestCase):
         self.assertFalse(list(redirect.glob(".coordinator-*")))
         self.assertFalse((redirect / manifest_path.name).exists())
 
+    def test_source_replacement_during_backup_fails_closed(self) -> None:
+        destination = self.root / "backup.sqlite3"
+        moved = self.root / "moved-source.sqlite3"
+        replacement = self.root / "replacement.sqlite3"
+        create_database(replacement, body="replacement")
+        original_copy = MODULE._copy_online
+        swapped = False
+
+        def swap_after_copy(source: Path, temporary: Path, binding: dict[str, object]) -> None:
+            nonlocal swapped
+            original_copy(source, temporary, binding)
+            if not swapped:
+                swapped = True
+                self.source.rename(moved)
+                self.source.symlink_to(replacement)
+
+        with (
+            patch.object(MODULE, "_copy_online", side_effect=swap_after_copy),
+            self.assertRaisesRegex(BackupError, "source database"),
+        ):
+            backup_database(self.source, destination, BINDING)
+        self.assertFalse(destination.exists())
+        self.assertTrue(moved.is_file())
+        self.assertTrue(self.source.is_symlink())
+        self.assertFalse(list(self.root.glob(".coordinator-*")))
+
+    def test_source_disappearance_during_backup_fails_closed(self) -> None:
+        destination = self.root / "backup.sqlite3"
+        moved = self.root / "disappeared-source.sqlite3"
+        original_copy = MODULE._copy_online
+
+        def remove_after_copy(source: Path, temporary: Path, binding: dict[str, object]) -> None:
+            original_copy(source, temporary, binding)
+            self.source.rename(moved)
+
+        with (
+            patch.object(MODULE, "_copy_online", side_effect=remove_after_copy),
+            self.assertRaisesRegex(BackupError, "source database disappeared"),
+        ):
+            backup_database(self.source, destination, BINDING)
+        self.assertFalse(destination.exists())
+        self.assertTrue(moved.is_file())
+        self.assertFalse(self.source.exists())
+        self.assertFalse(list(self.root.glob(".coordinator-*")))
+
 
 if __name__ == "__main__":
     unittest.main()
