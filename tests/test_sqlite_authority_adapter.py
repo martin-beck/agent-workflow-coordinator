@@ -1719,6 +1719,16 @@ class SQLiteAuthorityAdapterTests(unittest.TestCase):
         with self.assertRaisesRegex(SQLiteAuthorityError, "identity changed"):
             adapter.snapshot("discover", CONTEXT)
 
+    def test_existing_shm_sidecar_mode_change_fails_old_reader_closed(self) -> None:
+        sidecar = self.authority.with_name(self.authority.name + "-shm")
+        sidecar.write_bytes(b"shm")
+        sidecar.chmod(0o600)
+        adapter = SQLiteAuthorityAdapter(self.authority)
+        sidecar.chmod(0o644)
+        with self.assertRaisesRegex(SQLiteAuthorityError, "sidecar is unsafe"):
+            adapter.snapshot("discover", CONTEXT)
+        sidecar.unlink()
+
     def test_unsafe_sidecar_is_rejected_at_construction(self) -> None:
         sidecar = self.authority.with_name(self.authority.name + "-shm")
         sidecar.write_bytes(b"shm")
