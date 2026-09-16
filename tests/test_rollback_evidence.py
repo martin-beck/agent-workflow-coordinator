@@ -26,6 +26,7 @@ from tools.rollback_evidence import BackupObservation, RollbackEvidenceError
 from tools.sqlite_authority_adapter import SQLiteAuthorityAdapter, SQLiteAuthorityError
 from tools.sqlite_backup import BackupError as SQLiteBackupError
 from tools.sqlite_backup import backup_database
+from tools.upgrade_engine import PhaseContext, SQLiteRollbackObservationCapability
 
 PROJECT = "11111111-1111-4111-8111-111111111111"
 
@@ -201,6 +202,11 @@ class RollbackEvidenceTests(unittest.TestCase):
                 NoopAuthorityRuntimeRereader(),
             )
             observation = adapter.observe_backup_identity(backup, manifest, context)
+            capability = SQLiteRollbackObservationCapability.bind(
+                PhaseContext(**cast(dict[str, Any], context)), adapter
+            )
+            observed_again = capability.observe(context)
+            self.assertEqual(observation, observed_again)
             stat = control.control_store_path.stat()
             self.assertEqual(f"{stat.st_dev}:{stat.st_ino}", observation.control_store_identity)
             self.assertEqual(1, observation.control_store_revision)
