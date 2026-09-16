@@ -444,6 +444,16 @@ class SQLiteAuthorityAdapterTests(unittest.TestCase):
         self.assertFalse(self.session.operation_owned_by_current_thread)
         self.assertEqual("held", self.session.snapshot().status)  # type: ignore[union-attr]
 
+    def test_bound_lifecycle_executor_rejects_file_journal_parent(self) -> None:
+        parent = self.root / "journal-parent-file"
+        parent.write_bytes(b"not a directory")
+        journal = parent / "engine-journal.json"
+        executor = self.adapter.bind_lifecycle_executor(self.session, journal)
+        with self.assertRaisesRegex(SQLiteAuthorityError, "lifecycle journal is unavailable"):
+            executor.snapshot()
+        self.assertFalse(self.session.operation_owned_by_current_thread)
+        self.assertEqual("held", self.session.snapshot().status)  # type: ignore[union-attr]
+
     def test_bound_lifecycle_executor_rejects_missing_control_session(self) -> None:
         journal = self.root / "engine-journal.json"
         journal.write_text('{"status":"running","phase":"backup","records":[]}\n', encoding="utf-8")
