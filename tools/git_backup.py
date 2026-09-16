@@ -244,7 +244,16 @@ def verify_backup(backup: Path) -> dict[str, object]:
 
 def restore_backup(backup: Path, destination: Path) -> None:
     """Verify completely, then restore into a new destination atomically."""
+    _safe_root(backup, "backup")
+    backup_identity = backup.stat()
     verify_backup(backup)
+    _safe_root(backup, "backup")
+    current_identity = backup.stat()
+    if (current_identity.st_dev, current_identity.st_ino) != (
+        backup_identity.st_dev,
+        backup_identity.st_ino,
+    ):
+        raise BackupError("Git backup directory changed before restore")
     _safe_root(destination, "restore destination")
     _safe_parent(destination, "restore destination")
     if destination.exists():
@@ -253,6 +262,13 @@ def restore_backup(backup: Path, destination: Path) -> None:
     temporary = Path(tempfile.mkdtemp(prefix=".git-restore-", dir=destination.parent))
     shutil.rmtree(temporary)
     try:
+        _safe_root(backup, "backup")
+        current_identity = backup.stat()
+        if (current_identity.st_dev, current_identity.st_ino) != (
+            backup_identity.st_dev,
+            backup_identity.st_ino,
+        ):
+            raise BackupError("Git backup directory changed before restore")
         _run(["git", "clone", str(backup / "authority.bundle"), str(temporary)], backup.parent)
         temporary.replace(destination)
         descriptor = os.open(destination.parent, os.O_DIRECTORY)
