@@ -94,15 +94,14 @@ class FormalLifecycleCorrespondenceTests(unittest.TestCase):
                 )
             )
 
-    def test_process_death_before_outcome_is_write_closed_and_retryable(self) -> None:
-        """A lost process outcome maps to rejection, then a verified retry."""
+    def test_lost_outcome_is_write_closed_and_retryable(self) -> None:
+        """A lost publication outcome maps to rejection, then a verified retry."""
         self.assertEqual(
             ("ExecuteReject", "ExecuteSuccess"),
             validate_runtime_trace(
                 (
                     {
                         "event": "publication_failed",
-                        "cause": "process-death-before-outcome",
                         "revision_before": 3,
                         "revision_after": 3,
                         "lock_held": True,
