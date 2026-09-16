@@ -263,6 +263,17 @@ class SQLiteAuthorityAdapterTests(unittest.TestCase):
         self.assertFalse(self.session.operation_owned_by_current_thread)
         self.assertEqual("held", self.session.snapshot().status)  # type: ignore[union-attr]
 
+    def test_bound_lifecycle_executor_stability_reread_rejects_journal_drift(self) -> None:
+        journal = self.root / "engine-journal.json"
+        journal.write_text('{"status":"running","phase":"backup","records":[]}\n', encoding="utf-8")
+        executor = self.adapter.bind_lifecycle_executor(self.session, journal)
+        baseline = executor.snapshot()
+        self.assertEqual(baseline, executor.assert_snapshot_stable(baseline))
+        journal.write_text('{"status":"failed","phase":"backup","records":[]}\n', encoding="utf-8")
+        with self.assertRaisesRegex(SQLiteAuthorityError, "durable lifecycle state changed"):
+            executor.assert_snapshot_stable(baseline)
+        self.assertFalse(self.session.operation_owned_by_current_thread)
+
     def test_bound_lifecycle_executor_rejects_authority_drift_on_final_reread(self) -> None:
         journal = self.root / "engine-journal.json"
         journal.write_text('{"status":"running","phase":"backup","records":[]}\n', encoding="utf-8")

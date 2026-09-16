@@ -94,6 +94,13 @@ class SQLiteLifecycleExecutor:
         except Exception as error:
             raise SQLiteAuthorityError("durable lifecycle snapshot failed") from error
 
+    def assert_snapshot_stable(self, expected: SQLiteLifecycleSnapshot) -> SQLiteLifecycleSnapshot:
+        """Reread durable state and fail closed if it changed since ``expected``."""
+        current = self.snapshot()
+        if current != expected:
+            raise SQLiteAuthorityError("durable lifecycle state changed")
+        return current
+
     def backup(self, destination: Path, binding: dict[str, Any]) -> dict[str, Any]:
         return self._adapter.backup_bound(destination, binding)
 
