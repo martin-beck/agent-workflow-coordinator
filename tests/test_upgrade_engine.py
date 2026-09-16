@@ -1937,7 +1937,13 @@ class UpgradeEngineTests(unittest.TestCase):
             def verify_rollback_context_bound(
                 self, context: Mapping[str, object]
             ) -> Mapping[str, object]:
-                return {**context, "rollback_context_verified": False}
+                return {
+                    **context,
+                    "phase": "rollback",
+                    "backend_identity_verified": True,
+                    "mutates_authority": False,
+                    "rollback_context_verified": False,
+                }
 
             def snapshot(self, _phase: str, _context: object) -> dict[str, object]:
                 raise AssertionError("unbound snapshot reached")
@@ -2055,6 +2061,43 @@ class UpgradeEngineTests(unittest.TestCase):
             with self.assertRaisesRegex(UpgradeError, "authorizing"):
                 engine.inspect_rollback_bound()
 
+    def test_bound_rollback_inspection_rejects_incomplete_or_mutating_evidence(self) -> None:
+        class MalformedAdapter(FakeAdapter):
+            requires_bound_rollback = True
+
+            def __init__(self, result: Mapping[str, object]) -> None:
+                super().__init__()
+                self.result = result
+
+            def verify_rollback_context_bound(
+                self, context: Mapping[str, object]
+            ) -> Mapping[str, object]:
+                return {**context, **self.result}
+
+        for malformed in (
+            {"phase": "discover", "backend_identity_verified": True, "mutates_authority": False},
+            {"phase": "rollback", "backend_identity_verified": False, "mutates_authority": False},
+            {"phase": "rollback", "backend_identity_verified": True, "mutates_authority": True},
+        ):
+            with self.subTest(malformed=malformed), tempfile.TemporaryDirectory() as directory:
+                context = make_context("op-malformed-inspection")
+                adapter = MalformedAdapter(malformed)
+                journal = Path(directory) / "journal.json"
+                engine = UpgradeEngine(
+                    str(context["operation_id"]),
+                    journal,
+                    context,
+                    backend_adapter=adapter,
+                    rollback_bound_verifier=BoundRollbackCapability.bind(
+                        PhaseContext(**cast(dict[str, Any], context)), adapter
+                    ),
+                )
+                engine.plan()
+                before = journal.read_bytes()
+                with self.assertRaisesRegex(UpgradeError, "incomplete or authorizing"):
+                    engine.inspect_rollback_bound()
+                self.assertEqual(before, journal.read_bytes())
+
     def test_bound_rollback_inspection_dispatches_initialized_real_adapters(self) -> None:
         """Concrete adapter identity is retained without authorizing rollback."""
         for backend, adapter_type in (
@@ -2087,7 +2130,13 @@ class UpgradeEngineTests(unittest.TestCase):
                     _calls.append(
                         (context_arg, scope_arg, kwargs["lease"], kwargs["admission_recheck"])
                     )
-                    return {**context_arg, "rollback_context_verified": False}
+                    return {
+                        **context_arg,
+                        "phase": "rollback",
+                        "backend_identity_verified": True,
+                        "mutates_authority": False,
+                        "rollback_context_verified": False,
+                    }
 
                 with patch.object(adapter, "verify_rollback_context_bound", side_effect=evidence):
                     engine = UpgradeEngine(
