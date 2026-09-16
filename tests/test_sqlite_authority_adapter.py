@@ -396,6 +396,28 @@ class SQLiteAuthorityAdapterTests(unittest.TestCase):
             original_parent.rename(journal_parent)
         self.assertFalse(self.session.operation_owned_by_current_thread)
 
+    def test_bound_lifecycle_executor_rejects_journal_parent_replacement(self) -> None:
+        journal_parent = self.root / "journal-root"
+        journal_parent.mkdir()
+        journal = journal_parent / "engine-journal.json"
+        content = '{"status":"running","phase":"backup","records":[]}\n'
+        journal.write_text(content, encoding="utf-8")
+        executor = self.adapter.bind_lifecycle_executor(self.session, journal)
+        baseline = executor.snapshot()
+        foreign_parent = self.root / "foreign-journal-root"
+        foreign_parent.mkdir()
+        (foreign_parent / journal.name).write_text(content, encoding="utf-8")
+        original_parent = self.root / "journal-root-original"
+        journal_parent.rename(original_parent)
+        foreign_parent.rename(journal_parent)
+        try:
+            with self.assertRaisesRegex(SQLiteAuthorityError, "durable lifecycle state changed"):
+                executor.assert_snapshot_stable(baseline)
+        finally:
+            journal_parent.rename(foreign_parent)
+            original_parent.rename(journal_parent)
+        self.assertFalse(self.session.operation_owned_by_current_thread)
+
     def test_bound_lifecycle_executor_rejects_reused_stale_baseline(self) -> None:
         journal = self.root / "engine-journal.json"
         journal.write_text('{"status":"running","phase":"backup","records":[]}\n', encoding="utf-8")
