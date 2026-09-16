@@ -69,6 +69,39 @@ class GitBackupTests(unittest.TestCase):
             restore_backup(backup, root / "restored")
             self.assertTrue((root / "restored" / "task.md").exists())
 
+    def test_fresh_clone_rollback_preserves_verified_lifecycle_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repo = self.repo(root)
+            backup = create_backup(repo, root / "backup", quiesced=True)
+            expected_head = git_output("rev-parse", "HEAD", cwd=repo).strip()
+            backup_hashes = {
+                path.name: hashlib.sha256(path.read_bytes()).hexdigest()
+                for path in backup.iterdir()
+                if path.is_file()
+            }
+            restore_backup(backup, root / "fresh-clone")
+            fresh = root / "fresh-clone"
+            self.assertEqual(expected_head, git_output("rev-parse", "HEAD", cwd=fresh).strip())
+            self.assertEqual(
+                (backup / "index.txt").read_text(encoding="utf-8"),
+                git_output("ls-files", "--stage", cwd=fresh),
+            )
+            self.assertEqual(
+                (backup / "tracked-files.txt").read_text(encoding="utf-8"),
+                git_output("ls-files", cwd=fresh),
+            )
+            self.assertEqual("", git_output("status", "--porcelain", cwd=fresh))
+            self.assertEqual(
+                backup_hashes,
+                {
+                    path.name: hashlib.sha256(path.read_bytes()).hexdigest()
+                    for path in backup.iterdir()
+                    if path.is_file()
+                },
+            )
+            self.assertEqual([], list(root.glob(".git-restore-*")))
+
     def test_verify_rejects_backup_directory_replacement(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
