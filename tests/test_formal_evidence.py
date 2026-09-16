@@ -166,10 +166,10 @@ class FormalEvidenceTests(unittest.TestCase):
         )
         self.assertNotIn("needs.scope.outputs.release_sensitive", tier_expression)
         self.assertIn(
-            "|| (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') "
-            "&& 'full-exhaustive' || 'pr-fast'",
+            "|| github.event_name == 'schedule' && 'full-exhaustive' || 'pr-fast'",
             tier_expression,
         )
+        self.assertNotIn("github.event_name == 'workflow_dispatch'", tier_expression)
         steps_start = workflow.index("    steps:\n", workflow.index("  verify:\n"))
         job_environment = workflow[
             workflow.index("    env:\n", workflow.index("  verify:\n")) : steps_start
@@ -204,10 +204,8 @@ class FormalEvidenceTests(unittest.TestCase):
         self.assertIn('"${cgroup_dir}/memory.max"', workflow)
         self.assertIn('"${cgroup_dir}/memory.swap.max"', workflow)
         self.assertNotIn("needs.scope.outputs.release_sensitive", formal_step)
-        self.assertIn(
-            "github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && 360",
-            workflow,
-        )
+        self.assertIn("github.event_name == 'schedule' && 360", workflow)
+        self.assertNotIn("github.event_name == 'workflow_dispatch'", workflow)
         timeout_expression = workflow[
             workflow.index("TLC_TIMEOUT_SECONDS:") : workflow.index(
                 "\n", workflow.index("TLC_TIMEOUT_SECONDS:")
