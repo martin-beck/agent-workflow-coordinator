@@ -1,0 +1,35 @@
+name: Release upgrade contract
+"on":
+  workflow_dispatch:
+    inputs:
+      transition:
+        description: Repository-relative JSON transition input
+        required: true
+        type: string
+  push:
+    tags: ["v*"]
+permissions:
+  contents: read
+jobs:
+  contract:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d
+        with:
+          version: "0.12.8"
+      - name: Generate and validate release contract
+        env:
+          TRANSITION: ${{ inputs.transition }}
+        run: |
+          test -n "$TRANSITION"
+          case "$TRANSITION" in /*|*..*) exit 1;; esac
+          uv run python -m tools.verify_release_contract "$TRANSITION" "$RUNNER_TEMP/release-contract.json"
+      - name: Upload sanitized contract evidence
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08
+        with:
+          name: release-upgrade-contract-${{ github.sha }}
+          path: ${{ runner.temp }}/release-contract.json
+          if-no-files-found: error
