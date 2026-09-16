@@ -364,6 +364,43 @@ class SQLiteAuthorityAdapterTests(unittest.TestCase):
         self.assertFalse((self.root / "destination.sqlite").exists())
         self.assertFalse(self.session.operation_owned_by_current_thread)
 
+    def test_bound_lifecycle_executor_rejects_failed_restore_lock_replacement(self) -> None:
+        journal = self.root / "engine-journal.json"
+        journal.write_text(
+            '{"status":"running","phase":"rollback","records":[]}\n', encoding="utf-8"
+        )
+        lock = self.session.control_lock_path
+        foreign = self.root / "foreign-restore-control.lock"
+        foreign.write_bytes(b"foreign lock")
+        foreign.chmod(0o600)
+        executor = self.adapter.bind_lifecycle_executor(self.session, journal)
+        executor.snapshot()
+
+        def replace_then_fail(
+            _backup: Path,
+            _destination: Path,
+            _manifest: dict[str, Any],
+            _binding: dict[str, Any],
+        ) -> None:
+            original = self.root / "original-restore-control.lock"
+            lock.rename(original)
+            foreign.rename(lock)
+            raise RuntimeError("injected restore lock replacement")
+
+        try:
+            with (
+                patch.object(self.adapter, "restore_bound", side_effect=replace_then_fail),
+                self.assertRaisesRegex(SQLiteAuthorityError, "durable lifecycle state changed"),
+            ):
+                executor.restore(
+                    self.root / "backup.sqlite", self.root / "destination.sqlite", {}, {}
+                )
+        finally:
+            lock.unlink(missing_ok=True)
+            (self.root / "original-restore-control.lock").rename(lock)
+        self.assertFalse((self.root / "destination.sqlite").exists())
+        self.assertFalse(self.session.operation_owned_by_current_thread)
+
     def test_bound_lifecycle_executor_rejects_failed_effect_control_mutation(self) -> None:
         journal = self.root / "engine-journal.json"
         journal.write_text('{"status":"running","phase":"backup","records":[]}\n', encoding="utf-8")
