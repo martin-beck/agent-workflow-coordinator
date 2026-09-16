@@ -36,10 +36,14 @@ class BackupError(RuntimeError):
 def _check_session(
     session: LifecycleSession | None, owner: object | None, path: Path, message: str
 ) -> None:
-    if session is not None and (
-        (owner is not None and not session.belongs_to(owner))
-        or session.capture_identity() != _backup_identity(path)
-    ):
+    try:
+        invalid = session is not None and (
+            (owner is not None and not session.belongs_to(owner))
+            or session.capture_identity() != _backup_identity(path)
+        )
+    except (OSError, ValueError) as error:
+        raise BackupError(message) from error
+    if invalid:
         raise BackupError(message)
 
 
