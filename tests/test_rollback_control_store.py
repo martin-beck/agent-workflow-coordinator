@@ -366,6 +366,22 @@ class StaticAuthorityRuntimeRereader:
 
 
 class RollbackControlStoreTests(unittest.TestCase):
+    def test_snapshot_owned_by_caller_requires_and_reuses_operation_lock(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            control = SQLiteRollbackControlStore(root / "control.sqlite", PROJECT)
+            store = SQLiteBarrierSessionStore(control, lambda: "authority-3")
+            store.create(self._session_identity())
+
+            with self.assertRaisesRegex(ControlStoreError, "caller-owned control lock"):
+                store.snapshot_owned_by_caller()
+            with store.operation_lock():
+                snapshot = store.snapshot_owned_by_caller()
+                self.assertEqual("held", snapshot.status)
+                self.assertEqual(1, snapshot.revision)
+                with self.assertRaisesRegex(ControlStoreError, "non-reentrant"):
+                    store.snapshot()
+
     def test_authoritative_control_store_routes_have_operation_scope_contract(self) -> None:
         """Keep the documented rollback/session write surface behind admission."""
         routes = {

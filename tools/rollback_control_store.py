@@ -1218,7 +1218,11 @@ class SQLiteBarrierSessionStore:
         return self._control.lock_owned_by_caller(common_guard)
 
     def snapshot_owned_by_caller(self) -> BarrierSessionState:
-        """Read the durable session while the caller-owned control lock is held."""
+        """Read the typed durable session while the caller-owned lock is held.
+
+        The method never acquires a lock itself, so callers cannot accidentally
+        use an unlocked or independently supplied revision as lifecycle evidence.
+        """
         if not self.operation_owned_by_current_thread:
             raise ControlStoreError("caller-owned control lock is required")
         state = self._snapshot_locked()
