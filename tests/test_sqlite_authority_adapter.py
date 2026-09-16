@@ -1741,6 +1741,15 @@ class SQLiteAuthorityAdapterTests(unittest.TestCase):
         extra_link.unlink()
         sidecar.unlink()
 
+    def test_authority_descriptor_mode_change_fails_old_reader_closed(self) -> None:
+        adapter = SQLiteAuthorityAdapter(self.authority)
+        self.authority.chmod(0o640)
+        try:
+            with self.assertRaisesRegex(SQLiteAuthorityError, "identity changed"):
+                adapter.snapshot("discover", CONTEXT)
+        finally:
+            self.authority.chmod(0o600)
+
     def test_existing_shm_sidecar_symlink_fails_old_reader_closed(self) -> None:
         sidecar = self.authority.with_name(self.authority.name + "-shm")
         sidecar.write_bytes(b"shm")
