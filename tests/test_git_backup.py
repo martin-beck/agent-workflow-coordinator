@@ -226,6 +226,49 @@ class GitBackupTests(unittest.TestCase):
             with self.assertRaisesRegex(BackupError, "archive content mismatch"):
                 verify_backup(backup)
 
+    def test_verify_rejects_archive_file_set_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            backup = create_backup(self.repo(root), root / "backup", quiesced=True)
+            archive_path = backup / "tracked-tree.tar"
+            rewritten = io.BytesIO()
+            with (
+                tarfile.open(archive_path) as source,
+                tarfile.open(fileobj=rewritten, mode="w") as target,
+            ):
+                for member in source.getmembers():
+                    payload = source.extractfile(member)
+                    target.addfile(member, io.BytesIO(payload.read() if payload else b""))
+                extra = tarfile.TarInfo("extra.txt")
+                extra.size = 1
+                target.addfile(extra, io.BytesIO(b"x"))
+            archive_path.write_bytes(rewritten.getvalue())
+            manifest_path = backup / "manifest.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["artifacts"]["tracked-tree.tar"] = {
+                "sha256": hashlib.sha256(archive_path.read_bytes()).hexdigest(),
+                "size": archive_path.stat().st_size,
+            }
+            manifest_path.write_text(json.dumps(manifest, sort_keys=True), encoding="utf-8")
+            with self.assertRaisesRegex(BackupError, "archive file set mismatch"):
+                verify_backup(backup)
+
+    def test_verify_rejects_index_mismatch_after_clean_clone(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            backup = create_backup(self.repo(root), root / "backup", quiesced=True)
+            index_path = backup / "index.txt"
+            index_path.write_text("100644 deadbeef\twrong\n", encoding="utf-8")
+            manifest_path = backup / "manifest.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["artifacts"]["index.txt"] = {
+                "sha256": hashlib.sha256(index_path.read_bytes()).hexdigest(),
+                "size": index_path.stat().st_size,
+            }
+            manifest_path.write_text(json.dumps(manifest, sort_keys=True), encoding="utf-8")
+            with self.assertRaisesRegex(BackupError, "clean restore index mismatch"):
+                verify_backup(backup)
+
     def test_verify_rejects_archive_race_after_safety_check_without_residue(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
