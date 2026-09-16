@@ -362,6 +362,24 @@ class SQLiteBackupTests(unittest.TestCase):
             write_manifest(linked_parent / "manifest.json", manifest)
         self.assertFalse((real_parent / "manifest.json").exists())
 
+    def test_parent_identity_drift_fails_before_sqlite_publication(self) -> None:
+        backup = self.root / "backup.sqlite3"
+        manifest = backup_database(self.source, backup, BINDING)
+        destination = self.root / "restored.sqlite3"
+        with (
+            patch.object(MODULE, "_parent_identity", side_effect=[(1, 1), (1, 2)]),
+            self.assertRaisesRegex(BackupError, "parent identity changed"),
+        ):
+            restore_database(backup, destination, manifest, BINDING, quiesced=True)
+        self.assertFalse(destination.exists())
+        manifest_path = self.root / "manifest.json"
+        with (
+            patch.object(MODULE, "_parent_identity", side_effect=[(1, 1), (1, 2)]),
+            self.assertRaisesRegex(BackupError, "parent identity changed"),
+        ):
+            write_manifest(manifest_path, manifest)
+        self.assertFalse(manifest_path.exists())
+
 
 if __name__ == "__main__":
     unittest.main()

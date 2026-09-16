@@ -46,6 +46,19 @@ def _safe_parent(path: Path, label: str) -> None:
             raise BackupError(f"{label} parent must not contain symlinks")
 
 
+def _parent_identity(path: Path) -> tuple[int, int]:
+    try:
+        status = path.parent.stat()
+    except OSError as error:
+        raise BackupError("SQLite destination parent is unavailable") from error
+    return status.st_dev, status.st_ino
+
+
+def _assert_parent_identity(path: Path, expected: tuple[int, int]) -> None:
+    if _parent_identity(path) != expected:
+        raise BackupError("SQLite destination parent identity changed")
+
+
 def _digest(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as stream:
@@ -164,6 +177,7 @@ def _install(source: Path, destination: Path, binding: dict[str, Any]) -> None:
     _safe_parent(destination, "SQLite destination")
     try:
         destination.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        parent_identity = _parent_identity(destination)
         descriptor, temporary = tempfile.mkstemp(
             prefix=".coordinator-backup-", suffix=".sqlite3", dir=destination.parent
         )
@@ -177,6 +191,7 @@ def _install(source: Path, destination: Path, binding: dict[str, Any]) -> None:
         _copy_online(source, temporary_path, binding)
         temporary_path.chmod(0o600)
         previous_path = _backup_existing(destination)
+        _assert_parent_identity(destination, parent_identity)
         temporary_path.replace(destination)
         replaced = True
         _fsync_directory(destination.parent)
@@ -270,6 +285,7 @@ def write_manifest(path: Path, manifest: dict[str, Any]) -> None:
     _safe_parent(path, "SQLite manifest")
     try:
         path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        parent_identity = _parent_identity(path)
         descriptor, temporary = tempfile.mkstemp(
             prefix=".coordinator-manifest-", suffix=".json", dir=path.parent
         )
@@ -278,6 +294,7 @@ def write_manifest(path: Path, manifest: dict[str, Any]) -> None:
             stream.write(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
             stream.flush()
             os.fsync(stream.fileno())
+        _assert_parent_identity(path, parent_identity)
         temporary_path.replace(path)
         _fsync_directory(path.parent)
     except (OSError, TypeError, ValueError) as error:
