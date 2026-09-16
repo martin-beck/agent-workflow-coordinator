@@ -259,6 +259,27 @@ class SQLiteAuthorityAdapterTests(unittest.TestCase):
         self.assertFalse(self.session.operation_owned_by_current_thread)
         self.assertEqual("held", self.session.snapshot().status)  # type: ignore[union-attr]
 
+    def test_bound_lifecycle_executor_rejects_foreign_authority_store(self) -> None:
+        foreign_authority = self.root / "foreign-authority.sqlite"
+        with sqlite3.connect(foreign_authority) as connection:
+            connection.execute("CREATE TABLE records (id INTEGER PRIMARY KEY)")
+        foreign_authority.chmod(0o600)
+        foreign_control = self.root / "foreign-control.sqlite"
+        foreign_store = SQLiteBarrierSessionStore(
+            SQLiteRollbackControlStore(foreign_control, PROJECT, foreign_authority),
+            lambda: "authority",
+        )
+        with self.assertRaisesRegex(SQLiteAuthorityError, "foreign authority"):
+            self.adapter.bind_lifecycle_executor(foreign_store, self.root / "journal.json")
+
+    def test_bound_lifecycle_executor_rejects_store_without_authority_binding(self) -> None:
+        unbound_store = SQLiteBarrierSessionStore(
+            SQLiteRollbackControlStore(self.root / "unbound-control.sqlite", PROJECT),
+            lambda: "authority",
+        )
+        with self.assertRaisesRegex(SQLiteAuthorityError, "foreign authority"):
+            self.adapter.bind_lifecycle_executor(unbound_store, self.root / "journal.json")
+
     def test_engine_bound_rollback_inspection_uses_real_scope_and_preserves_journal(self) -> None:
         context = {**CONTEXT, "operation_id": "op-real-sqlite-inspection", "project_id": PROJECT}
         artifact_root = self.root / "artifacts"

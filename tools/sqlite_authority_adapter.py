@@ -69,6 +69,8 @@ class SQLiteLifecycleExecutor:
         journal: Path,
     ) -> SQLiteLifecycleExecutor:
         """Bind the executor to concrete durable control and journal sources."""
+        if session_store.authority_path != adapter._authority:
+            raise SQLiteAuthorityError("lifecycle session store is bound to a foreign authority")
         return cls(adapter, session_store, journal.absolute())
 
     def snapshot(self) -> SQLiteLifecycleSnapshot:
