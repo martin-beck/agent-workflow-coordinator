@@ -476,6 +476,40 @@ class SQLiteAuthorityAdapterTests(unittest.TestCase):
         self.assertFalse((self.root / "destination.sqlite").exists())
         self.assertFalse(self.session.operation_owned_by_current_thread)
 
+    def test_bound_lifecycle_executor_rejects_failed_restore_lock_disappearance(self) -> None:
+        journal = self.root / "engine-journal.json"
+        journal.write_text(
+            '{"status":"running","phase":"rollback","records":[]}\n', encoding="utf-8"
+        )
+        lock = self.session.control_lock_path
+        executor = self.adapter.bind_lifecycle_executor(self.session, journal)
+        executor.snapshot()
+
+        def delete_then_fail(
+            _backup: Path,
+            _destination: Path,
+            _manifest: dict[str, Any],
+            _binding: dict[str, Any],
+        ) -> None:
+            original = self.root / "original-restore-control.lock"
+            lock.rename(original)
+            raise RuntimeError("injected restore lock disappearance")
+
+        try:
+            with (
+                patch.object(self.adapter, "restore_bound", side_effect=delete_then_fail),
+                self.assertRaisesRegex(
+                    SQLiteAuthorityError, "lifecycle control lock is unavailable"
+                ),
+            ):
+                executor.restore(
+                    self.root / "backup.sqlite", self.root / "destination.sqlite", {}, {}
+                )
+        finally:
+            (self.root / "original-restore-control.lock").rename(lock)
+        self.assertFalse((self.root / "destination.sqlite").exists())
+        self.assertFalse(self.session.operation_owned_by_current_thread)
+
     def test_bound_lifecycle_executor_rejects_failed_effect_control_mutation(self) -> None:
         journal = self.root / "engine-journal.json"
         journal.write_text('{"status":"running","phase":"backup","records":[]}\n', encoding="utf-8")
