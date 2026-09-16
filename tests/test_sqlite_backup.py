@@ -648,6 +648,31 @@ class SQLiteBackupTests(unittest.TestCase):
         self.assertFalse(self.source.exists())
         self.assertFalse(list(self.root.glob(".coordinator-*")))
 
+    def test_backup_replacement_during_restore_fails_closed(self) -> None:
+        backup = self.root / "backup.sqlite3"
+        manifest = backup_database(self.source, backup, BINDING)
+        replacement_source = self.root / "replacement-source.sqlite3"
+        create_database(replacement_source, body="replacement")
+        replacement = self.root / "replacement.sqlite3"
+        replacement_manifest = backup_database(replacement_source, replacement, BINDING)
+        del replacement_manifest
+        destination = self.root / "restored.sqlite3"
+        original_integrity = MODULE._integrity
+
+        def replace_after_integrity(path: Path, binding: dict[str, object]) -> None:
+            original_integrity(path, binding)
+            if path == backup:
+                backup.unlink()
+                replacement.rename(backup)
+
+        with (
+            patch.object(MODULE, "_integrity", side_effect=replace_after_integrity),
+            self.assertRaisesRegex(BackupError, "backup database changed"),
+        ):
+            restore_database(backup, destination, manifest, BINDING, quiesced=True)
+        self.assertFalse(destination.exists())
+        self.assertFalse(list(self.root.glob(".coordinator-*")))
+
 
 if __name__ == "__main__":
     unittest.main()
