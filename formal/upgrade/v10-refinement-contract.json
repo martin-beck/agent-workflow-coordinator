@@ -13,9 +13,9 @@
     }
   },
   "implementation_snapshot": {
-    "revision": "5c8ea6bddd0b89f35a1b6796ac502938850701d7",
-    "runtime_revision": "5c8ea6bddd0b89f35a1b6796ac502938850701d7",
-    "status": "descriptor-safe control-store reread plus bounded independent-process barrier/write evidence; executable apply and rollback remain rejection-only"
+    "revision": "487a2cb5e49cccc27a12a3500b710b843aa49097",
+    "runtime_revision": "487a2cb5e49cccc27a12a3500b710b843aa49097",
+    "status": "descriptor-safe control-store and SQLite DB/WAL/SHM rereads plus bounded independent-process barrier/write evidence; executable apply and rollback remain rejection-only"
   },
   "correspondence": [
     {
@@ -34,7 +34,7 @@
       "model_actions": ["RequestWrite", "AcceptWrite", "RejectWrite", "FinishWrite"],
       "implementation_obligation": "Every authoritative SQLite mutation route, including tasks, observations, results, migrations, and reconciliation, uses the same fence and cannot bypass it through a separate connection.",
       "evidence_required": ["route inventory", "multiprocess writer rejection", "post-release admission"],
-      "status": "bounded executable evidence in tests/test_sqlite_mutation_barrier.py; implementation refinement pending"
+      "status": "bounded executable concurrency and DB/WAL/SHM replacement evidence in tests/test_sqlite_mutation_barrier.py; implementation refinement pending"
     },
     {
       "model_actions": ["MarkAmbiguous", "Acquire"],
