@@ -354,6 +354,8 @@ class SQLiteAuthorityAdapter:
         )
         if (
             current_parent != self._parent_identity
+            or parent.st_uid != os.geteuid()
+            or stat.S_IMODE(parent.st_mode) != 0o700
             or current_descriptor != self._descriptor_identity
             or self._sidecar_identities
             != {
