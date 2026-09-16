@@ -408,6 +408,36 @@ class GitAuthorityAdapterTests(unittest.TestCase):
                 backend_binding=binding,
             )
 
+    def test_bound_backend_mutation_boundary_rereads_identity(self) -> None:
+        binding = SQLiteBackendBinding.bind(self.control_store, self.session)
+        backend_meta = {
+            "project_id": PROJECT,
+            "state_repository": "owner/state",
+            "product_repository": "owner/product",
+        }
+        with self.assertRaisesRegex(ValueError, "mutation scope"):
+            SQLiteBackend(
+                binding.path,
+                backend_meta,
+                Path(self.coordination.name),
+                backend_binding=binding,
+            )
+        backend = SQLiteBackend(
+            binding.path,
+            backend_meta,
+            Path(self.coordination.name),
+            mutation_scope=lambda: nullcontext(),
+            backend_binding=binding,
+        )
+        backend._assert_mutation_binding()
+        with (
+            patch.object(
+                SQLiteBackendBinding, "assert_current", side_effect=RuntimeError("stale session")
+            ),
+            self.assertRaisesRegex(RuntimeError, "stale session"),
+        ):
+            backend._assert_mutation_binding()
+
     def test_engine_bound_rollback_inspection_uses_real_scope_and_preserves_journal(self) -> None:
         context = {**CONTEXT, "operation_id": "op-real-git-inspection", "target": "new"}
         artifact_root = Path(self.coordination.name) / "artifacts"

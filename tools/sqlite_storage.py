@@ -239,6 +239,8 @@ class SQLiteBackend:
                 raise TypeError("backend_binding must be SQLiteBackendBinding")
             if backend_binding.path != path:
                 raise ValueError("backend binding targets a different database")
+            if mutation_scope is None:
+                raise ValueError("bound SQLite backend requires a provisioned mutation scope")
         self.backend_binding = backend_binding
 
     def _connect(self, *, read_only: bool = False) -> sqlite3.Connection:
@@ -287,6 +289,17 @@ class SQLiteBackend:
         if rows.get("state") != "active":
             raise RuntimeError("SQLITE_BACKEND_INACTIVE: retry using the selected backend")
 
+    def _assert_mutation_binding(self) -> None:
+        """Re-read the optional durable capability at each mutation boundary.
+
+        The capability is an identity fence, not authorization.  Authorization
+        and lock ordering remain provided by ``mutation_scope`` and the
+        control-store adapter; this hook only rejects stale or ambiguous
+        durable sessions before and after a transaction's effects.
+        """
+        if self.backend_binding is not None:
+            self.backend_binding.assert_current()
+
     @contextmanager
     def _transaction(self) -> Iterator[sqlite3.Connection]:
         connection = self._connect()
@@ -295,7 +308,9 @@ class SQLiteBackend:
             state = connection.execute("SELECT value FROM metadata WHERE key='state'").fetchone()
             if state is None or state[0] != "active":
                 raise RuntimeError("SQLITE_BACKEND_INACTIVE: retry using the selected backend")
+            self._assert_mutation_binding()
             yield connection
+            self._assert_mutation_binding()
             connection.commit()
         except sqlite3.Error as error:
             connection.rollback()

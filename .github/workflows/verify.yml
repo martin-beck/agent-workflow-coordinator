@@ -65,7 +65,7 @@ jobs:
           BASE: ${{ github.event.pull_request.base.sha }}
           HEAD: ${{ github.event.pull_request.head.sha }}
         run: |
-          if [[ "$EVENT" != "pull_request" ]] || git diff --name-only "$BASE...$HEAD" | grep -Eq "^(formal/|tools/tlc_runner.py|tools/vendor.py|tools/handoffctl.py|pyproject.toml|uv.lock|CHANGELOG.md|coordinator.vendor.json|\\.github/workflows/verify\\.yml)"; then
+          if [[ "$EVENT" != "pull_request" ]] || git diff --name-only "$BASE...$HEAD" | grep -Eq "^(formal/|tools/sqlite_storage.py|tools/tlc_runner.py|tools/vendor.py|tools/handoffctl.py|pyproject.toml|uv.lock|CHANGELOG.md|coordinator.vendor.json|\\.github/workflows/verify\\.yml)"; then
             echo "formal_changed=true" >> "$GITHUB_OUTPUT"
           else
             echo "formal_changed=false" >> "$GITHUB_OUTPUT"
