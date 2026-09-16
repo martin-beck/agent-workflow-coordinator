@@ -144,6 +144,23 @@ class GitAuthorityAdapter:
         """Return an opaque session bound to this adapter's repository."""
         return issue(self, self._repository)
 
+    def create_backup_bound(self, destination: Path, *, quiesced: bool) -> Path:
+        """Create a Git backup using this adapter's owned lifecycle session."""
+        from tools.git_backup import create_backup
+
+        return create_backup(
+            self._repository,
+            destination,
+            quiesced=quiesced,
+            session=self.lifecycle_session(),
+        )
+
+    def restore_backup_bound(self, backup: Path, destination: Path) -> None:
+        """Restore using this adapter's owned lifecycle session."""
+        from tools.git_backup import restore_backup
+
+        restore_backup(backup, destination, session=self.lifecycle_session())
+
     @staticmethod
     def observe_backup_identity(
         backup: Path,
