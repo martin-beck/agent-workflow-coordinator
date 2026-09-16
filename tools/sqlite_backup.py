@@ -170,6 +170,21 @@ def _destination_identity(destination: Path) -> tuple[int, int] | None:
     return status.st_dev, status.st_ino
 
 
+def _manifest_identity(path: Path) -> tuple[int, int] | None:
+    if not path.exists():
+        return None
+    _regular(path, "existing SQLite manifest")
+    try:
+        status = path.stat()
+    except OSError as error:
+        raise BackupError("existing SQLite manifest disappeared") from error
+    return status.st_dev, status.st_ino
+
+
+def _before_manifest_publish(_path: Path) -> None:
+    """Test synchronization seam; production publication has no side effect."""
+
+
 def _before_destination_publish(_destination: Path) -> None:
     """Test synchronization seam; production publication has no side effect."""
 
@@ -331,6 +346,10 @@ def write_manifest(path: Path, manifest: dict[str, Any]) -> None:
             stream.flush()
             os.fsync(stream.fileno())
         _assert_parent_identity(path, parent_identity)
+        manifest_identity = _manifest_identity(path)
+        _before_manifest_publish(path)
+        if _manifest_identity(path) != manifest_identity:
+            raise BackupError("existing SQLite manifest changed before publication")
         temporary_path.replace(path)
         _fsync_directory(path.parent)
     except (OSError, TypeError, ValueError) as error:
