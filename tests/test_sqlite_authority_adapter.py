@@ -25,7 +25,11 @@ from tools.rollback_control_store import (
     SQLiteRollbackControlStore,
 )
 from tools.scoped_backend_adapter import ScopedBackendAdapter
-from tools.sqlite_authority_adapter import SQLiteAuthorityAdapter, SQLiteAuthorityError
+from tools.sqlite_authority_adapter import (
+    SQLiteAuthorityAdapter,
+    SQLiteAuthorityError,
+    SQLiteLifecycleExecutor,
+)
 from tools.upgrade_engine import BoundRollbackCapability, PhaseContext, UpgradeEngine
 from tools.upgrade_identity import (
     BarrierSessionIdentity,
@@ -234,6 +238,65 @@ class SQLiteAuthorityAdapterTests(unittest.TestCase):
 
     def tearDown(self) -> None:
         self.directory.cleanup()
+
+    def test_bound_lifecycle_executor_snapshots_real_control_and_journal(self) -> None:
+        journal = self.root / "engine-journal.json"
+        journal.write_text(
+            '{"status":"running","phase":"backup","records":[{"outcome":"started"}]}\n',
+            encoding="utf-8",
+        )
+        executor = self.adapter.bind_lifecycle_executor(self.session, journal)
+        snapshot = executor.snapshot()
+        self.assertEqual("held", snapshot.control.status)
+        self.assertEqual(1, snapshot.control.revision)
+        self.assertEqual("backup", snapshot.journal.phase)
+        self.assertEqual([{"outcome": "started"}], snapshot.journal.as_mapping()["records"])
+        self.assertFalse(self.session.operation_owned_by_current_thread)
+        self.assertEqual(b"clean", self.authority.read_bytes()[-5:])
+
+    def test_bound_lifecycle_executor_releases_lock_on_journal_failure(self) -> None:
+        journal = self.root / "engine-journal.json"
+        journal.write_text("not-json\n", encoding="utf-8")
+        executor = self.adapter.bind_lifecycle_executor(self.session, journal)
+        with self.assertRaisesRegex(SQLiteAuthorityError, "durable lifecycle snapshot failed"):
+            executor.snapshot()
+        self.assertFalse(self.session.operation_owned_by_current_thread)
+        self.assertEqual("held", self.session.snapshot().status)  # type: ignore[union-attr]
+
+    def test_bound_lifecycle_executor_rejects_foreign_authority_store(self) -> None:
+        foreign_authority = self.root / "foreign-authority.sqlite"
+        with sqlite3.connect(foreign_authority) as connection:
+            connection.execute("CREATE TABLE records (id INTEGER PRIMARY KEY)")
+        foreign_authority.chmod(0o600)
+        foreign_control = self.root / "foreign-control.sqlite"
+        foreign_store = SQLiteBarrierSessionStore(
+            SQLiteRollbackControlStore(foreign_control, PROJECT, foreign_authority),
+            lambda: "authority",
+        )
+        with self.assertRaisesRegex(SQLiteAuthorityError, "foreign authority"):
+            self.adapter.bind_lifecycle_executor(foreign_store, self.root / "journal.json")
+
+    def test_bound_lifecycle_executor_rejects_store_without_authority_binding(self) -> None:
+        unbound_store = SQLiteBarrierSessionStore(
+            SQLiteRollbackControlStore(self.root / "unbound-control.sqlite", PROJECT),
+            lambda: "authority",
+        )
+        with self.assertRaisesRegex(SQLiteAuthorityError, "foreign authority"):
+            self.adapter.bind_lifecycle_executor(unbound_store, self.root / "journal.json")
+
+    def test_direct_lifecycle_executor_constructor_rejects_foreign_store(self) -> None:
+        foreign_authority = self.root / "foreign-authority-direct.sqlite"
+        with sqlite3.connect(foreign_authority) as connection:
+            connection.execute("CREATE TABLE records (id INTEGER PRIMARY KEY)")
+        foreign_authority.chmod(0o600)
+        foreign_store = SQLiteBarrierSessionStore(
+            SQLiteRollbackControlStore(
+                self.root / "foreign-control-direct.sqlite", PROJECT, foreign_authority
+            ),
+            lambda: "authority",
+        )
+        with self.assertRaisesRegex(SQLiteAuthorityError, "foreign authority"):
+            SQLiteLifecycleExecutor(self.adapter, foreign_store, self.root / "journal.json")
 
     def test_engine_bound_rollback_inspection_uses_real_scope_and_preserves_journal(self) -> None:
         context = {**CONTEXT, "operation_id": "op-real-sqlite-inspection", "project_id": PROJECT}

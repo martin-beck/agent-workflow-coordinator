@@ -4,21 +4,33 @@
 
 from __future__ import annotations
 
+import json
 import os
 import sqlite3
 import stat
 from collections.abc import Mapping
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from tools.admission_lease import AdmissionLease, AdmissionRecheck
 from tools.lifecycle_session import LifecycleSession, _issue
 from tools.lock_domain_scope import LockDomainScope
+from tools.rollback_control_store import BarrierSessionState, SQLiteBarrierSessionStore
 from tools.rollback_evidence import BackupObservation
+from tools.upgrade_engine import JournalSnapshot
 
 
 class SQLiteAuthorityError(RuntimeError):
     """SQLite authority evidence is unavailable or mutation was requested."""
+
+
+@dataclass(frozen=True, slots=True)
+class SQLiteLifecycleSnapshot:
+    """Read-only paired durable control/session and journal snapshot."""
+
+    control: BarrierSessionState
+    journal: JournalSnapshot
 
 
 _SUPPORTED_PHASES = frozenset(
@@ -39,8 +51,46 @@ _SUPPORTED_PHASES = frozenset(
 class SQLiteLifecycleExecutor:
     """Concrete adapter-owned backup/restore executor; no phase authorization."""
 
-    def __init__(self, adapter: SQLiteAuthorityAdapter) -> None:
+    def __init__(
+        self,
+        adapter: SQLiteAuthorityAdapter,
+        session_store: SQLiteBarrierSessionStore | None = None,
+        journal: Path | None = None,
+    ) -> None:
+        if session_store is not None and session_store.authority_path != adapter._authority:
+            raise SQLiteAuthorityError("lifecycle session store is bound to a foreign authority")
+        if session_store is not None and journal is None:
+            raise SQLiteAuthorityError("lifecycle executor journal is required")
         self._adapter = adapter
+        self._session_store = session_store
+        self._journal = journal
+
+    @classmethod
+    def bind(
+        cls,
+        adapter: SQLiteAuthorityAdapter,
+        session_store: SQLiteBarrierSessionStore,
+        journal: Path,
+    ) -> SQLiteLifecycleExecutor:
+        """Bind the executor to concrete durable control and journal sources."""
+        if session_store.authority_path != adapter._authority:
+            raise SQLiteAuthorityError("lifecycle session store is bound to a foreign authority")
+        return cls(adapter, session_store, journal.absolute())
+
+    def snapshot(self) -> SQLiteLifecycleSnapshot:
+        """Capture both durable sources under the control-store operation lock."""
+        if self._session_store is None or self._journal is None:
+            raise SQLiteAuthorityError("lifecycle executor is not bound to durable state")
+        try:
+            with self._session_store.operation_lock():
+                control = self._session_store.snapshot_owned_by_caller()
+                value = json.loads(self._journal.read_text(encoding="utf-8"))
+                journal = JournalSnapshot.from_mapping(cast(Mapping[str, object], value))
+                return SQLiteLifecycleSnapshot(control, journal)
+        except SQLiteAuthorityError:
+            raise
+        except Exception as error:
+            raise SQLiteAuthorityError("durable lifecycle snapshot failed") from error
 
     def backup(self, destination: Path, binding: dict[str, Any]) -> dict[str, Any]:
         return self._adapter.backup_bound(destination, binding)
@@ -94,6 +144,12 @@ class SQLiteAuthorityAdapter:
 
     def lifecycle_executor(self) -> SQLiteLifecycleExecutor:
         return SQLiteLifecycleExecutor(self)
+
+    def bind_lifecycle_executor(
+        self, session_store: SQLiteBarrierSessionStore, journal: Path
+    ) -> SQLiteLifecycleExecutor:
+        """Return an executor bound to this adapter's durable state sources."""
+        return SQLiteLifecycleExecutor.bind(self, session_store, journal)
 
     def backup_bound(self, destination: Path, binding: dict[str, Any]) -> dict[str, Any]:
         from tools.sqlite_backup import backup_database
