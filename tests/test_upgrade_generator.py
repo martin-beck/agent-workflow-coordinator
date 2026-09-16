@@ -12,7 +12,9 @@ import tempfile
 import unittest
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 
+from tools.verify_release_contract import main as verify_main
 from tools.verify_release_contract import verify
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -62,6 +64,25 @@ class UpgradeGeneratorTests(unittest.TestCase):
             result = verify(source, output)
             self.assertEqual("pass", result["status"])
             self.assertEqual(transition()["operation_id"], result["operation_id"])
+
+    def test_release_contract_verifier_cli_success_and_invalid_input(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "transition.json"
+            output = root / "release-contract.json"
+            source.write_text(json.dumps(transition()), encoding="utf-8")
+            self.assertEqual(0, verify_main([str(source), str(output)]))
+            source.write_text("{not-json", encoding="utf-8")
+            self.assertEqual(1, verify_main([str(source), str(output)]))
+
+    def test_release_contract_verifier_cli_converts_generation_errors(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "transition.json"
+            output = root / "release-contract.json"
+            source.write_text(json.dumps(transition()), encoding="utf-8")
+            with patch("tools.verify_release_contract.verify", side_effect=OSError("write")):
+                self.assertEqual(1, verify_main([str(source), str(output)]))
 
     def test_generation_is_deterministic_and_valid(self) -> None:
         first = generate(transition())
