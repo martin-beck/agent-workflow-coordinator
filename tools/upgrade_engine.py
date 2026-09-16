@@ -34,6 +34,38 @@ JOURNAL_SCHEMA_VERSION = 3
 MAX_OPERATION_ID_LENGTH = 128 - max(len(f".{phase}") for phase in (*PHASES, "rollback"))
 
 
+@dataclass(frozen=True)
+class JournalSnapshot:
+    """Immutable validated journal envelope for diagnostics and recovery tests."""
+
+    status: str
+    phase: str | None
+    records: tuple[Mapping[str, object], ...]
+
+    @classmethod
+    def from_mapping(cls, value: Mapping[str, object]) -> JournalSnapshot:
+        if not isinstance(value, Mapping):
+            raise ValueError("journal snapshot must be a mapping")
+        if set(value) != {"status", "phase", "records"}:
+            raise ValueError("journal snapshot fields are invalid")
+        status, phase, records = value["status"], value["phase"], value["records"]
+        if not isinstance(status, str) or (phase is not None and not isinstance(phase, str)):
+            raise ValueError("journal snapshot identity is invalid")
+        if not isinstance(records, list) or not all(
+            isinstance(record, Mapping) for record in records
+        ):
+            raise ValueError("journal snapshot records are invalid")
+        immutable_records = tuple(cast(Mapping[str, object], _freeze(record)) for record in records)
+        return cls(status, phase, immutable_records)
+
+    def as_mapping(self) -> dict[str, object]:
+        return {
+            "status": self.status,
+            "phase": self.phase,
+            "records": [_thaw(record) for record in self.records],
+        }
+
+
 class UpgradeError(RuntimeError):
     """An upgrade cannot safely advance."""
 
@@ -426,10 +458,19 @@ class RollbackAuthorizationCapability:
 
 def _freeze(value: object) -> object:
     """Create a recursively immutable view for untrusted phase handlers."""
-    if isinstance(value, dict):
-        return MappingProxyType({str(key): _freeze(item) for key, item in value.items()})
-    if isinstance(value, list):
+    if isinstance(value, Mapping):
+        return MappingProxyType({key: _freeze(item) for key, item in value.items()})
+    if isinstance(value, (list, tuple)):
         return tuple(_freeze(item) for item in value)
+    return value
+
+
+def _thaw(value: object) -> object:
+    """Return a detached JSON-compatible copy of an immutable snapshot value."""
+    if isinstance(value, Mapping):
+        return {key: _thaw(item) for key, item in value.items()}
+    if isinstance(value, tuple):
+        return [_thaw(item) for item in value]
     return value
 
 
