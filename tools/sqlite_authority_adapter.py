@@ -341,7 +341,7 @@ class SQLiteAuthorityAdapter:
     def _check_identity(self) -> None:
         try:
             parent = self._authority.parent.stat()
-            descriptor = self._authority.stat()
+            descriptor = self._authority.lstat()
         except OSError as error:
             raise SQLiteAuthorityError("SQLite authority identity changed") from error
         current_parent = (parent.st_dev, parent.st_ino)
