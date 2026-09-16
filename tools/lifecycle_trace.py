@@ -4,7 +4,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Protocol
 
 
@@ -14,6 +14,10 @@ class LifecycleEvent:
     revision: int
     owner: str
     lock: str
+    project_id: str
+    session_digest: str
+    fencing_token: str
+    _token: object = field(repr=False, compare=False)
 
 
 class LifecycleObserver(Protocol):

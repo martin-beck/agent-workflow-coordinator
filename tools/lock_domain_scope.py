@@ -47,6 +47,7 @@ class LockDomainScope:
         # durable row CAS revision and can diverge after reconciliation.
         self._session_revision = lease.revision if session_revision is None else session_revision
         self._observer = observer
+        self._event_token = object()
 
     @classmethod
     def bind(
@@ -154,12 +155,6 @@ class LockDomainScope:
     def _recheck_session(self, common_guard: CoordinatorLockGuard) -> None:
         """Reread trusted session evidence while the caller owns control locks."""
         observed = self._session_store.snapshot_owned_by_caller()
-        if self._observer is not None:
-            self._observer(
-                LifecycleEvent(
-                    "scope.reread", observed.revision, self._lease.fencing_owner, "authority"
-                )
-            )
         if observed.status != "held":
             raise LockDomainError("durable session is not held")
         if (
@@ -167,6 +162,19 @@ class LockDomainScope:
             or observed.revision != self._session_revision
         ):
             raise LockDomainError("durable session and lease do not match")
+        if self._observer is not None:
+            self._observer(
+                LifecycleEvent(
+                    "scope.reread",
+                    observed.revision,
+                    self._lease.fencing_owner,
+                    "authority",
+                    self._lease.project_id,
+                    observed.identity.identity_digest,
+                    self._lease.fencing_token,
+                    self._event_token,
+                )
+            )
         try:
             state = self._session_store.recheck_held_locked(
                 common_guard,
