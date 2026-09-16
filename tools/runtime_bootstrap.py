@@ -23,6 +23,7 @@ def verify_runtime_manifest(runtime_root: Path, expected_digest: str) -> bool:
         raise AuthorityError("runtime manifest digest is invalid")
     manifest = runtime_root / "runtime-manifest.json"
     try:
+        parent_before = manifest.parent.lstat()
         value = manifest.lstat()
         if (
             not stat.S_ISREG(value.st_mode)
@@ -31,7 +32,25 @@ def verify_runtime_manifest(runtime_root: Path, expected_digest: str) -> bool:
             or stat.S_IMODE(value.st_mode) != 0o600
         ):
             raise AuthorityError("runtime manifest is unsafe")
-        digest = sha256(manifest.read_bytes()).hexdigest()
+        descriptor = os.open(manifest, os.O_RDONLY | os.O_NOFOLLOW)
+        try:
+            opened = os.fstat(descriptor)
+            if (
+                (opened.st_dev, opened.st_ino) != (value.st_dev, value.st_ino)
+                or opened.st_uid != os.geteuid()
+                or stat.S_IMODE(opened.st_mode) != 0o600
+                or opened.st_nlink != 1
+            ):
+                raise AuthorityError("runtime manifest identity changed")
+            digest = sha256(os.read(descriptor, opened.st_size)).hexdigest()
+        finally:
+            os.close(descriptor)
+        parent_after = manifest.parent.lstat()
+        if (parent_before.st_dev, parent_before.st_ino) != (
+            parent_after.st_dev,
+            parent_after.st_ino,
+        ):
+            raise AuthorityError("runtime manifest parent identity changed")
     except OSError as error:
         raise AuthorityError("runtime manifest is unavailable") from error
     if digest != expected_digest:
