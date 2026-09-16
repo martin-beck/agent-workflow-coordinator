@@ -59,6 +59,14 @@ def _assert_parent_identity(path: Path, expected: tuple[int, int]) -> None:
         raise BackupError("SQLite destination parent identity changed")
 
 
+def _backup_identity(path: Path) -> tuple[int, int]:
+    try:
+        status = path.stat()
+    except OSError as error:
+        raise BackupError("backup database disappeared") from error
+    return status.st_dev, status.st_ino
+
+
 def _digest(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as stream:
@@ -310,14 +318,12 @@ def restore_database(
     if Path(str(destination) + "-wal").exists() or Path(str(destination) + "-shm").exists():
         raise BackupError("restore requires a checkpointed destination without live WAL sidecars")
     _regular(backup, "backup database")
-    backup_status = backup.stat()
-    backup_identity = (backup_status.st_dev, backup_status.st_ino)
+    backup_identity = _backup_identity(backup)
     _validate_manifest(manifest)
     if manifest.get("database_sha256") != _digest(backup):
         raise BackupError("backup manifest is missing or does not match the backup")
     _integrity(backup, binding)
-    current_status = backup.stat()
-    if (current_status.st_dev, current_status.st_ino) != backup_identity:
+    if _backup_identity(backup) != backup_identity:
         raise BackupError("backup database changed during restore")
     _install(backup, destination, binding)
 
