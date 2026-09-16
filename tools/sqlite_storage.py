@@ -22,7 +22,7 @@ DURABILITY = "FULL"
 NETWORK_FILESYSTEMS = frozenset(
     {"9p", "afs", "ceph", "cifs", "fuse.sshfs", "gfs2", "glusterfs", "nfs", "nfs4", "smb3"}
 )
-_BACKEND_BINDING_TOKEN = object()
+_FACTORY_SENTINEL = object()
 
 
 class StorageContentionError(RuntimeError):
@@ -50,7 +50,7 @@ class SQLiteBackendBinding:
     __slots__ = (
         "_control_store",
         "_descriptor_identity",
-        "_fencing_token",
+        "_fence",
         "_owner",
         "_path",
         "_project_id",
@@ -59,7 +59,7 @@ class SQLiteBackendBinding:
     )
     _control_store: Any
     _descriptor_identity: tuple[int, int]
-    _fencing_token: str
+    _fence: str
     _owner: str
     _path: Path
     _project_id: str
@@ -69,14 +69,14 @@ class SQLiteBackendBinding:
     def __init__(
         self, control_store: Any, session: Any, state: Any, capability: object | None = None
     ) -> None:
-        if capability is not _BACKEND_BINDING_TOKEN:
+        if capability is not _FACTORY_SENTINEL:
             raise TypeError("SQLiteBackendBinding must be issued by bind()")
         object.__setattr__(self, "_control_store", control_store)
         object.__setattr__(self, "_session", session)
         object.__setattr__(self, "_path", Path(control_store.control_store_path))
         object.__setattr__(self, "_project_id", state.identity.project_id)
         object.__setattr__(self, "_owner", state.identity.fencing_owner)
-        object.__setattr__(self, "_fencing_token", state.identity.fencing_token)
+        object.__setattr__(self, "_fence", state.identity.fencing_token)
         object.__setattr__(self, "_revision", state.revision)
         object.__setattr__(self, "_descriptor_identity", control_store._control_identity)
 
@@ -92,7 +92,7 @@ class SQLiteBackendBinding:
         state = session.snapshot()
         if state is None or state.status != "held":
             raise ValueError("an active durable session is required")
-        return cls(control_store, session, state, _BACKEND_BINDING_TOKEN)
+        return cls(control_store, session, state, _FACTORY_SENTINEL)
 
     @property
     def path(self) -> Path:
@@ -107,8 +107,13 @@ class SQLiteBackendBinding:
         return self._owner
 
     @property
+    def fence(self) -> str:
+        return self._fence
+
+    @property
     def fencing_token(self) -> str:
-        return self._fencing_token
+        """Compatibility alias for consumers of the durable fence value."""
+        return self._fence
 
     @property
     def revision(self) -> int:
@@ -131,10 +136,73 @@ class SQLiteBackendBinding:
         if (
             identity.project_id != self._project_id
             or identity.fencing_owner != self._owner
-            or identity.fencing_token != self._fencing_token
+            or identity.fencing_token != self._fence
             or state.revision != self._revision
         ):
             raise RuntimeError("SQLite backend session identity changed")
+
+
+class SQLiteAuthorityBinding:
+    """Immutable dual binding for control-session and authority descriptors."""
+
+    __slots__ = ("_control", "_identity", "_path")
+    _control: SQLiteBackendBinding
+    _identity: tuple[int, int]
+    _path: Path
+
+    def __init__(
+        self, control: SQLiteBackendBinding, path: Path, identity: tuple[int, int], sentinel: object
+    ) -> None:
+        if sentinel is not _FACTORY_SENTINEL:
+            raise TypeError("SQLiteAuthorityBinding must be issued by bind()")
+        object.__setattr__(self, "_control", control)
+        object.__setattr__(self, "_path", path)
+        object.__setattr__(self, "_identity", identity)
+
+    def __setattr__(self, name: str, value: object) -> None:
+        raise AttributeError("SQLiteAuthorityBinding is immutable")
+
+    @classmethod
+    def bind(
+        cls, control: SQLiteBackendBinding, authority: Path, scope: object
+    ) -> SQLiteAuthorityBinding:
+        from tools.lock_domain_scope import LockDomainScope
+
+        if not isinstance(control, SQLiteBackendBinding):
+            raise TypeError("control binding is required")
+        if not isinstance(scope, LockDomainScope):
+            raise TypeError("authority binding requires adapter-owned LockDomainScope")
+        if (
+            getattr(getattr(scope, "_session_store", None), "_control", None)
+            is not control._control_store
+        ):
+            raise ValueError("authority binding scope uses a foreign control store")
+        if getattr(getattr(scope, "_authority_fence", None), "control_store", None) != control.path:
+            raise ValueError("authority binding scope uses a foreign control store")
+        path = authority.absolute()
+        if path.is_symlink() or not path.is_file():
+            raise ValueError("authority must be a regular non-symlink file")
+        status = path.stat()
+        return cls(control, path, (status.st_dev, status.st_ino), _FACTORY_SENTINEL)
+
+    @property
+    def path(self) -> Path:
+        return self._path
+
+    @property
+    def descriptor_identity(self) -> tuple[int, int]:
+        return self._identity
+
+    def assert_current(self) -> None:
+        self._control.assert_current()
+        try:
+            if self._path.is_symlink():
+                raise RuntimeError("SQLite authority descriptor is a symlink")
+            status = self._path.stat()
+        except OSError as error:
+            raise RuntimeError("SQLite authority descriptor reread failed") from error
+        if (status.st_dev, status.st_ino) != self._identity:
+            raise RuntimeError("SQLite authority descriptor identity changed")
 
 
 class Backend(Protocol):
@@ -228,7 +296,7 @@ class SQLiteBackend:
         binding: Meta,
         tasks_root: Path,
         mutation_scope: Callable[[], AbstractContextManager[object]] | None = None,
-        backend_binding: SQLiteBackendBinding | None = None,
+        backend_binding: SQLiteBackendBinding | SQLiteAuthorityBinding | None = None,
         _admission_capability: object | None = None,
     ) -> None:
         self.path = path
@@ -236,10 +304,10 @@ class SQLiteBackend:
         self.tasks_root = tasks_root
         self.mutation_scope = mutation_scope
         if backend_binding is not None:
-            if _admission_capability is not _BACKEND_BINDING_TOKEN:
+            if _admission_capability is not _FACTORY_SENTINEL:
                 raise ValueError("bound SQLite backend must be created by its adapter factory")
-            if not isinstance(backend_binding, SQLiteBackendBinding):
-                raise TypeError("backend_binding must be SQLiteBackendBinding")
+            if not isinstance(backend_binding, (SQLiteBackendBinding, SQLiteAuthorityBinding)):
+                raise TypeError("backend_binding must be an SQLite binding capability")
             if backend_binding.path != path:
                 raise ValueError("backend binding targets a different database")
             if mutation_scope is None:
@@ -305,6 +373,10 @@ class SQLiteBackend:
 
     @contextmanager
     def _transaction(self) -> Iterator[sqlite3.Connection]:
+        if self.backend_binding is not None and not isinstance(
+            self.backend_binding, SQLiteAuthorityBinding
+        ):
+            raise RuntimeError("mutating SQLite backend requires dual authority binding")
         connection = self._connect()
         try:
             connection.execute("BEGIN IMMEDIATE")
@@ -631,7 +703,7 @@ def bind_sqlite_backend(
     path: Path,
     binding: Meta,
     tasks_root: Path,
-    backend_binding: SQLiteBackendBinding,
+    backend_binding: SQLiteBackendBinding | SQLiteAuthorityBinding,
     scope: object,
 ) -> SQLiteBackend:
     """Build a bound backend from the concrete ordered admission scope.
@@ -645,12 +717,19 @@ def bind_sqlite_backend(
 
     if not isinstance(scope, LockDomainScope):
         raise TypeError("SQLite backend requires adapter-owned LockDomainScope")
+    if not isinstance(backend_binding, SQLiteAuthorityBinding):
+        raise TypeError("SQLite backend factory requires dual authority binding")
     session_store = getattr(scope, "_session_store", None)
     scope_control = getattr(session_store, "_control", None)
     fence = getattr(scope, "_authority_fence", None)
-    if scope_control is not backend_binding._control_store:
+    control_binding = (
+        backend_binding._control
+        if isinstance(backend_binding, SQLiteAuthorityBinding)
+        else backend_binding
+    )
+    if scope_control is not control_binding._control_store:
         raise ValueError("SQLite admission scope is bound to a foreign control store")
-    if getattr(fence, "control_store", None) != backend_binding.path:
+    if getattr(fence, "control_store", None) != control_binding.path:
         raise ValueError("SQLite admission scope is bound to a foreign authority fence")
     return SQLiteBackend(
         path,
@@ -658,5 +737,5 @@ def bind_sqlite_backend(
         tasks_root,
         mutation_scope=scope.hold,
         backend_binding=backend_binding,
-        _admission_capability=_BACKEND_BINDING_TOKEN,
+        _admission_capability=_FACTORY_SENTINEL,
     )

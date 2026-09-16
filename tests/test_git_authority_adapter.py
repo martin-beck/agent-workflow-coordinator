@@ -38,7 +38,12 @@ from tools.rollback_control_store import (
     SQLiteRollbackControlStore,
 )
 from tools.scoped_backend_adapter import ScopedBackendAdapter
-from tools.sqlite_storage import SQLiteBackend, SQLiteBackendBinding, bind_sqlite_backend
+from tools.sqlite_storage import (
+    SQLiteAuthorityBinding,
+    SQLiteBackend,
+    SQLiteBackendBinding,
+    bind_sqlite_backend,
+)
 from tools.upgrade_engine import (
     BoundRollbackCapability,
     GitRollbackObservationCapability,
@@ -348,7 +353,7 @@ class GitAuthorityAdapterTests(unittest.TestCase):
         binding = SQLiteBackendBinding.bind(self.control_store, self.session)
         self.assertEqual(binding.project_id, PROJECT)
         self.assertEqual(binding.fencing_owner, "owner")
-        self.assertEqual(binding.fencing_token, "fence")
+        self.assertEqual(binding.fence, "fence")
         self.assertEqual(binding.revision, 1)
         with self.assertRaises(TypeError):
             SQLiteBackendBinding(self.control_store, self.session, self.session.snapshot())
@@ -409,7 +414,10 @@ class GitAuthorityAdapterTests(unittest.TestCase):
             )
 
     def test_bound_backend_mutation_boundary_rereads_identity(self) -> None:
-        binding = SQLiteBackendBinding.bind(self.control_store, self.session)
+        control = SQLiteBackendBinding.bind(self.control_store, self.session)
+        authority_path = self.control_store.authority_path
+        assert authority_path is not None
+        binding = SQLiteAuthorityBinding.bind(control, authority_path, self.scope)
         backend_meta = {
             "project_id": PROJECT,
             "state_repository": "owner/state",
@@ -445,23 +453,60 @@ class GitAuthorityAdapterTests(unittest.TestCase):
             bind_sqlite_backend(
                 binding.path, backend_meta, Path(self.coordination.name), binding, nullcontext()
             )
-        backend = bind_sqlite_backend(
-            binding.path,
-            backend_meta,
+        with self.assertRaises(TypeError):
+            bind_sqlite_backend(
+                binding.path, backend_meta, Path(self.coordination.name), binding, self.scope
+            )
+
+    def test_sqlite_authority_binding_captures_and_rechecks_dual_identity(self) -> None:
+        control = SQLiteBackendBinding.bind(self.control_store, self.session)
+        authority_path = self.control_store.authority_path
+        assert authority_path is not None
+        authority = SQLiteAuthorityBinding.bind(control, authority_path, self.scope)
+        authority.assert_current()
+        self.assertEqual(authority.path, authority_path.absolute())
+        bound_backend = bind_sqlite_backend(
+            authority.path,
+            {
+                "project_id": PROJECT,
+                "state_repository": "owner/state",
+                "product_repository": "owner/product",
+            },
             Path(self.coordination.name),
-            binding,
+            authority,
             self.scope,
         )
-        self.assertIs(getattr(backend.mutation_scope, "__self__", None), self.scope)
+        bound_backend._assert_mutation_binding()
+        with self.assertRaises(TypeError):
+            SQLiteAuthorityBinding.bind(control, authority_path, nullcontext())
+        with self.assertRaises(TypeError):
+            SQLiteAuthorityBinding.bind(cast(Any, object()), authority_path, self.scope)
+        missing = authority_path.with_name("missing-authority.sqlite")
+        with self.assertRaises(ValueError):
+            SQLiteAuthorityBinding.bind(control, missing, self.scope)
+        symlink = authority_path.with_name("authority-link.sqlite")
+        symlink.symlink_to(authority_path)
+        try:
+            with self.assertRaises(ValueError):
+                SQLiteAuthorityBinding.bind(control, symlink, self.scope)
+        finally:
+            symlink.unlink()
         original_control = self.scope._authority_fence.control_store
         self.scope._authority_fence.control_store = Path(self.coordination.name) / "foreign.sqlite"
         try:
-            with self.assertRaisesRegex(ValueError, "foreign authority"):
-                bind_sqlite_backend(
-                    binding.path, backend_meta, Path(self.coordination.name), binding, self.scope
-                )
+            with self.assertRaisesRegex(ValueError, "foreign control"):
+                SQLiteAuthorityBinding.bind(control, authority_path, self.scope)
         finally:
             self.scope._authority_fence.control_store = original_control
+        displaced = authority.path.with_name("displaced-authority.sqlite")
+        authority.path.rename(displaced)
+        authority.path.write_bytes(b"foreign")
+        try:
+            with self.assertRaisesRegex(RuntimeError, "reread failed"):
+                authority.assert_current()
+        finally:
+            authority.path.unlink()
+            displaced.rename(authority.path)
 
     def test_engine_bound_rollback_inspection_uses_real_scope_and_preserves_journal(self) -> None:
         context = {**CONTEXT, "operation_id": "op-real-git-inspection", "target": "new"}
