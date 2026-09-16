@@ -61,8 +61,8 @@
   "barrier_model": {
     "model": "formal/upgrade/HandoffctlUpgradeBarrier.tla",
     "config": "formal/upgrade/HandoffctlUpgradeBarrier.cfg",
-    "model_sha256": "2a1a31f530781645f5e8e76f67ca80a8ed59ec5d1f78706ca2a5530ebefa7b92",
-    "config_sha256": "e38502a22e5c73b175c92d152b21f086269c49e9256d2d25fa9209657697e776",
+    "model_sha256": "742be024bb6f44073acd4cb059d92a1c94aa4ffe8054febdc00c15ed6d97c0ba",
+    "config_sha256": "f78fbd0f6232d4803ab92bed705601a46b8bb4b4d9aa274b96ef41e4c3a39914",
     "bounds": {
       "processes": ["p1", "p2"],
       "max_revision": 3,
@@ -87,6 +87,7 @@
         "LockOrder",
         "RecheckEvidence",
         "StaleCASRejected",
+        "RollbackAdmissionRejectedSafe",
         "WriterDrainOnAcquire"
       ]
     },

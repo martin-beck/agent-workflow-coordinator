@@ -22,6 +22,7 @@ contract for the next implementation slice, not an implementation proof.
 | SQLite backend | `test_wal_cas_and_reload_are_durable`, `test_sidecars_require_private_provisioning_and_stable_regular_identities` | model branch and public tests present; release-specific rereader/refinement pending |
 | Concrete SQLite rereader | `test_concrete_release_rereader_derives_and_rechecks_actual_authority`, selector/projection/sidecar swap tests | public hostile tests present; trace refinement and release orchestration pending |
 | Typed bound rollback rejection | `test_rollback_rejects_forged_bound_verifier_before_backend_or_handler`, `test_rollback_rejects_mismatched_capability_before_journal_activity`, `test_bound_rollback_rejects_stale_and_replaced_sessions_before_git`, `test_bound_rollback_rejects_malformed_admission_before_git`, `test_bound_rollback_rejects_stale_and_replaced_sessions_before_sqlite`, `test_bound_rollback_rejects_malformed_admission_before_sqlite` | bounded executable rejection evidence; correspondence and mutation authorization remain not-proven |
+| `RejectRollbackAdmission` / `RollbackAdmissionRejectedSafe` | same typed bound rollback rejection tests above | abstract no-authorizing rejection preserves writer/mutation state; concrete trace refinement remains not-proven |
 | Typed recovery rejection preservation | `test_v10_session_intent_recovery_fences_and_requires_newer_fence` (PR #289) | bounded executable evidence at `99b65e6`; implementation refinement pending |
 
 The names above are resolved against the implementation snapshot recorded in
