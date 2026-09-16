@@ -25,6 +25,8 @@ jobs:
         run: |
           test -n "$TRANSITION"
           case "$TRANSITION" in /*|*..*) exit 1;; esac
+          uv run python -m tools.verify_release_identity "$TRANSITION" \
+            --repository "$GITHUB_WORKSPACE" --workspace "$GITHUB_WORKSPACE"
           uv run python -m tools.verify_release_contract "$TRANSITION" "$RUNNER_TEMP/release-contract.json"
       - name: Upload sanitized contract evidence
         uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08
