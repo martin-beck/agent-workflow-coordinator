@@ -91,6 +91,29 @@ class GitBackupTests(unittest.TestCase):
             self.assertTrue(original.is_dir())
             self.assertTrue(replacement.is_dir())
 
+    def test_restore_rejects_backup_replacement_after_verify(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repo = self.repo(root)
+            backup = create_backup(repo, root / "backup", quiesced=True)
+            replacement = create_backup(repo, root / "replacement", quiesced=True)
+            original = root / "original-backup"
+            original_verify = MODULE.verify_backup
+
+            def replace_after_verify(path: Path) -> dict[str, object]:
+                result = cast(dict[str, object], original_verify(path))
+                path.rename(original)
+                path.symlink_to(replacement, target_is_directory=True)
+                return result
+
+            with (
+                patch.object(MODULE, "verify_backup", side_effect=replace_after_verify),
+                self.assertRaisesRegex(BackupError, "backup must not be a symlink"),
+            ):
+                restore_backup(backup, root / "restored")
+            self.assertFalse((root / "restored").exists())
+            self.assertTrue(original.is_dir())
+
     def test_restore_preserves_commit_tree_and_refs_equivalence(self) -> None:
         """A verified backup restores the exact immutable Git authority view."""
         with tempfile.TemporaryDirectory() as directory:
