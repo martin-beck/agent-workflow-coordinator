@@ -12,8 +12,10 @@ import tempfile
 import unittest
 from contextlib import closing
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from unittest.mock import patch
+
+from tools.formal_correspondence import formal_provenance, validate_trace
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -73,8 +75,11 @@ class CrossBackendLifecycleTests(unittest.TestCase):
             sqlite_manifest = SQLITE.backup_database(database, sqlite_backup, BINDING)
             GIT.verify_backup(git_backup)
             SQLITE.verify_backup(sqlite_backup, sqlite_manifest, BINDING)
+            self.assertEqual(("ExecuteSuccess",), validate_trace(("backup_verified",)))
+            self.assertEqual(64, len(cast(str, formal_provenance(ROOT)["model_sha256"])))
 
             with patch.object(Path, "replace", side_effect=OSError("publication interrupted")):
+                self.assertEqual(("ExecuteReject",), validate_trace(("publication_failed",)))
                 with self.assertRaises(GIT.BackupError):
                     GIT.restore_backup(git_backup, root / "git-fresh")
                 with self.assertRaises(SQLITE.BackupError):

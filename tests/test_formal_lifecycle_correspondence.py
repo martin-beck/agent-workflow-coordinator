@@ -4,8 +4,12 @@
 """Executable mapping from lifecycle traces to TLA action outcomes."""
 
 import unittest
+from pathlib import Path
+from typing import cast
 
-from tools.formal_correspondence import INVARIANTS, validate_trace
+from tools.formal_correspondence import INVARIANT_PREDICATES, formal_provenance, validate_trace
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 class FormalLifecycleCorrespondenceTests(unittest.TestCase):
@@ -24,6 +28,16 @@ class FormalLifecycleCorrespondenceTests(unittest.TestCase):
 
     def test_required_invariant_names_are_explicit(self) -> None:
         self.assertEqual(
-            ("NoReplacementBeforeBackup", "AmbiguousIsWriteClosed", "ReconcileRequiresFence"),
-            INVARIANTS,
+            {
+                "NoReplacementBeforeBackup": "ProjectionAtomicity",
+                "AmbiguousIsWriteClosed": "LockSafety",
+                "ReconcileRequiresFence": "RevisionAccounting",
+            },
+            INVARIANT_PREDICATES,
         )
+
+    def test_provenance_binds_authoritative_model_and_config(self) -> None:
+        provenance = formal_provenance(ROOT)
+        self.assertEqual(64, len(cast(str, provenance["model_sha256"])))
+        self.assertEqual(64, len(cast(str, provenance["config_sha256"])))
+        self.assertEqual(INVARIANT_PREDICATES, provenance["invariants"])

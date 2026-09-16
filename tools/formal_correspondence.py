@@ -1,8 +1,13 @@
+# Copyright (C) Huawei Technologies Co., Ltd. 2026. All rights reserved.
+# SPDX-License-Identifier: MIT
+
 """Executable correspondence checks for backup lifecycle evidence traces."""
 
 from __future__ import annotations
 
 from collections.abc import Sequence
+from hashlib import sha256
+from pathlib import Path
 
 EVENT_ACTIONS = {
     "backup_verified": "ExecuteSuccess",
@@ -10,7 +15,29 @@ EVENT_ACTIONS = {
     "restore_failed": "ExecuteReject",
     "retry_verified": "ExecuteSuccess",
 }
-INVARIANTS = ("NoReplacementBeforeBackup", "AmbiguousIsWriteClosed", "ReconcileRequiresFence")
+INVARIANT_PREDICATES = {
+    "NoReplacementBeforeBackup": "ProjectionAtomicity",
+    "AmbiguousIsWriteClosed": "LockSafety",
+    "ReconcileRequiresFence": "RevisionAccounting",
+}
+
+
+def formal_provenance(root: Path) -> dict[str, object]:
+    model = root / "formal/handoffctl/Handoffctl.tla"
+    config = root / "formal/handoffctl/Handoffctl.cfg"
+    text = model.read_text(encoding="utf-8")
+    missing = [
+        predicate for predicate in INVARIANT_PREDICATES.values() if f"{predicate} ==" not in text
+    ]
+    if missing:
+        raise ValueError(f"formal invariant definitions missing: {', '.join(missing)}")
+    return {
+        "model": str(model),
+        "model_sha256": sha256(model.read_bytes()).hexdigest(),
+        "config": str(config),
+        "config_sha256": sha256(config.read_bytes()).hexdigest(),
+        "invariants": dict(INVARIANT_PREDICATES),
+    }
 
 
 def validate_trace(events: Sequence[str]) -> tuple[str, ...]:
