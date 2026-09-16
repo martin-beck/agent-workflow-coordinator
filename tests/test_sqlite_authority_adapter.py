@@ -255,6 +255,36 @@ class SQLiteAuthorityAdapterTests(unittest.TestCase):
         self.assertFalse(self.session.operation_owned_by_current_thread)
         self.assertEqual(b"clean", self.authority.read_bytes()[-5:])
 
+    def test_bound_lifecycle_executor_backup_failure_rereads_and_preserves_state(self) -> None:
+        journal = self.root / "engine-journal.json"
+        journal.write_text('{"status":"running","phase":"backup","records":[]}\n', encoding="utf-8")
+        executor = self.adapter.bind_lifecycle_executor(self.session, journal)
+        before = executor.snapshot()
+        with (
+            patch.object(self.adapter, "backup_bound", side_effect=RuntimeError("injected backup")),
+            self.assertRaisesRegex(SQLiteAuthorityError, "lifecycle effect failed"),
+        ):
+            executor.backup(self.root / "backup.sqlite", {})
+        self.assertEqual(before, executor.snapshot())
+        self.assertFalse(self.session.operation_owned_by_current_thread)
+
+    def test_bound_lifecycle_executor_restore_failure_rereads_and_preserves_state(self) -> None:
+        journal = self.root / "engine-journal.json"
+        journal.write_text(
+            '{"status":"running","phase":"rollback","records":[]}\n', encoding="utf-8"
+        )
+        executor = self.adapter.bind_lifecycle_executor(self.session, journal)
+        before = executor.snapshot()
+        with (
+            patch.object(
+                self.adapter, "restore_bound", side_effect=RuntimeError("injected restore")
+            ),
+            self.assertRaisesRegex(SQLiteAuthorityError, "lifecycle effect failed"),
+        ):
+            executor.restore(self.root / "backup.sqlite", self.root / "destination.sqlite", {}, {})
+        self.assertEqual(before, executor.snapshot())
+        self.assertFalse(self.session.operation_owned_by_current_thread)
+
     def test_unbound_lifecycle_executor_cannot_snapshot_durable_state(self) -> None:
         executor = self.adapter.lifecycle_executor()
         with self.assertRaisesRegex(SQLiteAuthorityError, "not bound to durable state"):
