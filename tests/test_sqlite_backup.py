@@ -692,6 +692,22 @@ class SQLiteBackupTests(unittest.TestCase):
         self.assertFalse(destination.exists())
         self.assertFalse(list(self.root.glob(".coordinator-*")))
 
+    def test_verify_backup_disappearance_during_hash_is_backup_error(self) -> None:
+        backup = self.root / "backup.sqlite3"
+        manifest = backup_database(self.source, backup, BINDING)
+        original_digest = MODULE._digest
+
+        def remove_before_hash(path: Path) -> str:
+            backup.unlink()
+            return cast(str, original_digest(path))
+
+        with (
+            patch.object(MODULE, "_digest", side_effect=remove_before_hash),
+            self.assertRaisesRegex(BackupError, "disappeared while hashing"),
+        ):
+            MODULE.verify_backup(backup, manifest, BINDING)
+        self.assertFalse(list(self.root.glob(".coordinator-*")))
+
 
 if __name__ == "__main__":
     unittest.main()
