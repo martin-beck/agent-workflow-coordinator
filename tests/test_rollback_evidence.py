@@ -39,6 +39,13 @@ class RollbackEvidenceTests(unittest.TestCase):
                     backup, manifest, control_store_identity="store-1", control_store_revision=1
                 ).backup_bytes_digest,
             )
+            manifest.write_text(json.dumps({"version": 2}), encoding="utf-8")
+            self.assertNotEqual(
+                git_observation.manifest_digest,
+                sqlite.observe_backup_identity(
+                    backup, manifest, control_store_identity="store-1", control_store_revision=1
+                ).manifest_digest,
+            )
 
     def test_observation_rejects_tampered_manifest_and_cas_facts(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
