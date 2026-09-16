@@ -211,6 +211,11 @@ def _before_destination_publish(_destination: Path) -> None:
     """Test synchronization seam; production publication has no side effect."""
 
 
+def _assert_no_sidecars(destination: Path) -> None:
+    if Path(str(destination) + "-wal").exists() or Path(str(destination) + "-shm").exists():
+        raise BackupError("SQLite destination sidecar appeared before publication")
+
+
 def _restore_existing(destination: Path, previous: Path | None) -> None:
     try:
         if previous is None:
@@ -266,6 +271,7 @@ def _install(source: Path, destination: Path, binding: dict[str, Any]) -> None:
         if _destination_identity(destination) != destination_identity:
             raise BackupError("existing destination changed before publication")
         _before_destination_publish(destination)
+        _assert_no_sidecars(destination)
         if _destination_identity(destination) != destination_identity:
             raise BackupError("existing destination changed before publication")
         temporary_path.replace(destination)

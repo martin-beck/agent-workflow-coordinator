@@ -692,6 +692,23 @@ class SQLiteBackupTests(unittest.TestCase):
         self.assertFalse(destination.exists())
         self.assertFalse(list(self.root.glob(".coordinator-*")))
 
+    def test_sidecar_appearing_before_restore_publication_fails_closed(self) -> None:
+        backup = self.root / "backup.sqlite3"
+        manifest = backup_database(self.source, backup, BINDING)
+        destination = self.root / "restored.sqlite3"
+
+        def create_sidecar(_path: Path) -> None:
+            Path(str(destination) + "-wal").write_bytes(b"live")
+
+        with (
+            patch.object(MODULE, "_before_destination_publish", side_effect=create_sidecar),
+            self.assertRaisesRegex(BackupError, "sidecar appeared"),
+        ):
+            restore_database(backup, destination, manifest, BINDING, quiesced=True)
+        self.assertFalse(destination.exists())
+        self.assertFalse(list(self.root.glob(".coordinator-*")))
+        Path(str(destination) + "-wal").unlink()
+
     def test_verify_backup_disappearance_during_hash_is_backup_error(self) -> None:
         backup = self.root / "backup.sqlite3"
         manifest = backup_database(self.source, backup, BINDING)
