@@ -437,6 +437,44 @@ class SQLiteAuthorityAdapterTests(unittest.TestCase):
         self.assertFalse((self.root / "destination.sqlite").exists())
         self.assertFalse(self.session.operation_owned_by_current_thread)
 
+    def test_bound_lifecycle_executor_rejects_failed_restore_control_symlink(self) -> None:
+        journal = self.root / "engine-journal.json"
+        journal.write_text(
+            '{"status":"running","phase":"rollback","records":[]}\n', encoding="utf-8"
+        )
+        control = self.session.control_store_path
+        foreign = self.root / "foreign-restore-control-target.sqlite"
+        shutil.copy2(control, foreign)
+        executor = self.adapter.bind_lifecycle_executor(self.session, journal)
+        executor.snapshot()
+
+        def replace_then_fail(
+            _backup: Path,
+            _destination: Path,
+            _manifest: dict[str, Any],
+            _binding: dict[str, Any],
+        ) -> None:
+            original = self.root / "original-restore-control.sqlite"
+            control.rename(original)
+            control.symlink_to(foreign)
+            raise RuntimeError("injected restore control symlink")
+
+        try:
+            with (
+                patch.object(self.adapter, "restore_bound", side_effect=replace_then_fail),
+                self.assertRaisesRegex(
+                    SQLiteAuthorityError, "lifecycle control store is not private and regular"
+                ),
+            ):
+                executor.restore(
+                    self.root / "backup.sqlite", self.root / "destination.sqlite", {}, {}
+                )
+        finally:
+            control.unlink(missing_ok=True)
+            (self.root / "original-restore-control.sqlite").rename(control)
+        self.assertFalse((self.root / "destination.sqlite").exists())
+        self.assertFalse(self.session.operation_owned_by_current_thread)
+
     def test_bound_lifecycle_executor_rejects_failed_restore_unsafe_lock(self) -> None:
         journal = self.root / "engine-journal.json"
         journal.write_text(

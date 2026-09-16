@@ -36,6 +36,7 @@ class SQLiteLifecycleSnapshot:
     journal: JournalSnapshot
     journal_identity: tuple[int, int, int, int]
     control_lock_identity: tuple[int, int, int, int]
+    control_store_identity: tuple[int, int, int, int]
 
 
 _SUPPORTED_PHASES = frozenset(
@@ -99,8 +100,16 @@ class SQLiteLifecycleExecutor:
         """Capture durable state while the caller already owns the operation lock."""
         if self._session_store is None or self._journal is None:
             raise SQLiteAuthorityError("lifecycle executor is not bound to durable state")
+        control_store_identity = self._control_store_identity(
+            self._session_store.control_store_path
+        )
         self._adapter._check_identity()
         control = self._session_store.snapshot_owned_by_caller()
+        if (
+            self._control_store_identity(self._session_store.control_store_path)
+            != control_store_identity
+        ):
+            raise SQLiteAuthorityError("lifecycle control store identity changed")
         journal_identity = self._journal_identity(self._journal)
         value = json.loads(self._journal.read_text(encoding="utf-8"))
         journal = JournalSnapshot.from_mapping(cast(Mapping[str, object], value))
@@ -108,7 +117,9 @@ class SQLiteLifecycleExecutor:
             raise SQLiteAuthorityError("lifecycle journal identity changed")
         self._adapter._check_identity()
         lock_identity = self._lock_identity(self._session_store.control_lock_path)
-        snapshot = SQLiteLifecycleSnapshot(control, journal, journal_identity, lock_identity)
+        snapshot = SQLiteLifecycleSnapshot(
+            control, journal, journal_identity, lock_identity, control_store_identity
+        )
         self._last_snapshot = snapshot
         return snapshot
 
@@ -168,6 +179,19 @@ class SQLiteLifecycleExecutor:
             or stat.S_IMODE(value.st_mode) != 0o600
         ):
             raise SQLiteAuthorityError("lifecycle control lock is not private and regular")
+        return parent.st_dev, parent.st_ino, value.st_dev, value.st_ino
+
+    @staticmethod
+    def _control_store_identity(path: Path) -> tuple[int, int, int, int]:
+        try:
+            parent = path.parent.lstat()
+            value = path.lstat()
+        except OSError as error:
+            raise SQLiteAuthorityError("lifecycle control store is unavailable") from error
+        if not stat.S_ISDIR(parent.st_mode):
+            raise SQLiteAuthorityError("lifecycle control store parent is not a directory")
+        if not stat.S_ISREG(value.st_mode) or value.st_nlink != 1:
+            raise SQLiteAuthorityError("lifecycle control store is not private and regular")
         return parent.st_dev, parent.st_ino, value.st_dev, value.st_ino
 
     def assert_snapshot_stable(self, expected: SQLiteLifecycleSnapshot) -> SQLiteLifecycleSnapshot:
