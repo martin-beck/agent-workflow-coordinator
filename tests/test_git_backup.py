@@ -114,6 +114,40 @@ class GitBackupTests(unittest.TestCase):
             self.assertFalse((root / "restored").exists())
             self.assertTrue(original.is_dir())
 
+    def test_restore_rejects_destination_parent_replacement(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repo = self.repo(root)
+            backup = create_backup(repo, root / "backup", quiesced=True)
+            parent = root / "dest-parent"
+            parent.mkdir()
+            destination = parent / "restored"
+            moved = root / "moved-parent"
+            redirect = root / "redirect-parent"
+            redirect.mkdir()
+            original_run = MODULE._run
+            swapped = False
+            clone_count = 0
+
+            def swap_after_clone(command: list[str], cwd: Path) -> str:
+                nonlocal clone_count, swapped
+                result = cast(str, original_run(command, cwd))
+                if command[:2] == ["git", "clone"]:
+                    clone_count += 1
+                if command[:2] == ["git", "clone"] and clone_count == 2 and not swapped:
+                    swapped = True
+                    parent.rename(moved)
+                    parent.symlink_to(redirect, target_is_directory=True)
+                return result
+
+            with (
+                patch.object(MODULE, "_run", side_effect=swap_after_clone),
+                self.assertRaisesRegex(BackupError, "parent changed before publication"),
+            ):
+                restore_backup(backup, destination)
+            self.assertFalse(destination.exists())
+            self.assertFalse(list(redirect.glob(".git-restore-*")))
+
     def test_restore_preserves_commit_tree_and_refs_equivalence(self) -> None:
         """A verified backup restores the exact immutable Git authority view."""
         with tempfile.TemporaryDirectory() as directory:
