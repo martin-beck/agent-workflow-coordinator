@@ -514,6 +514,28 @@ class GitAuthorityAdapterTests(unittest.TestCase):
         self.assertEqual(observed["git_head"], bound["git_head"])
         self.assertFalse(bound["mutates_authority"])
 
+    def test_snapshot_bound_reread_real_session_and_rejects_foreign_head(self) -> None:
+        observed = self.adapter.snapshot("rollback", CONTEXT)
+        result = self.adapter.snapshot_bound_reread(
+            CONTEXT,
+            self.scope,
+            lease=self.lease,
+            admission_recheck=self.recheck,
+            expected_branch=str(observed["git_branch"]),
+            expected_head=str(observed["git_head"]),
+        )
+        self.assertEqual(str(observed["git_head"]), result.git_head)
+        self.assertEqual(str(observed["git_branch"]), result.git_branch)
+        with self.assertRaisesRegex(GitAuthorityError, "identity changed"):
+            self.adapter.snapshot_bound_reread(
+                CONTEXT,
+                self.scope,
+                lease=self.lease,
+                admission_recheck=self.recheck,
+                expected_branch=str(observed["git_branch"]),
+                expected_head="0" * 40,
+            )
+
     def test_snapshot_bound_rejects_session_or_identity_drift_before_observation(self) -> None:
         observed = self.adapter.snapshot("discover", CONTEXT)
         with self.assertRaisesRegex(GitAuthorityError, "identity changed"):
