@@ -254,6 +254,13 @@ class SQLiteAuthorityAdapterTests(unittest.TestCase):
         self.assertFalse(self.session.operation_owned_by_current_thread)
         self.assertEqual(b"clean", self.authority.read_bytes()[-5:])
 
+    def test_unbound_lifecycle_executor_cannot_snapshot_durable_state(self) -> None:
+        executor = self.adapter.lifecycle_executor()
+        with self.assertRaisesRegex(SQLiteAuthorityError, "not bound to durable state"):
+            executor.snapshot()
+        self.assertEqual(b"clean", self.authority.read_bytes()[-5:])
+        self.assertFalse(self.session.operation_owned_by_current_thread)
+
     def test_bound_lifecycle_executor_releases_lock_on_journal_failure(self) -> None:
         journal = self.root / "engine-journal.json"
         journal.write_text("not-json\n", encoding="utf-8")
