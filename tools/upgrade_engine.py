@@ -105,6 +105,75 @@ class SQLiteRollbackObservationCapability:
         )
 
 
+@dataclass(frozen=True, init=False)
+class GitRollbackObservationCapability:
+    """Instance-bound Git observation authority; never authorizes rollback."""
+
+    adapter: object
+    identity: tuple[object, ...]
+    scope: object
+    lease: object
+    admission_recheck: object
+    expected_branch: str
+    expected_head: str
+
+    def __init__(self) -> None:
+        raise TypeError("Git rollback observation capability must be bound")
+
+    @classmethod
+    def bind(
+        cls,
+        context: PhaseContext,
+        adapter: object,
+        scope: object,
+        *,
+        lease: object,
+        admission_recheck: object,
+        expected_branch: str,
+        expected_head: str,
+    ) -> GitRollbackObservationCapability:
+        from tools.git_authority_adapter import GitAuthorityAdapter
+
+        if not isinstance(adapter, GitAuthorityAdapter):
+            raise UpgradeError("Git rollback observation requires a concrete adapter")
+        if not isinstance(expected_branch, str) or not expected_branch:
+            raise UpgradeError("Git rollback branch binding is invalid")
+        if not isinstance(expected_head, str) or not expected_head:
+            raise UpgradeError("Git rollback head binding is invalid")
+        fields = tuple(field for field in CONTEXT_FIELDS if field != "target")
+        capability = object.__new__(cls)
+        object.__setattr__(capability, "adapter", adapter)
+        object.__setattr__(
+            capability, "identity", tuple(asdict(context)[field] for field in fields)
+        )
+        object.__setattr__(capability, "scope", scope)
+        object.__setattr__(capability, "lease", lease)
+        object.__setattr__(capability, "admission_recheck", admission_recheck)
+        object.__setattr__(capability, "expected_branch", expected_branch)
+        object.__setattr__(capability, "expected_head", expected_head)
+        return capability
+
+    def observe(self, context: Mapping[str, object]) -> BackupObservation:
+        from tools.admission_lease import AdmissionLease, AdmissionRecheck
+        from tools.git_authority_adapter import GitAuthorityAdapter, GitBackupObservation
+        from tools.lock_domain_scope import LockDomainScope
+
+        fields = tuple(field for field in CONTEXT_FIELDS if field != "target")
+        if self.identity != tuple(context.get(field) for field in fields):
+            raise UpgradeError("Git rollback observation context identity mismatch")
+        result = cast(GitAuthorityAdapter, self.adapter).preflight_git(
+            context,
+            cast(LockDomainScope, self.scope),
+            lease=cast(AdmissionLease, self.lease),
+            admission_recheck=cast(AdmissionRecheck, self.admission_recheck),
+            expected_branch=self.expected_branch,
+            expected_head=self.expected_head,
+        )
+        if not isinstance(result, GitBackupObservation):
+            raise UpgradeError("Git rollback observation result is invalid")
+        return cast(BackupObservation, result)
+
+
 REQUIRED_EVIDENCE = {
     "discover": ("release_authentic", "runtime_supported", "backend_identity_verified"),
     "preflight": ("preflight_admitted", "capacity_verified", "backend_identity_verified"),
@@ -332,10 +401,12 @@ class RollbackAuthorizationCapability:
     def preflight(
         self,
         context: Mapping[str, object],
-        provider: SQLiteRollbackObservationCapability,
+        provider: object,
     ) -> None:
         """Validate adapter-owned backup/CAS evidence without authorizing rollback."""
-        if not isinstance(provider, SQLiteRollbackObservationCapability):
+        if not isinstance(
+            provider, (SQLiteRollbackObservationCapability, GitRollbackObservationCapability)
+        ):
             raise UpgradeError("rollback preflight requires a bound observation provider")
         if provider.adapter is not self.evidence_capability.verifier:
             raise UpgradeError("rollback preflight provider is bound to a foreign adapter")
