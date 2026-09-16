@@ -13,6 +13,7 @@ import subprocess
 import tarfile
 import tempfile
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import cast
 from unittest.mock import patch
@@ -157,6 +158,41 @@ class GitBackupTests(unittest.TestCase):
             ):
                 restore_backup(backup, root / "restored")
             self.assertFalse((root / "restored").exists())
+
+    def test_restore_interruption_before_publication_leaves_no_destination(self) -> None:
+        """A publication interruption cannot expose a partial restored authority."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            backup = create_backup(self.repo(root), root / "backup", quiesced=True)
+            destination = root / "restored"
+            with (
+                patch.object(Path, "replace", side_effect=OSError("publication interrupted")),
+                self.assertRaises(BackupError),
+            ):
+                restore_backup(backup, destination)
+            self.assertFalse(destination.exists())
+
+    def test_concurrent_restore_collision_preserves_existing_destination(self) -> None:
+        """Concurrent attempts cannot overwrite an already-owned destination."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            backup = create_backup(self.repo(root), root / "backup", quiesced=True)
+            destination = root / "restored"
+            destination.mkdir()
+            sentinel = destination / "owner-sentinel"
+            sentinel.write_text("existing-owner\n", encoding="utf-8")
+
+            def attempt() -> type[Exception] | None:
+                try:
+                    restore_backup(backup, destination)
+                except Exception as error:
+                    return type(error)
+                return None
+
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                outcomes = list(pool.map(lambda _index: attempt(), range(2)))
+            self.assertEqual([BackupError, BackupError], outcomes)
+            self.assertEqual("existing-owner\n", sentinel.read_text(encoding="utf-8"))
 
     def test_archive_path_traversal_and_restore_symlink_fail_closed(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
