@@ -2,12 +2,14 @@
 # SPDX-License-Identifier: MIT
 
 import json
+import os
 import sqlite3
 import subprocess
 import tempfile
 import unittest
 from collections.abc import Mapping
 from pathlib import Path
+from unittest.mock import patch
 
 from tools.git_authority_adapter import GitAuthorityAdapter
 from tools.git_backup import BackupError as GitBackupError
@@ -19,7 +21,7 @@ from tools.rollback_control_store import (
     SQLiteControlStoreAdapter,
     SQLiteRollbackControlStore,
 )
-from tools.rollback_evidence import RollbackEvidenceError
+from tools.rollback_evidence import BackupObservation, RollbackEvidenceError
 from tools.sqlite_authority_adapter import SQLiteAuthorityAdapter, SQLiteAuthorityError
 from tools.sqlite_backup import BackupError as SQLiteBackupError
 from tools.sqlite_backup import backup_database
@@ -44,6 +46,53 @@ class NoopAuthorityRuntimeRereader(AuthorityRuntimeRereader):
 
 
 class RollbackEvidenceTests(unittest.TestCase):
+    def test_backup_observation_rejects_non_paths_and_unavailable_artifacts(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            backup = root / "backup"
+            manifest = root / "manifest.json"
+            backup.write_bytes(b"backup")
+            manifest.write_text("{", encoding="utf-8")
+            with self.assertRaisesRegex(RollbackEvidenceError, "must be paths"):
+                BackupObservation.from_artifacts(
+                    str(backup), manifest,
+                    control_store_identity="1:2", control_store_revision=1,
+                )  # type: ignore[arg-type]
+            with self.assertRaisesRegex(RollbackEvidenceError, "unavailable"):
+                BackupObservation.from_artifacts(
+                    backup, manifest,
+                    control_store_identity="1:2", control_store_revision=1,
+                )
+
+    def test_backup_observation_rejects_replacement_during_stat_recheck(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            backup = root / "backup"
+            manifest = root / "manifest.json"
+            backup.write_bytes(b"backup")
+            manifest.write_text("{}", encoding="utf-8")
+            original_backup_stat = backup.stat()
+            original_manifest_stat = manifest.stat()
+            changed_values = list(original_backup_stat)
+            changed_values[1] += 1
+            changed = os.stat_result(changed_values)
+            calls = 0
+
+            def stat_with_replacement(path: Path, **_kwargs: object) -> object:
+                nonlocal calls
+                if path == backup:
+                    calls += 1
+                    return original_backup_stat if calls == 1 else changed
+                return original_manifest_stat
+
+            with (
+                patch("pathlib.Path.stat", autospec=True, side_effect=stat_with_replacement),
+                self.assertRaisesRegex(RollbackEvidenceError, "replaced"),
+            ):
+                BackupObservation.from_artifacts(
+                    backup, manifest,
+                    control_store_identity="1:2", control_store_revision=1,
+                )
     def test_adapters_invoke_real_backend_backup_verifiers(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -149,6 +198,45 @@ class RollbackEvidenceTests(unittest.TestCase):
             self.assertEqual(1, observation.control_store_revision)
             control.cas(1, {**record, "status": "ambiguous", "revision": 2})
             with self.assertRaises(ControlStoreError):
+                adapter.observe_backup_identity(backup, manifest, context)
+            self.assertFalse(control.operation_owned_by_current_thread)
+            with control.operation_lock():
+                pass
+
+    def test_observation_rejects_control_store_stat_failure_and_bad_revision(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            authority = root / "authority.sqlite"
+            authority.write_bytes(b"SQLite format 3\x00")
+            authority.chmod(0o600)
+            control = SQLiteRollbackControlStore(root / "control.sqlite", PROJECT, authority)
+            adapter = SQLiteControlStoreAdapter(
+                SQLiteAuthorityAdapter(authority), control, NoopAuthorityRuntimeRereader()
+            )
+            context = {"operation_id": "missing", "backend": "sqlite", "target": "rollback"}
+            backup = root / "backup"
+            manifest = root / "manifest.json"
+            backup.write_bytes(b"backup")
+            manifest.write_text("{}", encoding="utf-8")
+            original_stat = Path.stat
+
+            def fail_control_stat(path: Path, **kwargs: object) -> os.stat_result:
+                if path == control.control_store_path:
+                    raise OSError("gone")
+                return original_stat(path, **kwargs)
+
+            with patch.object(
+                control, "_verify_rollback_context_locked", return_value={"revision": 1}
+            ), patch(
+                "pathlib.Path.stat", autospec=True, side_effect=fail_control_stat
+            ), self.assertRaisesRegex(ControlStoreError, "identity reread failed"):
+                adapter.observe_backup_identity(backup, manifest, context)
+            self.assertFalse(control.operation_owned_by_current_thread)
+            with control.operation_lock():
+                pass
+            with patch.object(
+                control, "_verify_rollback_context_locked", return_value={"revision": "one"}
+            ), self.assertRaisesRegex(ControlStoreError, "identity is invalid"):
                 adapter.observe_backup_identity(backup, manifest, context)
             self.assertFalse(control.operation_owned_by_current_thread)
             with control.operation_lock():
