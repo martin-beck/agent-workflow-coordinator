@@ -35,7 +35,7 @@ class SQLiteLifecycleSnapshot:
     control: BarrierSessionState
     journal: JournalSnapshot
     journal_identity: tuple[int, int, int, int]
-    control_lock_identity: tuple[int, int]
+    control_lock_identity: tuple[int, int, int, int]
 
 
 _SUPPORTED_PHASES = frozenset(
@@ -153,14 +153,22 @@ class SQLiteLifecycleExecutor:
         return parent.st_dev, parent.st_ino, value.st_dev, value.st_ino
 
     @staticmethod
-    def _lock_identity(path: Path) -> tuple[int, int]:
+    def _lock_identity(path: Path) -> tuple[int, int, int, int]:
         try:
+            parent = path.parent.lstat()
             value = path.lstat()
         except OSError as error:
             raise SQLiteAuthorityError("lifecycle control lock is unavailable") from error
-        if not stat.S_ISREG(value.st_mode) or value.st_nlink != 1:
+        if not stat.S_ISDIR(parent.st_mode):
+            raise SQLiteAuthorityError("lifecycle control lock parent is not a directory")
+        if (
+            not stat.S_ISREG(value.st_mode)
+            or value.st_nlink != 1
+            or value.st_uid != os.geteuid()
+            or stat.S_IMODE(value.st_mode) != 0o600
+        ):
             raise SQLiteAuthorityError("lifecycle control lock is not private and regular")
-        return value.st_dev, value.st_ino
+        return parent.st_dev, parent.st_ino, value.st_dev, value.st_ino
 
     def assert_snapshot_stable(self, expected: SQLiteLifecycleSnapshot) -> SQLiteLifecycleSnapshot:
         """Reread durable state and fail closed if it changed since ``expected``."""
