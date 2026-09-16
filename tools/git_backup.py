@@ -71,6 +71,26 @@ def _parent_identity(path: Path) -> tuple[int, int]:
     return status.st_dev, status.st_ino
 
 
+def _source_state(
+    repo: Path, observed_path: Path | None = None
+) -> tuple[int, int, int, int, str, str, str]:
+    status = repo.stat()
+    observed = (observed_path or repo).stat()
+    head = _run(["git", "rev-parse", "HEAD"], repo).strip()
+    branch = _run(["git", "symbolic-ref", "--short", "-q", "HEAD"], repo).strip()
+    clean = _run(["git", "status", "--porcelain=1", "--untracked-files=all"], repo)
+    return status.st_dev, status.st_ino, observed.st_dev, observed.st_ino, head, branch, clean
+
+
+def _assert_source_state(
+    repo: Path,
+    observed_path: Path,
+    expected: tuple[int, int, int, int, str, str, str],
+) -> None:
+    if _source_state(repo, observed_path) != expected:
+        raise BackupError("Git source authority changed during backup")
+
+
 def _valid_hex(value: object, length: int) -> bool:
     return (
         isinstance(value, str)
@@ -168,12 +188,14 @@ def create_backup(repo: Path, destination: Path, *, quiesced: bool) -> Path:
     """Create complete immutable artifacts from a clean, quiesced authority."""
     if not quiesced:
         raise BackupError("Git backup requires a proven quiesced authority")
+    observed_repo = repo
     repo = repo.resolve()
     _safe_root(destination, "backup destination")
     _safe_parent(destination, "backup destination")
     if destination.exists():
         raise BackupError("backup destination must not already exist")
     _clean(repo)
+    source_state = _source_state(repo, observed_repo)
     destination.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     parent_identity = _parent_identity(destination)
     if _parent_identity(destination) != parent_identity:
@@ -207,6 +229,7 @@ def create_backup(repo: Path, destination: Path, *, quiesced: bool) -> Path:
             },
         }
         _write_manifest(temporary / "manifest.json", manifest)
+        _assert_source_state(repo, observed_repo, source_state)
         if _parent_identity(destination) != parent_identity:
             raise BackupError("Git backup destination parent changed before publication")
         if destination.exists() or destination.is_symlink():
