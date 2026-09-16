@@ -178,6 +178,7 @@ class SQLiteAuthorityBinding:
             raise TypeError("control binding is required")
         if not isinstance(scope, LockDomainScope):
             raise TypeError("authority binding requires adapter-owned LockDomainScope")
+        path = authority.absolute()
         if (
             getattr(getattr(scope, "_session_store", None), "_control", None)
             is not control._control_store
@@ -185,7 +186,9 @@ class SQLiteAuthorityBinding:
             raise ValueError("authority binding scope uses a foreign control store")
         if getattr(getattr(scope, "_authority_fence", None), "control_store", None) != control.path:
             raise ValueError("authority binding scope uses a foreign control store")
-        path = authority.absolute()
+        fenced_authority = getattr(getattr(scope, "_authority_fence", None), "authority", None)
+        if not isinstance(fenced_authority, Path) or fenced_authority.absolute() != path:
+            raise ValueError("authority binding path does not match the admission scope authority")
         if path.is_symlink() or not path.is_file():
             raise ValueError("authority must be a regular non-symlink file")
         status = path.stat()

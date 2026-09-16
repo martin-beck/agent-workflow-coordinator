@@ -652,6 +652,28 @@ class GitAuthorityAdapterTests(unittest.TestCase):
                 authority_path.unlink()
                 displaced.rename(authority_path)
 
+    def test_sqlite_authority_binding_rejects_scope_authority_mismatch(self) -> None:
+        control = SQLiteBackendBinding.bind(self.control_store, self.session)
+        authority_path = self.control_store.authority_path
+        assert authority_path is not None
+        foreign_authority = authority_path.with_name("foreign-valid-authority.sqlite")
+        with (
+            sqlite3.connect(authority_path) as source,
+            sqlite3.connect(foreign_authority) as destination,
+        ):
+            source.backup(destination)
+
+        with self.assertRaisesRegex(ValueError, "does not match the admission scope authority"):
+            SQLiteAuthorityBinding.bind(control, foreign_authority, self.scope)
+
+        self.assertEqual(authority_path, self.scope._authority_fence.authority)
+        self.assertEqual(
+            "AR-0001",
+            SQLiteBackend(
+                foreign_authority, self.authority_binding, self.authority_tasks
+            ).load_tasks()[0][1]["id"],
+        )
+
     def test_sqlite_backend_factory_rejects_foreign_pairings(self) -> None:
         control = SQLiteBackendBinding.bind(self.control_store, self.session)
         authority_path = self.control_store.authority_path
@@ -953,14 +975,21 @@ class GitAuthorityAdapterTests(unittest.TestCase):
         with self.assertRaises(TypeError):
             SQLiteAuthorityBinding.bind(cast(Any, object()), authority_path, self.scope)
         missing = authority_path.with_name("missing-authority.sqlite")
-        with self.assertRaises(ValueError):
-            SQLiteAuthorityBinding.bind(control, missing, self.scope)
+        original_authority = self.scope._authority_fence.authority
+        self.scope._authority_fence.authority = missing
+        try:
+            with self.assertRaisesRegex(ValueError, "regular non-symlink"):
+                SQLiteAuthorityBinding.bind(control, missing, self.scope)
+        finally:
+            self.scope._authority_fence.authority = original_authority
         symlink = authority_path.with_name("authority-link.sqlite")
         symlink.symlink_to(authority_path)
+        self.scope._authority_fence.authority = symlink
         try:
-            with self.assertRaises(ValueError):
+            with self.assertRaisesRegex(ValueError, "regular non-symlink"):
                 SQLiteAuthorityBinding.bind(control, symlink, self.scope)
         finally:
+            self.scope._authority_fence.authority = original_authority
             symlink.unlink()
         original_control = self.scope._authority_fence.control_store
         self.scope._authority_fence.control_store = Path(self.coordination.name) / "foreign.sqlite"
