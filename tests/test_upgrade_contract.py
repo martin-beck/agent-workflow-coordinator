@@ -357,6 +357,52 @@ class UpgradeContractTests(unittest.TestCase):
         )
         self.assertTrue(any("wal" in item for item in document["backend_contracts"]))
 
+    def test_validator_rejects_each_typed_boundary_mismatch(self) -> None:
+        """Exercise fail-closed contract branches with individually invalid fields."""
+        mutations: tuple[Callable[[dict[str, Any]], None], ...] = (
+            lambda value: value["phases"][1].update(requires=[]),
+            lambda value: value["phases"][1]["operation"].update(opcode="wrong"),
+            lambda value: value["phases"][1]["operation"].update(operation_id="foreign:preflight"),
+            lambda value: value["phases"][1]["operation"]["inputs"].update(backend="git"),
+            lambda value: value["phases"][1]["operation"]["inputs"].update(
+                expected_state_revision=0
+            ),
+            lambda value: value["phases"][1]["operation"]["inputs"].update(
+                backup_operation_id="foreign"
+            ),
+            lambda value: value["phases"][1]["operation"]["inputs"].update(extra=True),
+            lambda value: value["phases"][1]["operation"]["inputs"].pop("barrier_id"),
+            lambda value: value["phases"][2]["operation"]["inputs"].update(
+                {"fencing_token": "changed"}
+            ),
+            lambda value: value["rollback"]["operation"].update(operation_id="foreign:rollback"),
+            lambda value: value["rollback"]["operation"].update(opcode="wrong"),
+            lambda value: value["rollback"]["operation"]["inputs"].update(backend="git"),
+            lambda value: value["rollback"]["operation"]["inputs"].update(
+                expected_state_revision=-1
+            ),
+            lambda value: value["rollback"]["operation"]["inputs"].update(
+                backup_operation_id="foreign"
+            ),
+            lambda value: value["rollback"]["operation"]["inputs"].update(extra=True),
+            lambda value: value["rollback"]["operation"]["inputs"].pop("fencing_token"),
+        )
+        for mutate in mutations:
+            document = contract()
+            mutate(document)
+            with self.subTest(mutate=mutate), self.assertRaises(ContractError):
+                validate_phases(document)
+
+        for mutate in (
+            lambda value: value["backend_contracts"][0].update(backend="other"),
+            lambda value: value["rollback"].update(backup_integrity="generic"),
+            lambda value: value["rollback"]["integrity_by_backend"].update(sqlite="bad"),
+        ):
+            document = contract()
+            mutate(document)
+            with self.assertRaises(ContractError):
+                validate_backends(document)
+
     @staticmethod
     def _assert_graph(phases: list[dict[str, Any]]) -> None:
         orders = [phase["order"] for phase in phases]
