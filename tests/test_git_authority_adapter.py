@@ -38,7 +38,7 @@ from tools.rollback_control_store import (
     SQLiteRollbackControlStore,
 )
 from tools.scoped_backend_adapter import ScopedBackendAdapter
-from tools.sqlite_storage import SQLiteBackend, SQLiteBackendBinding
+from tools.sqlite_storage import SQLiteBackend, SQLiteBackendBinding, bind_sqlite_backend
 from tools.upgrade_engine import (
     BoundRollbackCapability,
     GitRollbackObservationCapability,
@@ -393,7 +393,7 @@ class GitAuthorityAdapterTests(unittest.TestCase):
             "state_repository": "owner/state",
             "product_repository": "owner/product",
         }
-        with self.assertRaises(TypeError):
+        with self.assertRaisesRegex(ValueError, "adapter factory"):
             SQLiteBackend(
                 binding.path,
                 backend_meta,
@@ -415,19 +415,15 @@ class GitAuthorityAdapterTests(unittest.TestCase):
             "state_repository": "owner/state",
             "product_repository": "owner/product",
         }
-        with self.assertRaisesRegex(ValueError, "mutation scope"):
+        with self.assertRaisesRegex(ValueError, "adapter factory"):
             SQLiteBackend(
                 binding.path,
                 backend_meta,
                 Path(self.coordination.name),
                 backend_binding=binding,
             )
-        backend = SQLiteBackend(
-            binding.path,
-            backend_meta,
-            Path(self.coordination.name),
-            mutation_scope=lambda: nullcontext(),
-            backend_binding=binding,
+        backend = bind_sqlite_backend(
+            binding.path, backend_meta, Path(self.coordination.name), binding, self.scope
         )
         backend._assert_mutation_binding()
         with (
@@ -437,6 +433,35 @@ class GitAuthorityAdapterTests(unittest.TestCase):
             self.assertRaisesRegex(RuntimeError, "stale session"),
         ):
             backend._assert_mutation_binding()
+
+    def test_sqlite_backend_factory_requires_ordered_adapter_scope(self) -> None:
+        binding = SQLiteBackendBinding.bind(self.control_store, self.session)
+        backend_meta = {
+            "project_id": PROJECT,
+            "state_repository": "owner/state",
+            "product_repository": "owner/product",
+        }
+        with self.assertRaises(TypeError):
+            bind_sqlite_backend(
+                binding.path, backend_meta, Path(self.coordination.name), binding, nullcontext()
+            )
+        backend = bind_sqlite_backend(
+            binding.path,
+            backend_meta,
+            Path(self.coordination.name),
+            binding,
+            self.scope,
+        )
+        self.assertIs(getattr(backend.mutation_scope, "__self__", None), self.scope)
+        original_control = self.scope._authority_fence.control_store
+        self.scope._authority_fence.control_store = Path(self.coordination.name) / "foreign.sqlite"
+        try:
+            with self.assertRaisesRegex(ValueError, "foreign authority"):
+                bind_sqlite_backend(
+                    binding.path, backend_meta, Path(self.coordination.name), binding, self.scope
+                )
+        finally:
+            self.scope._authority_fence.control_store = original_control
 
     def test_engine_bound_rollback_inspection_uses_real_scope_and_preserves_journal(self) -> None:
         context = {**CONTEXT, "operation_id": "op-real-git-inspection", "target": "new"}

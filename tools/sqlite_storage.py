@@ -229,12 +229,15 @@ class SQLiteBackend:
         tasks_root: Path,
         mutation_scope: Callable[[], AbstractContextManager[object]] | None = None,
         backend_binding: SQLiteBackendBinding | None = None,
+        _admission_capability: object | None = None,
     ) -> None:
         self.path = path
         self.binding = binding
         self.tasks_root = tasks_root
         self.mutation_scope = mutation_scope
         if backend_binding is not None:
+            if _admission_capability is not _BACKEND_BINDING_TOKEN:
+                raise ValueError("bound SQLite backend must be created by its adapter factory")
             if not isinstance(backend_binding, SQLiteBackendBinding):
                 raise TypeError("backend_binding must be SQLiteBackendBinding")
             if backend_binding.path != path:
@@ -622,3 +625,38 @@ def create_database(
         temporary_path.unlink(missing_ok=True)
         Path(str(temporary_path) + "-wal").unlink(missing_ok=True)
         Path(str(temporary_path) + "-shm").unlink(missing_ok=True)
+
+
+def bind_sqlite_backend(
+    path: Path,
+    binding: Meta,
+    tasks_root: Path,
+    backend_binding: SQLiteBackendBinding,
+    scope: object,
+) -> SQLiteBackend:
+    """Build a bound backend from the concrete ordered admission scope.
+
+    This is the adapter-owned integration seam.  ``scope`` must be a real
+    ``LockDomainScope``; arbitrary context managers are rejected.  The scope
+    owns common -> control -> authority lock ordering and durable admission.
+    The legacy constructor remains available for unbound/read-only callers.
+    """
+    from tools.lock_domain_scope import LockDomainScope
+
+    if not isinstance(scope, LockDomainScope):
+        raise TypeError("SQLite backend requires adapter-owned LockDomainScope")
+    session_store = getattr(scope, "_session_store", None)
+    scope_control = getattr(session_store, "_control", None)
+    fence = getattr(scope, "_authority_fence", None)
+    if scope_control is not backend_binding._control_store:
+        raise ValueError("SQLite admission scope is bound to a foreign control store")
+    if getattr(fence, "control_store", None) != backend_binding.path:
+        raise ValueError("SQLite admission scope is bound to a foreign authority fence")
+    return SQLiteBackend(
+        path,
+        binding,
+        tasks_root,
+        mutation_scope=scope.hold,
+        backend_binding=backend_binding,
+        _admission_capability=_BACKEND_BINDING_TOKEN,
+    )
