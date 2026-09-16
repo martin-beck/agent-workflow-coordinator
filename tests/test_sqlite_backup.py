@@ -381,6 +381,45 @@ class SQLiteBackupTests(unittest.TestCase):
             write_manifest(manifest_path, manifest)
         self.assertFalse(manifest_path.exists())
 
+    def test_existing_destination_swap_during_preservation_fails_closed(self) -> None:
+        backup = self.root / "backup.sqlite3"
+        manifest = backup_database(self.source, backup, BINDING)
+        destination = self.root / "restored.sqlite3"
+        create_database(destination, body="preserved")
+        original = self.root / "original-destination.sqlite3"
+        foreign = self.root / "foreign.sqlite3"
+        create_database(foreign, body="foreign")
+        original_link = MODULE.os.link
+        swapped = False
+
+        def swap_before_link(source: Path, target: Path) -> None:
+            nonlocal swapped
+            if not swapped:
+                swapped = True
+                destination.rename(original)
+                destination.symlink_to(foreign)
+            original_link(source, target)
+
+        with (
+            patch.object(MODULE.os, "link", side_effect=swap_before_link),
+            self.assertRaisesRegex(BackupError, "existing destination"),
+        ):
+            restore_database(backup, destination, manifest, BINDING, quiesced=True)
+        with closing(sqlite3.connect(original)) as connection:
+            self.assertEqual(
+                "preserved", connection.execute("SELECT body FROM records").fetchone()[0]
+            )
+        with closing(sqlite3.connect(foreign)) as connection:
+            self.assertEqual(
+                "foreign", connection.execute("SELECT body FROM records").fetchone()[0]
+            )
+        self.assertTrue(destination.is_symlink())
+        self.assertFalse(list(self.root.glob(".coordinator-*")))
+        destination.unlink()
+        restore_database(backup, destination, manifest, BINDING, quiesced=True)
+        with closing(sqlite3.connect(destination)) as connection:
+            self.assertEqual("before", connection.execute("SELECT body FROM records").fetchone()[0])
+
     def test_parent_swap_before_existing_destination_preservation_is_safe(self) -> None:
         backup = self.root / "backup.sqlite3"
         manifest = backup_database(self.source, backup, BINDING)
