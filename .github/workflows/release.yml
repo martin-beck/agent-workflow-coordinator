@@ -6,8 +6,6 @@ name: Release upgrade contract
         description: Repository-relative JSON transition input
         required: true
         type: string
-  push:
-    tags: ["v*"]
 permissions:
   contents: read
 jobs:
