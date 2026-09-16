@@ -127,7 +127,13 @@ class SQLiteBackendBinding:
         if self._control_store._control_identity != self._descriptor_identity:
             raise RuntimeError("SQLite backend descriptor identity changed")
         try:
-            state = self._session.snapshot()
+            if self._session.operation_owned_by_current_thread:
+                # LockDomainScope already owns common -> control -> authority.
+                # Re-entering snapshot() would violate the non-reentrant
+                # control-lock contract at the mutation boundary.
+                state = self._session.snapshot_owned_by_caller()
+            else:
+                state = self._session.snapshot()
         except Exception as error:
             raise RuntimeError("SQLite backend binding reread failed") from error
         if state is None or state.status != "held":
