@@ -779,6 +779,20 @@ class UpgradeEngine:
                 raise UpgradeError("trusted bound rollback inspection failed") from error
             if result.get("rollback_context_verified") is not False:
                 raise UpgradeError("rollback inspection capability is authorizing")
+            if (
+                any(
+                    field not in result
+                    or result.get(field) != context[field]
+                    or type(result.get(field)) is not type(context[field])
+                    for field in CONTEXT_FIELDS
+                )
+                or result.get("phase") != "rollback"
+                or result.get("backend") != self.context.backend
+                or result.get("backend_identity_verified") is not True
+                or type(result.get("mutates_authority")) is not bool
+                or result.get("mutates_authority") is not False
+            ):
+                raise UpgradeError("rollback inspection evidence is incomplete or authorizing")
             return dict(result)
 
     def _rollback_locked(self, handler: Handler) -> dict[str, Any]:  # noqa: C901
