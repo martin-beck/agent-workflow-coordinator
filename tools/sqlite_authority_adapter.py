@@ -236,7 +236,9 @@ class SQLiteLifecycleExecutor:
     ) -> None:
         identity = snapshot.control.identity
         if (
-            snapshot.control.status != "held"
+            type(expected_state_revision) is not int
+            or expected_state_revision < 1
+            or snapshot.control.status != "held"
             or identity.state_revision != expected_state_revision
             or identity.durable_barrier_id != barrier_id
             or identity.fencing_token != fencing_token
