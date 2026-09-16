@@ -1700,13 +1700,22 @@ class SQLiteBarrierSessionStore:
                 identity_digest,
                 proposed_status,
             ) in prepared:
+                matches_current = (
+                    proposed_revision == current.revision
+                    and expected_revision == current.revision - 1
+                    and proposed_status == current.status
+                )
+                matches_interrupted_recovery = (
+                    current.status == "ambiguous"
+                    and proposed_revision == current.revision - 1
+                    and expected_revision == proposed_revision - 1
+                    and proposed_status in {"held", "releasing"}
+                )
                 if (
                     attempt_id != current.identity.attempt_id
                     or identity_digest != current.identity.identity_digest
-                    or proposed_revision != current.revision
-                    or expected_revision != current.revision - 1
                     or proposed_status not in STATUS_TRANSITIONS
-                    or proposed_status != current.status
+                    or not (matches_current or matches_interrupted_recovery)
                 ):
                     raise ControlStoreError("prepared session intent identity is invalid")
             if current.status != "ambiguous":
