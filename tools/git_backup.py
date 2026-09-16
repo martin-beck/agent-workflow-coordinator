@@ -175,6 +175,9 @@ def create_backup(repo: Path, destination: Path, *, quiesced: bool) -> Path:
         raise BackupError("backup destination must not already exist")
     _clean(repo)
     destination.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    parent_identity = _parent_identity(destination)
+    if _parent_identity(destination) != parent_identity:
+        raise BackupError("Git backup destination parent changed before allocation")
     temporary = Path(tempfile.mkdtemp(prefix=".git-backup-", dir=destination.parent))
     try:
         bundle = temporary / "authority.bundle"
@@ -201,6 +204,8 @@ def create_backup(repo: Path, destination: Path, *, quiesced: bool) -> Path:
             },
         }
         _write_manifest(temporary / "manifest.json", manifest)
+        if _parent_identity(destination) != parent_identity:
+            raise BackupError("Git backup destination parent changed before publication")
         if destination.exists() or destination.is_symlink():
             raise BackupError("Git backup destination appeared before publication")
         temporary.replace(destination)
