@@ -54,6 +54,15 @@ class BackendAdapter(Protocol):
     def execute(self, phase: str, context: Mapping[str, object]) -> Mapping[str, object]: ...
 
 
+@runtime_checkable
+class RollbackObservationProvider(Protocol):
+    """Adapter-owned, lock-scoped source of typed rollback observations."""
+
+    def observe_backup_identity(
+        self, backup: Path, manifest: Path, context: Mapping[str, object]
+    ) -> BackupObservation: ...
+
+
 REQUIRED_EVIDENCE = {
     "discover": ("release_authentic", "runtime_supported", "backend_identity_verified"),
     "preflight": ("preflight_admitted", "capacity_verified", "backend_identity_verified"),
@@ -281,30 +290,26 @@ class RollbackAuthorizationCapability:
     def preflight(
         self,
         context: Mapping[str, object],
-        observation: BackupObservation,
-        reread: Mapping[str, object],
+        provider: RollbackObservationProvider,
     ) -> None:
         """Validate adapter-owned backup/CAS evidence without authorizing rollback."""
-        if (
-            not isinstance(observation, BackupObservation)
-            or not observation.has_provenance
-            or not isinstance(reread, Mapping)
-        ):
-            raise UpgradeError("rollback preflight requires typed observation and reread")
+        if not isinstance(provider, RollbackObservationProvider):
+            raise UpgradeError("rollback preflight requires a bound observation provider")
         if not isinstance(context, Mapping) or context.get("target") != "rollback":
             raise UpgradeError("rollback preflight context is invalid")
         identity_fields = tuple(field for field in CONTEXT_FIELDS if field != "target")
         if self.identity != tuple(context.get(field) for field in identity_fields):
             raise UpgradeError("rollback preflight context identity mismatch")
-        if (
-            reread.get("control_store_identity") != observation.control_store_identity
-            or reread.get("control_store_revision") != observation.control_store_revision
-        ):
-            raise UpgradeError("rollback preflight control-store reread is stale")
-        if reread.get("backup_bytes_digest") != observation.backup_bytes_digest:
-            raise UpgradeError("rollback preflight backup evidence changed")
-        if reread.get("manifest_digest") != observation.manifest_digest:
-            raise UpgradeError("rollback preflight manifest evidence changed")
+        backup = context.get("destination")
+        manifest = context.get("manifest")
+        if not isinstance(backup, str) or not isinstance(manifest, str):
+            raise UpgradeError("rollback preflight artifact paths are invalid")
+        try:
+            observation = provider.observe_backup_identity(Path(backup), Path(manifest), context)
+        except Exception as error:
+            raise UpgradeError("rollback preflight observation failed") from error
+        if not observation.has_provenance:
+            raise UpgradeError("rollback preflight observation provenance is invalid")
         raise UpgradeError("rollback authorization is not enabled")
 
 

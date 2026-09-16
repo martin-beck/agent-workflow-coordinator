@@ -2176,27 +2176,24 @@ class UpgradeEngineTests(unittest.TestCase):
             observation = BackupObservation.from_artifacts(
                 backup, manifest, control_store_identity="store:1", control_store_revision=4
             )
-        reread = {
-            "backup_bytes_digest": observation.backup_bytes_digest,
-            "manifest_digest": observation.manifest_digest,
-            "control_store_identity": observation.control_store_identity,
-            "control_store_revision": observation.control_store_revision,
-        }
+
+        class Provider:
+            def observe_backup_identity(
+                self, _backup: Path, _manifest: Path, _context: Mapping[str, object]
+            ) -> BackupObservation:
+                return observation
+
         with self.assertRaisesRegex(UpgradeError, "not enabled"):
-            capability.preflight(ROLLBACK_CONTEXT, observation, reread)
-        for name, changed, message in (
-            ("control_store_revision", 5, "stale"),
-            ("backup_bytes_digest", "changed", "backup evidence changed"),
-            ("manifest_digest", "changed", "manifest evidence changed"),
-        ):
-            with self.subTest(name=name):
-                hostile = {**reread, name: changed}
-                with self.assertRaisesRegex(UpgradeError, message):
-                    capability.preflight(ROLLBACK_CONTEXT, observation, hostile)
-        with self.assertRaisesRegex(UpgradeError, "typed observation"):
-            capability.preflight(
-                ROLLBACK_CONTEXT, BackupObservation("bytes", "manifest", "store:1", 4), reread
-            )
+            capability.preflight(ROLLBACK_CONTEXT, Provider())
+        with self.assertRaisesRegex(UpgradeError, "provenance"):
+
+            class ForgedProvider:
+                def observe_backup_identity(
+                    self, _backup: Path, _manifest: Path, _context: Mapping[str, object]
+                ) -> BackupObservation:
+                    return BackupObservation("bytes", "manifest", "store:1", 4)
+
+            capability.preflight(ROLLBACK_CONTEXT, ForgedProvider())
 
     def test_bound_rollback_inspection_dispatches_initialized_real_adapters(self) -> None:
         """Concrete adapter identity is retained without authorizing rollback."""
