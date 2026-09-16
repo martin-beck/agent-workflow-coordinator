@@ -306,6 +306,31 @@ class SQLiteAuthorityAdapterTests(unittest.TestCase):
         self.assertFalse((self.root / "backup.sqlite").exists())
         self.assertFalse(self.session.operation_owned_by_current_thread)
 
+    def test_bound_lifecycle_executor_rejects_failed_effect_control_mutation(self) -> None:
+        journal = self.root / "engine-journal.json"
+        journal.write_text('{"status":"running","phase":"backup","records":[]}\n', encoding="utf-8")
+        executor = self.adapter.bind_lifecycle_executor(self.session, journal)
+        before = executor.snapshot()
+
+        def mutate_then_fail(_destination: Path, _binding: dict[str, Any]) -> dict[str, Any]:
+            # Simulate a hostile external writer changing durable state while
+            # the effect is in flight; the executor must detect it on reread.
+            with sqlite3.connect(self.session.control_store_path) as connection:
+                connection.execute(
+                    "UPDATE barrier_session SET status='ambiguous' WHERE project_id=?",
+                    (PROJECT,),
+                )
+            raise RuntimeError("injected control mutation")
+
+        with (
+            patch.object(self.adapter, "backup_bound", side_effect=mutate_then_fail),
+            self.assertRaisesRegex(SQLiteAuthorityError, "durable lifecycle state changed"),
+        ):
+            executor.backup(self.root / "backup.sqlite", {})
+        self.assertNotEqual(before.control, executor.snapshot().control)
+        self.assertFalse((self.root / "backup.sqlite").exists())
+        self.assertFalse(self.session.operation_owned_by_current_thread)
+
     def test_unbound_lifecycle_executor_cannot_snapshot_durable_state(self) -> None:
         executor = self.adapter.lifecycle_executor()
         with self.assertRaisesRegex(SQLiteAuthorityError, "not bound to durable state"):
