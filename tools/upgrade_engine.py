@@ -98,12 +98,25 @@ RECORD_FIELDS = {"operation_id", "step_id", "phase", "outcome", "result", "error
 CONTEXT_FIELDS = ENVELOPE_FIELDS
 
 
-def backup_identity_digest(context: Mapping[str, object]) -> str:
-    """Derive immutable backup identity from bound storage and barrier fields."""
+def backup_identity_digest(
+    context: Mapping[str, object],
+    *,
+    backup_bytes_digest: str,
+    manifest_digest: str,
+    control_store_identity: str,
+    control_store_revision: int,
+) -> str:
+    """Derive immutable backup identity from bytes, manifest, and control store."""
     payload = {
         field: context[field]
         for field in ("source", "destination", "manifest", "barrier_identity_digest")
     }
+    payload.update(
+        backup_bytes_digest=backup_bytes_digest,
+        manifest_digest=manifest_digest,
+        control_store_identity=control_store_identity,
+        control_store_revision=control_store_revision,
+    )
     return hashlib.sha256(
         json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
@@ -268,6 +281,10 @@ class RollbackAuthorizationCapability:
             "sqlite_integrity_verified",
             "sqlite_foreign_keys_verified",
             "backup_identity_digest",
+            "backup_bytes_digest",
+            "manifest_digest",
+            "control_store_identity",
+            "control_store_revision",
         }
         required = set(CONTEXT_FIELDS) | {
             "phase",
@@ -277,6 +294,10 @@ class RollbackAuthorizationCapability:
             "backup_verified",
             "restore_roundtrip_verified",
             "backup_identity_digest",
+            "backup_bytes_digest",
+            "manifest_digest",
+            "control_store_identity",
+            "control_store_revision",
         }
         if set(evidence) - allowed or not required.issubset(evidence):
             raise UpgradeError("rollback authorization evidence schema is invalid")
@@ -292,9 +313,22 @@ class RollbackAuthorizationCapability:
             raise UpgradeError("rollback authorization evidence identity is unverified")
         if evidence.get("mutates_authority") is not False:
             raise UpgradeError("rollback authorization evidence is mutating")
-        if type(evidence.get("backup_identity_digest")) is not str or evidence.get(
-            "backup_identity_digest"
-        ) != backup_identity_digest(context):
+        if (
+            type(evidence.get("backup_identity_digest")) is not str
+            or type(evidence.get("backup_bytes_digest")) is not str
+            or type(evidence.get("manifest_digest")) is not str
+            or type(evidence.get("control_store_identity")) is not str
+            or type(evidence.get("control_store_revision")) is not int
+            or evidence.get("control_store_revision") != context["state_revision"]
+            or evidence.get("backup_identity_digest")
+            != backup_identity_digest(
+                context,
+                backup_bytes_digest=cast(str, evidence["backup_bytes_digest"]),
+                manifest_digest=cast(str, evidence["manifest_digest"]),
+                control_store_identity=cast(str, evidence["control_store_identity"]),
+                control_store_revision=cast(int, evidence["control_store_revision"]),
+            )
+        ):
             raise UpgradeError("rollback authorization backup identity is invalid")
         if (
             evidence.get("backup_verified") is not True
@@ -305,7 +339,7 @@ class RollbackAuthorizationCapability:
             raise UpgradeError("rollback authorization evidence is not diagnostic-only")
         return RollbackAuthorizationRequest(
             self.identity,
-            backup_identity_digest(context),
+            cast(str, evidence["backup_identity_digest"]),
             tuple((field, context[field]) for field in CONTEXT_FIELDS),
             tuple((field, evidence[field]) for field in sorted(evidence)),
         )

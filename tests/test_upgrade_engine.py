@@ -2118,14 +2118,24 @@ class UpgradeEngineTests(unittest.TestCase):
             "mutates_authority": False,
             "backup_verified": True,
             "restore_roundtrip_verified": True,
-            "backup_identity_digest": backup_identity_digest(ROLLBACK_CONTEXT),
+            "backup_bytes_digest": "a" * 64,
+            "manifest_digest": "b" * 64,
+            "control_store_identity": "control-store-1",
+            "control_store_revision": ROLLBACK_CONTEXT["state_revision"],
+            "backup_identity_digest": backup_identity_digest(
+                ROLLBACK_CONTEXT,
+                backup_bytes_digest="a" * 64,
+                manifest_digest="b" * 64,
+                control_store_identity="control-store-1",
+                control_store_revision=1,
+            ),
             "rollback_context_verified": False,
         }
         with self.assertRaisesRegex(UpgradeError, "not enabled"):
             capability.authorize(ROLLBACK_CONTEXT, valid_evidence)
         request = capability.validate(ROLLBACK_CONTEXT, valid_evidence)
         self.assertEqual(evidence_capability.identity, request.identity)
-        self.assertEqual(backup_identity_digest(ROLLBACK_CONTEXT), request.backup_identity_digest)
+        self.assertEqual(valid_evidence["backup_identity_digest"], request.backup_identity_digest)
         self.assertEqual(dict(request.context), ROLLBACK_CONTEXT)
         forged = dict(ROLLBACK_CONTEXT)
         forged["fencing_token"] = "forged"  # noqa: S105
@@ -2142,7 +2152,7 @@ class UpgradeEngineTests(unittest.TestCase):
         with self.assertRaisesRegex(UpgradeError, "backup identity is invalid"):
             capability.authorize(
                 ROLLBACK_CONTEXT,
-                {**valid_evidence, "backup_identity_digest": "0" * 64},
+                {**valid_evidence, "backup_bytes_digest": "0" * 64},
             )
         for hostile, message in (
             (None, "context or evidence is invalid"),
@@ -2155,6 +2165,13 @@ class UpgradeEngineTests(unittest.TestCase):
             ({**valid_evidence, "phase": "discover"}, "phase or backend is invalid"),
             ({**valid_evidence, "mutates_authority": True}, "evidence is mutating"),
             ({**valid_evidence, "backup_verified": False}, "lacks backup or restore proof"),
+            ({**valid_evidence, "manifest_digest": "c" * 64}, "backup identity is invalid"),
+            (
+                {**valid_evidence, "control_store_identity": "replaced"},
+                "backup identity is invalid",
+            ),
+            ({**valid_evidence, "control_store_revision": 2}, "backup identity is invalid"),
+            ({**valid_evidence, "control_store_revision": True}, "backup identity is invalid"),
         ):
             with self.subTest(hostile=hostile), self.assertRaisesRegex(UpgradeError, message):
                 capability.authorize(ROLLBACK_CONTEXT, hostile)  # type: ignore[arg-type]
