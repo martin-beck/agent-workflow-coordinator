@@ -375,6 +375,11 @@ class SQLiteAuthorityAdapterTests(unittest.TestCase):
             executor.selector_visibility_scope("runtime-selector.json", 1, "barrier", "fence"),
         ):
             raise RuntimeError("publication failed")
+        with (
+            self.assertRaisesRegex(SQLiteAuthorityError, "durable lifecycle state changed"),
+            executor.selector_visibility_scope("runtime-selector.json", 1, "barrier", "fence"),
+        ):
+            journal.write_text('{"status":"running","phase":"preflight","records":[]}\n')
 
     def test_generated_contract_backup_operation_dispatches_directly(self) -> None:
         def release(version: str, seed: str) -> dict[str, str]:
