@@ -15,6 +15,7 @@ import tempfile
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from threading import Barrier
 from typing import cast
 from unittest.mock import patch
 
@@ -173,26 +174,46 @@ class GitBackupTests(unittest.TestCase):
             self.assertFalse(destination.exists())
 
     def test_concurrent_restore_collision_preserves_existing_destination(self) -> None:
-        """Concurrent attempts cannot overwrite an already-owned destination."""
+        """An absent destination is published by one racing restore only."""
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             backup = create_backup(self.repo(root), root / "backup", quiesced=True)
             destination = root / "restored"
-            destination.mkdir()
-            sentinel = destination / "owner-sentinel"
-            sentinel.write_text("existing-owner\n", encoding="utf-8")
+            existence_barrier = Barrier(2)
+            created_staging: list[Path] = []
+            original_safe_root = MODULE._safe_root
+            original_mkdtemp = MODULE.tempfile.mkdtemp
 
-            def attempt() -> type[Exception] | None:
-                try:
-                    restore_backup(backup, destination)
-                except Exception as error:
-                    return type(error)
-                return None
+            def gated_safe_root(path: Path, label: str) -> None:
+                original_safe_root(path, label)
+                if path == destination:
+                    existence_barrier.wait(timeout=5)
 
-            with ThreadPoolExecutor(max_workers=2) as pool:
-                outcomes = list(pool.map(lambda _index: attempt(), range(2)))
-            self.assertEqual([BackupError, BackupError], outcomes)
-            self.assertEqual("existing-owner\n", sentinel.read_text(encoding="utf-8"))
+            def record_mkdtemp(*args: object, **kwargs: object) -> str:
+                path = Path(original_mkdtemp(*args, **kwargs))
+                if path.name.startswith(".git-restore-"):
+                    created_staging.append(path)
+                return str(path)
+
+            with (
+                patch.object(MODULE, "_safe_root", side_effect=gated_safe_root),
+                patch.object(MODULE.tempfile, "mkdtemp", side_effect=record_mkdtemp),
+                ThreadPoolExecutor(max_workers=2) as pool,
+            ):
+                futures = [pool.submit(restore_backup, backup, destination) for _ in range(2)]
+                outcomes: list[type[Exception] | None] = []
+                for future in futures:
+                    try:
+                        future.result()
+                    except Exception as error:
+                        outcomes.append(type(error))
+                    else:
+                        outcomes.append(None)
+
+            self.assertEqual([None, BackupError], outcomes)
+            self.assertEqual("state\n", (destination / "task.md").read_text(encoding="utf-8"))
+            self.assertTrue(created_staging)
+            self.assertTrue(all(not path.exists() for path in created_staging))
 
     def test_archive_path_traversal_and_restore_symlink_fail_closed(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
