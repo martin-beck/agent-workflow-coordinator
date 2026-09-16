@@ -2110,7 +2110,15 @@ class UpgradeEngineTests(unittest.TestCase):
         context = PhaseContext(**cast(dict[str, Any], ROLLBACK_CONTEXT))
         evidence_capability = BoundRollbackCapability.bind(context, adapter)
         capability = RollbackAuthorizationCapability.bind(context, evidence_capability)
-        valid_evidence = {**ROLLBACK_CONTEXT, "rollback_context_verified": False}
+        valid_evidence = {
+            **ROLLBACK_CONTEXT,
+            "phase": "rollback",
+            "backend_identity_verified": True,
+            "mutates_authority": False,
+            "backup_verified": True,
+            "restore_roundtrip_verified": True,
+            "rollback_context_verified": False,
+        }
         with self.assertRaisesRegex(UpgradeError, "not enabled"):
             capability.authorize(ROLLBACK_CONTEXT, valid_evidence)
         forged = dict(ROLLBACK_CONTEXT)
@@ -2125,6 +2133,20 @@ class UpgradeEngineTests(unittest.TestCase):
             capability.authorize(
                 ROLLBACK_CONTEXT, {**valid_evidence, "rollback_context_verified": True}
             )
+        for hostile, message in (
+            (None, "context or evidence is invalid"),
+            (
+                {key: value for key, value in valid_evidence.items() if key != "phase"},
+                "schema is invalid",
+            ),
+            ({**valid_evidence, "unexpected": True}, "schema is invalid"),
+            ({**valid_evidence, "backend": "git"}, "evidence identity mismatch"),
+            ({**valid_evidence, "phase": "discover"}, "phase or backend is invalid"),
+            ({**valid_evidence, "mutates_authority": True}, "evidence is mutating"),
+            ({**valid_evidence, "backup_verified": False}, "lacks backup or restore proof"),
+        ):
+            with self.subTest(hostile=hostile), self.assertRaisesRegex(UpgradeError, message):
+                capability.authorize(ROLLBACK_CONTEXT, hostile)  # type: ignore[arg-type]
 
     def test_bound_rollback_inspection_dispatches_initialized_real_adapters(self) -> None:
         """Concrete adapter identity is retained without authorizing rollback."""
