@@ -1178,6 +1178,41 @@ class RollbackControlStoreTests(unittest.TestCase):
                 finally:
                     connection.close()
 
+    def test_v10_interrupted_recovery_residue_requires_exact_revision_chain(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "control.sqlite"
+            store = SQLiteBarrierSessionStore(
+                SQLiteRollbackControlStore(path, PROJECT), lambda: "authority-3"
+            )
+            identity = self._session_identity()
+            created = store.create(identity)
+            with sqlite3.connect(path) as connection:
+                connection.execute(
+                    "UPDATE barrier_session SET status='ambiguous',revision=? WHERE project_id=?",
+                    (created.revision + 1, PROJECT),
+                )
+                connection.execute(
+                    "UPDATE barrier_session_intent SET outcome='prepared',expected_revision=? "
+                    "WHERE project_id=?",
+                    (created.revision, PROJECT),
+                )
+                connection.commit()
+
+            with self.assertRaisesRegex(ControlStoreError, "identity is invalid"):
+                store.recover_unknown()
+            self.assertFalse(store.operation_owned_by_current_thread)
+            unchanged = store.snapshot()
+            assert unchanged is not None
+            self.assertEqual(("ambiguous", 2), (unchanged.status, unchanged.revision))
+            with sqlite3.connect(path) as connection:
+                self.assertEqual(
+                    [("prepared",)],
+                    connection.execute(
+                        "SELECT outcome FROM barrier_session_intent WHERE project_id=?",
+                        (PROJECT,),
+                    ).fetchall(),
+                )
+
     def test_v10_session_intent_publication_failure_requires_recovery(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "control.sqlite"

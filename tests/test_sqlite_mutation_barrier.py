@@ -158,6 +158,20 @@ def _session_commit_waiting_for_sigkill(root_text: str, ready: Any) -> None:
     session.create(_identity())
 
 
+def _session_recovery_waiting_for_sigkill(root_text: str, ready: Any) -> None:
+    """Pause after durable ambiguity but before intent outcome publication."""
+    root = Path(root_text)
+    session = SQLiteBarrierSessionStore(_control(root), lambda: "authority-1")
+
+    def wait_after_ambiguity(*_args: object, **_kwargs: object) -> None:
+        ready.set()
+        multiprocessing.Event().wait()
+
+    session_any: Any = session
+    session_any._mark_intent_locked = wait_after_ambiguity
+    session.recover_unknown()
+
+
 def _route_effect_waiting_for_sigkill(root_text: str, ready: Any) -> None:
     """Pause after a public route's SQL effects and before transaction commit."""
     root = Path(root_text)
@@ -515,6 +529,86 @@ class SQLiteMutationBarrierProcessTests(unittest.TestCase):
             ).fetchall()
         self.assertNotIn(("prepared",), outcomes)
         self.assertIn(("ambiguous",), outcomes)
+
+    def test_sigkill_during_unknown_recovery_preserves_ambiguity_until_new_fence(self) -> None:
+        context = multiprocessing.get_context("fork")
+        commit_ready = context.Event()
+        committed_without_outcome = context.Process(
+            target=_session_commit_waiting_for_sigkill,
+            args=(self.directory.name, commit_ready),
+        )
+        committed_without_outcome.start()
+        self.assertTrue(commit_ready.wait(5))
+        self._kill(committed_without_outcome)
+
+        committed = self.session.snapshot()
+        assert committed is not None
+        self.assertEqual(("held", 1), (committed.status, committed.revision))
+
+        recovery_ready = context.Event()
+        crashed_recovery = context.Process(
+            target=_session_recovery_waiting_for_sigkill,
+            args=(self.directory.name, recovery_ready),
+        )
+        crashed_recovery.start()
+        self.assertTrue(recovery_ready.wait(5))
+        self._kill(crashed_recovery)
+
+        reopened = SQLiteBarrierSessionStore(_control(self.root), lambda: "authority-1")
+        ambiguous = reopened.snapshot()
+        assert ambiguous is not None
+        self.assertEqual(("ambiguous", 2), (ambiguous.status, ambiguous.revision))
+        with sqlite3.connect(self.control.control_store_path) as connection:
+            self.assertEqual(
+                [("prepared",)],
+                connection.execute(
+                    "SELECT outcome FROM barrier_session_intent WHERE project_id=?",
+                    (PROJECT,),
+                ).fetchall(),
+            )
+
+        self.assertEqual(
+            (
+                "rejected",
+                "MutationFenceError",
+                "authority mutation rejected while barrier is ambiguous",
+            ),
+            self._run_writer(),
+        )
+        self.assertEqual(1, self._authority_revision()[0])
+
+        self.assertEqual(ambiguous, reopened.recover_unknown())
+        with sqlite3.connect(self.control.control_store_path) as connection:
+            self.assertEqual(
+                [("ambiguous",)],
+                connection.execute(
+                    "SELECT outcome FROM barrier_session_intent WHERE project_id=?",
+                    (PROJECT,),
+                ).fetchall(),
+            )
+
+        replacement = BarrierSessionState(
+            _identity(
+                attempt="attempt-recovered",
+                state_revision=2,
+                barrier="barrier-recovered",
+                fence="fence-recovered",
+                owner="owner-recovered",
+            ),
+            "held",
+            1,
+        )
+        reconciled = reopened.reconcile_ambiguous(ambiguous.revision, replacement)
+        self.assertEqual(replacement, reconciled)
+        self.assertEqual(
+            ("rejected", "MutationFenceError", "authority mutation rejected while barrier is held"),
+            self._run_writer(),
+        )
+        self.session = reopened
+        released = self._release(reconciled)
+        self.assertEqual("released", released.status)
+        self.assertEqual(("committed",), self._run_writer())
+        self.assertEqual(2, self._authority_revision()[0])
 
     def test_concurrent_released_writers_serialize_one_exact_revision(self) -> None:
         released = self._release(self._create_held())

@@ -13,8 +13,8 @@
     }
   },
   "implementation_snapshot": {
-    "revision": "487a2cb5e49cccc27a12a3500b710b843aa49097",
-    "runtime_revision": "487a2cb5e49cccc27a12a3500b710b843aa49097",
+    "revision": "c1e26b8c1a66c2a9f4ce7f61391fa40456efc3b2",
+    "runtime_revision": "c1e26b8c1a66c2a9f4ce7f61391fa40456efc3b2",
     "status": "descriptor-safe control-store and SQLite DB/WAL/SHM rereads plus bounded independent-process barrier/write evidence; executable apply and rollback remain rejection-only"
   },
   "correspondence": [
@@ -40,13 +40,13 @@
       "model_actions": ["MarkAmbiguous", "Acquire"],
       "implementation_obligation": "Process death or uncertain WAL/control-store outcomes preserve durable write-closed state; recovery must reread and reconcile before a newer fenced session can proceed.",
       "evidence_required": ["sigkill boundaries", "WAL/SHM fault tests", "new-session CAS tests"],
-      "status": "bounded executable evidence in tests/test_sqlite_mutation_barrier.py; implementation refinement pending"
+      "status": "bounded executable SIGKILL evidence covers CAS publication and interrupted ambiguous-recovery intent residue in tests/test_sqlite_mutation_barrier.py; implementation refinement pending"
     },
     {
       "model_actions": ["RejectStaleCAS", "AmbiguousIsWriteClosed", "LockOwnership"],
       "implementation_obligation": "Typed recovery rejection paths release the operation lock and preserve the durable ambiguous snapshot across stale-fence, reused-fence, authority-mismatch, reread-failure, invalid-revision, and unresolved-intent failures.",
-      "evidence_required": ["tests/test_rollback_control_store.py::test_v10_session_intent_recovery_fences_and_requires_newer_fence"],
-      "status": "bounded executable evidence at 99b65e6; implementation refinement pending"
+      "evidence_required": ["tests/test_rollback_control_store.py::test_v10_session_intent_recovery_fences_and_requires_newer_fence", "tests/test_rollback_control_store.py::test_v10_interrupted_recovery_residue_requires_exact_revision_chain"],
+      "status": "bounded executable recovery and hostile revision-chain evidence; implementation refinement pending"
     }
   ],
   "tlc_result": {
