@@ -352,6 +352,26 @@ class SQLiteAuthorityAdapterTests(unittest.TestCase):
         self.assertFalse((self.root / "backup.sqlite").exists())
         self.assertFalse(self.session.operation_owned_by_current_thread)
 
+    def test_bound_lifecycle_executor_rejects_failed_effect_journal_disappearance(self) -> None:
+        journal = self.root / "engine-journal.json"
+        journal.write_text('{"status":"running","phase":"backup","records":[]}\n', encoding="utf-8")
+        executor = self.adapter.bind_lifecycle_executor(self.session, journal)
+        executor.snapshot()
+
+        def delete_then_fail(_destination: Path, _binding: dict[str, Any]) -> dict[str, Any]:
+            # Simulate loss of the durable journal while the effect is in flight.
+            journal.unlink()
+            raise RuntimeError("injected journal disappearance")
+
+        with (
+            patch.object(self.adapter, "backup_bound", side_effect=delete_then_fail),
+            self.assertRaisesRegex(SQLiteAuthorityError, "lifecycle journal is unavailable"),
+        ):
+            executor.backup(self.root / "backup.sqlite", {})
+        self.assertFalse(journal.exists())
+        self.assertFalse((self.root / "backup.sqlite").exists())
+        self.assertFalse(self.session.operation_owned_by_current_thread)
+
     def test_unbound_lifecycle_executor_cannot_snapshot_durable_state(self) -> None:
         executor = self.adapter.lifecycle_executor()
         with self.assertRaisesRegex(SQLiteAuthorityError, "not bound to durable state"):
