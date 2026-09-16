@@ -29,6 +29,7 @@ from tools.handoffctl import (
     coordinator_lock_path,
     locked,
 )
+from tools.rollback_evidence import BackupObservation
 from tools.upgrade_authority import inspect_sqlite_release_authority
 from tools.upgrade_identity import (
     ENVELOPE_FIELDS,
@@ -347,6 +348,24 @@ class SQLiteControlStoreAdapter:
         if self._store.operation_owned_by_current_thread:
             return self._store._verify_rollback_context_locked(context)
         return self._store.verify_rollback_context(context)
+
+    def observe_backup_identity(
+        self, backup: Path, manifest: Path, context: Mapping[str, object]
+    ) -> BackupObservation:
+        """Bind artifact evidence to a fresh durable control-store reread."""
+        durable = self.verify_rollback_context(context)
+        if not isinstance(durable, Mapping):
+            raise ControlStoreError("backup observation requires a valid control-store reread")
+        identity = durable.get("durable_barrier_id")
+        revision = durable.get("revision")
+        if not isinstance(identity, str) or type(revision) is not int:
+            raise ControlStoreError("control-store reread identity is invalid")
+        return BackupObservation.from_artifacts(
+            backup,
+            manifest,
+            control_store_identity=identity,
+            control_store_revision=revision,
+        )
 
     def begin_release_rollback_context(self, context: Mapping[str, object]) -> Mapping[str, object]:
         operation_id = str(context["operation_id"])
