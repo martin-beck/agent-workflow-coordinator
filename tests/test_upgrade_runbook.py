@@ -1,0 +1,89 @@
+# Copyright (C) Huawei Technologies Co., Ltd. 2026. All rights reserved.
+# SPDX-License-Identifier: MIT
+
+"""Hostile tests for privacy-safe release runbook generation."""
+
+from __future__ import annotations
+
+import json
+import tempfile
+import unittest
+from pathlib import Path
+from typing import Any
+
+from tools.generate_upgrade_contract import generate
+from tools.generate_upgrade_runbook import RunbookError, generate_runbooks, main, write_runbooks
+
+
+def _release(version: str, seed: str) -> dict[str, str]:
+    return {
+        "version": version,
+        "source_commit": seed * 40,
+        "tag_ref": f"refs/tags/{version}",
+        "tag_object": chr(ord(seed) + 1) * 40,
+        "signature_sha256": chr(ord(seed) + 2) * 64,
+        "trust_policy_sha256": chr(ord(seed) + 3) * 64,
+        "vendor_manifest_sha256": chr(ord(seed) + 4) * 64,
+    }
+
+
+def _contract() -> dict[str, Any]:
+    return generate(
+        {
+            "operation_id": "upgrade:v0.3.5-to-v0.3.6:001",
+            "backend": "sqlite",
+            "selector_ref": ".runtime/runtime-selector.json",
+            "expected_state_revision": 7,
+            "barrier_id": "barrier-7",
+            "fencing_token": "fence-7",
+            "from": _release("v0.3.5", "a"),
+            "to": _release("v0.3.6", "b"),
+        }
+    )
+
+
+class UpgradeRunbookTests(unittest.TestCase):
+    def test_generation_is_deterministic_and_contains_safety_gates(self) -> None:
+        first = generate_runbooks(_contract())
+        self.assertEqual(first, generate_runbooks(_contract()))
+        self.assertEqual(set(first), {"operator.md", "agent.md"})
+        for text in first.values():
+            self.assertIn("work closed", text)
+            self.assertIn("health check", text)
+            self.assertIn("reconcile", text)
+            self.assertIn("WAL/SHM", text)
+        self.assertIn("backend.restore", first["operator.md"])
+        self.assertIn("barrier.acquire", first["operator.md"])
+
+    def test_output_excludes_private_contract_values(self) -> None:
+        document = _contract()
+        rendered = "\n".join(generate_runbooks(document).values())
+        for value in (
+            document["phases"][0]["operation"]["inputs"]["selector_ref"],
+            document["phases"][0]["operation"]["inputs"]["barrier_id"],
+            document["phases"][0]["operation"]["inputs"]["fencing_token"],
+            document["from"]["source_commit"],
+            document["to"]["signature_sha256"],
+        ):
+            self.assertNotIn(value, rendered)
+
+    def test_write_and_cli_require_valid_contract(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            contract = root / "contract.json"
+            output = root / "runbooks"
+            contract.write_text(json.dumps(_contract()), encoding="utf-8")
+            self.assertEqual(0, main([str(contract), str(output)]))
+            self.assertEqual(
+                sorted((output / name).name for name in ("operator.md", "agent.md")),
+                ["agent.md", "operator.md"],
+            )
+            before = sorted(path.name for path in output.iterdir())
+            contract.write_text("{}", encoding="utf-8")
+            with self.assertRaises(RunbookError):
+                write_runbooks(json.loads(contract.read_text()), output / "invalid")
+            self.assertEqual(before, sorted(path.name for path in output.iterdir()))
+
+
+if __name__ == "__main__":
+    unittest.main()
