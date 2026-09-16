@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any, cast
 from unittest.mock import patch
 
-from tools.formal_correspondence import formal_provenance, validate_trace
+from tools.formal_correspondence import formal_provenance, validate_runtime_trace
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -73,15 +73,27 @@ class CrossBackendLifecycleTests(unittest.TestCase):
             git_backup = GIT.create_backup(repo, root / "git-backup", quiesced=True)
             sqlite_backup = root / "sqlite-backup.sqlite3"
             sqlite_manifest = SQLITE.backup_database(database, sqlite_backup, BINDING)
+            trace: list[dict[str, object]] = []
             GIT.verify_backup(git_backup)
             SQLITE.verify_backup(sqlite_backup, sqlite_manifest, BINDING)
-            self.assertEqual(("ExecuteSuccess",), validate_trace(("backup_verified",)))
-            self.assertEqual(64, len(cast(str, formal_provenance(ROOT)["model_sha256"])))
+            trace.append({"event": "backup_verified", "revision_before": 0, "revision_after": 0})
+            self.assertEqual(("ExecuteSuccess",), validate_runtime_trace(trace))
+            provenance = formal_provenance(ROOT)
+            self.assertEqual(64, len(cast(str, provenance["model_sha256"])))
+            self.assertEqual(64, len(cast(str, provenance["artifact_sha256"])))
 
             with patch.object(Path, "replace", side_effect=OSError("publication interrupted")):
-                self.assertEqual(("ExecuteReject",), validate_trace(("publication_failed",)))
                 with self.assertRaises(GIT.BackupError):
                     GIT.restore_backup(git_backup, root / "git-fresh")
+                trace.append(
+                    {
+                        "event": "publication_failed",
+                        "revision_before": 0,
+                        "revision_after": 0,
+                        "lock_held": True,
+                    }
+                )
+                self.assertEqual(("ExecuteReject",), validate_runtime_trace(trace[-1:]))
                 with self.assertRaises(SQLITE.BackupError):
                     SQLITE.restore_database(
                         sqlite_backup,

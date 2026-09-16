@@ -31,13 +31,31 @@ def formal_provenance(root: Path) -> dict[str, object]:
     ]
     if missing:
         raise ValueError(f"formal invariant definitions missing: {', '.join(missing)}")
+    artifact = root / "formal/tier-evidence.json"
     return {
         "model": str(model),
         "model_sha256": sha256(model.read_bytes()).hexdigest(),
         "config": str(config),
         "config_sha256": sha256(config.read_bytes()).hexdigest(),
+        "artifact": str(artifact),
+        "artifact_sha256": sha256(artifact.read_bytes()).hexdigest(),
         "invariants": dict(INVARIANT_PREDICATES),
     }
+
+
+def validate_runtime_trace(trace: Sequence[dict[str, object]]) -> tuple[str, ...]:
+    """Evaluate concrete terminal outcomes against correspondence invariants."""
+    events = tuple(str(record.get("event")) for record in trace)
+    actions = validate_trace(events)
+    for record in trace:
+        if record.get("event") in {"publication_failed", "restore_failed"}:
+            if record.get("revision_before") != record.get("revision_after"):
+                raise ValueError("ProjectionAtomicity violated")
+            if record.get("lock_held") is not True:
+                raise ValueError("LockSafety violated")
+        if record.get("event") == "reconcile" and record.get("fenced") is not True:
+            raise ValueError("ReconcileRequiresFence violated")
+    return actions
 
 
 def validate_trace(events: Sequence[str]) -> tuple[str, ...]:
