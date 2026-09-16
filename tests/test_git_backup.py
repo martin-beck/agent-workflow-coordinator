@@ -37,6 +37,12 @@ def git(*args: str, cwd: Path) -> None:
     )
 
 
+def git_output(*args: str, cwd: Path) -> str:
+    return subprocess.check_output(  # noqa: S603
+        ["git", *args], cwd=cwd, text=True, stderr=subprocess.STDOUT  # noqa: S607
+    )
+
+
 class GitBackupTests(unittest.TestCase):
     def repo(self, root: Path) -> Path:
         repo = root / "repo"
@@ -57,6 +63,22 @@ class GitBackupTests(unittest.TestCase):
             self.assertEqual(True, verify_backup(backup)["verified"])
             restore_backup(backup, root / "restored")
             self.assertTrue((root / "restored" / "task.md").exists())
+
+    def test_restore_preserves_commit_tree_and_refs_equivalence(self) -> None:
+        """A verified backup restores the exact immutable Git authority view."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repo = self.repo(root)
+            backup = create_backup(repo, root / "backup", quiesced=True)
+            original_head = git_output("rev-parse", "HEAD", cwd=repo)
+            original_tree = git_output("ls-tree", "-r", "HEAD", cwd=repo)
+            original_refs = git_output("show-ref", "--heads", cwd=repo)
+            self.assertEqual(original_head, str(verify_backup(backup)["commit"]) + "\n")
+            restore_backup(backup, root / "restored")
+            restored = root / "restored"
+            self.assertEqual(original_head, git_output("rev-parse", "HEAD", cwd=restored))
+            self.assertEqual(original_tree, git_output("ls-tree", "-r", "HEAD", cwd=restored))
+            self.assertEqual(original_refs, git_output("show-ref", "--heads", cwd=restored))
 
     def test_corrupt_artifact_and_nonempty_restore_fail_closed(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
