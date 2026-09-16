@@ -14,6 +14,7 @@ import unittest
 from contextlib import closing
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from typing import cast
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -379,6 +380,73 @@ class SQLiteBackupTests(unittest.TestCase):
         ):
             write_manifest(manifest_path, manifest)
         self.assertFalse(manifest_path.exists())
+
+    def test_real_parent_swap_before_install_allocation_fails_closed(self) -> None:
+        backup = self.root / "backup.sqlite3"
+        manifest = backup_database(self.source, backup, BINDING)
+        parent = self.root / "destination-parent"
+        parent.mkdir()
+        destination = parent / "restored.sqlite3"
+        create_database(destination, body="preserved")
+        moved = self.root / "moved-parent"
+        redirect = self.root / "redirect-parent"
+        redirect.mkdir()
+        original_identity = MODULE._parent_identity
+        swapped = False
+
+        def swap_parent(path: Path) -> tuple[int, int]:
+            nonlocal swapped
+            identity = cast(tuple[int, int], original_identity(path))
+            if not swapped:
+                swapped = True
+                parent.rename(moved)
+                parent.symlink_to(redirect, target_is_directory=True)
+            return identity
+
+        with (
+            patch.object(MODULE, "_parent_identity", side_effect=swap_parent),
+            self.assertRaisesRegex(BackupError, "parent identity changed"),
+        ):
+            restore_database(backup, destination, manifest, BINDING, quiesced=True)
+        self.assertTrue((moved / destination.name).is_file())
+        with closing(sqlite3.connect(moved / destination.name)) as connection:
+            self.assertEqual(
+                "preserved", connection.execute("SELECT body FROM records").fetchone()[0]
+            )
+        self.assertFalse(list(redirect.glob(".coordinator-*")))
+        self.assertFalse((redirect / destination.name).exists())
+        self.assertFalse((redirect / f"{destination.name}-wal").exists())
+        self.assertFalse((redirect / f"{destination.name}-shm").exists())
+
+    def test_real_parent_swap_before_manifest_allocation_fails_closed(self) -> None:
+        backup = self.root / "backup.sqlite3"
+        manifest = backup_database(self.source, backup, BINDING)
+        parent = self.root / "manifest-parent"
+        parent.mkdir()
+        manifest_path = parent / "manifest.json"
+        moved = self.root / "moved-manifest-parent"
+        redirect = self.root / "redirect-manifest-parent"
+        redirect.mkdir()
+        original_identity = MODULE._parent_identity
+        swapped = False
+
+        def swap_parent(path: Path) -> tuple[int, int]:
+            nonlocal swapped
+            identity = cast(tuple[int, int], original_identity(path))
+            if not swapped:
+                swapped = True
+                parent.rename(moved)
+                parent.symlink_to(redirect, target_is_directory=True)
+            return identity
+
+        with (
+            patch.object(MODULE, "_parent_identity", side_effect=swap_parent),
+            self.assertRaisesRegex(BackupError, "parent identity changed"),
+        ):
+            write_manifest(manifest_path, manifest)
+        self.assertFalse((moved / manifest_path.name).exists())
+        self.assertFalse(list(redirect.glob(".coordinator-*")))
+        self.assertFalse((redirect / manifest_path.name).exists())
 
 
 if __name__ == "__main__":

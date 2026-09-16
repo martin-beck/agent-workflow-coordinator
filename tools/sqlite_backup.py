@@ -178,6 +178,7 @@ def _install(source: Path, destination: Path, binding: dict[str, Any]) -> None:
     try:
         destination.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         parent_identity = _parent_identity(destination)
+        _assert_parent_identity(destination, parent_identity)
         descriptor, temporary = tempfile.mkstemp(
             prefix=".coordinator-backup-", suffix=".sqlite3", dir=destination.parent
         )
