@@ -9,7 +9,7 @@ from contextlib import AbstractContextManager, contextmanager
 
 from tools.admission_lease import LOCK_ORDER, AdmissionLease, AdmissionRecheck
 from tools.handoffctl import CoordinatorLockGuard
-from tools.lifecycle_trace import LifecycleEvent, LifecycleObserver
+from tools.lifecycle_trace import LifecycleObserver, _issue_event
 from tools.lock_domain import LockDomainContract, LockDomainError, LockDomainIdentity
 from tools.mutation_fence import MutationFence
 from tools.rollback_control_store import ControlStoreError, SQLiteBarrierSessionStore
@@ -162,19 +162,6 @@ class LockDomainScope:
             or observed.revision != self._session_revision
         ):
             raise LockDomainError("durable session and lease do not match")
-        if self._observer is not None:
-            self._observer(
-                LifecycleEvent(
-                    "scope.reread",
-                    observed.revision,
-                    self._lease.fencing_owner,
-                    "authority",
-                    self._lease.project_id,
-                    observed.identity.identity_digest,
-                    self._lease.fencing_token,
-                    self._event_token,
-                )
-            )
         try:
             state = self._session_store.recheck_held_locked(
                 common_guard,
@@ -190,3 +177,16 @@ class LockDomainScope:
         self._identity.assert_session_binding(
             state, self._lease, session_revision=self._session_revision
         )
+        if self._observer is not None:
+            self._observer(
+                _issue_event(
+                    self._event_token,
+                    "scope.reread",
+                    state.revision,
+                    self._lease.fencing_owner,
+                    "authority",
+                    self._lease.project_id,
+                    state.identity.identity_digest,
+                    self._lease.fencing_token,
+                )
+            )
