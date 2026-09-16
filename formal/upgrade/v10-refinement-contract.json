@@ -13,8 +13,8 @@
     }
   },
   "implementation_snapshot": {
-    "revision": "be92ec8638301170caa7a09b00a8442c54dfd831",
-    "runtime_revision": "be92ec8638301170caa7a09b00a8442c54dfd831",
+    "revision": "5c8ea6bddd0b89f35a1b6796ac502938850701d7",
+    "runtime_revision": "5c8ea6bddd0b89f35a1b6796ac502938850701d7",
     "status": "descriptor-safe control-store reread plus bounded independent-process barrier/write evidence; executable apply and rollback remain rejection-only"
   },
   "correspondence": [
