@@ -235,6 +235,30 @@ class SQLiteAuthorityAdapterTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.directory.cleanup()
 
+    def test_bound_lifecycle_executor_snapshots_real_control_and_journal(self) -> None:
+        journal = self.root / "engine-journal.json"
+        journal.write_text(
+            '{"status":"running","phase":"backup","records":[{"outcome":"started"}]}\n',
+            encoding="utf-8",
+        )
+        executor = self.adapter.bind_lifecycle_executor(self.session, journal)
+        snapshot = executor.snapshot()
+        self.assertEqual("held", snapshot.control.status)
+        self.assertEqual(1, snapshot.control.revision)
+        self.assertEqual("backup", snapshot.journal.phase)
+        self.assertEqual([{"outcome": "started"}], snapshot.journal.as_mapping()["records"])
+        self.assertFalse(self.session.operation_owned_by_current_thread)
+        self.assertEqual(b"clean", self.authority.read_bytes()[-5:])
+
+    def test_bound_lifecycle_executor_releases_lock_on_journal_failure(self) -> None:
+        journal = self.root / "engine-journal.json"
+        journal.write_text("not-json\n", encoding="utf-8")
+        executor = self.adapter.bind_lifecycle_executor(self.session, journal)
+        with self.assertRaisesRegex(SQLiteAuthorityError, "durable lifecycle snapshot failed"):
+            executor.snapshot()
+        self.assertFalse(self.session.operation_owned_by_current_thread)
+        self.assertEqual("held", self.session.snapshot().status)  # type: ignore[union-attr]
+
     def test_engine_bound_rollback_inspection_uses_real_scope_and_preserves_journal(self) -> None:
         context = {**CONTEXT, "operation_id": "op-real-sqlite-inspection", "project_id": PROJECT}
         artifact_root = self.root / "artifacts"
