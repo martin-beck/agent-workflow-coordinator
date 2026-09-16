@@ -8,7 +8,9 @@ import json
 import os
 import sqlite3
 import stat
+import tempfile
 from collections.abc import Callable, Mapping
+from contextlib import nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, TypeVar, cast
@@ -205,6 +207,177 @@ class SQLiteLifecycleExecutor:
 
     def backup(self, destination: Path, binding: dict[str, Any]) -> dict[str, Any]:
         return self._run_effect(lambda: self._adapter.backup_bound(destination, binding))
+
+    def execute_generated_operation(
+        self,
+        operation: Mapping[str, object],
+        destination: Path,
+        binding: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Execute only the generated SQLite backup opcode under a held session.
+
+        This is the first production operation dispatch seam.  It does not
+        authorize upgrades or selector replacement; unsupported opcodes remain
+        fail-closed until their corresponding lifecycle contracts exist.
+        """
+        operation_id, inputs = self._validate_generated_operation(operation)
+        session_store = self._session_store
+        if session_store is None:
+            raise SQLiteAuthorityError("generated backup executor is not bound")
+        snapshot = self.snapshot()
+        if snapshot.control.status != "held":
+            raise SQLiteAuthorityError("generated backup requires a held durable barrier")
+        self._validate_generated_journal(snapshot, operation_id, inputs)
+        result: dict[str, Any]
+        try:
+            with session_store.operation_lock():
+                if self._snapshot_locked() != snapshot:
+                    raise SQLiteAuthorityError("generated backup durable state changed")
+                result = self._adapter.backup_bound(destination, binding)
+                self._publish_generated_outcome(snapshot, operation_id, result)
+        except SQLiteAuthorityError:
+            raise
+        except Exception as error:
+            raise SQLiteAuthorityError("generated SQLite backup failed") from error
+        return {
+            "operation_id": operation_id,
+            "opcode": "backend.backup",
+            "outcome": "completed",
+            **result,
+        }
+
+    @staticmethod
+    def _validate_generated_operation(
+        operation: Mapping[str, object],
+    ) -> tuple[str, Mapping[str, object]]:
+        if not isinstance(operation, Mapping):
+            raise SQLiteAuthorityError("generated operation must be an object")
+        if operation.get("opcode") != "backend.backup":
+            raise SQLiteAuthorityError("generated SQLite operation is unsupported")
+        SQLiteLifecycleExecutor._validate_generated_operation_fields(operation)
+        operation_id = operation.get("operation_id")
+        inputs = operation.get("inputs")
+        if not isinstance(operation_id, str) or not operation_id:
+            raise SQLiteAuthorityError("generated operation identity is invalid")
+        required = {
+            "backend",
+            "selector_ref",
+            "expected_state_revision",
+            "barrier_id",
+            "fencing_token",
+            "backup_operation_id",
+        }
+        if not isinstance(inputs, Mapping) or set(inputs) != required:
+            raise SQLiteAuthorityError("generated SQLite operation binding is invalid")
+        if inputs.get("backend") != "sqlite":
+            raise SQLiteAuthorityError("generated SQLite operation binding is invalid")
+        if inputs.get("backup_operation_id") != operation_id:
+            raise SQLiteAuthorityError("generated backup operation identity is invalid")
+        if operation.get("preconditions") != ["previous-phase-complete"]:
+            raise SQLiteAuthorityError("generated backup preconditions are invalid")
+        if operation.get("durable_record") != "operation-id-and-outcome":
+            raise SQLiteAuthorityError("generated operation durability contract is invalid")
+        return operation_id, inputs
+
+    @staticmethod
+    def _validate_generated_operation_fields(operation: Mapping[str, object]) -> None:
+        if set(operation) != {
+            "operation_id",
+            "opcode",
+            "inputs",
+            "timeout_seconds",
+            "resources",
+            "preconditions",
+            "postconditions",
+            "evidence",
+            "durable_record",
+        }:
+            raise SQLiteAuthorityError("generated operation fields are incomplete or unknown")
+        if operation.get("timeout_seconds") != 300:
+            raise SQLiteAuthorityError("generated operation timeout is invalid")
+        if operation.get("resources") != ["maintenance-barrier", "durable-operation-record"]:
+            raise SQLiteAuthorityError("generated operation resources are invalid")
+        if operation.get("postconditions") != ["backup-contract-satisfied"]:
+            raise SQLiteAuthorityError("generated backup postconditions are invalid")
+        if operation.get("evidence") != ["durable-operation-record"]:
+            raise SQLiteAuthorityError("generated operation evidence is invalid")
+
+    @staticmethod
+    def _validate_generated_journal(
+        snapshot: SQLiteLifecycleSnapshot,
+        operation_id: str,
+        inputs: Mapping[str, object],
+    ) -> None:
+        if snapshot.journal.phase != "backup" or not snapshot.journal.records:
+            raise SQLiteAuthorityError("generated backup journal step is missing")
+        journal_record = snapshot.journal.records[-1]
+        if (
+            journal_record.get("operation_id") != operation_id.rsplit(":", maxsplit=1)[0]
+            or journal_record.get("step_id") != operation_id
+            or journal_record.get("phase") != "backup"
+            or journal_record.get("outcome") != "started"
+        ):
+            raise SQLiteAuthorityError("generated backup journal identity is invalid")
+        context = journal_record.get("context")
+        identity = snapshot.control.identity
+        if (
+            not isinstance(context, Mapping)
+            or context.get("selector_ref") != inputs.get("selector_ref")
+            or context.get("state_revision") != inputs.get("expected_state_revision")
+            or inputs.get("expected_state_revision") != identity.state_revision
+            or inputs.get("barrier_id") != identity.durable_barrier_id
+            or inputs.get("fencing_token") != identity.fencing_token
+            or context.get("durable_barrier_id") != identity.durable_barrier_id
+            or context.get("fencing_token") != identity.fencing_token
+        ):
+            raise SQLiteAuthorityError("generated backup fencing or selector identity is invalid")
+
+    def _publish_generated_outcome(
+        self,
+        before: SQLiteLifecycleSnapshot,
+        operation_id: str,
+        result: Mapping[str, Any],
+    ) -> None:
+        """Atomically persist the generated step outcome after its effect."""
+        if self._journal is None or self._session_store is None:
+            raise SQLiteAuthorityError("generated backup executor is not bound")
+        lock = (
+            nullcontext()
+            if self._session_store.operation_owned_by_current_thread
+            else self._session_store.operation_lock()
+        )
+        with lock:
+            current = self._snapshot_locked()
+            if current.control != before.control or current.journal != before.journal:
+                raise SQLiteAuthorityError("generated backup durable state changed")
+            document = json.loads(self._journal.read_text(encoding="utf-8"))
+            records = document.get("records")
+            if not isinstance(records, list) or not records:
+                raise SQLiteAuthorityError("generated backup journal records are invalid")
+            record = records[-1]
+            if record.get("step_id") != operation_id or record.get("outcome") != "started":
+                raise SQLiteAuthorityError("generated backup journal step changed")
+            record["outcome"] = "success"
+            record["result"] = dict(result)
+            descriptor, temporary = tempfile.mkstemp(
+                prefix=".upgrade-journal-", suffix=".json", dir=self._journal.parent
+            )
+            temporary_path = Path(temporary)
+            try:
+                with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+                    stream.write(json.dumps(document, sort_keys=True) + "\n")
+                    stream.flush()
+                    os.fsync(stream.fileno())
+                temporary_path.replace(self._journal)
+                directory = os.open(self._journal.parent, os.O_DIRECTORY)
+                try:
+                    os.fsync(directory)
+                finally:
+                    os.close(directory)
+            except OSError as error:
+                raise SQLiteAuthorityError("generated backup outcome publication failed") from error
+            finally:
+                temporary_path.unlink(missing_ok=True)
 
     def restore(
         self, backup: Path, destination: Path, manifest: dict[str, Any], binding: dict[str, Any]

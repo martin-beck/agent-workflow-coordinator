@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import json
 import multiprocessing
 import os
 import shutil
@@ -17,6 +18,7 @@ from typing import Any, cast
 from unittest.mock import patch
 
 from tools.admission_lease import AdmissionLease, validate_recheck
+from tools.generate_upgrade_contract import generate
 from tools.handoffctl import locked
 from tools.lock_domain_scope import LockDomainScope
 from tools.mutation_fence import MutationFence, provision, provision_control_binding
@@ -255,6 +257,151 @@ class SQLiteAuthorityAdapterTests(unittest.TestCase):
         self.assertEqual([{"outcome": "started"}], snapshot.journal.as_mapping()["records"])
         self.assertFalse(self.session.operation_owned_by_current_thread)
         self.assertEqual(b"clean", self.authority.read_bytes()[-5:])
+
+    def test_generated_backup_dispatch_requires_held_session_and_preserves_contract_identity(
+        self,
+    ) -> None:
+        journal = self.root / "engine-journal.json"
+        journal.write_text(
+            '{"status":"running","phase":"backup","records":[{'
+            '"operation_id":"campaign","step_id":"campaign:backup",'
+            '"phase":"backup","outcome":"started","context":{'
+            '"selector_ref":"runtime-selector.json","state_revision":1,'
+            '"durable_barrier_id":"barrier","fencing_token":"fence"}}]}\n',
+            encoding="utf-8",
+        )
+        executor = self.adapter.bind_lifecycle_executor(self.session, journal)
+        operation = {
+            "operation_id": "campaign:backup",
+            "opcode": "backend.backup",
+            "inputs": {
+                "backend": "sqlite",
+                "selector_ref": "runtime-selector.json",
+                "expected_state_revision": 1,
+                "barrier_id": "barrier",
+                "fencing_token": "fence",
+                "backup_operation_id": "campaign:backup",
+            },
+            "timeout_seconds": 300,
+            "resources": ["maintenance-barrier", "durable-operation-record"],
+            "preconditions": ["previous-phase-complete"],
+            "postconditions": ["backup-contract-satisfied"],
+            "evidence": ["durable-operation-record"],
+            "durable_record": "operation-id-and-outcome",
+        }
+        operation_inputs = cast(dict[str, Any], operation["inputs"])
+        operation_inputs["fencing_token"] = "stale-fence"  # noqa: S105
+        with self.assertRaisesRegex(SQLiteAuthorityError, "fencing or selector identity"):
+            executor.execute_generated_operation(
+                operation, self.root / "forged.sqlite", {"project_id": PROJECT}
+            )
+        operation_inputs["fencing_token"] = "fence"  # noqa: S105
+        with patch.object(
+            self.adapter, "backup_bound", return_value={"backup_verified": True}
+        ) as backup:
+            result = executor.execute_generated_operation(
+                operation, self.root / "backup.sqlite", {"project_id": PROJECT}
+            )
+        self.assertEqual(
+            {
+                "operation_id": "campaign:backup",
+                "opcode": "backend.backup",
+                "outcome": "completed",
+                "backup_verified": True,
+            },
+            result,
+        )
+        journal_record = json.loads(journal.read_text(encoding="utf-8"))["records"][-1]
+        self.assertEqual("success", journal_record["outcome"])
+        self.assertEqual({"backup_verified": True}, journal_record["result"])
+        backup.assert_called_once()
+        with self.assertRaisesRegex(SQLiteAuthorityError, "journal identity"):
+            executor.execute_generated_operation(
+                operation, self.root / "replayed.sqlite", {"project_id": PROJECT}
+            )
+        operation["opcode"] = "authority.atomic_replace"
+        with self.assertRaisesRegex(SQLiteAuthorityError, "unsupported"):
+            executor.execute_generated_operation(operation, self.root / "backup.sqlite", {})
+
+    def test_generated_contract_backup_operation_dispatches_directly(self) -> None:
+        def release(version: str, seed: str) -> dict[str, str]:
+            return {
+                "version": version,
+                "source_commit": seed * 40,
+                "tag_ref": f"refs/tags/{version}",
+                "tag_object": chr(ord(seed) + 1) * 40,
+                "signature_sha256": chr(ord(seed) + 2) * 64,
+                "trust_policy_sha256": chr(ord(seed) + 3) * 64,
+                "vendor_manifest_sha256": chr(ord(seed) + 4) * 64,
+            }
+
+        document = generate(
+            {
+                "operation_id": "campaign",
+                "backend": "sqlite",
+                "selector_ref": "runtime-selector.json",
+                "expected_state_revision": 1,
+                "barrier_id": "barrier",
+                "fencing_token": "fence",
+                "from": release("v0.3.5", "a"),
+                "to": release("v0.3.6", "b"),
+            }
+        )
+        operation = document["phases"][3]["operation"]
+        journal = self.root / "generated-journal.json"
+        journal.write_text(
+            '{"status":"running","phase":"backup","records":[{"operation_id":"campaign",'
+            '"step_id":"campaign:backup","phase":"backup","outcome":"started",'
+            '"context":{"selector_ref":"runtime-selector.json","state_revision":1,'
+            '"durable_barrier_id":"barrier","fencing_token":"fence"}}]}\n',
+            encoding="utf-8",
+        )
+        executor = self.adapter.bind_lifecycle_executor(self.session, journal)
+        with patch.object(self.adapter, "backup_bound", return_value={"backup_verified": True}):
+            result = executor.execute_generated_operation(
+                operation, self.root / "generated-backup.sqlite", {"project_id": PROJECT}
+            )
+        self.assertEqual("campaign:backup", result["operation_id"])
+        self.assertEqual("completed", result["outcome"])
+
+    def test_generated_backup_rejects_journal_replacement_before_publication(self) -> None:
+        journal = self.root / "replacement-journal.json"
+        journal.write_text(
+            '{"status":"running","phase":"backup","records":[{"operation_id":"campaign",'
+            '"step_id":"campaign:backup","phase":"backup","outcome":"started",'
+            '"context":{"selector_ref":"runtime-selector.json","state_revision":1,'
+            '"durable_barrier_id":"barrier","fencing_token":"fence"}}]}\n',
+            encoding="utf-8",
+        )
+        executor = self.adapter.bind_lifecycle_executor(self.session, journal)
+        operation = {
+            "operation_id": "campaign:backup",
+            "opcode": "backend.backup",
+            "inputs": {
+                "backend": "sqlite",
+                "selector_ref": "runtime-selector.json",
+                "expected_state_revision": 1,
+                "barrier_id": "barrier",
+                "fencing_token": "fence",
+                "backup_operation_id": "campaign:backup",
+            },
+            "timeout_seconds": 300,
+            "resources": ["maintenance-barrier", "durable-operation-record"],
+            "preconditions": ["previous-phase-complete"],
+            "postconditions": ["backup-contract-satisfied"],
+            "evidence": ["durable-operation-record"],
+            "durable_record": "operation-id-and-outcome",
+        }
+
+        def replace_journal(*_: object, **__: object) -> dict[str, bool]:
+            journal.write_text('{"status":"running","phase":"backup","records":[]}\n')
+            return {"backup_verified": True}
+
+        with (
+            patch.object(self.adapter, "backup_bound", side_effect=replace_journal),
+            self.assertRaisesRegex(SQLiteAuthorityError, "durable state changed"),
+        ):
+            executor.execute_generated_operation(operation, self.root / "backup.sqlite", {})
 
     def test_bound_lifecycle_executor_backup_failure_rereads_and_preserves_state(self) -> None:
         journal = self.root / "engine-journal.json"
