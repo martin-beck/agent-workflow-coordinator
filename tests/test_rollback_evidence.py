@@ -9,6 +9,7 @@ import unittest
 from pathlib import Path
 
 from tools.git_authority_adapter import GitAuthorityAdapter
+from tools.git_backup import BackupError as GitBackupError
 from tools.git_backup import create_backup
 from tools.rollback_control_store import (
     ControlStoreError,
@@ -17,6 +18,7 @@ from tools.rollback_control_store import (
 )
 from tools.rollback_evidence import RollbackEvidenceError
 from tools.sqlite_authority_adapter import SQLiteAuthorityAdapter, SQLiteAuthorityError
+from tools.sqlite_backup import BackupError as SQLiteBackupError
 from tools.sqlite_backup import backup_database
 
 PROJECT = "11111111-1111-4111-8111-111111111111"
@@ -39,6 +41,9 @@ class RollbackEvidenceTests(unittest.TestCase):
             subprocess.run(["git", "commit", "-qm", "initial"], cwd=repo, check=True)  # noqa: S607
             git_backup = create_backup(repo, root / "git-backup", quiesced=True)
             self.assertTrue(GitAuthorityAdapter.verify_backup_artifact(git_backup)["verified"])
+            (git_backup / "refs.txt").write_text("tampered\n", encoding="utf-8")
+            with self.assertRaises(GitBackupError):
+                GitAuthorityAdapter.verify_backup_artifact(git_backup)
 
             binding = {
                 "project_id": PROJECT,
@@ -71,6 +76,13 @@ class RollbackEvidenceTests(unittest.TestCase):
                 manifest,
                 SQLiteAuthorityAdapter.verify_backup_artifact(sqlite_backup, manifest, binding),
             )
+            with self.assertRaises(SQLiteBackupError):
+                SQLiteAuthorityAdapter.verify_backup_artifact(
+                    sqlite_backup, {**manifest, "database_sha256": "0" * 64}, binding
+                )
+            sqlite_backup.write_bytes(b"tampered")
+            with self.assertRaises(SQLiteBackupError):
+                SQLiteAuthorityAdapter.verify_backup_artifact(sqlite_backup, manifest, binding)
 
     def test_initialized_sqlite_control_store_binds_observation_identity(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
