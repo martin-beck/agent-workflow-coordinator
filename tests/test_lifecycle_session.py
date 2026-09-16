@@ -46,5 +46,19 @@ class LifecycleSessionTests(unittest.TestCase):
             replacement.write_text("replacement")
             path.rename(Path(directory) / "original")
             path.symlink_to(replacement)
-            with self.assertRaisesRegex(ValueError, "identity changed"):
+            with self.assertRaisesRegex(ValueError, "(?:identity changed|must not be a symlink)"):
+                session.capture_identity()
+
+    def test_bound_identity_reread_rejects_same_inode_symlink(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "authority"
+            path.write_text("original")
+            path.chmod(0o600)
+            Path(directory).chmod(0o700)
+            adapter = SQLiteAuthorityAdapter(path)
+            session = adapter.lifecycle_session()
+            original = Path(directory) / "original"
+            path.rename(original)
+            path.symlink_to(original)
+            with self.assertRaisesRegex(ValueError, "must not be a symlink"):
                 session.capture_identity()

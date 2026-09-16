@@ -31,6 +31,8 @@ class LifecycleSession:
         return self._owner is owner
 
     def capture_identity(self) -> tuple[int, int]:
+        if self._path.is_symlink():
+            raise ValueError("bound lifecycle path must not be a symlink")
         status = self._path.stat()
         identity = (status.st_dev, status.st_ino)
         if identity != self._identity:
