@@ -57,6 +57,10 @@ class SQLiteLifecycleExecutor:
         session_store: SQLiteBarrierSessionStore | None = None,
         journal: Path | None = None,
     ) -> None:
+        if session_store is not None and session_store.authority_path != adapter._authority:
+            raise SQLiteAuthorityError("lifecycle session store is bound to a foreign authority")
+        if session_store is not None and journal is None:
+            raise SQLiteAuthorityError("lifecycle executor journal is required")
         self._adapter = adapter
         self._session_store = session_store
         self._journal = journal

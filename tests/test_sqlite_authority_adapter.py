@@ -25,7 +25,11 @@ from tools.rollback_control_store import (
     SQLiteRollbackControlStore,
 )
 from tools.scoped_backend_adapter import ScopedBackendAdapter
-from tools.sqlite_authority_adapter import SQLiteAuthorityAdapter, SQLiteAuthorityError
+from tools.sqlite_authority_adapter import (
+    SQLiteAuthorityAdapter,
+    SQLiteAuthorityError,
+    SQLiteLifecycleExecutor,
+)
 from tools.upgrade_engine import BoundRollbackCapability, PhaseContext, UpgradeEngine
 from tools.upgrade_identity import (
     BarrierSessionIdentity,
@@ -279,6 +283,20 @@ class SQLiteAuthorityAdapterTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(SQLiteAuthorityError, "foreign authority"):
             self.adapter.bind_lifecycle_executor(unbound_store, self.root / "journal.json")
+
+    def test_direct_lifecycle_executor_constructor_rejects_foreign_store(self) -> None:
+        foreign_authority = self.root / "foreign-authority-direct.sqlite"
+        with sqlite3.connect(foreign_authority) as connection:
+            connection.execute("CREATE TABLE records (id INTEGER PRIMARY KEY)")
+        foreign_authority.chmod(0o600)
+        foreign_store = SQLiteBarrierSessionStore(
+            SQLiteRollbackControlStore(
+                self.root / "foreign-control-direct.sqlite", PROJECT, foreign_authority
+            ),
+            lambda: "authority",
+        )
+        with self.assertRaisesRegex(SQLiteAuthorityError, "foreign authority"):
+            SQLiteLifecycleExecutor(self.adapter, foreign_store, self.root / "journal.json")
 
     def test_engine_bound_rollback_inspection_uses_real_scope_and_preserves_journal(self) -> None:
         context = {**CONTEXT, "operation_id": "op-real-sqlite-inspection", "project_id": PROJECT}
