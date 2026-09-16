@@ -456,6 +456,50 @@ class GitBackupTests(unittest.TestCase):
             self.assertEqual("foreign", (destination / "foreign.txt").read_text())
             self.assertFalse(list(root.glob(".git-backup-*")))
 
+    def test_create_rejects_source_authority_mutation_before_publication(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repo = self.repo(root)
+            destination = root / "backup"
+            original_manifest = MODULE._write_manifest
+
+            def mutate_after_manifest(path: Path, value: dict[str, object]) -> None:
+                original_manifest(path, value)
+                (repo / "mutated.txt").write_text("changed")
+                git("add", "mutated.txt", cwd=repo)
+                git("commit", "-qm", "mutate during backup", cwd=repo)
+
+            with (
+                patch.object(MODULE, "_write_manifest", side_effect=mutate_after_manifest),
+                self.assertRaisesRegex(BackupError, "source authority changed"),
+            ):
+                create_backup(repo, destination, quiesced=True)
+            self.assertFalse(destination.exists())
+            self.assertFalse(list(root.glob(".git-backup-*")))
+
+    def test_create_rejects_source_repository_replacement_before_publication(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repo = self.repo(root)
+            replacement_root = root / "replacement-root"
+            replacement_root.mkdir()
+            replacement = self.repo(replacement_root)
+            original = root / "original-repo"
+            original_manifest = MODULE._write_manifest
+
+            def replace_after_manifest(path: Path, value: dict[str, object]) -> None:
+                original_manifest(path, value)
+                repo.rename(original)
+                repo.symlink_to(replacement, target_is_directory=True)
+
+            with (
+                patch.object(MODULE, "_write_manifest", side_effect=replace_after_manifest),
+                self.assertRaisesRegex(BackupError, "source authority changed"),
+            ):
+                create_backup(repo, root / "backup", quiesced=True)
+            self.assertFalse((root / "backup").exists())
+            self.assertTrue(original.is_dir())
+
 
 if __name__ == "__main__":
     unittest.main()
