@@ -13,7 +13,7 @@ from tools.rollback_control_store import (
     SQLiteRollbackControlStore,
 )
 from tools.rollback_evidence import RollbackEvidenceError
-from tools.sqlite_authority_adapter import SQLiteAuthorityAdapter
+from tools.sqlite_authority_adapter import SQLiteAuthorityAdapter, SQLiteAuthorityError
 
 PROJECT = "11111111-1111-4111-8111-111111111111"
 
@@ -64,6 +64,9 @@ class RollbackEvidenceTests(unittest.TestCase):
             control.cas(1, {**record, "status": "ambiguous", "revision": 2})
             with self.assertRaises(ControlStoreError):
                 adapter.observe_backup_identity(backup, manifest, context)
+            self.assertFalse(control.operation_owned_by_current_thread)
+            with control.operation_lock():
+                pass
 
     def test_initialized_control_store_inode_replacement_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -77,6 +80,39 @@ class RollbackEvidenceTests(unittest.TestCase):
             control.control_store_path.replace(replacement)
             with self.assertRaises(ControlStoreError):
                 control.snapshot("op-1")
+
+    def test_sqlite_sidecar_replacement_is_rejected_after_initialization(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            authority = root / "authority.sqlite"
+            authority.write_bytes(b"SQLite format 3\x00")
+            authority.chmod(0o600)
+            adapter = SQLiteAuthorityAdapter(authority)
+            wal = authority.with_name("authority.sqlite-wal")
+            wal.write_bytes(b"replacement")
+            wal.chmod(0o600)
+            with self.assertRaises(SQLiteAuthorityError):
+                adapter.snapshot(
+                    "rollback",
+                    {
+                        "schema_version": 2,
+                        "backend": "sqlite",
+                        "project_id": PROJECT,
+                        "operation_id": "op-1",
+                        "state_revision": 1,
+                        "authority_revision": "authority-1",
+                        "fencing_token": "fence-1",
+                        "fencing_owner": "owner-1",
+                        "durable_barrier_id": "barrier-1",
+                        "artifact_root": str(root),
+                        "source": str(authority),
+                        "destination": str(root / "backup"),
+                        "manifest": str(root / "manifest"),
+                        "barrier_identity_digest": "0" * 64,
+                        "target": "rollback",
+                        "envelope_digest": "0" * 64,
+                    },
+                )
 
     def test_initialized_adapters_observe_identical_artifacts(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
