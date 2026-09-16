@@ -43,6 +43,30 @@ def _contract() -> dict[str, Any]:
 
 
 class UpgradeRunbookTests(unittest.TestCase):
+    def test_checked_in_release_fixture_matches_generator_and_is_private(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        fixture = root / "examples/upgrade/fixture-v0.3.8-to-v0.3.9"
+        document = json.loads(
+            (root / "examples/upgrade/fixture-v0.3.8-to-v0.3.9.contract.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        generated = generate_runbooks(document)
+        for name, content in generated.items():
+            self.assertEqual(content, (fixture / name).read_text(encoding="utf-8"))
+            self.assertNotIn(document["phases"][0]["operation"]["inputs"]["selector_ref"], content)
+            self.assertNotIn(document["phases"][0]["operation"]["inputs"]["barrier_id"], content)
+            self.assertNotIn(document["phases"][0]["operation"]["inputs"]["fencing_token"], content)
+            for release in (document["from"], document["to"]):
+                for field in (
+                    "source_commit",
+                    "tag_object",
+                    "signature_sha256",
+                    "trust_policy_sha256",
+                    "vendor_manifest_sha256",
+                ):
+                    self.assertNotIn(release[field], content)
+
     def test_generation_is_deterministic_and_contains_safety_gates(self) -> None:
         first = generate_runbooks(_contract())
         self.assertEqual(first, generate_runbooks(_contract()))
