@@ -132,6 +132,17 @@ def _manifest(backup: Path) -> dict[str, object]:
     return value
 
 
+def _manifest_identity(path: Path) -> tuple[int, int]:
+    """Return the identity of a regular manifest file without following links."""
+    if path.is_symlink() or not path.is_file():
+        raise BackupError("Git backup manifest must be a regular file")
+    try:
+        status = path.stat()
+    except OSError as error:  # pragma: no cover - race-dependent
+        raise BackupError("Git backup manifest disappeared") from error
+    return status.st_dev, status.st_ino
+
+
 def _verify_artifacts(backup: Path, manifest: dict[str, object]) -> None:
     artifacts = manifest["artifacts"]
     if not isinstance(artifacts, dict):
@@ -252,8 +263,10 @@ def verify_backup(backup: Path) -> dict[str, object]:
     """Verify hashes, bundle reachability, refs, and clean-checkout equivalence."""
     _safe_root(backup, "backup")
     backup_identity = backup.stat()
+    manifest_path = backup / "manifest.json"
+    manifest_identity = _manifest_identity(manifest_path)
     manifest = _manifest(backup)
-    manifest_digest = _sha256(backup / "manifest.json")
+    manifest_digest = _sha256(manifest_path)
     _verify_artifacts(backup, manifest)
     _verify_archive(backup / "tracked-tree.tar")
     with tempfile.TemporaryDirectory(prefix="handoffctl-restore-") as directory:
@@ -281,7 +294,9 @@ def verify_backup(backup: Path) -> dict[str, object]:
         backup_identity.st_ino,
     ):
         raise BackupError("Git backup directory changed during verification")
-    if _sha256(backup / "manifest.json") != manifest_digest:
+    if _manifest_identity(manifest_path) != manifest_identity:
+        raise BackupError("Git backup manifest changed during verification")
+    if _sha256(manifest_path) != manifest_digest:
         raise BackupError("Git backup manifest changed during verification")
     _verify_artifacts(backup, manifest)
     return {"commit": manifest["commit"], "verified": True, "artifact_count": len(ARTIFACTS)}

@@ -111,6 +111,31 @@ class GitBackupTests(unittest.TestCase):
             ):
                 verify_backup(backup)
 
+    def test_verify_rejects_same_byte_manifest_symlink_replacement(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repo = self.repo(root)
+            backup = create_backup(repo, root / "backup", quiesced=True)
+            manifest_path = backup / "manifest.json"
+            original = root / "original-manifest.json"
+            foreign = root / "foreign-manifest.json"
+            foreign.write_bytes(manifest_path.read_bytes())
+            original_archive = MODULE._verify_archive
+
+            def replace_after_archive(path: Path) -> None:
+                original_archive(path)
+                manifest_path.rename(original)
+                manifest_path.symlink_to(foreign)
+
+            with (
+                patch.object(MODULE, "_verify_archive", side_effect=replace_after_archive),
+                self.assertRaisesRegex(BackupError, "manifest must be a regular file"),
+            ):
+                verify_backup(backup)
+            self.assertTrue(original.is_file())
+            self.assertTrue(foreign.is_file())
+            self.assertEqual(foreign.read_bytes(), original.read_bytes())
+
     def test_verify_rejects_artifact_replacement_before_returning_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
