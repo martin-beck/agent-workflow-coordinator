@@ -131,6 +131,37 @@ class SQLiteBackupTests(unittest.TestCase):
                 backup, self.root / "restored.sqlite3", manifest, BINDING, quiesced=True
             )
 
+    def test_verify_rejects_live_backup_sidecars(self) -> None:
+        backup = self.root / "backup.sqlite3"
+        manifest = backup_database(self.source, backup, BINDING)
+        (self.root / "backup.sqlite3-wal").write_bytes(b"live")
+        with self.assertRaisesRegex(BackupError, "backup database has live WAL sidecars"):
+            MODULE.verify_backup(backup, manifest, BINDING)
+        (self.root / "backup.sqlite3-wal").unlink()
+
+    def test_verify_rejects_backup_replacement_during_integrity(self) -> None:
+        backup = self.root / "backup.sqlite3"
+        manifest = backup_database(self.source, backup, BINDING)
+        replacement_source = self.root / "replacement-source.sqlite3"
+        create_database(replacement_source, body="replacement")
+        replacement = self.root / "replacement.sqlite3"
+        backup_database(replacement_source, replacement, BINDING)
+        original = self.root / "original-backup.sqlite3"
+        original_integrity = MODULE._integrity
+
+        def replace_after_integrity(path: Path, binding: dict[str, object]) -> None:
+            original_integrity(path, binding)
+            if path == backup:
+                backup.rename(original)
+                backup.symlink_to(replacement)
+
+        with (
+            patch.object(MODULE, "_integrity", side_effect=replace_after_integrity),
+            self.assertRaisesRegex(BackupError, "backup database"),
+        ):
+            MODULE.verify_backup(backup, manifest, BINDING)
+        self.assertFalse(list(self.root.glob(".coordinator-*")))
+
     def test_manifest_unknown_fields_fail_closed(self) -> None:
         backup = self.root / "backup.sqlite3"
         manifest = backup_database(self.source, backup, BINDING)
