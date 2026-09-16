@@ -356,7 +356,11 @@ class SQLiteControlStoreAdapter:
         durable = self.verify_rollback_context(context)
         if not isinstance(durable, Mapping):
             raise ControlStoreError("backup observation requires a valid control-store reread")
-        identity = durable.get("durable_barrier_id")
+        try:
+            control_stat = self._store.control_store_path.stat()
+        except OSError as error:
+            raise ControlStoreError("control-store identity reread failed") from error
+        identity = f"{control_stat.st_dev}:{control_stat.st_ino}"
         revision = durable.get("revision")
         if not isinstance(identity, str) or type(revision) is not int:
             raise ControlStoreError("control-store reread identity is invalid")
