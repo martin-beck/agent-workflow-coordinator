@@ -353,23 +353,24 @@ class SQLiteControlStoreAdapter:
         self, backup: Path, manifest: Path, context: Mapping[str, object]
     ) -> BackupObservation:
         """Bind artifact evidence to a fresh durable control-store reread."""
-        durable = self.verify_rollback_context(context)
-        if not isinstance(durable, Mapping):
-            raise ControlStoreError("backup observation requires a valid control-store reread")
-        try:
-            control_stat = self._store.control_store_path.stat()
-        except OSError as error:
-            raise ControlStoreError("control-store identity reread failed") from error
-        identity = f"{control_stat.st_dev}:{control_stat.st_ino}"
-        revision = durable.get("revision")
-        if not isinstance(identity, str) or type(revision) is not int:
-            raise ControlStoreError("control-store reread identity is invalid")
-        return BackupObservation.from_artifacts(
-            backup,
-            manifest,
-            control_store_identity=identity,
-            control_store_revision=revision,
-        )
+        with self._store.operation_lock():
+            durable = self._store._verify_rollback_context_locked(context)
+            if not isinstance(durable, Mapping):
+                raise ControlStoreError("backup observation requires a valid control-store reread")
+            try:
+                control_stat = self._store.control_store_path.stat()
+            except OSError as error:
+                raise ControlStoreError("control-store identity reread failed") from error
+            identity = f"{control_stat.st_dev}:{control_stat.st_ino}"
+            revision = durable.get("revision")
+            if type(revision) is not int:
+                raise ControlStoreError("control-store reread identity is invalid")
+            return BackupObservation.from_artifacts(
+                backup,
+                manifest,
+                control_store_identity=identity,
+                control_store_revision=revision,
+            )
 
     def begin_release_rollback_context(self, context: Mapping[str, object]) -> Mapping[str, object]:
         operation_id = str(context["operation_id"])
