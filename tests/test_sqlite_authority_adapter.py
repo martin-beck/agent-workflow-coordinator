@@ -1741,6 +1741,23 @@ class SQLiteAuthorityAdapterTests(unittest.TestCase):
         extra_link.unlink()
         sidecar.unlink()
 
+    def test_existing_shm_sidecar_symlink_fails_old_reader_closed(self) -> None:
+        sidecar = self.authority.with_name(self.authority.name + "-shm")
+        sidecar.write_bytes(b"shm")
+        sidecar.chmod(0o600)
+        adapter = SQLiteAuthorityAdapter(self.authority)
+        replacement = self.root / "shm-target"
+        replacement.write_bytes(b"shm")
+        replacement.chmod(0o600)
+        sidecar.unlink()
+        sidecar.symlink_to(replacement.name)
+        try:
+            with self.assertRaisesRegex(SQLiteAuthorityError, "sidecar is unsafe"):
+                adapter.snapshot("discover", CONTEXT)
+        finally:
+            sidecar.unlink()
+            replacement.unlink()
+
     def test_authority_parent_mode_change_fails_old_reader_closed(self) -> None:
         adapter = SQLiteAuthorityAdapter(self.authority)
         parent = self.authority.parent

@@ -318,7 +318,7 @@ class SQLiteAuthorityAdapter:
     @staticmethod
     def _optional_identity(path: Path) -> tuple[int, int, int, int, int] | None:
         try:
-            value = path.stat()
+            value = path.lstat()
         except FileNotFoundError:
             return None
         except OSError as error:
