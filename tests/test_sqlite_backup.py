@@ -420,6 +420,61 @@ class SQLiteBackupTests(unittest.TestCase):
         with closing(sqlite3.connect(destination)) as connection:
             self.assertEqual("before", connection.execute("SELECT body FROM records").fetchone()[0])
 
+    def test_destination_creation_before_publication_fails_closed(self) -> None:
+        backup = self.root / "backup.sqlite3"
+        manifest = backup_database(self.source, backup, BINDING)
+        destination = self.root / "restored.sqlite3"
+        original_backup_existing = MODULE._backup_existing
+        swapped = False
+
+        def create_before_publish(path: Path) -> Path | None:
+            nonlocal swapped
+            previous = cast(Path | None, original_backup_existing(path))
+            if not swapped:
+                swapped = True
+                create_database(destination, body="attacker")
+            return previous
+
+        with (
+            patch.object(MODULE, "_backup_existing", side_effect=create_before_publish),
+            self.assertRaisesRegex(BackupError, "existing destination"),
+        ):
+            restore_database(backup, destination, manifest, BINDING, quiesced=True)
+        with closing(sqlite3.connect(destination)) as connection:
+            self.assertEqual(
+                "attacker", connection.execute("SELECT body FROM records").fetchone()[0]
+            )
+        self.assertFalse(list(self.root.glob(".coordinator-*")))
+
+    def test_real_destination_swap_at_publication_boundary_fails_closed(self) -> None:
+        backup = self.root / "backup.sqlite3"
+        manifest = backup_database(self.source, backup, BINDING)
+        destination = self.root / "restored.sqlite3"
+        create_database(destination, body="preserved")
+        original = self.root / "original-destination.sqlite3"
+        foreign = self.root / "foreign.sqlite3"
+        create_database(foreign, body="foreign")
+
+        def swap_at_boundary(_path: Path) -> None:
+            destination.rename(original)
+            destination.symlink_to(foreign)
+
+        with (
+            patch.object(MODULE, "_before_destination_publish", side_effect=swap_at_boundary),
+            self.assertRaisesRegex(BackupError, "existing destination"),
+        ):
+            restore_database(backup, destination, manifest, BINDING, quiesced=True)
+        with closing(sqlite3.connect(original)) as connection:
+            self.assertEqual(
+                "preserved", connection.execute("SELECT body FROM records").fetchone()[0]
+            )
+        with closing(sqlite3.connect(foreign)) as connection:
+            self.assertEqual(
+                "foreign", connection.execute("SELECT body FROM records").fetchone()[0]
+            )
+        self.assertTrue(destination.is_symlink())
+        self.assertFalse(list(self.root.glob(".coordinator-*")))
+
     def test_parent_swap_before_existing_destination_preservation_is_safe(self) -> None:
         backup = self.root / "backup.sqlite3"
         manifest = backup_database(self.source, backup, BINDING)

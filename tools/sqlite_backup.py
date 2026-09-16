@@ -159,6 +159,21 @@ def _backup_existing(destination: Path) -> Path | None:
     return previous_path
 
 
+def _destination_identity(destination: Path) -> tuple[int, int] | None:
+    if not destination.exists():
+        return None
+    _regular(destination, "existing destination")
+    try:
+        status = destination.stat()
+    except OSError as error:
+        raise BackupError("existing destination disappeared") from error
+    return status.st_dev, status.st_ino
+
+
+def _before_destination_publish(_destination: Path) -> None:
+    """Test synchronization seam; production publication has no side effect."""
+
+
 def _restore_existing(destination: Path, previous: Path | None) -> None:
     try:
         if previous is None:
@@ -205,8 +220,14 @@ def _install(source: Path, destination: Path, binding: dict[str, Any]) -> None:
         # Do not allocate a preservation link in a parent that was replaced
         # while the online copy was running.
         _assert_parent_identity(destination, parent_identity)
+        destination_identity = _destination_identity(destination)
         previous_path = _backup_existing(destination)
         _assert_parent_identity(destination, parent_identity)
+        if _destination_identity(destination) != destination_identity:
+            raise BackupError("existing destination changed before publication")
+        _before_destination_publish(destination)
+        if _destination_identity(destination) != destination_identity:
+            raise BackupError("existing destination changed before publication")
         temporary_path.replace(destination)
         replaced = True
         _fsync_directory(destination.parent)
