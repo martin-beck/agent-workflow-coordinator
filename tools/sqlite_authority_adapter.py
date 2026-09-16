@@ -83,9 +83,11 @@ class SQLiteLifecycleExecutor:
             raise SQLiteAuthorityError("lifecycle executor is not bound to durable state")
         try:
             with self._session_store.operation_lock():
+                self._adapter._check_identity()
                 control = self._session_store.snapshot_owned_by_caller()
                 value = json.loads(self._journal.read_text(encoding="utf-8"))
                 journal = JournalSnapshot.from_mapping(cast(Mapping[str, object], value))
+                self._adapter._check_identity()
                 return SQLiteLifecycleSnapshot(control, journal)
         except SQLiteAuthorityError:
             raise
