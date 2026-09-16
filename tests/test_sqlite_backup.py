@@ -475,6 +475,32 @@ class SQLiteBackupTests(unittest.TestCase):
         self.assertTrue(destination.is_symlink())
         self.assertFalse(list(self.root.glob(".coordinator-*")))
 
+    def test_real_manifest_swap_at_publication_boundary_fails_closed(self) -> None:
+        backup = self.root / "backup.sqlite3"
+        manifest = backup_database(self.source, backup, BINDING)
+        path = self.root / "manifest.json"
+        write_manifest(path, manifest)
+        original = self.root / "original-manifest.json"
+        foreign = self.root / "foreign-manifest.json"
+        write_manifest(foreign, manifest)
+
+        def swap_at_boundary(_path: Path) -> None:
+            path.rename(original)
+            path.symlink_to(foreign)
+
+        with (
+            patch.object(MODULE, "_before_manifest_publish", side_effect=swap_at_boundary),
+            self.assertRaisesRegex(BackupError, "existing SQLite manifest"),
+        ):
+            write_manifest(path, manifest)
+        self.assertTrue(path.is_symlink())
+        self.assertTrue(original.is_file())
+        self.assertTrue(foreign.is_file())
+        self.assertFalse(list(self.root.glob(".coordinator-manifest-*")))
+        path.unlink()
+        write_manifest(path, manifest)
+        self.assertEqual(path.read_text(encoding="utf-8"), (original).read_text(encoding="utf-8"))
+
     def test_parent_swap_before_existing_destination_preservation_is_safe(self) -> None:
         backup = self.root / "backup.sqlite3"
         manifest = backup_database(self.source, backup, BINDING)
