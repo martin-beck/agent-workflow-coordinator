@@ -9,8 +9,8 @@ import os
 import sqlite3
 import stat
 import tempfile
-from collections.abc import Callable, Mapping
-from contextlib import nullcontext
+from collections.abc import Callable, Iterator, Mapping
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, TypeVar, cast
@@ -221,16 +221,49 @@ class SQLiteLifecycleExecutor:
         still disabled until an adapter can perform the publication atomically.
         """
         snapshot = self.snapshot()
+        self._check_selector_binding(
+            snapshot, selector_ref, expected_state_revision, barrier_id, fencing_token
+        )
+        return snapshot
+
+    @staticmethod
+    def _check_selector_binding(
+        snapshot: SQLiteLifecycleSnapshot,
+        selector_ref: str,
+        expected_state_revision: int,
+        barrier_id: str,
+        fencing_token: str,
+    ) -> None:
         identity = snapshot.control.identity
         if (
-            snapshot.control.status != "held"
+            type(expected_state_revision) is not int
+            or expected_state_revision < 1
+            or snapshot.control.status != "held"
             or identity.state_revision != expected_state_revision
             or identity.durable_barrier_id != barrier_id
             or identity.fencing_token != fencing_token
             or not selector_ref
         ):
             raise SQLiteAuthorityError("selector publication binding is invalid")
-        return snapshot
+
+    @contextmanager
+    def selector_visibility_scope(
+        self,
+        selector_ref: str,
+        expected_state_revision: int,
+        barrier_id: str,
+        fencing_token: str,
+    ) -> Iterator[SQLiteLifecycleSnapshot]:
+        """Hold the barrier while a future selector publication is attempted."""
+        if self._session_store is None:
+            raise SQLiteAuthorityError("selector publication executor is not bound")
+        with self._session_store.operation_lock():
+            snapshot = self._snapshot_locked()
+            self._check_selector_binding(
+                snapshot, selector_ref, expected_state_revision, barrier_id, fencing_token
+            )
+            yield snapshot
+            self._assert_snapshot_locked(snapshot)
 
     def execute_generated_operation(
         self,
