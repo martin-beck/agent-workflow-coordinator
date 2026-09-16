@@ -1758,6 +1758,16 @@ class SQLiteAuthorityAdapterTests(unittest.TestCase):
             sidecar.unlink()
             replacement.unlink()
 
+    def test_authority_descriptor_hard_link_fails_old_reader_closed(self) -> None:
+        adapter = SQLiteAuthorityAdapter(self.authority)
+        extra_link = self.root / "authority-link"
+        extra_link.hardlink_to(self.authority)
+        try:
+            with self.assertRaisesRegex(SQLiteAuthorityError, "identity changed"):
+                adapter.snapshot("discover", CONTEXT)
+        finally:
+            extra_link.unlink()
+
     def test_authority_parent_mode_change_fails_old_reader_closed(self) -> None:
         adapter = SQLiteAuthorityAdapter(self.authority)
         parent = self.authority.parent
