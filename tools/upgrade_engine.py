@@ -236,6 +236,63 @@ class RollbackAuthorizationRequest:
 
 
 @dataclass(frozen=True)
+class RollbackBackupEvidence:
+    """Typed evidence snapshot derived from observed backup/control inputs."""
+
+    context: tuple[tuple[str, object], ...]
+    backup_bytes_digest: str
+    manifest_digest: str
+    control_store_identity: str
+    control_store_revision: int
+
+    @classmethod
+    def from_observations(
+        cls,
+        context: Mapping[str, object],
+        backup_bytes: bytes,
+        manifest: Mapping[str, object],
+        control_store_identity: str,
+        control_store_revision: int,
+    ) -> RollbackBackupEvidence:
+        if not isinstance(backup_bytes, bytes) or not isinstance(manifest, Mapping):
+            raise UpgradeError("rollback backup observations are invalid")
+        if not isinstance(control_store_identity, str) or not control_store_identity:
+            raise UpgradeError("rollback control-store identity is invalid")
+        if type(control_store_revision) is not int or control_store_revision < 1:
+            raise UpgradeError("rollback control-store revision is invalid")
+        return cls(
+            tuple((field, context[field]) for field in CONTEXT_FIELDS),
+            hashlib.sha256(backup_bytes).hexdigest(),
+            hashlib.sha256(
+                json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode()
+            ).hexdigest(),
+            control_store_identity,
+            control_store_revision,
+        )
+
+    def as_mapping(self) -> dict[str, object]:
+        return dict(self.context) | {
+            "phase": "rollback",
+            "backend_identity_verified": True,
+            "mutates_authority": False,
+            "backup_verified": True,
+            "restore_roundtrip_verified": True,
+            "rollback_context_verified": False,
+            "backup_bytes_digest": self.backup_bytes_digest,
+            "manifest_digest": self.manifest_digest,
+            "control_store_identity": self.control_store_identity,
+            "control_store_revision": self.control_store_revision,
+            "backup_identity_digest": backup_identity_digest(
+                dict(self.context),
+                backup_bytes_digest=self.backup_bytes_digest,
+                manifest_digest=self.manifest_digest,
+                control_store_identity=self.control_store_identity,
+                control_store_revision=self.control_store_revision,
+            ),
+        }
+
+
+@dataclass(frozen=True)
 class RollbackAuthorizationCapability:
     """Typed placeholder for future rollback authorization.
 
@@ -261,6 +318,8 @@ class RollbackAuthorizationCapability:
     def validate(  # noqa: C901
         self, context: Mapping[str, object], evidence: Mapping[str, object]
     ) -> RollbackAuthorizationRequest:
+        if isinstance(evidence, RollbackBackupEvidence):
+            evidence = evidence.as_mapping()
         if not isinstance(context, Mapping) or not isinstance(evidence, Mapping):
             raise UpgradeError("rollback authorization context or evidence is invalid")
         if set(context) != set(CONTEXT_FIELDS) or context.get("target") != "rollback":

@@ -38,6 +38,7 @@ from tools.upgrade_engine import (
     Handler,
     PhaseContext,
     RollbackAuthorizationCapability,
+    RollbackBackupEvidence,
     UpgradeEngine,
     UpgradeError,
     backup_identity_digest,
@@ -2154,6 +2155,31 @@ class UpgradeEngineTests(unittest.TestCase):
                 ROLLBACK_CONTEXT,
                 {**valid_evidence, "backup_bytes_digest": "0" * 64},
             )
+        typed = RollbackBackupEvidence.from_observations(
+            ROLLBACK_CONTEXT, b"backup-v1", {"manifest": "v1"}, "control-store-1", 1
+        )
+        with self.assertRaisesRegex(UpgradeError, "not enabled"):
+            capability.authorize(ROLLBACK_CONTEXT, typed)
+        self.assertNotEqual(
+            typed.backup_bytes_digest,
+            RollbackBackupEvidence.from_observations(
+                ROLLBACK_CONTEXT, b"backup-v2", {"manifest": "v1"}, "control-store-1", 1
+            ).backup_bytes_digest,
+        )
+        self.assertNotEqual(
+            typed.manifest_digest,
+            RollbackBackupEvidence.from_observations(
+                ROLLBACK_CONTEXT, b"backup-v1", {"manifest": "v2"}, "control-store-1", 1
+            ).manifest_digest,
+        )
+        for observations in (
+            (bytearray(b"backup"), {"manifest": "v1"}, "control-store-1", 1),
+            (b"backup", [], "control-store-1", 1),
+            (b"backup", {"manifest": "v1"}, "", 1),
+            (b"backup", {"manifest": "v1"}, "control-store-1", True),
+        ):
+            with self.subTest(observations=observations), self.assertRaises(UpgradeError):
+                RollbackBackupEvidence.from_observations(ROLLBACK_CONTEXT, *observations)
         for hostile, message in (
             (None, "context or evidence is invalid"),
             (
