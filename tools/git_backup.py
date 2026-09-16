@@ -307,6 +307,10 @@ def verify_backup(backup: Path) -> dict[str, object]:
             encoding="utf-8"
         ):
             raise BackupError("clean restore tracked-file set mismatch")  # pragma: no cover
+        if _run(["git", "ls-files", "--stage"], target) != (backup / "index.txt").read_text(
+            encoding="utf-8"
+        ):
+            raise BackupError("clean restore index mismatch")
         _verify_archive_equivalence(backup / "tracked-tree.tar", target)
     _safe_root(backup, "backup")
     current_identity = backup.stat()
