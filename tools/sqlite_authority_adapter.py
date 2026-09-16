@@ -262,8 +262,10 @@ class SQLiteLifecycleExecutor:
             self._check_selector_binding(
                 snapshot, selector_ref, expected_state_revision, barrier_id, fencing_token
             )
-            yield snapshot
-            self._assert_snapshot_locked(snapshot)
+            try:
+                yield snapshot
+            finally:
+                self._assert_snapshot_locked(snapshot)
 
     def execute_generated_operation(
         self,

@@ -360,6 +360,11 @@ class SQLiteAuthorityAdapterTests(unittest.TestCase):
             "runtime-selector.json", 1, "barrier", "fence"
         ) as held:
             self.assertEqual(snapshot, held)
+        with (
+            self.assertRaisesRegex(RuntimeError, "publication failed"),
+            executor.selector_visibility_scope("runtime-selector.json", 1, "barrier", "fence"),
+        ):
+            raise RuntimeError("publication failed")
 
     def test_generated_contract_backup_operation_dispatches_directly(self) -> None:
         def release(version: str, seed: str) -> dict[str, str]:
