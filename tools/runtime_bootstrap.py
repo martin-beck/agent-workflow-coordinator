@@ -8,11 +8,35 @@ import os
 import re
 import stat
 from collections.abc import Callable
+from hashlib import sha256
 from pathlib import Path
 
 from tools.upgrade_authority import AuthorityError, read_runtime_selector
 
 _RELEASE = re.compile(r"v[0-9]+\.[0-9]+\.[0-9]+\Z")
+_DIGEST = re.compile(r"[0-9a-f]{64}\Z")
+
+
+def verify_runtime_manifest(runtime_root: Path, expected_digest: str) -> bool:
+    """Verify the owner-only manifest digest for one staged runtime."""
+    if not isinstance(expected_digest, str) or _DIGEST.fullmatch(expected_digest) is None:
+        raise AuthorityError("runtime manifest digest is invalid")
+    manifest = runtime_root / "runtime-manifest.json"
+    try:
+        value = manifest.lstat()
+        if (
+            not stat.S_ISREG(value.st_mode)
+            or value.st_uid != os.geteuid()
+            or value.st_nlink != 1
+            or stat.S_IMODE(value.st_mode) != 0o600
+        ):
+            raise AuthorityError("runtime manifest is unsafe")
+        digest = sha256(manifest.read_bytes()).hexdigest()
+    except OSError as error:
+        raise AuthorityError("runtime manifest is unavailable") from error
+    if digest != expected_digest:
+        raise AuthorityError("runtime manifest digest does not match")
+    return True
 
 
 def resolve_selected_runtime(

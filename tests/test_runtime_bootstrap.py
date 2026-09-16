@@ -7,9 +7,10 @@ from __future__ import annotations
 import json
 import tempfile
 import unittest
+from hashlib import sha256
 from pathlib import Path
 
-from tools.runtime_bootstrap import resolve_selected_runtime
+from tools.runtime_bootstrap import resolve_selected_runtime, verify_runtime_manifest
 from tools.upgrade_authority import AuthorityError, commit_runtime_selector
 
 
@@ -67,6 +68,19 @@ class RuntimeBootstrapTests(unittest.TestCase):
                 resolve_selected_runtime(selector, releases)
             with self.assertRaisesRegex(AuthorityError, "verification failed"):
                 resolve_selected_runtime(selector, releases, lambda _: False)
+
+    def test_manifest_verifier_requires_exact_owner_only_digest(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            runtime = Path(directory)
+            manifest = runtime / "runtime-manifest.json"
+            manifest.write_text('{"release":"v1.2.3"}\n')
+            manifest.chmod(0o600)
+            digest = sha256(manifest.read_bytes()).hexdigest()
+            self.assertTrue(verify_runtime_manifest(runtime, digest))
+            with self.assertRaisesRegex(AuthorityError, "does not match"):
+                verify_runtime_manifest(runtime, "0" * 64)
+            with self.assertRaisesRegex(AuthorityError, "digest is invalid"):
+                verify_runtime_manifest(runtime, "not-a-digest")
 
     def test_rejects_symlinked_release_root_ancestor(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
