@@ -98,16 +98,18 @@ class OracleLifecycleTests(unittest.TestCase):
         ):
             malformed = dict(valid)
             malformed.pop(key)
-            with self.subTest(key=key), self.assertRaises((GateError, KeyError)):
+            with self.subTest(key=key), self.assertRaises(GateError):
                 InteractionEvent.from_record(malformed)
         malformed = dict(valid)
         malformed["stage"] = "unknown"
         with self.assertRaisesRegex(GateError, "stage"):
             InteractionEvent.from_record(malformed)
         malformed = dict(valid)
-        malformed["before"] = [{"ref": "plan/x"}]
-        with self.assertRaises(GateError):
-            InteractionEvent.from_record(malformed)
+        for field in ("before", "after"):
+            malformed = dict(valid)
+            malformed[field] = [{"ref": "plan/x"}]
+            with self.subTest(field=field), self.assertRaisesRegex(GateError, "invalid artifact"):
+                InteractionEvent.from_record(malformed)
         for field, value in (
             ("task_id", "bad"),
             ("task_revision", 0),
@@ -190,6 +192,19 @@ class OracleLifecycleTests(unittest.TestCase):
             step(state, "release", "intake", 2, "accepted")
         with self.assertRaisesRegex(ValueError, "unknown"):
             step(State(1, (), None), "unknown", "intake", 1, "accepted")
+
+    def test_model_preserves_unresolved_gate_and_accepts_lifecycle_actions(self) -> None:
+        state = step(State(1, (), None), "open", "intake", 1, "unresolved")
+        unresolved = step(state, "resolve", "intake", 2, "unresolved")
+        self.assertEqual(State(3, (), "intake"), unresolved)
+        with self.assertRaisesRegex(ValueError, "unresolved"):
+            step(unresolved, "claim", "intake", 3, "accepted")
+        resolved = step(unresolved, "resolve", "intake", 3, "accepted")
+        self.assertEqual(State(4, ("intake",), None), resolved)
+        for expected_revision, operation in enumerate(("claim", "run", "release"), start=5):
+            with self.subTest(operation=operation):
+                resolved = step(resolved, operation, "intake", resolved.revision, "accepted")
+                self.assertEqual(expected_revision, resolved.revision)
 
 
 if __name__ == "__main__":
