@@ -58,7 +58,7 @@ jobs:
           signer_dir="$(mktemp -d)"
           trap 'rm -rf -- "$signer_dir"' EXIT
           python - "$signer_dir/awc-sign-release.sh" <<'PY'
-          import json, os, shlex, subprocess, sys
+          import hashlib, json, os, shlex, subprocess, sys, tempfile
           from pathlib import Path
           template = Path("docs/templates/awc-sign-release.sh.in").read_text()
           transition = json.loads(os.environ["RELEASE_TRANSITION"])
@@ -71,13 +71,38 @@ jobs:
           policy = config("gpg.ssh.allowedSignersFile")
           identity = config("user.email")
           policy_path = Path(policy).expanduser()
+          key_path = Path(key).expanduser()
+          if not key_path.is_file():
+              raise SystemExit("configured release signing key material is unavailable")
+          key_probe = subprocess.run(["ssh-keygen", "-lf", str(key_path)], capture_output=True, text=True, check=False)
+          if key_probe.returncode != 0:
+              raise SystemExit("configured release signing key material is invalid")
+          key_fingerprint = next((part for part in key_probe.stdout.split() if part.startswith("SHA256:")), "")
+          if not key_fingerprint:
+              raise SystemExit("configured release signing key fingerprint is unavailable")
           try:
-              authorized = any(line.split(maxsplit=1)[0] == identity for line in policy_path.read_text().splitlines() if line.strip())
+              policy_text = policy_path.read_text()
+              authorized = False
+              for line in policy_text.splitlines():
+                  fields = line.split()
+                  if len(fields) < 3 or identity not in fields[0].split(","):
+                      continue
+                  with tempfile.NamedTemporaryFile("w", delete=False) as candidate:
+                      candidate.write(" ".join(fields[1:3]) + "\n")
+                      candidate_path = candidate.name
+                  try:
+                      probe = subprocess.run(["ssh-keygen", "-lf", candidate_path], capture_output=True, text=True, check=False)
+                      authorized = key_fingerprint in probe.stdout.split()
+                  finally:
+                      os.unlink(candidate_path)
+                  if authorized:
+                      break
           except OSError:
               authorized = False
           if not authorized:
               raise SystemExit("configured release identity is not authorized by the GitHub release-key policy")
-          values = {"@RELEASE_VERSION@": transition["to"]["version"], "@SOURCE_COMMIT@": transition["to"]["source_commit"], "@REPOSITORY@": os.environ["GITHUB_WORKSPACE"], "@FROM_TAG@": transition["from"]["tag_ref"], "@TO_TAG@": transition["to"]["tag_ref"], "@TRUST_POLICY@": transition["to"]["trust_policy_sha256"], "@VENDOR_MANIFEST@": transition["to"]["vendor_manifest_sha256"], "@OUTPUT@": os.path.join(os.environ["RUNNER_TEMP"], "release-signature.json"), "@SIGNING_KEY_REF@": key, "@SIGNING_POLICY_REF@": policy, "@SIGNING_IDENTITY@": identity}
+          policy_digest = hashlib.sha256(policy_text.encode()).hexdigest()
+          values = {"@RELEASE_VERSION@": transition["to"]["version"], "@SOURCE_COMMIT@": transition["to"]["source_commit"], "@REPOSITORY@": os.environ["GITHUB_WORKSPACE"], "@FROM_TAG@": transition["from"]["tag_ref"], "@TO_TAG@": transition["to"]["tag_ref"], "@TRUST_POLICY@": transition["to"]["trust_policy_sha256"], "@VENDOR_MANIFEST@": transition["to"]["vendor_manifest_sha256"], "@OUTPUT@": os.path.join(os.environ["RUNNER_TEMP"], "release-signature.json"), "@SIGNING_KEY_REF@": key, "@SIGNING_POLICY_REF@": policy, "@SIGNING_IDENTITY@": identity, "@SIGNING_KEY_FINGERPRINT@": key_fingerprint, "@SIGNING_POLICY_DIGEST@": policy_digest}
           for placeholder, value in values.items(): template = template.replace(placeholder, shlex.quote(value))
           target = Path(sys.argv[1]); target.write_text(template); target.chmod(0o700)
           PY

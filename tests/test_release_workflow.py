@@ -32,6 +32,8 @@ def test_release_signer_template_is_self_test_only() -> None:
     assert "@SIGNING_KEY_REF@" in template
     assert "@SIGNING_POLICY_REF@" in template
     assert "@SIGNING_IDENTITY@" in template
+    assert "@SIGNING_KEY_FINGERPRINT@" in template
+    assert "@SIGNING_POLICY_DIGEST@" in template
     assert "rev-parse HEAD" in template
     assert "@RELEASE_VERSION@" in template
     assert "@SOURCE_COMMIT@" in template
@@ -43,6 +45,7 @@ def test_release_signer_template_is_self_test_only() -> None:
     assert "required release signer policy" in WORKFLOW
     assert "gpg.ssh.allowedSignersFile" in WORKFLOW
     assert "not authorized by the GitHub release-key policy" in WORKFLOW
+    assert "ssh-keygen" in WORKFLOW
 
 
 def test_signer_probe_precedes_release_contract_generation() -> None:
