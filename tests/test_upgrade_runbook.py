@@ -60,6 +60,19 @@ class UpgradeRunbookTests(unittest.TestCase):
         self.assertIn('cmp -- "$RUNNER_TEMP/release-runbooks/operator.md"', workflow)
         self.assertIn('cmp -- "$RUNNER_TEMP/release-runbooks/agent.md"', workflow)
 
+    def test_release_workflow_binds_artifact_digests_to_source(self) -> None:
+        workflow = (
+            Path(__file__).resolve().parents[1] / ".github/workflows/release.yml"
+        ).read_text(encoding="utf-8")
+        self.assertIn("printf '%s\\n' \"$GITHUB_SHA\"", workflow)
+        self.assertIn(
+            "sha256sum release-contract.json release-runbooks/operator.md "
+            "release-runbooks/agent.md",
+            workflow,
+        )
+        self.assertIn("release-source-commit.txt", workflow)
+        self.assertIn("release-artifacts.sha256", workflow)
+
     def test_release_workflow_generates_and_verifies_sanitized_runbooks(self) -> None:
         workflow = (
             Path(__file__).resolve().parents[1] / ".github/workflows/release.yml"
