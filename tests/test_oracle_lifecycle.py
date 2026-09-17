@@ -4,6 +4,7 @@
 """Hostile and positive contract tests for mandatory interaction gates."""
 
 import unittest
+from typing import Any
 
 from tools.oracle_lifecycle import (
     ArtifactRef,
@@ -38,7 +39,7 @@ class OracleLifecycleTests(unittest.TestCase):
         self.assertGreater(result["hostile"], 0)
 
     def test_complete_ordered_lifecycle_is_typed_and_revision_bound(self) -> None:
-        meta = {"id": "AR-0022", "task_revision": 1}
+        meta: dict[str, Any] = {"id": "AR-0022", "task_revision": 1}
         for stage in GateStage:
             revision = meta["task_revision"]
             apply_event(meta, event(revision, stage, "open", "unresolved"))
@@ -51,14 +52,14 @@ class OracleLifecycleTests(unittest.TestCase):
         self.assertIsNone(meta["oracle_gate"]["open_stage"])
 
     def test_skipped_gate_and_stale_event_are_rejected(self) -> None:
-        meta = {"id": "AR-0022", "task_revision": 3}
+        meta: dict[str, Any] = {"id": "AR-0022", "task_revision": 3}
         with self.assertRaisesRegex(GateError, "skipped"):
             apply_event(meta, event(3, GateStage.DISCUSSION, "open", "unresolved"))
         with self.assertRaisesRegex(GateError, "stale"):
             apply_event(meta, event(2, GateStage.INTAKE, "open", "unresolved"))
 
     def test_unresolved_guidance_keeps_gate_open_and_blocks_autonomous_work(self) -> None:
-        meta = {"id": "AR-0022", "task_revision": 1}
+        meta: dict[str, Any] = {"id": "AR-0022", "task_revision": 1}
         apply_event(meta, event(1, GateStage.INTAKE, "open", "unresolved"))
         meta["task_revision"] += 1
         apply_event(meta, event(2, GateStage.INTAKE, "resolve", "unresolved"))

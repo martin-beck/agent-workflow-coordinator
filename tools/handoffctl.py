@@ -1559,6 +1559,21 @@ def apply_gate(args: argparse.Namespace, meta: Meta) -> str:
         raise RuntimeError(str(error)) from error
 
 
+def apply_transition(args: argparse.Namespace, kind: str, meta: Meta, tasks: list[Task]) -> str:
+    """Dispatch one typed lifecycle transition for both storage backends."""
+    if kind == "claim":
+        return apply_claim(args, meta, tasks)
+    if kind == "promote":
+        return apply_promote(args, meta, tasks)
+    if kind == "resume":
+        return apply_resume(args, meta, tasks)
+    if kind == "recover-expired":
+        return apply_recover_expired(args, meta, tasks)
+    if kind == "gate":
+        return apply_gate(args, meta)
+    return apply_owned_change(args, kind, meta)
+
+
 def rendered_task_views(tasks: list[Task]) -> dict[Path, str]:
     """Return every enabled task-derived projection for one consistent task snapshot."""
     views = {ROOT / "CURRENT.md": render_current(tasks)}
@@ -1612,21 +1627,7 @@ def mutate(args: argparse.Namespace, kind: str) -> None:
             }
         )
         committed = False
-        note = (
-            apply_claim(args, meta, all_tasks())
-            if kind == "claim"
-            else (
-                apply_promote(args, meta, all_tasks())
-                if kind == "promote"
-                else apply_resume(args, meta, all_tasks())
-                if kind == "resume"
-                else apply_recover_expired(args, meta, all_tasks())
-                if kind == "recover-expired"
-                else apply_gate(args, meta)
-                if kind == "gate"
-                else apply_owned_change(args, kind, meta)
-            )
-        )
+        note = apply_transition(args, kind, meta, all_tasks())
         meta["task_revision"] += 1
         meta["updated_at"] = now()
         if note:
@@ -1694,19 +1695,7 @@ def mutate_sqlite(args: argparse.Namespace, kind: str) -> None:
     at = now()
 
     def transition(meta: Meta, tasks: list[Task]) -> tuple[str, str]:
-        note = (
-            apply_claim(args, meta, tasks)
-            if kind == "claim"
-            else apply_promote(args, meta, tasks)
-            if kind == "promote"
-            else apply_resume(args, meta, tasks)
-            if kind == "resume"
-            else apply_recover_expired(args, meta, tasks)
-            if kind == "recover-expired"
-            else apply_gate(args, meta)
-            if kind == "gate"
-            else apply_owned_change(args, kind, meta)
-        )
+        note = apply_transition(args, kind, meta, tasks)
         candidate = [
             (path, meta if item["id"] == args.task else item, text) for path, item, text in tasks
         ]
