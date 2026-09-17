@@ -97,6 +97,18 @@ class UpgradeRunbookTests(unittest.TestCase):
             with self.assertRaises(RunbookVerificationError):
                 verify_runbooks(document, output)
 
+    def test_checker_rejects_aliased_output_ancestor(self) -> None:
+        document = _contract()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            real = root / "real"
+            output = real / "runbooks"
+            write_runbooks(document, output)
+            alias = root / "alias"
+            alias.symlink_to(real, target_is_directory=True)
+            with self.assertRaisesRegex(RunbookVerificationError, "contains a symlink"):
+                verify_runbooks(document, alias / "runbooks")
+
     def test_checker_cli_and_generator_cli_fail_closed(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
