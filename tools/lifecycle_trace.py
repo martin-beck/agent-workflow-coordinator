@@ -60,6 +60,15 @@ def validate_model_action_contract(root: Path) -> None:
         if (action == "Backup" and not all(name in text for name in names))
         or (action != "Backup" and not any(name in text for name in names))
     ]
+    required_invariants = (
+        "NoReplacementBeforeBackup ==",
+        "ReleaseOrder ==",
+        "RollbackProof ==",
+        "RollbackRequiresBackup ==",
+    )
+    missing.extend(
+        f"invariant {name.split()[0]}" for name in required_invariants if name not in text
+    )
     if missing:
         raise ValueError(f"model actions are missing: {', '.join(missing)}")
 
