@@ -20,6 +20,30 @@ def evidence(project: str, kind: EvidenceKind) -> Evidence:
 
 
 class IntegrationContractTests(unittest.TestCase):
+    def test_evidence_and_contract_identity_inputs_fail_closed(self) -> None:
+        digest = "sha256:" + "a" * 64
+        for args, message in (
+            (("guidance", "bad", "guidance/evidence/1", digest, 7), "kind"),
+            (("guidance", EvidenceKind.GUIDANCE, "../private", digest, 7), "public-safe"),
+            (("guidance", EvidenceKind.GUIDANCE, "guidance/evidence/1", "bad", 7), "digest"),
+            (("guidance", EvidenceKind.GUIDANCE, "guidance/evidence/1", digest, 0), "positive"),
+        ):
+            with self.subTest(args=args), self.assertRaisesRegex(IntegrationError, message):
+                Evidence(*args)
+
+        base = (
+            evidence("guidance", EvidenceKind.GUIDANCE),
+            evidence("quality", EvidenceKind.QUALITY),
+            evidence("quality", EvidenceKind.FORMAL),
+        )
+        for args, message in (
+            (("bad", 7, *base, "coordinator/events/7"), "task id"),
+            (("AR-0025", 0, *base, "coordinator/events/7"), "positive"),
+            (("AR-0025", 7, *base, "../event"), "public-safe"),
+        ):
+            with self.subTest(message=message), self.assertRaisesRegex(IntegrationError, message):
+                IntegrationContract(*args)
+
     def test_complete_contract_is_digestable_and_has_single_authority(self) -> None:
         contract = IntegrationContract(
             "AR-0025",
@@ -66,6 +90,12 @@ class IntegrationContractTests(unittest.TestCase):
         malformed: dict[str, Any] = dict(contract.as_record())
         malformed["guidance"] = dict(malformed["guidance"], digest="not-a-digest")
         self.assertTrue(integration_errors(malformed))
+        for malformed in (None, {}, {**contract.as_record(), "extra": True}):
+            with self.subTest(malformed=malformed):
+                self.assertTrue(integration_errors(malformed))
+        incomplete = contract.as_record()
+        incomplete["quality"] = {"project": "quality"}
+        self.assertTrue(integration_errors(incomplete))
 
     def test_projects_cannot_misrepresent_each_others_evidence(self) -> None:
         with self.assertRaisesRegex(IntegrationError, "guidance evidence kind"):

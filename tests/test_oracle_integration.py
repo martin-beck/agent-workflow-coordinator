@@ -27,6 +27,28 @@ class OracleIntegrationTests(unittest.TestCase):
     def _awq(self, status: str = "passed") -> AWQEvidence:
         return AWQEvidence("awq/evidence-1", status, "implementation-test", _digest("d"))
 
+    def test_projection_inputs_are_public_safe_and_typed(self) -> None:
+        with self.assertRaisesRegex(IntegrationTraceError, "public-safe"):
+            AWGDecision("../private", "accept", "awg/rationale-1", _digest("c"))
+        with self.assertRaisesRegex(IntegrationTraceError, "digest"):
+            AWGDecision("awg/packet-1", "accept", "awg/rationale-1", "bad")
+        with self.assertRaisesRegex(IntegrationTraceError, "decision"):
+            AWGDecision("awg/packet-1", "nope", "awg/rationale-1", _digest("c"))
+        with self.assertRaisesRegex(IntegrationTraceError, "quality_status"):
+            AWQEvidence("awq/evidence-1", "unknown", "implementation-test", _digest("d"))
+        with self.assertRaisesRegex(IntegrationTraceError, "evidence_class"):
+            AWQEvidence("awq/evidence-1", "passed", "unknown", _digest("d"))
+        with self.assertRaisesRegex(IntegrationTraceError, "public-safe"):
+            AWQEvidence("/private", "passed", "implementation-test", _digest("d"))
+
+    def test_trace_identity_and_evidence_inputs_fail_closed(self) -> None:
+        with self.assertRaisesRegex(IntegrationTraceError, "identity"):
+            run_synthetic_trace(task_id="bad", start_revision=1, awg=self._awg(), awq=self._awq())
+        with self.assertRaisesRegex(IntegrationTraceError, "identity"):
+            run_synthetic_trace(
+                task_id="AR-0025", start_revision=0, awg=self._awg(), awq=self._awq()
+            )
+
     def test_complete_synthetic_trace_preserves_three_owners(self) -> None:
         result = run_synthetic_trace(
             task_id="AR-0025", start_revision=7, awg=self._awg(), awq=self._awq()
