@@ -601,6 +601,21 @@ class LockDomainScopeTests(unittest.TestCase):
         )
         self.assertEqual("old", validate_terminal_outcome(valid))
 
+    def test_terminal_outcome_rejects_invalid_or_premature_target_metadata(self) -> None:
+        token = object()
+        fields = (1, "owner-1", "authority", PROJECT, "digest", "fence")
+        with self.assertRaisesRegex(ValueError, "terminal target is invalid"):
+            validate_terminal_outcome(
+                (_issue_event(token, "acquire", *fields, terminal_target="replacement"),)
+            )
+        with self.assertRaisesRegex(ValueError, "terminal target is premature"):
+            validate_terminal_outcome(
+                (
+                    _issue_event(token, "acquire", *fields, terminal_target="new"),
+                    _issue_event(token, "quiesce", *fields),
+                )
+            )
+
     def test_hold_performs_trusted_authority_reread_after_lock_acquisition(self) -> None:
         reads: list[str] = []
 
