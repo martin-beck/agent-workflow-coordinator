@@ -256,6 +256,49 @@ class OracleLifecycleTests(unittest.TestCase):
                 resolved = step(resolved, operation, "intake", resolved.revision, "accepted")
                 self.assertEqual(expected_revision, resolved.revision)
 
+    def test_non_authorizing_user_dispositions_keep_pause_active(self) -> None:
+        for disposition in ("rejected", "clarify", "user-added-option", "contradiction"):
+            with self.subTest(disposition=disposition):
+                meta: dict[str, Any] = {"id": "AR-0022", "task_revision": 1}
+                apply_event(meta, event(1, GateStage.INTAKE, "open", "unresolved"))
+                meta["task_revision"] += 1
+                apply_event(meta, event(2, GateStage.INTAKE, "resolve", disposition))
+                self.assertEqual("intake", meta["oracle_gate"]["open_stage"])
+                with self.assertRaisesRegex(GateError, "unresolved"):
+                    transition_allowed(meta, "run")
+
+    def test_contradiction_reopens_completed_stage_and_requires_reconciliation(self) -> None:
+        meta: dict[str, Any] = {"id": "AR-0022", "task_revision": 1}
+        apply_event(meta, event(1, GateStage.INTAKE, "open", "unresolved"))
+        meta["task_revision"] += 1
+        apply_event(meta, event(2, GateStage.INTAKE, "resolve", "accepted"))
+        meta["task_revision"] += 1
+        apply_event(meta, event(3, GateStage.INTAKE, "reopen", "contradiction"))
+        self.assertEqual([], meta["oracle_gate"]["completed"])
+        self.assertFalse(meta["oracle_gate"]["authorized"])
+        with self.assertRaisesRegex(GateError, "unresolved"):
+            transition_allowed(meta, "release")
+
+    def test_duplicate_and_stale_responses_cannot_advance_a_pause(self) -> None:
+        meta: dict[str, Any] = {"id": "AR-0022", "task_revision": 1}
+        apply_event(meta, event(1, GateStage.INTAKE, "open", "unresolved"))
+        meta["task_revision"] += 1
+        apply_event(meta, event(2, GateStage.INTAKE, "resolve", "clarify"))
+        meta["task_revision"] += 1
+        with self.assertRaisesRegex(GateError, "stale"):
+            apply_event(meta, event(2, GateStage.INTAKE, "resolve", "accepted"))
+        with self.assertRaisesRegex(GateError, "already open"):
+            apply_event(meta, event(3, GateStage.INTAKE, "open", "unresolved"))
+
+    def test_repeated_discussion_is_bounded_and_does_not_authorize_work(self) -> None:
+        meta: dict[str, Any] = {"id": "AR-0022", "task_revision": 1}
+        apply_event(meta, event(1, GateStage.INTAKE, "open", "unresolved"))
+        for _ in range(16):
+            meta["task_revision"] += 1
+            apply_event(meta, event(meta["task_revision"], GateStage.INTAKE, "resolve", "clarify"))
+        with self.assertRaisesRegex(GateError, "repeated discussion"):
+            apply_event(meta, event(meta["task_revision"], GateStage.INTAKE, "resolve", "clarify"))
+
 
 if __name__ == "__main__":
     unittest.main()

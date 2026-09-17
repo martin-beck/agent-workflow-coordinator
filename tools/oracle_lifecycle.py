@@ -21,8 +21,14 @@ from typing import Any
 GATE_SEQUENCE = ("intake", "discussion", "formal_spec_review", "reconciliation")
 SHA256 = re.compile(r"^sha256:[0-9a-f]{64}$")
 PUBLIC_REF = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$")
-DISPOSITIONS = frozenset({"accepted", "rejected", "unresolved"})
+DISPOSITIONS = frozenset(
+    {"accepted", "rejected", "clarify", "user-added-option", "contradiction", "unresolved"}
+)
+NON_AUTHORIZING_DISPOSITIONS = frozenset(
+    {"rejected", "clarify", "user-added-option", "contradiction", "unresolved"}
+)
 ACTIONS = frozenset({"open", "resolve", "reopen"})
+MAX_DISCUSSION_ROUNDS = 16
 
 
 class GateStage(StrEnum):
@@ -165,7 +171,12 @@ def gate_errors(value: object) -> list[str]:  # noqa: C901
     if not isinstance(value, dict):
         return ["oracle_gate must be an object"]
     required = {"required", "open_stage", "completed", "events"}
-    if set(value) != required:
+    if not required.issubset(value) or set(value) - {
+        *required,
+        "authorized",
+        "discussion_rounds",
+        "reconciliation_required",
+    }:
         return ["oracle_gate fields are incomplete or unknown"]
     if value["required"] is not True:
         return ["oracle_gate.required must be true"]
@@ -175,6 +186,13 @@ def gate_errors(value: object) -> list[str]:  # noqa: C901
     completed = value["completed"]
     if not isinstance(completed, list) or any(item not in GATE_SEQUENCE for item in completed):
         return ["oracle_gate.completed is invalid"]
+    rounds = value.get("discussion_rounds", 0)
+    if not isinstance(rounds, int) or not 0 <= rounds <= MAX_DISCUSSION_ROUNDS:
+        return ["oracle_gate.discussion_rounds is invalid"]
+    if not isinstance(value.get("authorized", False), bool):
+        return ["oracle_gate.authorized is invalid"]
+    if not isinstance(value.get("reconciliation_required", False), bool):
+        return ["oracle_gate.reconciliation_required is invalid"]
     events = value["events"]
     if not isinstance(events, list) or len(events) > 32:
         return ["oracle_gate.events is invalid or unbounded"]
@@ -192,10 +210,15 @@ def transition_allowed(meta: Mapping[str, Any], operation: str) -> None:
     if (
         isinstance(gate, dict)
         and gate.get("required") is True
-        and gate.get("open_stage")
+        and (
+            gate.get("open_stage")
+            or gate.get("completed", []) != list(GATE_SEQUENCE)
+            or gate.get("authorized") is not True
+        )
         and operation in {"promote", "claim", "run", "release"}
     ):
-        raise GateError(f"interaction gate unresolved: {gate['open_stage']}")
+        reason = gate.get("open_stage") or "reconciliation"
+        raise GateError(f"interaction gate unresolved: {reason}")
 
 
 def apply_event(meta: dict[str, Any], event: InteractionEvent) -> str:  # noqa: C901
@@ -209,12 +232,18 @@ def apply_event(meta: dict[str, Any], event: InteractionEvent) -> str:  # noqa: 
         "open_stage": None,
         "completed": [],
         "events": [],
+        "authorized": False,
+        "discussion_rounds": 0,
+        "reconciliation_required": False,
     }
     errors = gate_errors(current)
     if errors:
         raise GateError(errors[0])
     open_stage = current["open_stage"]
     completed = list(current["completed"])
+    current.setdefault("authorized", False)
+    current.setdefault("discussion_rounds", 0)
+    current.setdefault("reconciliation_required", False)
     index = GATE_SEQUENCE.index(event.stage.value)
     if event.action == "open":
         if open_stage is not None:
@@ -225,17 +254,36 @@ def apply_event(meta: dict[str, Any], event: InteractionEvent) -> str:  # noqa: 
     elif event.action == "resolve":
         if open_stage != event.stage.value:
             raise GateError("interaction event does not match open gate")
-        current["open_stage"] = None
-        if event.disposition != "unresolved":
+        if event.disposition == "accepted":
+            current["open_stage"] = None
             completed.append(event.stage.value)
         else:
             current["open_stage"] = event.stage.value
+            if current["discussion_rounds"] >= MAX_DISCUSSION_ROUNDS:
+                raise GateError("repeated discussion limit exceeded")
+            current["discussion_rounds"] += 1
+            current["reconciliation_required"] = True
     else:  # reopen
         if event.stage.value not in completed or open_stage is not None:
             raise GateError("only a completed gate can be reopened")
         completed = completed[:index]
         current["open_stage"] = event.stage.value
+        if current["discussion_rounds"] >= MAX_DISCUSSION_ROUNDS:
+            raise GateError("repeated discussion limit exceeded")
+        current["discussion_rounds"] += 1
+        current["reconciliation_required"] = True
+    if (
+        event.action == "resolve"
+        and event.disposition == "accepted"
+        and event.stage is GateStage.RECONCILIATION
+    ):
+        current["reconciliation_required"] = False
     current["completed"] = completed
+    current["authorized"] = (
+        current["open_stage"] is None
+        and completed == list(GATE_SEQUENCE)
+        and not current["reconciliation_required"]
+    )
     current["events"] = [*current["events"], event.as_record()]
     if len(current["events"]) > 32:
         raise GateError("interaction event history is bounded at 32 events")
