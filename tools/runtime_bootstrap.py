@@ -51,6 +51,52 @@ class VerifiedManifest:
     digest: str
 
 
+@dataclass(slots=True)
+class ResolvedRuntime:
+    """Opaque descriptor-bound runtime result; dispatch is intentionally absent."""
+
+    path: Path
+    descriptor: int
+    identity: VerifiedManifest
+    _directory_identity: tuple[int, int, int, int, int]
+
+    def revalidate(self) -> None:
+        """Fail closed if the retained directory or its pathname was replaced."""
+        try:
+            retained = os.fstat(self.descriptor)
+            current = self.path.lstat()
+        except OSError as error:
+            raise AuthorityError("resolved runtime is unavailable") from error
+        observed = (
+            retained.st_dev,
+            retained.st_ino,
+            stat.S_IMODE(retained.st_mode),
+            retained.st_uid,
+            retained.st_nlink,
+        )
+        named = (
+            current.st_dev,
+            current.st_ino,
+            stat.S_IMODE(current.st_mode),
+            current.st_uid,
+            current.st_nlink,
+        )
+        if observed != self._directory_identity or named != self._directory_identity:
+            raise AuthorityError("resolved runtime identity changed")
+
+    def close(self) -> None:
+        """Close the retained descriptor; no execution operation is exposed."""
+        if self.descriptor >= 0:
+            os.close(self.descriptor)
+            self.descriptor = -1
+
+    def __enter__(self) -> ResolvedRuntime:
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        self.close()
+
+
 def _manifest_pairs(pairs: list[tuple[str, object]]) -> dict[str, object]:
     value = dict(pairs)
     if len(value) != len(pairs):
@@ -222,3 +268,66 @@ def resolve_selected_runtime(
         raise AuthorityError("runtime authenticity evidence is not bound to selected release")
     verify_runtime_manifest(release_path, verified.digest)
     return release_path
+
+
+def resolve_selected_runtime_bound(  # noqa: C901
+    selector: Path,
+    releases_root: Path,
+    expected_identity: ExpectedRuntimeIdentity,
+    verify_authenticity: Callable[[Path, ExpectedRuntimeIdentity], VerifiedManifest],
+) -> ResolvedRuntime:
+    """Resolve and retain the selected release directory without dispatching it."""
+    selected = read_runtime_selector(selector)
+    release = selected["active_release"]
+    if not isinstance(release, str) or _RELEASE.fullmatch(release) is None:
+        raise AuthorityError("runtime selector release identity is invalid")
+    release_path = _release_path(releases_root.absolute(), release)
+    try:
+        descriptor = os.open(release_path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        status = os.fstat(descriptor)
+        directory_identity = (
+            status.st_dev,
+            status.st_ino,
+            stat.S_IMODE(status.st_mode),
+            status.st_uid,
+            status.st_nlink,
+        )
+        if (
+            not stat.S_ISDIR(status.st_mode)
+            or directory_identity[2] != 0o700
+            or directory_identity[3] != os.geteuid()
+        ):
+            raise AuthorityError("selected runtime release is unsafe")
+        manifest = read_runtime_manifest(release_path)
+        if manifest["release"] != release:
+            raise AuthorityError("runtime manifest release does not match selector")
+        manifest_identity = ExpectedRuntimeIdentity(
+            manifest["source_commit"],
+            manifest["tag_ref"],
+            manifest["tag_object"],
+            manifest["signature_sha256"],
+            manifest["trust_policy_sha256"],
+            manifest["vendor_manifest_sha256"],
+        )
+        if manifest_identity != expected_identity:
+            raise AuthorityError("runtime manifest identity does not match expected identity")
+        verified = verify_authenticity(release_path, expected_identity)
+        if (
+            not isinstance(verified, VerifiedManifest)
+            or verified.release != release
+            or verified.identity != expected_identity
+            or _DIGEST.fullmatch(verified.digest) is None
+        ):
+            raise AuthorityError("runtime authenticity evidence is not bound to selected release")
+        verify_runtime_manifest(release_path, verified.digest)
+        result = ResolvedRuntime(release_path, descriptor, verified, directory_identity)
+        result.revalidate()
+        return result
+    except AuthorityError:
+        if "descriptor" in locals():
+            os.close(descriptor)
+        raise
+    except OSError as error:
+        if "descriptor" in locals():
+            os.close(descriptor)
+        raise AuthorityError("resolved runtime is unavailable") from error
