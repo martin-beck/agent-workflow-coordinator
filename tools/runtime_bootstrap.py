@@ -156,6 +156,19 @@ class ResolvedRuntime:
             self.identity.identity, ExpectedRuntimeIdentity
         ):
             raise AuthorityError("resolved runtime identity is unavailable")
+        expected_identity = self.identity.identity
+        if not all(
+            isinstance(value, str)
+            for value in (
+                expected_identity.source_commit,
+                expected_identity.tag_ref,
+                expected_identity.tag_object,
+                expected_identity.signature_sha256,
+                expected_identity.trust_policy_sha256,
+                expected_identity.vendor_manifest_sha256,
+            )
+        ):
+            raise AuthorityError("resolved runtime identity is unavailable")
         if not isinstance(self.identity.digest, str):
             raise AuthorityError("resolved runtime digest is unavailable")
         manifest = read_runtime_manifest(self.path)
