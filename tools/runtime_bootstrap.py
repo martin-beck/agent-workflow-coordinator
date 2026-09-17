@@ -146,6 +146,8 @@ class ResolvedRuntime:
 
     def revalidate_manifest(self) -> None:
         """Recheck retained manifest bytes and identity before a future dispatch."""
+        if not isinstance(self.identity, VerifiedManifest):
+            raise AuthorityError("resolved runtime identity is unavailable")
         manifest = read_runtime_manifest(self.path)
         identity = ExpectedRuntimeIdentity(
             manifest["source_commit"],
