@@ -487,3 +487,7 @@ def resolve_selected_runtime_bound(  # noqa: C901
         if "descriptor" in locals():
             os.close(descriptor)
         raise AuthorityError("resolved runtime is unavailable") from error
+    except Exception as error:
+        if "descriptor" in locals():
+            os.close(descriptor)
+        raise AuthorityError("resolved runtime verification failed") from error
