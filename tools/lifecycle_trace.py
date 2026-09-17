@@ -121,6 +121,7 @@ def validate_terminal_recovery_contract(root: Path) -> None:
         "THEOREM Spec => []WriteFence",
         "THEOREM Spec => []IdentityStable",
         "THEOREM Spec => []ChildIdentityStable",
+        "THEOREM Spec => []OneActiveSession",
     )
     missing = [name for name in required if name not in text]
     if missing:
