@@ -534,6 +534,13 @@ class LockDomainScopeTests(unittest.TestCase):
             )
             with self.assertRaisesRegex(ValueError, "terminalVerified"):
                 validate_terminal_recovery_contract(root)
+            (root / "formal/upgrade/HandoffctlUpgradeBarrier.tla").write_text(
+                "VerifyTerminal(op, target) == TRUE\n"
+                "terminalTarget terminalVerified freshRuntimeVerified\n",
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, 'target = "new"'):
+                validate_terminal_recovery_contract(root)
         event = _issue_event(
             object(), "acquire", 1, "owner-1", "authority", PROJECT, "digest", "fence"
         )
