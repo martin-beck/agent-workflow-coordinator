@@ -21,7 +21,12 @@ def test_release_signer_template_is_self_test_only() -> None:
     )
     assert '"--self-test"' in template
     assert "exec git tag -s" in template
-    assert '"@TRANSITION@"' in template
+    assert '"@REPOSITORY@"' in template
+    assert '"@FROM_TAG@"' in template
+    assert '"@TO_TAG@"' in template
+    assert '"@TRUST_POLICY@"' in template
+    assert '"@VENDOR_MANIFEST@"' in template
+    assert '"@OUTPUT@"' in template
     assert '"@RELEASE_VERSION@"' in template
     assert '"@SOURCE_COMMIT@"' in template
     assert "sign" in template.lower()

@@ -30,10 +30,17 @@ jobs:
           import sys
           from pathlib import Path
           template = Path("docs/templates/awc-sign-release.sh.in").read_text()
+          import json
+          transition = json.loads(os.environ["RELEASE_TRANSITION"])
           for key, value in {
-              "@RELEASE_VERSION@": os.environ.get("GITHUB_REF_NAME", ""),
+              "@RELEASE_VERSION@": transition["to"]["version"],
               "@SOURCE_COMMIT@": os.environ["GITHUB_SHA"],
-              "@TRANSITION@": os.environ["RELEASE_TRANSITION"],
+              "@REPOSITORY@": os.environ["GITHUB_REPOSITORY"],
+              "@FROM_TAG@": transition["from"]["tag_ref"],
+              "@TO_TAG@": transition["to"]["tag_ref"],
+              "@TRUST_POLICY@": transition["to"]["trust_policy_sha256"],
+              "@VENDOR_MANIFEST@": transition["to"]["vendor_manifest_sha256"],
+              "@OUTPUT@": os.path.join(os.environ["RUNNER_TEMP"], "release-signature.txt"),
           }.items():
               template = template.replace(key, value)
           target = Path(sys.argv[1])
@@ -41,14 +48,6 @@ jobs:
           target.chmod(0o700)
           PY
           "$signer_dir/awc-sign-release.sh" --self-test
-      - name: Render release signer contract (non-publishing)
-        env:
-          RELEASE_VERSION: ${{ github.ref_name }}
-        run: |
-          sed "s/@RELEASE_VERSION@/${RELEASE_VERSION}/g; s/@SOURCE_COMMIT@/${GITHUB_SHA}/g" \
-            docs/templates/awc-sign-release.sh.in > "$RUNNER_TEMP/awc-sign-release.sh"
-          chmod 700 "$RUNNER_TEMP/awc-sign-release.sh"
-          "$RUNNER_TEMP/awc-sign-release.sh" --self-test
       - name: Generate and validate release contract
         env:
           TRANSITION: ${{ inputs.transition }}
