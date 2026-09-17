@@ -296,6 +296,12 @@ class RuntimeBootstrapTests(unittest.TestCase):
         runtime.close()
         self.assertEqual(-1, runtime.descriptor)
 
+    def test_resolved_runtime_revalidate_rejects_malformed_path(self) -> None:
+        runtime = object.__new__(ResolvedRuntime)
+        object.__setattr__(runtime, "path", object())
+        with self.assertRaisesRegex(AuthorityError, "path is unavailable"):
+            runtime.revalidate()
+
     def test_dispatch_admission_rejects_malformed_identity_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
