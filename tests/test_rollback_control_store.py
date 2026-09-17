@@ -841,6 +841,15 @@ class RollbackControlStoreTests(unittest.TestCase):
             self.assertIsNotNone(state)
             assert state is not None
             self.assertEqual(("releasing", 3), (state.status, state.revision))
+            child_result = root / "child-result"
+            verifier = multiprocessing.get_context("fork").Process(
+                target=_reopen_ambiguous_child,
+                args=(str(control_path), str(authority_path), str(child_result)),
+            )
+            verifier.start()
+            verifier.join(timeout=10)
+            self.assertEqual(0, verifier.exitcode)
+            self.assertEqual("releasing:3\n", child_result.read_text(encoding="utf-8"))
             with sqlite3.connect(control_path) as connection:
                 outcomes = connection.execute(
                     "SELECT outcome FROM barrier_session_intent WHERE project_id=?",
