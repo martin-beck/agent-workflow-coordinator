@@ -489,6 +489,10 @@ class RuntimeSelectorTests(unittest.TestCase):
                         after_previous_release="old",
                     ),
                 )
+            self.assertEqual(
+                {"selector.json"},
+                {entry.name for entry in path.parent.iterdir()},
+            )
             handoffctl.locked.assert_called_once_with()
             handoffctl.locked.return_value.__enter__.assert_called_once_with()
             commit_runtime_selector(path, "old", "older")
