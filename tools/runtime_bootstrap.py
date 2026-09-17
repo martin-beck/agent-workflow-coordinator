@@ -61,8 +61,15 @@ class DispatchAdmission:
 
     def __post_init__(self) -> None:
         """Reject forged evidence pairs before they can reach a consumer."""
-        if self.runtime.identity is not self.identity:
-            self.runtime.close()
+        runtime_candidate: object = self.runtime
+        identity_candidate: object = self.identity
+        runtime = runtime_candidate if isinstance(runtime_candidate, ResolvedRuntime) else None
+        if runtime is None or not isinstance(identity_candidate, VerifiedManifest):
+            if runtime is not None:
+                runtime.close()
+            raise AuthorityError("dispatch admission identity is not bound")
+        if runtime.identity is not self.identity:
+            runtime.close()
             raise AuthorityError("dispatch admission identity is not bound")
 
     def revalidate(self) -> None:
