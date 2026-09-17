@@ -74,6 +74,11 @@ class UpgradeRunbookTests(unittest.TestCase):
         self.assertIn('if [[ -n "$(git status --porcelain=v1)" ]]; then', workflow)
         self.assertIn('echo "checked-out source is not clean"', workflow)
         self.assertIn(
+            'test "$(find "$RUNNER_TEMP/release-runbooks" -mindepth 1 -maxdepth 1 '
+            '-printf \'%f\\n\' | sort | paste -sd, -)" = "agent.md,operator.md"',
+            workflow,
+        )
+        self.assertIn(
             "for artifact in release-contract.json release-runbooks/operator.md "
             "release-runbooks/agent.md; do",
             workflow,
