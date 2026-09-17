@@ -64,7 +64,11 @@ class DispatchAdmission:
         runtime_candidate: object = self.runtime
         identity_candidate: object = self.identity
         runtime = runtime_candidate if isinstance(runtime_candidate, ResolvedRuntime) else None
-        if runtime is None or not isinstance(identity_candidate, VerifiedManifest):
+        if (
+            runtime is None
+            or not isinstance(identity_candidate, VerifiedManifest)
+            or not isinstance(identity_candidate.identity, ExpectedRuntimeIdentity)
+        ):
             if runtime is not None:
                 runtime.close()
             raise AuthorityError("dispatch admission identity is not bound")
