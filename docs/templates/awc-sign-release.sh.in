@@ -19,6 +19,7 @@ if [[ "${1:-}" != "--self-test" ]]; then
     [[ "$#" -eq 0 ]] || { echo "usage: $0 [--self-test]" >&2; exit 64; }
     test -z "$(git -C "$REPOSITORY" status --porcelain --untracked-files=all)"
     test "$(git -C "$REPOSITORY" config --get user.signingkey)" = "$SIGNING_KEY_REF"
+    test "$(git -C "$REPOSITORY" config --get gpg.format)" = ssh
     test "$(git -C "$REPOSITORY" config --get gpg.ssh.allowedSignersFile)" = "$SIGNING_POLICY_REF"
     test "$(git -C "$REPOSITORY" config --get user.email)" = "$SIGNING_IDENTITY"
     test "$(sha256sum "$SIGNING_POLICY_REF" | cut -d' ' -f1)" = "$SIGNING_POLICY_DIGEST"

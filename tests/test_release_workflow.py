@@ -46,6 +46,8 @@ def test_release_signer_template_is_self_test_only() -> None:
     assert "gpg.ssh.allowedSignersFile" in WORKFLOW
     assert "not authorized by the GitHub release-key policy" in WORKFLOW
     assert "ssh-keygen" in WORKFLOW
+    assert 'config("gpg.format") != "ssh"' in WORKFLOW
+    assert 'config --get gpg.format' in template
 
 
 def test_signer_probe_precedes_release_contract_generation() -> None:
