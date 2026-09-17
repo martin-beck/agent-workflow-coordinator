@@ -115,6 +115,7 @@ def validate_terminal_recovery_contract(root: Path) -> None:
         "THEOREM Spec => []StaleCASRejected",
         "THEOREM Spec => []RecheckEvidence",
         "THEOREM Spec => []AmbiguousIsWriteClosed",
+        "THEOREM Spec => []LockOwnership",
     )
     missing = [name for name in required if name not in text]
     if missing:
