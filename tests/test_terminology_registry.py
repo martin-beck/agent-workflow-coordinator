@@ -10,7 +10,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).parents[1]
 REGISTRY = ROOT / "quality" / "terminology.json"
-BROKEN_FIXTURE = ROOT / "fixtures" / "broken" / "terminology" / "docs" / "incorrect.md"
+BROKEN_FIXTURE = ROOT / "fixtures" / "broken" / "terminology" / "docs" / "incorrect.md.fixture"
 
 
 class TerminologyRegistryTests(unittest.TestCase):
