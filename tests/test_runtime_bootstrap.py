@@ -17,6 +17,24 @@ from tools.upgrade_authority import AuthorityError, commit_runtime_selector
 
 
 class RuntimeBootstrapTests(unittest.TestCase):
+    @staticmethod
+    def _write_manifest(runtime: Path, release: str = "v1.2.3") -> None:
+        runtime.joinpath("runtime-manifest.json").write_text(
+            json.dumps(
+                {
+                    "release": release,
+                    "source_commit": "a" * 40,
+                    "tag_ref": f"refs/tags/{release}",
+                    "tag_object": "b" * 40,
+                    "signature_sha256": "c" * 64,
+                    "trust_policy_sha256": "d" * 64,
+                    "vendor_manifest_sha256": "e" * 64,
+                },
+                separators=(",", ":"),
+            )
+        )
+        runtime.joinpath("runtime-manifest.json").chmod(0o600)
+
     def test_resolves_owner_only_versioned_release(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -26,6 +44,7 @@ class RuntimeBootstrapTests(unittest.TestCase):
             selected = releases / "v1.2.3"
             selected.mkdir(mode=0o700)
             selected.chmod(0o700)
+            self._write_manifest(selected)
             selector = root / "runtime-selector.json"
             commit_runtime_selector(selector, "v1.2.3", "v1.2.2")
             self.assertEqual(selected, resolve_selected_runtime(selector, releases, lambda _: True))
@@ -64,6 +83,7 @@ class RuntimeBootstrapTests(unittest.TestCase):
             selected = releases / "v1.2.3"
             selected.mkdir(mode=0o700)
             selected.chmod(0o700)
+            self._write_manifest(selected)
             selector = root / "runtime-selector.json"
             commit_runtime_selector(selector, "v1.2.3", "v1.2.2")
             with self.assertRaisesRegex(AuthorityError, "verifier is required"):
