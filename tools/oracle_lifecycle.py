@@ -207,14 +207,20 @@ def gate_errors(value: object) -> list[str]:  # noqa: C901
 def transition_allowed(meta: Mapping[str, Any], operation: str) -> None:
     """Reject autonomous lifecycle operations while a required gate is open."""
     gate = meta.get("oracle_gate")
+    legacy_authorized = (
+        (
+            ("completed" not in gate or gate.get("completed", []) == list(GATE_SEQUENCE))
+            and not gate.get("open_stage")
+            and not gate.get("reconciliation_required", False)
+            and "authorized" not in gate
+        )
+        if isinstance(gate, dict)
+        else False
+    )
     if (
         isinstance(gate, dict)
         and gate.get("required") is True
-        and (
-            gate.get("open_stage")
-            or gate.get("completed", []) != list(GATE_SEQUENCE)
-            or gate.get("authorized") is not True
-        )
+        and (gate.get("open_stage") or gate.get("authorized", legacy_authorized) is not True)
         and operation in {"promote", "claim", "run", "release"}
     ):
         reason = gate.get("open_stage") or "reconciliation"
