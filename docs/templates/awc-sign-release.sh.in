@@ -12,9 +12,15 @@ readonly VENDOR_MANIFEST="@VENDOR_MANIFEST@"
 readonly OUTPUT="@OUTPUT@"
 if [[ "${1:-}" != "--self-test" ]]; then
     [[ "$#" -eq 0 ]] || { echo "usage: $0 [--self-test]" >&2; exit 64; }
-    git tag -s "$TO_TAG" -m "Release $RELEASE_VERSION" "$SOURCE_COMMIT"
+    git -C "$REPOSITORY" diff --quiet
+    git -C "$REPOSITORY" diff --cached --quiet
+    git -C "$REPOSITORY" commit -S --allow-empty -m "Release $RELEASE_VERSION"
+    source_commit="$(git -C "$REPOSITORY" rev-parse HEAD)"
+    git -C "$REPOSITORY" tag -s "${TO_TAG#refs/tags/}" -m "Release $RELEASE_VERSION" "$source_commit"
+    git -C "$REPOSITORY" verify-tag "${TO_TAG#refs/tags/}"
     printf '%s\n' "repository=$REPOSITORY" "from=$FROM_TAG" "to=$TO_TAG" \
-        "trust_policy=$TRUST_POLICY" "vendor_manifest=$VENDOR_MANIFEST" > "$OUTPUT"
+        "source_commit=$source_commit" "trust_policy=$TRUST_POLICY" \
+        "vendor_manifest=$VENDOR_MANIFEST" > "$OUTPUT"
     exit 0
 fi
 [[ "$RELEASE_VERSION" != *[[:space:]]* && -n "$RELEASE_VERSION" ]]
