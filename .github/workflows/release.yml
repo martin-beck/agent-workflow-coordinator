@@ -32,6 +32,25 @@ jobs:
             "$RUNNER_TEMP/release-contract.json" "$RUNNER_TEMP/release-runbooks"
           uv run python -m tools.verify_upgrade_runbook \
             "$RUNNER_TEMP/release-contract.json" "$RUNNER_TEMP/release-runbooks"
+      - name: Revalidate from a fresh clone
+        env:
+          TRANSITION: ${{ inputs.transition }}
+        run: |
+          git clone --no-local --no-hardlinks "$GITHUB_WORKSPACE" "$RUNNER_TEMP/release-clone"
+          uv run --directory "$RUNNER_TEMP/release-clone" python -m tools.verify_release_identity \
+            "$TRANSITION" --repository "$RUNNER_TEMP/release-clone" \
+            --workspace "$RUNNER_TEMP/release-clone"
+          uv run --directory "$RUNNER_TEMP/release-clone" python -m tools.verify_release_contract \
+            "$TRANSITION" "$RUNNER_TEMP/release-clone/release-contract.json"
+          uv run --directory "$RUNNER_TEMP/release-clone" python -m tools.generate_upgrade_runbook \
+            "$RUNNER_TEMP/release-clone/release-contract.json" "$RUNNER_TEMP/release-clone/release-runbooks"
+          uv run --directory "$RUNNER_TEMP/release-clone" python -m tools.verify_upgrade_runbook \
+            "$RUNNER_TEMP/release-clone/release-contract.json" "$RUNNER_TEMP/release-clone/release-runbooks"
+          cmp -- "$RUNNER_TEMP/release-contract.json" "$RUNNER_TEMP/release-clone/release-contract.json"
+          cmp -- "$RUNNER_TEMP/release-runbooks/operator.md" \
+            "$RUNNER_TEMP/release-clone/release-runbooks/operator.md"
+          cmp -- "$RUNNER_TEMP/release-runbooks/agent.md" \
+            "$RUNNER_TEMP/release-clone/release-runbooks/agent.md"
       - name: Upload sanitized contract evidence
         uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08
         with:
