@@ -536,10 +536,13 @@ class LockDomainScopeTests(unittest.TestCase):
         event = _issue_event(
             object(), "acquire", 1, "owner-1", "authority", PROJECT, "digest", "fence"
         )
-        with patch(
-            "tools.lifecycle_trace.validate_terminal_recovery_contract",
-            side_effect=ValueError("terminal contract rejected"),
-        ), self.assertRaisesRegex(ValueError, "terminal contract rejected"):
+        with (
+            patch(
+                "tools.lifecycle_trace.validate_terminal_recovery_contract",
+                side_effect=ValueError("terminal contract rejected"),
+            ),
+            self.assertRaisesRegex(ValueError, "terminal contract rejected"),
+        ):
             validate_model_trace((event,))
 
     def test_model_trace_rejects_empty_invalid_and_malformed_events(self) -> None:
