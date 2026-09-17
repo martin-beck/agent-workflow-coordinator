@@ -30,6 +30,7 @@ from tools.lifecycle_trace import (
     _issue_event,
     validate_model_action_contract,
     validate_model_trace,
+    validate_terminal_outcome,
     validate_terminal_recovery_contract,
 )
 from tools.lock_domain import LockDomainContract, LockDomainError
@@ -554,6 +555,51 @@ class LockDomainScopeTests(unittest.TestCase):
             validate_model_trace(
                 (_issue_event(object(), "acquire", 1, "", "authority", PROJECT, "digest", "fence"),)
             )
+
+    def test_terminal_outcome_requires_verified_forward_reopen(self) -> None:
+        token = object()
+        fields = (1, "owner-1", "authority", PROJECT, "digest", "fence")
+        phases = ("acquire", "quiesce", "backup", "stage", "commit", "validate")
+        incomplete = tuple(_issue_event(token, phase, *fields) for phase in phases)
+        with self.assertRaisesRegex(ValueError, "terminal outcome is incomplete"):
+            validate_terminal_outcome(incomplete)
+        complete = tuple(
+            _issue_event(
+                token, phase, *fields, terminal_target="new" if phase == "reopen" else None
+            )
+            for phase in (*phases, "reopen")
+        )
+        self.assertEqual("new", validate_terminal_outcome(complete))
+
+    def test_terminal_outcome_rejects_wrong_target_and_incomplete_rollback(self) -> None:
+        token = object()
+        fields = (1, "owner-1", "authority", PROJECT, "digest", "fence")
+        phases = (
+            "acquire",
+            "quiesce",
+            "backup",
+            "rollback_started",
+            "rollback_verified",
+            "rollback_released",
+        )
+        wrong = tuple(
+            _issue_event(
+                token, phase, *fields, terminal_target="new" if phase == phases[-1] else None
+            )
+            for phase in phases
+        )
+        with self.assertRaisesRegex(ValueError, "rollback terminal outcome has wrong target"):
+            validate_terminal_outcome(wrong)
+        incomplete = tuple(_issue_event(token, phase, *fields) for phase in phases[:-1])
+        with self.assertRaisesRegex(ValueError, "terminal outcome is incomplete"):
+            validate_terminal_outcome(incomplete)
+        valid = tuple(
+            _issue_event(
+                token, phase, *fields, terminal_target="old" if phase == phases[-1] else None
+            )
+            for phase in phases
+        )
+        self.assertEqual("old", validate_terminal_outcome(valid))
 
     def test_hold_performs_trusted_authority_reread_after_lock_acquisition(self) -> None:
         reads: list[str] = []

@@ -96,6 +96,7 @@ class LifecycleEvent:
     project_id: str
     session_digest: str
     fencing_token: str
+    terminal_target: str | None
     _token: object = field(repr=False, compare=False)
 
     def __init__(self, *_args: object, **_kwargs: object) -> None:
@@ -111,6 +112,8 @@ def _issue_event(
     project_id: str,
     session_digest: str,
     fencing_token: str,
+    *,
+    terminal_target: str | None = None,
 ) -> LifecycleEvent:
     event = object.__new__(LifecycleEvent)
     object.__setattr__(event, "phase", phase)
@@ -120,6 +123,7 @@ def _issue_event(
     object.__setattr__(event, "project_id", project_id)
     object.__setattr__(event, "session_digest", session_digest)
     object.__setattr__(event, "fencing_token", fencing_token)
+    object.__setattr__(event, "terminal_target", terminal_target)
     object.__setattr__(event, "_token", token)
     return event
 
@@ -143,6 +147,10 @@ def _validate_event_schema(events: tuple[LifecycleEvent, ...]) -> None:
             )
         ):
             raise ValueError("lifecycle trace identity is invalid")
+        if event.terminal_target not in (None, "new", "old"):
+            raise ValueError("lifecycle trace terminal target is invalid")
+        if event.phase not in ("reopen", "rollback_released") and event.terminal_target is not None:
+            raise ValueError("lifecycle trace terminal target is premature")
     identity = (
         events[0].owner,
         events[0].lock,
@@ -188,3 +196,31 @@ def validate_model_trace(
     ):
         raise ValueError("lifecycle trace transition is not allowed by the model")
     return tuple(MODEL_ACTIONS[phase] for phase in phases)
+
+
+def validate_terminal_outcome(
+    events: tuple[LifecycleEvent, ...], *, model_root: Path | None = None
+) -> str:
+    """Validate that a trusted lifecycle trace reaches one model terminal outcome.
+
+    A trace is usable for release only after forward reopen of the new target or
+    after rollback verification and release of the old target.  Incomplete
+    traces and target mismatches are rejected so callers cannot treat a durable
+    prefix as a healthy coordinator state.
+    """
+    validate_model_trace(events, model_root=model_root)
+    phases = tuple(event.phase for event in events)
+    terminal = events[-1]
+    if phases == ("acquire", "quiesce", "backup", "stage", "commit", "validate", "reopen"):
+        if terminal.terminal_target != "new":
+            raise ValueError("forward terminal outcome has wrong target")
+        return "new"
+    if (
+        len(phases) >= 6
+        and phases[:3] == ("acquire", "quiesce", "backup")
+        and phases[-3:] == ("rollback_started", "rollback_verified", "rollback_released")
+    ):
+        if terminal.terminal_target != "old":
+            raise ValueError("rollback terminal outcome has wrong target")
+        return "old"
+    raise ValueError("lifecycle trace terminal outcome is incomplete")
