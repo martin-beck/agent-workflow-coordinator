@@ -482,6 +482,11 @@ class UpgradeCampaignTests(unittest.TestCase):
         process.join(timeout=10)
         self.assertEqual(-signal.SIGKILL, process.exitcode)
         self.assertFalse(process.is_alive())
+        selected = read_runtime_selector(selector)
+        self.assertEqual(
+            {"schema_version": 1, "active_release": "v0.3.5", "previous_release": "v0.3.4"},
+            selected,
+        )
         self._sqlite_functional(database, "v0.3.5", binding)
         connection = sqlite3.connect(f"file:{database}?mode=ro", uri=True)
         try:
