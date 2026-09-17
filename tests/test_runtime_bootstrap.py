@@ -15,6 +15,7 @@ from unittest.mock import patch
 from tools.runtime_bootstrap import (
     DispatchAdmission,
     ExpectedRuntimeIdentity,
+    ResolvedRuntime,
     VerifiedManifest,
     read_runtime_manifest,
     resolve_selected_runtime,
@@ -288,6 +289,12 @@ class RuntimeBootstrapTests(unittest.TestCase):
         object.__setattr__(admission, "identity", object())
         with self.assertRaisesRegex(AuthorityError, "runtime is not retained"):
             admission.close()
+
+    def test_resolved_runtime_close_tolerates_malformed_descriptor(self) -> None:
+        runtime = object.__new__(ResolvedRuntime)
+        object.__setattr__(runtime, "descriptor", object())
+        runtime.close()
+        self.assertEqual(-1, runtime.descriptor)
 
     def test_dispatch_admission_rejects_malformed_identity_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

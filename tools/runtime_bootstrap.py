@@ -173,11 +173,12 @@ class ResolvedRuntime:
 
     def close(self) -> None:
         """Close the retained descriptor; no execution operation is exposed."""
-        if self.descriptor >= 0:
-            descriptor = self.descriptor
-            self.descriptor = -1
-            with suppress(OSError):
-                os.close(descriptor)
+        descriptor = self.descriptor
+        self.descriptor = -1
+        if not isinstance(descriptor, int) or isinstance(descriptor, bool) or descriptor < 0:
+            return
+        with suppress(OSError):
+            os.close(descriptor)
 
     def __enter__(self) -> ResolvedRuntime:
         return self
