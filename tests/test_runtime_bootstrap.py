@@ -297,7 +297,9 @@ class RuntimeBootstrapTests(unittest.TestCase):
                 selector, releases, self._identity_for_release(), self._verifier
             ) as resolved:
                 resolved.identity = VerifiedManifest(
-                    resolved.identity.release, object(), resolved.identity.digest  # type: ignore[arg-type]
+                    resolved.identity.release,
+                    object(),
+                    resolved.identity.digest,  # type: ignore[arg-type]
                 )
                 with self.assertRaisesRegex(AuthorityError, "identity is unavailable"):
                     resolved.revalidate_manifest()
