@@ -61,6 +61,7 @@ def validate_model_action_contract(root: Path) -> None:
         or (action != "Backup" and not any(name in text for name in names))
     ]
     required_invariants = (
+        "FunctionalAvailability ==",
         "NoReplacementBeforeBackup ==",
         "ReleaseOrder ==",
         "RollbackProof ==",
