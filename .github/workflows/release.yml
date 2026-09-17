@@ -57,6 +57,10 @@ jobs:
             echo "GITHUB_SHA is not a 40-hex source identity" >&2
             exit 1
           fi
+          if [[ "$(git rev-parse HEAD)" != "$GITHUB_SHA" ]]; then
+            echo "checked-out HEAD does not match GITHUB_SHA" >&2
+            exit 1
+          fi
           printf '%s\n' "$GITHUB_SHA" > "$RUNNER_TEMP/release-source-commit.txt"
           (
             cd "$RUNNER_TEMP"
