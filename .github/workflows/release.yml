@@ -28,9 +28,15 @@ jobs:
           uv run python -m tools.verify_release_identity "$TRANSITION" \
             --repository "$GITHUB_WORKSPACE" --workspace "$GITHUB_WORKSPACE"
           uv run python -m tools.verify_release_contract "$TRANSITION" "$RUNNER_TEMP/release-contract.json"
+          uv run python -m tools.generate_upgrade_runbook \
+            "$RUNNER_TEMP/release-contract.json" "$RUNNER_TEMP/release-runbooks"
+          uv run python -m tools.verify_upgrade_runbook \
+            "$RUNNER_TEMP/release-contract.json" "$RUNNER_TEMP/release-runbooks"
       - name: Upload sanitized contract evidence
         uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08
         with:
           name: release-upgrade-contract-${{ github.sha }}
-          path: ${{ runner.temp }}/release-contract.json
+          path: |
+            ${{ runner.temp }}/release-contract.json
+            ${{ runner.temp }}/release-runbooks
           if-no-files-found: error
