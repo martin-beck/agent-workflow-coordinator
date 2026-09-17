@@ -423,6 +423,39 @@ class LockDomainScopeTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "transition is not allowed"):
             validate_model_trace(events)
 
+    def test_model_trace_rejects_identity_and_revision_drift(self) -> None:
+        token = object()
+        fields = (2, "owner-1", "authority", PROJECT, "digest", "fence")
+        with self.assertRaisesRegex(ValueError, "identity changed"):
+            validate_model_trace(
+                (
+                    _issue_event(token, "acquire", *fields),
+                    _issue_event(
+                        token, "quiesce", 2, "owner-2", "authority", PROJECT, "digest", "fence"
+                    ),
+                )
+            )
+        with self.assertRaisesRegex(ValueError, "identity changed"):
+            validate_model_trace(
+                (
+                    _issue_event(token, "acquire", *fields),
+                    _issue_event(
+                        token, "quiesce", 2, "owner-1", "foreign-lock", PROJECT, "digest", "fence"
+                    ),
+                )
+            )
+        with self.assertRaisesRegex(ValueError, "revision regressed"):
+            validate_model_trace(
+                (
+                    _issue_event(token, "acquire", *fields),
+                    _issue_event(
+                        token, "quiesce", 1, "owner-1", "authority", PROJECT, "digest", "fence"
+                    ),
+                )
+            )
+        with self.assertRaisesRegex(ValueError, "revision is invalid"):
+            validate_model_trace((_issue_event(token, "acquire", -1, *fields[1:]),))
+
     def test_hold_performs_trusted_authority_reread_after_lock_acquisition(self) -> None:
         reads: list[str] = []
 

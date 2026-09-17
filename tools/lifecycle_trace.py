@@ -75,6 +75,38 @@ class LifecycleObserver(Protocol):
     def __call__(self, event: LifecycleEvent) -> None: ...
 
 
+def _validate_event_schema(events: tuple[LifecycleEvent, ...]) -> None:
+    for event in events:
+        if type(event.revision) is not int or event.revision < 0:
+            raise ValueError("lifecycle trace revision is invalid")
+        if any(
+            type(value) is not str or not value
+            for value in (
+                event.owner,
+                event.lock,
+                event.project_id,
+                event.session_digest,
+                event.fencing_token,
+            )
+        ):
+            raise ValueError("lifecycle trace identity is invalid")
+    identity = (
+        events[0].owner,
+        events[0].lock,
+        events[0].project_id,
+        events[0].session_digest,
+        events[0].fencing_token,
+    )
+    if any(
+        (event.owner, event.lock, event.project_id, event.session_digest, event.fencing_token)
+        != identity
+        for event in events
+    ):
+        raise ValueError("lifecycle trace identity changed")
+    if any(left.revision > right.revision for left, right in pairwise(events)):
+        raise ValueError("lifecycle trace revision regressed")
+
+
 def validate_model_trace(events: tuple[LifecycleEvent, ...]) -> tuple[str, ...]:
     """Map one scope-issued lifecycle trace to UpgradeRecovery actions.
 
@@ -88,6 +120,7 @@ def validate_model_trace(events: tuple[LifecycleEvent, ...]) -> tuple[str, ...]:
     token = events[0]._token
     if any(event._token is not token for event in events):
         raise ValueError("lifecycle trace mixes scope-issued events")
+    _validate_event_schema(events)
     phases = tuple(event.phase for event in events)
     if any(phase not in MODEL_ACTIONS for phase in phases):
         raise ValueError("lifecycle trace phase is not mapped to the model")
