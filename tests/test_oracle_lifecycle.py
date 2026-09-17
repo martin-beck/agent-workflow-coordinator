@@ -4,6 +4,7 @@
 """Hostile and positive contract tests for mandatory interaction gates."""
 
 import unittest
+from pathlib import Path
 from typing import Any
 
 from tools.oracle_lifecycle import (
@@ -33,6 +34,13 @@ def event(task_revision: int, stage: GateStage, action: str, disposition: str) -
 
 
 class OracleLifecycleTests(unittest.TestCase):
+    def test_formal_model_is_in_required_fast_tier(self) -> None:
+        root = Path(__file__).parents[1]
+        verify = (root / "formal/handoffctl/verify.sh").read_text(encoding="utf-8")
+        attest = (root / "formal/handoffctl/attest.py").read_text(encoding="utf-8")
+        self.assertIn("run_model OracleInteractionGates", verify)
+        self.assertIn('"OracleInteractionGates"', attest)
+
     def test_bounded_model_covers_hostile_and_accepted_traces(self) -> None:
         result = check_bounded_model()
         self.assertGreater(result["accepted"], 0)

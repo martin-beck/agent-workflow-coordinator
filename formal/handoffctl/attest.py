@@ -14,7 +14,7 @@ from pathlib import Path
 
 EXPECTED_MODELS = {
     "portable-smoke": {"HandoffctlBinding"},
-    "pr-fast": {"HandoffctlFast"},
+    "pr-fast": {"HandoffctlFast", "OracleInteractionGates"},
     "pr-publication": {
         "HandoffctlBinding",
         "HandoffctlLocks",
@@ -32,7 +32,12 @@ EXPECTED_MODELS = {
         "HandoffctlRecovery",
     },
 }
-MODEL_SOURCE = {"HandoffctlPR": "Handoffctl", "HandoffctlFast": "HandoffctlBinding"}
+MODEL_SOURCE = {
+    "HandoffctlPR": "Handoffctl",
+    "HandoffctlFast": "HandoffctlBinding",
+    "OracleInteractionGates": "../oracle/OracleInteractionGates",
+}
+MODEL_CONFIG = {"OracleInteractionGates": "../oracle/OracleInteractionGates"}
 
 
 def digest(path: Path) -> str:
@@ -73,7 +78,8 @@ def main() -> int:
         parser.error(f"{args.tier} attestation has an unexpected model set")
     root = Path(__file__).resolve().parents[2]
     configs = {
-        model: digest(root / "formal" / "handoffctl" / f"{model}.cfg") for model in args.models
+        model: digest(root / "formal" / "handoffctl" / f"{MODEL_CONFIG.get(model, model)}.cfg")
+        for model in args.models
     }
     models = {
         model: digest(root / "formal" / "handoffctl" / f"{MODEL_SOURCE.get(model, model)}.tla")

@@ -81,6 +81,7 @@ class FormalEvidenceTests(unittest.TestCase):
         full_models = tier_manifest["profiles"]["full-exhaustive"]["models"]
         configs = [FORMAL_ROOT / f"{model}.cfg" for model in full_models]
         models = {config.stem for config in FORMAL_ROOT.glob("*.cfg")}
+        models.add("OracleInteractionGates")
         runner = (FORMAL_ROOT / "verify.sh").read_text(encoding="utf-8")
         invoked = set(re.findall(r"^\s*run_model\s+(\w+)(?:\s+\w+)?\s*$", runner, re.MULTILINE))
 
@@ -112,7 +113,10 @@ class FormalEvidenceTests(unittest.TestCase):
         manifest = json.loads((ROOT / "formal" / "tier-evidence.json").read_text())
         self.assertFalse(manifest["profiles"]["portable-smoke"]["exhaustive"])
         self.assertFalse(manifest["profiles"]["pr-fast"]["exhaustive"])
-        self.assertEqual(["HandoffctlFast"], manifest["profiles"]["pr-fast"]["models"])
+        self.assertEqual(
+            ["HandoffctlFast", "OracleInteractionGates"],
+            manifest["profiles"]["pr-fast"]["models"],
+        )
         self.assertIn("safety-only", manifest["profiles"]["pr-fast"]["claims"])
         fast_config = (FORMAL_ROOT / "HandoffctlFast.cfg").read_text()
         self.assertIn("SPECIFICATION Spec", fast_config)
@@ -124,6 +128,7 @@ class FormalEvidenceTests(unittest.TestCase):
         self.assertIn(
             ("HandoffctlFast", ""), [(model, source or "") for model, source in fast_invocations]
         )
+        self.assertIn("run_model OracleInteractionGates", verify)
         self.assertFalse(manifest["profiles"]["pr-publication"]["exhaustive"])
         self.assertTrue(manifest["profiles"]["full-exhaustive"]["exhaustive"])
         self.assertNotEqual(

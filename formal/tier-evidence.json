@@ -8,7 +8,7 @@
     },
     "pr-fast": {
       "exhaustive": false,
-      "models": ["HandoffctlFast"],
+      "models": ["HandoffctlFast", "OracleInteractionGates"],
       "claims": "required bounded safety-only merge gate; no liveness, full formal evidence, or release attestation"
     },
     "pr-publication": {
