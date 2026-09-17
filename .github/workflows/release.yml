@@ -62,8 +62,22 @@ jobs:
           from pathlib import Path
           template = Path("docs/templates/awc-sign-release.sh.in").read_text()
           transition = json.loads(os.environ["RELEASE_TRANSITION"])
-          key = subprocess.run(["git", "config", "--get", "user.signingkey"], capture_output=True, text=True, check=False).stdout.strip() or "configured-key"
-          values = {"@RELEASE_VERSION@": transition["to"]["version"], "@SOURCE_COMMIT@": transition["to"]["source_commit"], "@REPOSITORY@": os.environ["GITHUB_WORKSPACE"], "@FROM_TAG@": transition["from"]["tag_ref"], "@TO_TAG@": transition["to"]["tag_ref"], "@TRUST_POLICY@": transition["to"]["trust_policy_sha256"], "@VENDOR_MANIFEST@": transition["to"]["vendor_manifest_sha256"], "@OUTPUT@": os.path.join(os.environ["RUNNER_TEMP"], "release-signature.json"), "@SIGNING_KEY_REF@": key}
+          def config(name: str) -> str:
+              value = subprocess.run(["git", "config", "--get", name], capture_output=True, text=True, check=False).stdout.strip()
+              if not value or "\n" in value:
+                  raise SystemExit(f"required release signer policy is not configured: {name}")
+              return value
+          key = config("user.signingkey")
+          policy = config("gpg.ssh.allowedSignersFile")
+          identity = config("user.email")
+          policy_path = Path(policy).expanduser()
+          try:
+              authorized = any(line.split(maxsplit=1)[0] == identity for line in policy_path.read_text().splitlines() if line.strip())
+          except OSError:
+              authorized = False
+          if not authorized:
+              raise SystemExit("configured release identity is not authorized by the GitHub release-key policy")
+          values = {"@RELEASE_VERSION@": transition["to"]["version"], "@SOURCE_COMMIT@": transition["to"]["source_commit"], "@REPOSITORY@": os.environ["GITHUB_WORKSPACE"], "@FROM_TAG@": transition["from"]["tag_ref"], "@TO_TAG@": transition["to"]["tag_ref"], "@TRUST_POLICY@": transition["to"]["trust_policy_sha256"], "@VENDOR_MANIFEST@": transition["to"]["vendor_manifest_sha256"], "@OUTPUT@": os.path.join(os.environ["RUNNER_TEMP"], "release-signature.json"), "@SIGNING_KEY_REF@": key, "@SIGNING_POLICY_REF@": policy, "@SIGNING_IDENTITY@": identity}
           for placeholder, value in values.items(): template = template.replace(placeholder, shlex.quote(value))
           target = Path(sys.argv[1]); target.write_text(template); target.chmod(0o700)
           PY
