@@ -13,6 +13,13 @@ from typing import Any
 
 from tools.generate_upgrade_contract import generate
 from tools.generate_upgrade_runbook import RunbookError, generate_runbooks, main, write_runbooks
+from tools.verify_upgrade_runbook import (
+    RunbookVerificationError,
+    verify_runbooks,
+)
+from tools.verify_upgrade_runbook import (
+    main as verify_main,
+)
 
 
 def _release(version: str, seed: str) -> dict[str, str]:
@@ -66,6 +73,52 @@ class UpgradeRunbookTests(unittest.TestCase):
                     "vendor_manifest_sha256",
                 ):
                     self.assertNotIn(release[field], content)
+
+        verify_runbooks(document, fixture)
+
+    def test_checker_rejects_stale_or_aliased_output(self) -> None:
+        document = _contract()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            output = root / "runbooks"
+            write_runbooks(document, output)
+            (output / "agent.md").write_text("stale", encoding="utf-8")
+            with self.assertRaises(RunbookVerificationError):
+                verify_runbooks(document, output)
+            write_runbooks(document, output)
+            (output / "stale.md").write_text("old output", encoding="utf-8")
+            with self.assertRaises(RunbookVerificationError):
+                verify_runbooks(document, output)
+            (output / "stale.md").unlink()
+            target = root / "target.md"
+            target.write_text((output / "agent.md").read_text(encoding="utf-8"), encoding="utf-8")
+            (output / "agent.md").unlink()
+            (output / "agent.md").symlink_to(target)
+            with self.assertRaises(RunbookVerificationError):
+                verify_runbooks(document, output)
+
+    def test_checker_cli_and_generator_cli_fail_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            contract = root / "contract.json"
+            output = root / "runbooks"
+            contract.write_text("not-json", encoding="utf-8")
+            self.assertEqual(1, verify_main([str(contract), str(output)]))
+            self.assertEqual(1, main([str(contract), str(output)]))
+            contract.write_text("[]", encoding="utf-8")
+            self.assertEqual(1, main([str(contract), str(output)]))
+            contract.write_text(json.dumps(_contract()), encoding="utf-8")
+            self.assertEqual(1, verify_main([str(contract), str(output)]))
+
+    def test_git_release_runbook_uses_git_backup_instructions(self) -> None:
+        document = _contract()
+        document["backend"] = "git"
+        for phase in document["phases"]:
+            phase["operation"]["inputs"]["backend"] = "git"
+        document["rollback"]["operation"]["inputs"]["backend"] = "git"
+        generated = generate_runbooks(document)
+        self.assertIn("reachable objects", generated["operator.md"])
+        self.assertNotIn("WAL/SHM", generated["operator.md"])
 
     def test_generation_is_deterministic_and_contains_safety_gates(self) -> None:
         first = generate_runbooks(_contract())

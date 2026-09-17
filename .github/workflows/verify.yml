@@ -118,6 +118,9 @@ jobs:
           uv run python -m json.tool examples/project/.handoffctl.json >/dev/null
           uv run python -m json.tool examples/project/coordinator.backend.json >/dev/null
           uv run python -m json.tool examples/project/runtime-config.example.json >/dev/null
+          uv run python -m tools.verify_upgrade_runbook \
+            examples/upgrade/fixture-v0.3.8-to-v0.3.9.contract.json \
+            examples/upgrade/fixture-v0.3.8-to-v0.3.9
           uv run python - <<'PY'
           import json
           from pathlib import Path
