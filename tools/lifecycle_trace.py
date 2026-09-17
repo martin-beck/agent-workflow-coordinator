@@ -109,6 +109,7 @@ def validate_terminal_recovery_contract(root: Path) -> None:
         "FreshRuntimeRead(p) ==",
         "NoUnheldRollbackGap",
         "terminalTarget \\in Targets",
+        "THEOREM Spec => []TypeOK",
         "THEOREM Spec => []NoUnheldRollbackGap",
         "THEOREM Spec => []ReleaseEvidence",
         "THEOREM Spec => []WriterDrainOnAcquire",

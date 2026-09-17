@@ -557,7 +557,8 @@ class LockDomainScopeTests(unittest.TestCase):
                 "~terminalVerified terminalTarget' = target\n"
                 "freshRuntimeVerified' = TRUE\n"
                 "BeginReopen(p) == TRUE\n"
-                "controlRevision < MaxRevision\n",
+                "controlRevision < MaxRevision\n"
+                "THEOREM Spec => []TypeOK\n",
                 encoding="utf-8",
             )
             with self.assertRaisesRegex(ValueError, "authorityRechecked"):
