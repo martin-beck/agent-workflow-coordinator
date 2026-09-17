@@ -68,7 +68,7 @@ class DispatchAdmission:
 
     def validate_identity(self, expected: VerifiedManifest) -> None:
         """Require the consumer's identity evidence to match this admission."""
-        if expected != self.identity:
+        if not isinstance(expected, VerifiedManifest) or expected != self.identity:
             self.runtime.close()
             raise AuthorityError("dispatch admission identity is not bound")
         self.revalidate()
