@@ -94,6 +94,22 @@ def _reconcile_selector_in_child(path_text: str, result_text: str) -> None:
     Path(result_text).write_text(result, encoding="utf-8")
 
 
+def _reconcile_and_verify_selector_in_child(path_text: str, result_text: str) -> None:
+    path = Path(path_text)
+    result = reconcile_runtime_selector(
+        path,
+        before_active_release="old",
+        before_previous_release="older",
+        after_active_release="new",
+        after_previous_release="old",
+    )
+    selector = read_runtime_selector(path)
+    Path(result_text).write_text(
+        f"{result}:{selector['active_release']}:{selector['previous_release']}",
+        encoding="utf-8",
+    )
+
+
 def _replace_selector_parent_after_marker(
     parent_text: str, marker_text: str, replaced_text: str, displaced_text: str
 ) -> None:
@@ -587,12 +603,12 @@ class RuntimeSelectorTests(unittest.TestCase):
             self.assertEqual(-signal.SIGKILL, process.exitcode)
             result = root / "result"
             verifier = multiprocessing.get_context("fork").Process(
-                target=_reconcile_selector_in_child, args=(str(path), str(result))
+                target=_reconcile_and_verify_selector_in_child, args=(str(path), str(result))
             )
             verifier.start()
             verifier.join(timeout=10)
             self.assertEqual(0, verifier.exitcode)
-            self.assertEqual("committed", result.read_text(encoding="utf-8"))
+            self.assertEqual("committed:new:old", result.read_text(encoding="utf-8"))
             self.assertEqual({"selector.json", "result"}, {entry.name for entry in root.iterdir()})
 
     def test_child_death_before_selector_rename_preserves_old_pair(self) -> None:
