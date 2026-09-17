@@ -478,6 +478,11 @@ class LockDomainScopeTests(unittest.TestCase):
             )
             with self.assertRaisesRegex(ValueError, "model actions are missing"):
                 validate_model_trace((event,), model_root=root)
+            (root / "formal/upgrade/UpgradeRecovery.tla").write_text(
+                "Preflight(op) == TRUE\nBackupGit(op) == TRUE\n", encoding="utf-8"
+            )
+            with self.assertRaisesRegex(ValueError, "Backup"):
+                validate_model_action_contract(root)
 
     def test_model_trace_rejects_empty_invalid_and_malformed_events(self) -> None:
         with self.assertRaisesRegex(ValueError, "must not be empty"):
