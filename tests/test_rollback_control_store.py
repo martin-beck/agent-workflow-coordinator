@@ -318,6 +318,17 @@ def _reopen_ambiguous_child(control_text: str, authority_text: str, result_text:
     Path(result_text).write_text(f"{state.status}:{state.revision}\n", encoding="utf-8")
 
 
+def _recover_ambiguous_child(control_text: str, authority_text: str, result_text: str) -> None:
+    store = SQLiteBarrierSessionStore(
+        SQLiteRollbackControlStore(Path(control_text), PROJECT, Path(authority_text)),
+        lambda: "authority-3",
+    )
+    state = store.recover_unknown()
+    if state is None:
+        raise SystemExit("missing recovery state")
+    Path(result_text).write_text(f"{state.status}:{state.revision}\n", encoding="utf-8")
+
+
 def authority_task() -> tuple[Path, dict[str, object], str]:
     meta: dict[str, object] = {
         "schema_version": 1,
@@ -838,7 +849,16 @@ class RollbackControlStoreTests(unittest.TestCase):
             self.assertIsNotNone(state)
             assert state is not None
             self.assertEqual(("releasing", 3), (state.status, state.revision))
-            recovered = store.recover_unknown()
+            child_result = root / "recovered-child-result"
+            verifier = multiprocessing.get_context("fork").Process(
+                target=_recover_ambiguous_child,
+                args=(str(control_path), str(authority_path), str(child_result)),
+            )
+            verifier.start()
+            verifier.join(timeout=10)
+            self.assertEqual(0, verifier.exitcode)
+            self.assertEqual("ambiguous:4\n", child_result.read_text(encoding="utf-8"))
+            recovered = store.snapshot()
             self.assertIsNotNone(recovered)
             assert recovered is not None
             self.assertEqual(("ambiguous", 4), (recovered.status, recovered.revision))
