@@ -75,6 +75,10 @@ class UpgradeRunbookTests(unittest.TestCase):
             "release-runbooks/agent.md",
             workflow,
         )
+        self.assertIn('test "$(wc -l < "$RUNNER_TEMP/release-artifacts.sha256")" -eq 3', workflow)
+        self.assertIn("grep -Eq '^[0-9a-f]{64}  release-contract\\.json$'", workflow)
+        self.assertIn("grep -Eq '^[0-9a-f]{64}  release-runbooks/operator\\.md$'", workflow)
+        self.assertIn("grep -Eq '^[0-9a-f]{64}  release-runbooks/agent\\.md$'", workflow)
         self.assertIn("release-source-commit.txt", workflow)
         self.assertIn("release-artifacts.sha256", workflow)
 
