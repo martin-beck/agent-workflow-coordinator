@@ -15,6 +15,7 @@ from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
 from typing import Any, cast
+from unittest.mock import patch
 
 from tools.admission_lease import (
     AdmissionLease,
@@ -532,6 +533,14 @@ class LockDomainScopeTests(unittest.TestCase):
             )
             with self.assertRaisesRegex(ValueError, "terminalVerified"):
                 validate_terminal_recovery_contract(root)
+        event = _issue_event(
+            object(), "acquire", 1, "owner-1", "authority", PROJECT, "digest", "fence"
+        )
+        with patch(
+            "tools.lifecycle_trace.validate_terminal_recovery_contract",
+            side_effect=ValueError("terminal contract rejected"),
+        ), self.assertRaisesRegex(ValueError, "terminal contract rejected"):
+            validate_model_trace((event,))
 
     def test_model_trace_rejects_empty_invalid_and_malformed_events(self) -> None:
         with self.assertRaisesRegex(ValueError, "must not be empty"):

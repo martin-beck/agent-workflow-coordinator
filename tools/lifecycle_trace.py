@@ -172,7 +172,9 @@ def validate_model_trace(
         raise ValueError("lifecycle trace must not be empty")
     if any(not isinstance(event, LifecycleEvent) for event in events):
         raise ValueError("lifecycle trace contains an invalid event")
-    validate_model_action_contract(model_root or Path(__file__).resolve().parents[1])
+    contract_root = model_root or Path(__file__).resolve().parents[1]
+    validate_model_action_contract(contract_root)
+    validate_terminal_recovery_contract(contract_root)
     token = events[0]._token
     if any(event._token is not token for event in events):
         raise ValueError("lifecycle trace mixes scope-issued events")
