@@ -65,7 +65,7 @@ jobs:
           vendor_manifest = Path(os.environ["GITHUB_WORKSPACE"]) / "coordinator.vendor.json"
           if not trust_policy.is_file() or not vendor_manifest.is_file():
               raise SystemExit("canonical release trust-policy and vendor-manifest files are required")
-          args = ["/home/martin/bin/awc-sign-release.sh", "--repo", os.environ["GITHUB_WORKSPACE"], "--version", to["version"], "--from-tag", old["tag_ref"].removeprefix("refs/tags/"), "--trust-policy", str(trust_policy), "--vendor-manifest", str(vendor_manifest), "--output", os.path.join(os.environ["RUNNER_TEMP"], "release-signature.json"), "--backend", transition["backend"], "--selector-ref", transition["selector_ref"], "--state-revision", str(transition["expected_state_revision"]), "--barrier-id", transition["barrier_id"], "--fencing-token", transition["fencing_token"], "--operation-id", transition["operation_id"]]
+          args = ["awc-sign-release.sh", "--repo", os.environ["GITHUB_WORKSPACE"], "--version", to["version"], "--from-tag", old["tag_ref"].removeprefix("refs/tags/"), "--trust-policy", str(trust_policy), "--vendor-manifest", str(vendor_manifest), "--output", os.path.join(os.environ["RUNNER_TEMP"], "release-signature.json"), "--backend", transition["backend"], "--selector-ref", transition["selector_ref"], "--state-revision", str(transition["expected_state_revision"]), "--barrier-id", transition["barrier_id"], "--fencing-token", transition["fencing_token"], "--operation-id", transition["operation_id"]]
           command = " ".join(shlex.quote(arg) for arg in args)
           print("Release signing command (copy/paste on the authorized signing runner; not executed by CI):")
           print(command)

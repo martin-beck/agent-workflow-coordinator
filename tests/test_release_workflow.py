@@ -25,6 +25,7 @@ def test_release_workflow_probes_external_signer_without_publishing() -> None:
     assert "--push" not in WORKFLOW
     assert '.removeprefix("refs/tags/")' in WORKFLOW
     assert "Not executed by CI" in WORKFLOW
+    assert "/home/martin" not in WORKFLOW
 
 
 def test_signing_command_is_after_release_contract_validation() -> None:
