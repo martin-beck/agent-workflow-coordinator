@@ -345,6 +345,51 @@ def _cleanup_selector_temporaries(parent: int, name: str) -> None:
             raise AuthorityError("runtime selector temporary cleanup is ambiguous") from error
 
 
+def _read_runtime_selector_at(parent: int, name: str) -> dict[str, Any]:  # noqa: C901
+    descriptor = -1
+    try:
+        descriptor = os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=parent)
+        status = os.fstat(descriptor)
+        if not stat.S_ISREG(status.st_mode) or status.st_nlink != 1:
+            raise AuthorityError("runtime selector descriptor is unsafe")
+        chunks: list[bytes] = []
+        total = 0
+        while True:
+            chunk = os.read(descriptor, 8192)
+            if not chunk:
+                break
+            total += len(chunk)
+            if total > 64 * 1024:
+                raise AuthorityError("runtime selector is too large")
+            chunks.append(chunk)
+        after = os.fstat(descriptor)
+        if _file_identity(status) != _file_identity(after):
+            raise AuthorityError("runtime selector identity changed")
+        try:
+            value = json.loads(b"".join(chunks).decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as error:
+            raise AuthorityError("runtime selector is unreadable") from error
+    except FileNotFoundError as error:
+        raise AuthorityError("runtime selector is unavailable") from error
+    except OSError as error:
+        raise AuthorityError("runtime selector descriptor is unsafe") from error
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+    if not isinstance(value, dict) or set(value) != {
+        "schema_version",
+        "active_release",
+        "previous_release",
+    }:
+        raise AuthorityError("runtime selector schema is invalid")
+    if value["schema_version"] != 1 or not all(
+        isinstance(value[key], str) and _RELEASE_IDENTITY.fullmatch(value[key]) is not None
+        for key in ("active_release", "previous_release")
+    ):
+        raise AuthorityError("runtime selector identity is invalid")
+    return cast(dict[str, Any], value)
+
+
 def _sidecar_identities(parent: int, name: str) -> dict[str, tuple[int, int] | None]:
     result: dict[str, tuple[int, int] | None] = {}
     for suffix in _SQLITE_SIDECARS:
@@ -819,8 +864,14 @@ def reconcile_runtime_selector(
                 raise AuthorityError("runtime selector parent identity changed")
             _cleanup_selector_temporaries(parent, path.name)
             _recheck_parent(path, parent_identity)
+            verified = _read_runtime_selector_at(parent, path.name)
+            if _file_identity(os.fstat(parent)) != parent_identity:
+                raise AuthorityError("runtime selector parent identity changed")
+            _recheck_parent(path, parent_identity)
         finally:
             os.close(parent)
+        if (verified["active_release"], verified["previous_release"]) != pair:
+            raise AuthorityError("selector changed during reconciliation")
         if pair == (after_active_release, after_previous_release):
             return "committed"
         if pair == (before_active_release, before_previous_release):
