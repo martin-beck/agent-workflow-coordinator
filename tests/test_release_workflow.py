@@ -14,6 +14,7 @@ def test_release_workflow_probes_external_signer_without_publishing() -> None:
     assert "GITHUB_STEP_SUMMARY" in WORKFLOW
     assert "ephemeral self-test only" in WORKFLOW
     assert '"@SOURCE_COMMIT@": transition["to"]["source_commit"]' in WORKFLOW
+    assert 'transition_path.read_text(encoding="utf-8")' in WORKFLOW
     assert "no signing or publication" in WORKFLOW
 
 

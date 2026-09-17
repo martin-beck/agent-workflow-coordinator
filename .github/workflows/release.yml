@@ -61,7 +61,8 @@ jobs:
           import hashlib, json, os, shlex, subprocess, sys, tempfile
           from pathlib import Path
           template = Path("docs/templates/awc-sign-release.sh.in").read_text()
-          transition = json.loads(os.environ["RELEASE_TRANSITION"])
+          transition_path = Path(os.environ["RELEASE_TRANSITION"])
+          transition = json.loads(transition_path.read_text(encoding="utf-8"))
           def config(name: str) -> str:
               value = subprocess.run(["git", "config", "--get", name], capture_output=True, text=True, check=False).stdout.strip()
               if not value or "\n" in value:
