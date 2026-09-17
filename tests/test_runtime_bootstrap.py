@@ -195,6 +195,24 @@ class RuntimeBootstrapTests(unittest.TestCase):
                     admission.validate_identity(wrong)
                 self.assertEqual(-1, resolved.descriptor)
 
+    def test_dispatch_admission_rejects_malformed_identity_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            releases = root / "releases"
+            releases.mkdir(mode=0o700)
+            selected = releases / "v1.2.3"
+            selected.mkdir(mode=0o700)
+            self._write_manifest(selected)
+            selector = root / "runtime-selector.json"
+            commit_runtime_selector(selector, "v1.2.3", "v1.2.2")
+            with resolve_selected_runtime_bound(
+                selector, releases, self._identity_for_release(), self._verifier
+            ) as resolved:
+                admission = resolved.admit_for_dispatch()
+                with self.assertRaisesRegex(AuthorityError, "identity is not bound"):
+                    admission.validate_identity(object())  # type: ignore[arg-type]
+                self.assertEqual(-1, resolved.descriptor)
+
     def test_dispatch_admission_close_is_terminal_and_reuse_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
