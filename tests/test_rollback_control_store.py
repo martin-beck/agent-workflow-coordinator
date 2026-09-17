@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import inspect
 import json
+import multiprocessing
 import os
 import signal
 import sqlite3
@@ -304,6 +305,17 @@ except ControlStoreError as error:
     raise SystemExit(0)
 raise SystemExit("stale writer was accepted")
 """
+
+
+def _reopen_ambiguous_child(control_text: str, authority_text: str, result_text: str) -> None:
+    store = SQLiteBarrierSessionStore(
+        SQLiteRollbackControlStore(Path(control_text), PROJECT, Path(authority_text)),
+        lambda: "authority-3",
+    )
+    state = store.snapshot()
+    if state is None:
+        raise SystemExit("missing state")
+    Path(result_text).write_text(f"{state.status}:{state.revision}\n", encoding="utf-8")
 
 
 def authority_task() -> tuple[Path, dict[str, object], str]:
@@ -792,6 +804,15 @@ class RollbackControlStoreTests(unittest.TestCase):
             self.assertIsNotNone(recovered)
             assert recovered is not None
             self.assertEqual(("ambiguous", 4), (recovered.status, recovered.revision))
+            child_result = root / "child-result"
+            verifier = multiprocessing.get_context("fork").Process(
+                target=_reopen_ambiguous_child,
+                args=(str(control_path), str(authority_path), str(child_result)),
+            )
+            verifier.start()
+            verifier.join(timeout=10)
+            self.assertEqual(0, verifier.exitcode)
+            self.assertEqual("ambiguous:4\n", child_result.read_text(encoding="utf-8"))
             self.assertEqual(authority_bytes, authority_path.read_bytes())
 
     def test_v10_subprocess_after_outcome_publication_reopens_releasing(self) -> None:
