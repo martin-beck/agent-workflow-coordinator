@@ -83,6 +83,29 @@ class RuntimeBootstrapTests(unittest.TestCase):
             with self.assertRaisesRegex(AuthorityError, "unavailable"):
                 resolved.revalidate()
 
+    def test_bound_runtime_revalidates_manifest_before_dispatch(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            releases = root / "releases"
+            releases.mkdir(mode=0o700)
+            selected = releases / "v1.2.3"
+            selected.mkdir(mode=0o700)
+            self._write_manifest(selected)
+            selector = root / "runtime-selector.json"
+            commit_runtime_selector(selector, "v1.2.3", "v1.2.2")
+            with resolve_selected_runtime_bound(
+                selector, releases, self._identity_for_release(), self._verifier
+            ) as resolved:
+                resolved.revalidate_manifest()
+                manifest = selected / "runtime-manifest.json"
+                replacement = selected / "replacement.json"
+                replacement.write_text(manifest.read_text().replace("v1.2.3", "v1.2.4"))
+                replacement.chmod(0o600)
+                manifest.unlink()
+                replacement.rename(manifest)
+                with self.assertRaisesRegex(AuthorityError, "manifest identity changed"):
+                    resolved.revalidate_manifest()
+
     def test_bound_runtime_rejects_invalid_evidence_and_identity(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
