@@ -9,6 +9,7 @@ import os
 import re
 import stat
 from collections.abc import Callable
+from contextlib import suppress
 from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path
@@ -153,8 +154,10 @@ class ResolvedRuntime:
     def close(self) -> None:
         """Close the retained descriptor; no execution operation is exposed."""
         if self.descriptor >= 0:
-            os.close(self.descriptor)
+            descriptor = self.descriptor
             self.descriptor = -1
+            with suppress(OSError):
+                os.close(descriptor)
 
     def __enter__(self) -> ResolvedRuntime:
         return self
