@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sqlite3
 import stat
 import tempfile
@@ -324,7 +325,7 @@ class SQLiteLifecycleExecutor:
     @classmethod
     def _selector_path_identity(
         cls, root: Path, selector_ref: str
-    ) -> tuple[tuple[int, int, int, int, int], ...]:
+    ) -> tuple[tuple[tuple[int, int, int, int, int], ...], str]:
         """Capture identities for the root's ancestors, root, and selector."""
         cls._resolve_selector_target(root, selector_ref)
         paths = []
@@ -334,7 +335,7 @@ class SQLiteLifecycleExecutor:
             paths.append(component)
         paths.append(root / selector_ref)
         try:
-            return tuple(
+            identities = tuple(
                 (
                     status.st_dev,
                     status.st_ino,
@@ -345,6 +346,9 @@ class SQLiteLifecycleExecutor:
                 for path in paths
                 for status in (path.lstat(),)
             )
+            import hashlib
+
+            return identities, hashlib.sha256(paths[-1].read_bytes()).hexdigest()
         except OSError as error:
             raise SQLiteAuthorityError("selector target identity unavailable") from error
 
@@ -367,6 +371,23 @@ class SQLiteLifecycleExecutor:
         or new pair.  It never writes the selector or authorizes an upgrade.
         """
         from tools.upgrade_authority import read_runtime_selector
+
+        releases = (
+            before_active_release,
+            before_previous_release,
+            after_active_release,
+            after_previous_release,
+        )
+        if not all(
+            isinstance(value, str) and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", value)
+            for value in releases
+        ):
+            raise SQLiteAuthorityError("selector release identity is invalid")
+        if (before_active_release, before_previous_release) == (
+            after_active_release,
+            after_previous_release,
+        ):
+            raise SQLiteAuthorityError("selector release pairs must differ")
 
         with self.selector_visibility_scope(
             selector_ref,
