@@ -12,7 +12,12 @@ from hashlib import sha256
 from pathlib import Path
 from unittest.mock import patch
 
-from tools.runtime_bootstrap import resolve_selected_runtime, verify_runtime_manifest
+from tools.runtime_bootstrap import (
+    ExpectedRuntimeIdentity,
+    VerifiedManifest,
+    resolve_selected_runtime,
+    verify_runtime_manifest,
+)
 from tools.upgrade_authority import AuthorityError, commit_runtime_selector
 
 
@@ -47,7 +52,11 @@ class RuntimeBootstrapTests(unittest.TestCase):
             self._write_manifest(selected)
             selector = root / "runtime-selector.json"
             commit_runtime_selector(selector, "v1.2.3", "v1.2.2")
-            self.assertEqual(selected, resolve_selected_runtime(selector, releases, lambda _: True))
+            expected = self._identity(selected)
+            self.assertEqual(
+                selected,
+                resolve_selected_runtime(selector, releases, expected, self._verifier),
+            )
 
     def test_rejects_missing_symlink_and_unbounded_release(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -58,10 +67,14 @@ class RuntimeBootstrapTests(unittest.TestCase):
             selector = root / "runtime-selector.json"
             commit_runtime_selector(selector, "v1.2.3", "v1.2.2")
             with self.assertRaisesRegex(AuthorityError, "unavailable"):
-                resolve_selected_runtime(selector, releases, lambda _: True)
+                resolve_selected_runtime(
+                    selector, releases, self._identity_for_release(), self._verifier
+                )
             (releases / "v1.2.3").symlink_to(root)
             with self.assertRaisesRegex(AuthorityError, "unsafe"):
-                resolve_selected_runtime(selector, releases, lambda _: True)
+                resolve_selected_runtime(
+                    selector, releases, self._identity_for_release(), self._verifier
+                )
             selector.write_text(
                 json.dumps(
                     {
@@ -72,7 +85,9 @@ class RuntimeBootstrapTests(unittest.TestCase):
                 )
             )
             with self.assertRaisesRegex(AuthorityError, "identity"):
-                resolve_selected_runtime(selector, releases, lambda _: True)
+                resolve_selected_runtime(
+                    selector, releases, self._identity_for_release(), self._verifier
+                )
 
     def test_requires_authenticity_verifier_and_rejects_failed_verification(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -86,10 +101,67 @@ class RuntimeBootstrapTests(unittest.TestCase):
             self._write_manifest(selected)
             selector = root / "runtime-selector.json"
             commit_runtime_selector(selector, "v1.2.3", "v1.2.2")
-            with self.assertRaisesRegex(AuthorityError, "verifier is required"):
-                resolve_selected_runtime(selector, releases)
+            with self.assertRaisesRegex(
+                AuthorityError, "verifier and expected identity are required"
+            ):
+                resolve_selected_runtime(selector, releases, self._identity_for_release())
             with self.assertRaisesRegex(AuthorityError, "verification failed"):
-                resolve_selected_runtime(selector, releases, lambda _: False)
+                resolve_selected_runtime(
+                    selector,
+                    releases,
+                    self._identity_for_release(),
+                    lambda *_: (_ for _ in ()).throw(RuntimeError("no")),
+                )
+
+    def test_rejects_cross_bound_verified_manifest(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            releases = root / "releases"
+            releases.mkdir(mode=0o700)
+            selected = releases / "v1.2.3"
+            selected.mkdir(mode=0o700)
+            self._write_manifest(selected)
+            selector = root / "runtime-selector.json"
+            commit_runtime_selector(selector, "v1.2.3", "v1.2.2")
+            foreign = ExpectedRuntimeIdentity(
+                "f" * 40, "refs/tags/v1.2.3", "b" * 40, "c" * 64, "d" * 64, "e" * 64
+            )
+            with self.assertRaisesRegex(AuthorityError, "not bound"):
+                resolve_selected_runtime(
+                    selector,
+                    releases,
+                    self._identity_for_release(),
+                    lambda path, _expected: VerifiedManifest(
+                        "v1.2.3",
+                        foreign,
+                        sha256(path.joinpath("runtime-manifest.json").read_bytes()).hexdigest(),
+                    ),
+                )
+
+    def test_rejects_manifest_replacement_after_authenticity_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            releases = root / "releases"
+            releases.mkdir(mode=0o700)
+            selected = releases / "v1.2.3"
+            selected.mkdir(mode=0o700)
+            self._write_manifest(selected)
+            selector = root / "runtime-selector.json"
+            commit_runtime_selector(selector, "v1.2.3", "v1.2.2")
+
+            def replace(path: Path, expected: ExpectedRuntimeIdentity) -> VerifiedManifest:
+                digest = sha256(path.joinpath("runtime-manifest.json").read_bytes()).hexdigest()
+                replacement = path.joinpath("replacement.json")
+                replacement.write_text(
+                    path.joinpath("runtime-manifest.json").read_text().replace("v1.2.3", "v1.2.4")
+                )
+                replacement.chmod(0o600)
+                path.joinpath("runtime-manifest.json").unlink()
+                replacement.rename(path.joinpath("runtime-manifest.json"))
+                return VerifiedManifest("v1.2.3", expected, digest)
+
+            with self.assertRaisesRegex(AuthorityError, "does not match"):
+                resolve_selected_runtime(selector, releases, self._identity_for_release(), replace)
 
     def test_manifest_verifier_requires_exact_owner_only_digest(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -150,4 +222,21 @@ class RuntimeBootstrapTests(unittest.TestCase):
             alias = root / "alias"
             alias.symlink_to(real, target_is_directory=True)
             with self.assertRaisesRegex(AuthorityError, "contains a symlink"):
-                resolve_selected_runtime(selector, alias, lambda _: True)
+                resolve_selected_runtime(
+                    selector, alias, self._identity_for_release(), self._verifier
+                )
+
+    @staticmethod
+    def _identity_for_release() -> ExpectedRuntimeIdentity:
+        return ExpectedRuntimeIdentity(
+            "a" * 40, "refs/tags/v1.2.3", "b" * 40, "c" * 64, "d" * 64, "e" * 64
+        )
+
+    @staticmethod
+    def _identity(_runtime: Path) -> ExpectedRuntimeIdentity:
+        return RuntimeBootstrapTests._identity_for_release()
+
+    @staticmethod
+    def _verifier(runtime: Path, expected: ExpectedRuntimeIdentity) -> VerifiedManifest:
+        digest = sha256(runtime.joinpath("runtime-manifest.json").read_bytes()).hexdigest()
+        return VerifiedManifest("v1.2.3", expected, digest)

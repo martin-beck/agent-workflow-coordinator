@@ -179,7 +179,8 @@ def _release_path(root: Path, release: str) -> Path:
 def resolve_selected_runtime(
     selector: Path,
     releases_root: Path,
-    verify_authenticity: Callable[[Path], bool] | None = None,
+    expected_identity: ExpectedRuntimeIdentity | None = None,
+    verify_authenticity: Callable[[Path, ExpectedRuntimeIdentity], VerifiedManifest] | None = None,
 ) -> Path:
     """Resolve one selected release without executing or mutating anything.
 
@@ -188,8 +189,8 @@ def resolve_selected_runtime(
     and hard-link aliases are rejected before a caller can execute the result.
     """
     selected = read_runtime_selector(selector)
-    if verify_authenticity is None:
-        raise AuthorityError("runtime authenticity verifier is required")
+    if expected_identity is None or verify_authenticity is None:
+        raise AuthorityError("runtime authenticity verifier and expected identity are required")
     release = selected["active_release"]
     if not isinstance(release, str) or _RELEASE.fullmatch(release) is None:
         raise AuthorityError("runtime selector release identity is invalid")
@@ -198,10 +199,26 @@ def resolve_selected_runtime(
     manifest = read_runtime_manifest(release_path)
     if manifest["release"] != release:
         raise AuthorityError("runtime manifest release does not match selector")
+    manifest_identity = ExpectedRuntimeIdentity(
+        source_commit=manifest["source_commit"],
+        tag_ref=manifest["tag_ref"],
+        tag_object=manifest["tag_object"],
+        signature_sha256=manifest["signature_sha256"],
+        trust_policy_sha256=manifest["trust_policy_sha256"],
+        vendor_manifest_sha256=manifest["vendor_manifest_sha256"],
+    )
+    if manifest_identity != expected_identity:
+        raise AuthorityError("runtime manifest identity does not match expected identity")
     try:
-        verified = verify_authenticity(release_path)
+        verified = verify_authenticity(release_path, expected_identity)
     except Exception as error:
         raise AuthorityError("runtime authenticity verification failed") from error
-    if verified is not True:
-        raise AuthorityError("runtime authenticity verification failed")
+    if (
+        not isinstance(verified, VerifiedManifest)
+        or verified.release != release
+        or verified.identity != expected_identity
+        or _DIGEST.fullmatch(verified.digest) is None
+    ):
+        raise AuthorityError("runtime authenticity evidence is not bound to selected release")
+    verify_runtime_manifest(release_path, verified.digest)
     return release_path
