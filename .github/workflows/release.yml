@@ -61,13 +61,11 @@ jobs:
           transition_path = Path(os.environ["TRANSITION"])
           transition = json.loads(transition_path.read_text(encoding="utf-8"))
           to, old = transition["to"], transition["from"]
-          trust_policy = Path("./coordinator.trust-policy.json")
-          vendor_manifest = Path("./coordinator.vendor.json")
-          if not trust_policy.is_file() or not vendor_manifest.is_file():
-              raise SystemExit("canonical release trust-policy and vendor-manifest files are required")
-          args = ["awc-sign-release.sh", "--repo", ".", "--version", to["version"], "--from-tag", old["tag_ref"].removeprefix("refs/tags/"), "--trust-policy", str(trust_policy), "--vendor-manifest", str(vendor_manifest), "--output", "./release-signature.json", "--backend", transition["backend"], "--selector-ref", transition["selector_ref"], "--state-revision", str(transition["expected_state_revision"]), "--barrier-id", transition["barrier_id"], "--fencing-token", transition["fencing_token"], "--operation-id", transition["operation_id"]]
+          args = ["awc-sign-release.sh", "--repo", ".", "--version", to["version"], "--from-tag", old["tag_ref"].removeprefix("refs/tags/"), "--trust-policy", '"$AWC_TRUST_POLICY_FILE"', "--vendor-manifest", '"$AWC_VENDOR_MANIFEST_FILE"', "--output", '"$AWC_RELEASE_OUTPUT"', "--backend", transition["backend"], "--selector-ref", transition["selector_ref"], "--state-revision", str(transition["expected_state_revision"]), "--barrier-id", transition["barrier_id"], "--fencing-token", transition["fencing_token"], "--operation-id", transition["operation_id"]]
           command = " ".join(shlex.quote(arg) for arg in args)
-          print("Run this command from a clean checkout whose HEAD equals the transition source commit; the external signer performs the signing mutation only when explicitly invoked.")
+          for variable in ("AWC_TRUST_POLICY_FILE", "AWC_VENDOR_MANIFEST_FILE", "AWC_RELEASE_OUTPUT"):
+              command = command.replace(shlex.quote(f'"${variable}"'), f'"${variable}"')
+          print("Run this command from a clean checkout whose HEAD equals the transition source commit, with AWC_TRUST_POLICY_FILE, AWC_VENDOR_MANIFEST_FILE, and AWC_RELEASE_OUTPUT set to verified signing-runner paths; the external signer performs the signing mutation only when explicitly invoked.")
           print("Release signing command (copy/paste on the authorized signing runner; not executed by CI):")
           print(command)
           with Path(os.environ["GITHUB_STEP_SUMMARY"]).open("a", encoding="utf-8") as summary:
