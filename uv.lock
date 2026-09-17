@@ -8,7 +8,7 @@ resolution-markers = [
 
 [[package]]
 name = "agent-workflow-coordinator-quality"
-version = "0.3.10"
+version = "0.3.9"
 source = { virtual = "." }
 
 [package.dev-dependencies]
