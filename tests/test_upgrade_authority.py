@@ -115,6 +115,26 @@ def _publish_selector_after_final_recheck_then_die(path_text: str) -> None:
         commit_runtime_selector(path, "new", "old")
 
 
+def _publish_selector_after_identity_validation_then_die(path_text: str) -> None:
+    path = Path(path_text)
+    original_identity = (path.stat().st_dev, path.stat().st_ino)
+    real_close = os.close
+
+    def crash_after_identity_validation(descriptor: int) -> None:
+        try:
+            descriptor_path = Path(f"/proc/self/fd/{descriptor}").readlink()
+        except OSError:
+            descriptor_path = None
+        if descriptor_path == path:
+            descriptor_status = os.fstat(descriptor)
+            if (descriptor_status.st_dev, descriptor_status.st_ino) != original_identity:
+                os.kill(os.getpid(), signal.SIGKILL)
+        real_close(descriptor)
+
+    with patch("tools.upgrade_authority.os.close", side_effect=crash_after_identity_validation):
+        commit_runtime_selector(path, "new", "old")
+
+
 def _reconcile_selector_in_child(path_text: str, result_text: str) -> None:
     result = reconcile_runtime_selector(
         Path(path_text),
@@ -700,6 +720,27 @@ class RuntimeSelectorTests(unittest.TestCase):
             commit_runtime_selector(path, "old", "older")
             process = multiprocessing.get_context("fork").Process(
                 target=_publish_selector_after_final_recheck_then_die, args=(str(path),)
+            )
+            process.start()
+            process.join(timeout=10)
+            self.assertEqual(-signal.SIGKILL, process.exitcode)
+            result = root / "result"
+            verifier = multiprocessing.get_context("fork").Process(
+                target=_reconcile_and_verify_selector_in_child, args=(str(path), str(result))
+            )
+            verifier.start()
+            verifier.join(timeout=10)
+            self.assertEqual(0, verifier.exitcode)
+            self.assertEqual("committed:new:old", result.read_text(encoding="utf-8"))
+            self.assertEqual({"selector.json", "result"}, {entry.name for entry in root.iterdir()})
+
+    def test_child_death_after_identity_validation_reconciles_new_pair(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / "selector.json"
+            commit_runtime_selector(path, "old", "older")
+            process = multiprocessing.get_context("fork").Process(
+                target=_publish_selector_after_identity_validation_then_die, args=(str(path),)
             )
             process.start()
             process.join(timeout=10)
