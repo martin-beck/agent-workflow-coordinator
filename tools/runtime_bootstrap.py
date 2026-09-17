@@ -128,6 +128,16 @@ class ResolvedRuntime:
             raise AuthorityError("resolved runtime descriptor is unavailable")
         if self.descriptor < 0:
             raise AuthorityError("resolved runtime is unavailable")
+        directory_identity = self._directory_identity
+        if (
+            not isinstance(directory_identity, tuple)
+            or len(directory_identity) != 5
+            or any(
+                not isinstance(value, int) or isinstance(value, bool)
+                for value in directory_identity
+            )
+        ):
+            raise AuthorityError("resolved runtime identity is unavailable")
         try:
             retained = os.fstat(self.descriptor)
             current = self.path.lstat()
@@ -147,7 +157,7 @@ class ResolvedRuntime:
             current.st_uid,
             current.st_nlink,
         )
-        if observed != self._directory_identity or named != self._directory_identity:
+        if observed != directory_identity or named != directory_identity:
             raise AuthorityError("resolved runtime identity changed")
 
     def revalidate_manifest(self) -> None:
