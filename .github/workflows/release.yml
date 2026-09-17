@@ -66,6 +66,10 @@ jobs:
           grep -Eq '^[0-9a-f]{64}  release-contract\.json$' "$RUNNER_TEMP/release-artifacts.sha256"
           grep -Eq '^[0-9a-f]{64}  release-runbooks/operator\.md$' "$RUNNER_TEMP/release-artifacts.sha256"
           grep -Eq '^[0-9a-f]{64}  release-runbooks/agent\.md$' "$RUNNER_TEMP/release-artifacts.sha256"
+          (
+            cd "$RUNNER_TEMP"
+            sha256sum --check --strict release-artifacts.sha256
+          )
       - name: Upload sanitized contract evidence
         uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08
         with:
