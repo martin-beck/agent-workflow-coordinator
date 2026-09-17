@@ -15,7 +15,9 @@ from tools.artifact_binding import (
 )
 
 
-def snapshot(artifact_type: str, *, version: int = 1, digest: str | None = None) -> ArtifactSnapshot:
+def snapshot(
+    artifact_type: str, *, version: int = 1, digest: str | None = None
+) -> ArtifactSnapshot:
     return ArtifactSnapshot(
         artifact_type=ArtifactType(artifact_type),
         ref=f"artifacts/{artifact_type}",
@@ -27,7 +29,9 @@ def snapshot(artifact_type: str, *, version: int = 1, digest: str | None = None)
     )
 
 
-def binding(*, action: str = "record", version: int = 1, reopened: tuple[str, ...] = ()) -> ArtifactBinding:
+def binding(
+    *, action: str = "record", version: int = 1, reopened: tuple[str, ...] = ()
+) -> ArtifactBinding:
     items = tuple(snapshot(item, version=version) for item in ARTIFACT_TYPES)
     return ArtifactBinding(
         task_id="AR-0023",
@@ -46,7 +50,9 @@ class ArtifactBindingTests(unittest.TestCase):
         restored = ArtifactBinding(
             task_id="AR-0023",
             task_revision=4,
-            before=tuple(ArtifactSnapshot.from_record(item) for item in value.as_record()["before"]),
+            before=tuple(
+                ArtifactSnapshot.from_record(item) for item in value.as_record()["before"]
+            ),
             after=tuple(ArtifactSnapshot.from_record(item) for item in value.as_record()["after"]),
         )
         self.assertEqual(value.digest, restored.digest)
@@ -57,7 +63,13 @@ class ArtifactBindingTests(unittest.TestCase):
             ArtifactBinding("AR-0023", 4, items, items)
         wrong = tuple(
             ArtifactSnapshot(
-                item.artifact_type, item.ref, item.digest, item.scope, 3, item.version, item.predecessors
+                item.artifact_type,
+                item.ref,
+                item.digest,
+                item.scope,
+                3,
+                item.version,
+                item.predecessors,
             )
             for item in (snapshot(name) for name in ARTIFACT_TYPES)
         )
