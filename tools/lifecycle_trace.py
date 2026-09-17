@@ -74,6 +74,19 @@ def validate_model_action_contract(root: Path) -> None:
         raise ValueError(f"model actions are missing: {', '.join(missing)}")
 
 
+def validate_terminal_recovery_contract(root: Path) -> None:
+    """Require terminal success state to be explicit in the barrier model."""
+    model = root / "formal/upgrade/HandoffctlUpgradeBarrier.tla"
+    try:
+        text = model.read_text(encoding="utf-8")
+    except OSError as error:
+        raise ValueError("terminal recovery model is unavailable") from error
+    required = ("VerifyTerminal", "terminalTarget", "terminalVerified", "freshRuntimeVerified")
+    missing = [name for name in required if name not in text]
+    if missing:
+        raise ValueError(f"terminal recovery model fields are missing: {', '.join(missing)}")
+
+
 @dataclass(frozen=True, slots=True, init=False)
 class LifecycleEvent:
     phase: str

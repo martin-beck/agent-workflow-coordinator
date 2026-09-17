@@ -29,6 +29,7 @@ from tools.lifecycle_trace import (
     _issue_event,
     validate_model_action_contract,
     validate_model_trace,
+    validate_terminal_recovery_contract,
 )
 from tools.lock_domain import LockDomainContract, LockDomainError
 from tools.lock_domain_scope import LockDomainScope
@@ -519,6 +520,18 @@ class LockDomainScopeTests(unittest.TestCase):
             )
             with self.assertRaisesRegex(ValueError, "invariant FunctionalAvailability"):
                 validate_model_action_contract(root)
+
+    def test_terminal_recovery_contract_binds_barrier_model(self) -> None:
+        validate_terminal_recovery_contract(Path(__file__).resolve().parents[1])
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "formal/upgrade").mkdir(parents=True)
+            (root / "formal/upgrade/HandoffctlUpgradeBarrier.tla").write_text(
+                "VerifyTerminal(op, target) == TRUE\nterminalTarget\n",
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "terminalVerified"):
+                validate_terminal_recovery_contract(root)
 
     def test_model_trace_rejects_empty_invalid_and_malformed_events(self) -> None:
         with self.assertRaisesRegex(ValueError, "must not be empty"):
