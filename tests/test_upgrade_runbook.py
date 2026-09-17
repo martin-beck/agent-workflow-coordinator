@@ -73,6 +73,7 @@ class UpgradeRunbookTests(unittest.TestCase):
         self.assertIn('echo "checked-out HEAD does not match GITHUB_SHA"', workflow)
         self.assertIn('if [[ -n "$(git status --porcelain=v1)" ]]; then', workflow)
         self.assertIn('echo "checked-out source is not clean"', workflow)
+        self.assertIn("export LC_ALL=C", workflow)
         self.assertIn(
             'test "$(find "$RUNNER_TEMP/release-runbooks" -mindepth 1 -maxdepth 1 '
             '-printf \'%f\\n\' | sort | paste -sd, -)" = "agent.md,operator.md"',
