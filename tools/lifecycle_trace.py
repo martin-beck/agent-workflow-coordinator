@@ -55,7 +55,10 @@ def validate_model_action_contract(root: Path) -> None:
         "ReleaseRollback": ("ReleaseRollback(op) ==",),
     }
     missing = [
-        action for action, names in definitions.items() if not any(name in text for name in names)
+        action
+        for action, names in definitions.items()
+        if (action == "Backup" and not all(name in text for name in names))
+        or (action != "Backup" and not any(name in text for name in names))
     ]
     if missing:
         raise ValueError(f"model actions are missing: {', '.join(missing)}")
