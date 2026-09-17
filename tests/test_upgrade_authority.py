@@ -71,6 +71,16 @@ def _publish_selector_then_die(path_text: str) -> None:
         commit_runtime_selector(path, "new", "old")
 
 
+def _publish_selector_before_fsync_then_die(path_text: str) -> None:
+    path = Path(path_text)
+
+    def crash_before_file_fsync(_descriptor: int) -> None:
+        os.kill(os.getpid(), signal.SIGKILL)
+
+    with patch("tools.upgrade_authority.os.fsync", side_effect=crash_before_file_fsync):
+        commit_runtime_selector(path, "new", "old")
+
+
 def _reconcile_selector_in_child(path_text: str, result_text: str) -> None:
     result = reconcile_runtime_selector(
         Path(path_text),
@@ -566,6 +576,27 @@ class RuntimeSelectorTests(unittest.TestCase):
             self.assertEqual(0, verifier.exitcode)
             self.assertEqual("committed", result.read_text(encoding="utf-8"))
             self.assertEqual({"selector.json", "result"}, {entry.name for entry in root.iterdir()})
+
+    def test_child_death_before_selector_rename_preserves_old_pair(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / "selector.json"
+            commit_runtime_selector(path, "old", "older")
+            process = multiprocessing.get_context("fork").Process(
+                target=_publish_selector_before_fsync_then_die, args=(str(path),)
+            )
+            process.start()
+            process.join(timeout=10)
+            self.assertEqual(-signal.SIGKILL, process.exitcode)
+            result = root / "result"
+            verifier = multiprocessing.get_context("fork").Process(
+                target=_reconcile_selector_in_child, args=(str(path), str(result))
+            )
+            verifier.start()
+            verifier.join(timeout=10)
+            self.assertEqual(0, verifier.exitcode)
+            self.assertEqual("not-committed", result.read_text(encoding="utf-8"))
+            self.assertEqual({"selector.json", "result"}, {entry.name for entry in root.iterdir()})
             with self.assertRaisesRegex(AuthorityError, "identities are invalid"):
                 reconcile_runtime_selector(
                     path,
@@ -573,6 +604,111 @@ class RuntimeSelectorTests(unittest.TestCase):
                     before_previous_release="pair",
                     after_active_release="same",
                     after_previous_release="pair",
+                )
+
+    def test_selector_recovery_rejects_unsafe_abandoned_temporary(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / "selector.json"
+            commit_runtime_selector(path, "old", "older")
+            target = root / "secret"
+            target.write_text("must remain\n", encoding="utf-8")
+            temporary = root / ".selector.json.0123456789abcdef0123456789abcdef"
+            temporary.symlink_to(target)
+            with self.assertRaisesRegex(AuthorityError, "temporary is unsafe"):
+                reconcile_runtime_selector(
+                    path,
+                    before_active_release="old",
+                    before_previous_release="older",
+                    after_active_release="new",
+                    after_previous_release="old",
+                )
+            self.assertTrue(temporary.is_symlink())
+            self.assertEqual("must remain\n", target.read_text(encoding="utf-8"))
+
+    def test_selector_recovery_cleans_regular_temporary(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / "selector.json"
+            commit_runtime_selector(path, "old", "older")
+            temporary = root / ".selector.json.0123456789abcdef0123456789abcdef"
+            temporary.write_bytes(b"staged\n")
+            temporary.chmod(0o600)
+            self.assertEqual(
+                "not-committed",
+                reconcile_runtime_selector(
+                    path,
+                    before_active_release="old",
+                    before_previous_release="older",
+                    after_active_release="new",
+                    after_previous_release="old",
+                ),
+            )
+            self.assertFalse(temporary.exists())
+
+    def test_selector_recovery_rejects_non_private_temporary(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / "selector.json"
+            commit_runtime_selector(path, "old", "older")
+            temporary = root / ".selector.json.0123456789abcdef0123456789abcdef"
+            temporary.write_bytes(b"staged\n")
+            temporary.chmod(0o644)
+            with self.assertRaisesRegex(AuthorityError, "temporary is unsafe"):
+                reconcile_runtime_selector(
+                    path,
+                    before_active_release="old",
+                    before_previous_release="older",
+                    after_active_release="new",
+                    after_previous_release="old",
+                )
+            self.assertTrue(temporary.exists())
+
+    def test_selector_recovery_fails_closed_on_cleanup_errors(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / "selector.json"
+            commit_runtime_selector(path, "old", "older")
+            temporary = root / ".selector.json.0123456789abcdef0123456789abcdef"
+            temporary.write_bytes(b"staged\n")
+            temporary.chmod(0o600)
+            with (
+                patch("tools.upgrade_authority.os.unlink", side_effect=OSError("unlink")),
+                self.assertRaisesRegex(AuthorityError, "temporary cleanup failed"),
+            ):
+                reconcile_runtime_selector(
+                    path,
+                    before_active_release="old",
+                    before_previous_release="older",
+                    after_active_release="new",
+                    after_previous_release="old",
+                )
+            with (
+                patch("tools.upgrade_authority.os.fsync", side_effect=OSError("fsync")),
+                self.assertRaisesRegex(AuthorityError, "temporary cleanup is ambiguous"),
+            ):
+                reconcile_runtime_selector(
+                    path,
+                    before_active_release="old",
+                    before_previous_release="older",
+                    after_active_release="new",
+                    after_previous_release="old",
+                )
+
+    def test_selector_recovery_fails_closed_on_temporary_inventory_error(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "selector.json"
+            commit_runtime_selector(path, "old", "older")
+            with (
+                patch("tools.upgrade_authority.os.listdir", side_effect=OSError("inventory")),
+                self.assertRaisesRegex(AuthorityError, "temporary inventory failed"),
+            ):
+                reconcile_runtime_selector(
+                    path,
+                    before_active_release="old",
+                    before_previous_release="older",
+                    after_active_release="new",
+                    after_previous_release="old",
                 )
 
     def test_ambiguous_selector_cleanup_failure_preserves_classification(self) -> None:
