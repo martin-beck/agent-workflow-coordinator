@@ -88,6 +88,7 @@ def validate_terminal_recovery_contract(root: Path) -> None:
         "ControlHeld(p)",
         "AuthorityHeld(p)",
         "activeAttempt = p",
+        "terminalTarget = NoTarget",
         "terminalTarget",
         "terminalVerified",
         "freshRuntimeVerified",
