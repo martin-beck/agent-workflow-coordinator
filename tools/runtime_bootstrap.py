@@ -68,6 +68,8 @@ class DispatchAdmission:
             runtime is None
             or not isinstance(identity_candidate, VerifiedManifest)
             or not isinstance(identity_candidate.identity, ExpectedRuntimeIdentity)
+            or _RELEASE.fullmatch(identity_candidate.release) is None
+            or _DIGEST.fullmatch(identity_candidate.digest) is None
         ):
             if runtime is not None:
                 runtime.close()
