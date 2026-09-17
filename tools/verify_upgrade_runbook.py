@@ -17,6 +17,18 @@ class RunbookVerificationError(ValueError):
     """Raised when generated runbook output is missing, stale, or not private."""
 
 
+def _require_real_ancestors(path: Path) -> None:
+    """Reject output paths whose lexical parent chain contains an alias."""
+    current = Path(path.anchor)
+    for component in path.absolute().parts[1:-1]:
+        current /= component
+        try:
+            if current.is_symlink():
+                raise RunbookVerificationError("runbook output path contains a symlink")
+        except OSError as error:
+            raise RunbookVerificationError("runbook output path is unavailable") from error
+
+
 def _private_values(document: dict[str, Any]) -> set[str]:
     values: set[str] = set()
     for phase in document["phases"]:
@@ -39,6 +51,7 @@ def _private_values(document: dict[str, Any]) -> set[str]:
 
 
 def _read_outputs(expected: dict[str, str], output: Path) -> dict[str, str]:
+    _require_real_ancestors(output)
     if output.is_symlink() or not output.is_dir():
         raise RunbookVerificationError("runbook output must be a non-aliased directory")
     expected_names = set(expected)
