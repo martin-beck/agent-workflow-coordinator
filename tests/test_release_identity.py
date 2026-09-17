@@ -174,6 +174,7 @@ class ReleaseIdentityTests(unittest.TestCase):
             outside.write_text("{}", encoding="utf-8")
             inside = root / "transition.json"
             inside.write_text("{}", encoding="utf-8")
+            root.chmod(0o755)
             inside.chmod(0o644)
             self.assertEqual(inside, _transition_path(Path("transition.json"), root))
             with self.assertRaisesRegex(ReleaseIdentityError, "escapes workspace"):
@@ -187,6 +188,15 @@ class ReleaseIdentityTests(unittest.TestCase):
             inside.chmod(0o666)
             with self.assertRaisesRegex(ReleaseIdentityError, "owner-controlled"):
                 _transition_path(Path("transition.json"), root)
+            inside.chmod(0o644)
+            nested = root / "nested"
+            nested.mkdir()
+            nested.chmod(0o777)
+            nested_transition = nested / "transition.json"
+            nested_transition.write_text("{}", encoding="utf-8")
+            nested_transition.chmod(0o644)
+            with self.assertRaisesRegex(ReleaseIdentityError, "parent must be owner-controlled"):
+                _transition_path(Path("nested/transition.json"), root)
 
 
 if __name__ == "__main__":
