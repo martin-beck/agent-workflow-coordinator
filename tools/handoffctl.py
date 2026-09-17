@@ -24,6 +24,15 @@ from pathlib import Path
 from typing import Any, cast
 
 if __package__:
+    from .oracle_lifecycle import (
+        ArtifactRef,
+        GateError,
+        GateStage,
+        InteractionEvent,
+        apply_event,
+        gate_errors,
+        transition_allowed,
+    )
     from .sqlite_storage import (
         Backend,
         SQLiteBackend,
@@ -36,6 +45,15 @@ if __package__:
         render_status_pages_from_text,
     )
 else:  # pragma: no cover - direct script execution
+    from oracle_lifecycle import (  # type: ignore[import-not-found,no-redef]
+        ArtifactRef,
+        GateError,
+        GateStage,
+        InteractionEvent,
+        apply_event,
+        gate_errors,
+        transition_allowed,
+    )
     from sqlite_storage import (  # type: ignore[import-not-found,no-redef]
         Backend,
         SQLiteBackend,
@@ -100,6 +118,7 @@ FIELDS = set(REQ) | {
     "observed_head",
     "observed_dirty",
     "superseded_by",
+    "oracle_gate",
 }
 type Meta = dict[str, Any]
 type Task = tuple[Path, Meta, str]
@@ -846,6 +865,7 @@ def value_errors(path: Path, meta: Meta) -> list[str]:
         for name in ("title", "summary", "next_action", "updated_at")
         if not isinstance(meta.get(name), str) or not meta.get(name)
     )
+    errors.extend(f"{task_id}: {error}" for error in gate_errors(meta.get("oracle_gate")))
     return errors
 
 
@@ -1362,6 +1382,10 @@ def apply_claim(args: argparse.Namespace, meta: Meta, tasks: list[Task]) -> str:
     pending = [item for item in meta.get("depends_on", []) if not dependency_satisfied(item, tasks)]
     if pending:
         raise RuntimeError("unfinished dependencies: " + ", ".join(pending))
+    try:
+        transition_allowed(meta, "claim")
+    except GateError as error:
+        raise RuntimeError(str(error)) from error
     held = [
         item["id"]
         for _, item, _ in tasks
@@ -1409,6 +1433,10 @@ def apply_promote(args: argparse.Namespace, meta: Meta, tasks: list[Task]) -> st
     pending = [item for item in meta.get("depends_on", []) if not dependency_satisfied(item, tasks)]
     if pending:
         raise RuntimeError("unfinished dependencies: " + ", ".join(pending))
+    try:
+        transition_allowed(meta, "promote")
+    except GateError as error:
+        raise RuntimeError(str(error)) from error
     if not args.note.strip():
         raise RuntimeError("promotion note must not be empty")
     meta["status"] = "open"
@@ -1465,7 +1493,7 @@ def require_promotion_preflight(kind: str) -> None:
         raise RuntimeError("promotion requires a clean state repository")
 
 
-def apply_owned_change(args: argparse.Namespace, kind: str, meta: Meta) -> str:
+def apply_owned_change(args: argparse.Namespace, kind: str, meta: Meta) -> str:  # noqa: C901
     if meta.get("owner") != args.owner:
         raise RuntimeError(f"{args.task} is owned by {meta.get('owner') or 'nobody'}")
     if kind == "heartbeat":
@@ -1478,6 +1506,10 @@ def apply_owned_change(args: argparse.Namespace, kind: str, meta: Meta) -> str:
         )
         return f"Heartbeat by {args.owner}."
     if kind == "release":
+        try:
+            transition_allowed(meta, "release")
+        except GateError as error:
+            raise RuntimeError(str(error)) from error
         meta["status"] = args.status
         meta["owner"] = ""
         meta["claim_expires"] = ""
@@ -1493,6 +1525,57 @@ def apply_owned_change(args: argparse.Namespace, kind: str, meta: Meta) -> str:
         if value is not None:
             meta[name] = value
     return str(args.note)
+
+
+def _artifact_values(values: list[str], label: str) -> tuple[ArtifactRef, ...]:
+    result: list[ArtifactRef] = []
+    for value in values:
+        ref, separator, digest = value.partition("=")
+        if not separator:
+            raise RuntimeError(f"{label} must use REF=DIGEST")
+        try:
+            result.append(ArtifactRef(ref, digest))
+        except GateError as error:
+            raise RuntimeError(str(error)) from error
+    return tuple(result)
+
+
+def apply_gate(args: argparse.Namespace, meta: Meta) -> str:
+    """Record one typed interaction event as the task's next revision."""
+    try:
+        try:
+            stage = GateStage(str(args.stage))
+        except ValueError as error:
+            raise GateError("unknown interaction gate stage") from error
+        event = InteractionEvent(
+            task_id=str(meta["id"]),
+            task_revision=int(args.expected_revision),
+            stage=stage,
+            action=str(args.action),
+            disposition=str(args.disposition),
+            before=_artifact_values(args.before, "--before"),
+            after=_artifact_values(args.after, "--after"),
+            public_ref=str(args.public_ref),
+            recorded_at=now(),
+        )
+        return apply_event(meta, event)
+    except (GateError, ValueError) as error:
+        raise RuntimeError(str(error)) from error
+
+
+def apply_transition(args: argparse.Namespace, kind: str, meta: Meta, tasks: list[Task]) -> str:
+    """Dispatch one typed lifecycle transition for both storage backends."""
+    if kind == "claim":
+        return apply_claim(args, meta, tasks)
+    if kind == "promote":
+        return apply_promote(args, meta, tasks)
+    if kind == "resume":
+        return apply_resume(args, meta, tasks)
+    if kind == "recover-expired":
+        return apply_recover_expired(args, meta, tasks)
+    if kind == "gate":
+        return apply_gate(args, meta)
+    return apply_owned_change(args, kind, meta)
 
 
 def rendered_task_views(tasks: list[Task]) -> dict[Path, str]:
@@ -1548,19 +1631,7 @@ def mutate(args: argparse.Namespace, kind: str) -> None:
             }
         )
         committed = False
-        note = (
-            apply_claim(args, meta, all_tasks())
-            if kind == "claim"
-            else (
-                apply_promote(args, meta, all_tasks())
-                if kind == "promote"
-                else apply_resume(args, meta, all_tasks())
-                if kind == "resume"
-                else apply_recover_expired(args, meta, all_tasks())
-                if kind == "recover-expired"
-                else apply_owned_change(args, kind, meta)
-            )
-        )
+        note = apply_transition(args, kind, meta, all_tasks())
         meta["task_revision"] += 1
         meta["updated_at"] = now()
         if note:
@@ -1628,17 +1699,7 @@ def mutate_sqlite(args: argparse.Namespace, kind: str) -> None:
     at = now()
 
     def transition(meta: Meta, tasks: list[Task]) -> tuple[str, str]:
-        note = (
-            apply_claim(args, meta, tasks)
-            if kind == "claim"
-            else apply_promote(args, meta, tasks)
-            if kind == "promote"
-            else apply_resume(args, meta, tasks)
-            if kind == "resume"
-            else apply_recover_expired(args, meta, tasks)
-            if kind == "recover-expired"
-            else apply_owned_change(args, kind, meta)
-        )
+        note = apply_transition(args, kind, meta, tasks)
         candidate = [
             (path, meta if item["id"] == args.task else item, text) for path, item, text in tasks
         ]
@@ -1725,6 +1786,10 @@ def require_active_owner(task_id: str, owner: str) -> None:
         errors = active_expiry_errors(task_id, meta.get("claim_expires"))
         if errors:
             raise RuntimeError(errors[0])
+        try:
+            transition_allowed(meta, "run")
+        except GateError as error:
+            raise RuntimeError(str(error)) from error
         assert_invocation_worktree(meta)
 
 
@@ -2048,6 +2113,7 @@ def dispatch_bound_command(args: argparse.Namespace) -> int:  # noqa: C901
         "resume",
         "recover-expired",
         "update",
+        "gate",
     ):
         mutate(args, args.cmd)
     elif args.cmd == "run":
@@ -2120,6 +2186,17 @@ def main() -> int:
     item.add_argument("--summary")
     item.add_argument("--next-action")
     item.add_argument("--note", required=True)
+    item = commands.add_parser("gate")
+    item.add_argument("task")
+    item.add_argument("--expected-revision", type=int, required=True)
+    item.add_argument("--stage", choices=[stage.value for stage in GateStage], required=True)
+    item.add_argument("--action", choices=("open", "resolve", "reopen"), required=True)
+    item.add_argument(
+        "--disposition", choices=("accepted", "rejected", "unresolved"), required=True
+    )
+    item.add_argument("--before", action="append", default=[], required=True)
+    item.add_argument("--after", action="append", default=[], required=True)
+    item.add_argument("--public-ref", required=True)
     item = commands.add_parser("run")
     item.add_argument("task")
     item.add_argument("--owner", required=True)

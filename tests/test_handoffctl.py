@@ -2357,6 +2357,65 @@ class HandoffTest(unittest.TestCase):
         ):
             self.assertEqual(1, CORE.main())
 
+    def test_oracle_gate_dispatch_and_transition_errors_are_normalized(self) -> None:
+        digest = "sha256:" + "a" * 64
+        values = CORE._artifact_values([f"plan/before={digest}"], "--before")
+        self.assertEqual("plan/before", values[0].ref)
+        with self.assertRaisesRegex(RuntimeError, "REF=DIGEST"):
+            CORE._artifact_values(["malformed"], "--before")
+        with self.assertRaisesRegex(RuntimeError, "sha256 digest"):
+            CORE._artifact_values(["plan/before=bad"], "--before")
+
+        meta: dict[str, Any] = {"id": "AR-0022", "task_revision": 1}
+        args = argparse.Namespace(
+            expected_revision=1,
+            stage="intake",
+            action="open",
+            disposition="accepted",
+            before=[f"plan/before={digest}"],
+            after=[f"plan/after={'sha256:' + 'b' * 64}"],
+            public_ref="oracle/decision-1",
+        )
+        self.assertIn("Recorded open", CORE.apply_gate(args, meta))
+        with self.assertRaisesRegex(RuntimeError, "already open"):
+            CORE.apply_gate(args, meta)
+        args.stage = "not-a-stage"
+        with self.assertRaisesRegex(RuntimeError, "unknown interaction gate stage"):
+            CORE.apply_gate(args, {"id": "AR-0022", "task_revision": 1})
+
+        held_gate = {"required": True, "open_stage": "intake"}
+        release_args = argparse.Namespace(owner="worker", status="done", note="released")
+        with self.assertRaisesRegex(RuntimeError, "unresolved"):
+            CORE.apply_owned_change(
+                release_args,
+                "release",
+                {"id": "AR-0022", "owner": "worker", "oracle_gate": held_gate},
+            )
+        released = {
+            "id": "AR-0022",
+            "owner": "worker",
+            "oracle_gate": {"required": True, "open_stage": None},
+        }
+        self.assertEqual("released", CORE.apply_owned_change(release_args, "release", released))
+        self.assertEqual("done", released["status"])
+
+    def test_oracle_gate_blocks_claim_and_promote(self) -> None:
+        gate = {"required": True, "open_stage": "intake"}
+        claim_args = argparse.Namespace(task="AR-0022", owner="worker", lease_minutes=10)
+        with self.assertRaisesRegex(RuntimeError, "unresolved"):
+            CORE.apply_claim(
+                claim_args,
+                {"id": "AR-0022", "status": "open", "oracle_gate": gate},
+                [],
+            )
+        promote_args = argparse.Namespace(task="AR-0022", expected_revision=1, note="promote")
+        with self.assertRaisesRegex(RuntimeError, "unresolved"):
+            CORE.apply_promote(
+                promote_args,
+                {"id": "AR-0022", "status": "planned", "task_revision": 1, "oracle_gate": gate},
+                [],
+            )
+
 
 if __name__ == "__main__":
     unittest.main()
