@@ -30,6 +30,7 @@ def test_release_signer_template_is_self_test_only() -> None:
     assert "@TRUST_POLICY@" in template
     assert "@VENDOR_MANIFEST@" in template
     assert "@OUTPUT@" in template
+    assert "@SIGNING_KEY_REF@" in template
     assert "rev-parse HEAD" in template
     assert "@RELEASE_VERSION@" in template
     assert "@SOURCE_COMMIT@" in template

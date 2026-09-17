@@ -10,6 +10,7 @@ readonly TO_TAG=@TO_TAG@
 readonly TRUST_POLICY=@TRUST_POLICY@
 readonly VENDOR_MANIFEST=@VENDOR_MANIFEST@
 readonly OUTPUT=@OUTPUT@
+readonly SIGNING_KEY_REF=@SIGNING_KEY_REF@
 if [[ "${1:-}" != "--self-test" ]]; then
     [[ "$#" -eq 0 ]] || { echo "usage: $0 [--self-test]" >&2; exit 64; }
     test -z "$(git -C "$REPOSITORY" status --porcelain --untracked-files=all)"
@@ -34,4 +35,5 @@ fi
 [[ "$TO_TAG" =~ ^refs/tags/v[0-9]+\.[0-9]+\.[0-9]+$ ]]
 [[ "$TRUST_POLICY" =~ ^[0-9a-f]{64}$ && "$VENDOR_MANIFEST" =~ ^[0-9a-f]{64}$ ]]
 [[ "$OUTPUT" != *$'\n'* && -n "$OUTPUT" ]]
+[[ -n "$SIGNING_KEY_REF" && "$SIGNING_KEY_REF" != *$'\n'* ]]
 echo "release signer contract self-test passed"
