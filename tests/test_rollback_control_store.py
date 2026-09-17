@@ -589,6 +589,8 @@ class RollbackControlStoreTests(unittest.TestCase):
                 msg=f"restarted stale stdout={restarted_stdout}; stderr={restarted_stderr}",
             )
             self.assertEqual(b"authority remains untouched\n", authority_path.read_bytes())
+            with locked() as guard:
+                self.assertIsNotNone(guard)
             final = seed.snapshot()
             self.assertIsNotNone(final)
             assert final is not None
