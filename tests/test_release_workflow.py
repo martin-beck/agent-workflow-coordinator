@@ -12,6 +12,7 @@ def test_release_workflow_probes_external_signer_without_publishing() -> None:
     assert "awc-sign-release.sh" in WORKFLOW
     assert "Release signing command (copy/paste" in WORKFLOW
     assert "not executed by CI" in WORKFLOW
+    assert "HEAD equals the transition source commit" in WORKFLOW
     assert "GITHUB_STEP_SUMMARY" in WORKFLOW
     assert "--backend" in WORKFLOW
     assert "--selector-ref" in WORKFLOW

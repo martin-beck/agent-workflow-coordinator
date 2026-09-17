@@ -67,6 +67,7 @@ jobs:
               raise SystemExit("canonical release trust-policy and vendor-manifest files are required")
           args = ["awc-sign-release.sh", "--repo", ".", "--version", to["version"], "--from-tag", old["tag_ref"].removeprefix("refs/tags/"), "--trust-policy", str(trust_policy), "--vendor-manifest", str(vendor_manifest), "--output", "./release-signature.json", "--backend", transition["backend"], "--selector-ref", transition["selector_ref"], "--state-revision", str(transition["expected_state_revision"]), "--barrier-id", transition["barrier_id"], "--fencing-token", transition["fencing_token"], "--operation-id", transition["operation_id"]]
           command = " ".join(shlex.quote(arg) for arg in args)
+          print("Run this command from a clean checkout whose HEAD equals the transition source commit; the external signer performs the signing mutation only when explicitly invoked.")
           print("Release signing command (copy/paste on the authorized signing runner; not executed by CI):")
           print(command)
           with Path(os.environ["GITHUB_STEP_SUMMARY"]).open("a", encoding="utf-8") as summary:
