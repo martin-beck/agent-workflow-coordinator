@@ -99,7 +99,10 @@ class DispatchAdmission:
 
     def close(self) -> None:
         """Release the retained runtime handle; repeated close is harmless."""
-        self.runtime.close()
+        runtime_candidate: object = self.runtime
+        if not isinstance(runtime_candidate, ResolvedRuntime):
+            raise AuthorityError("dispatch admission runtime is not retained")
+        runtime_candidate.close()
 
     def __enter__(self) -> DispatchAdmission:
         return self
