@@ -818,6 +818,7 @@ def reconcile_runtime_selector(
             if parent_identity != _file_identity(os.fstat(parent)):
                 raise AuthorityError("runtime selector parent identity changed")
             _cleanup_selector_temporaries(parent, path.name)
+            _recheck_parent(path, parent_identity)
         finally:
             os.close(parent)
         if pair == (after_active_release, after_previous_release):

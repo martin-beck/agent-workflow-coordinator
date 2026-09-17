@@ -14,6 +14,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from contextlib import contextmanager
 from pathlib import Path
@@ -90,6 +91,22 @@ def _reconcile_selector_in_child(path_text: str, result_text: str) -> None:
         after_previous_release="old",
     )
     Path(result_text).write_text(result, encoding="utf-8")
+
+
+def _replace_selector_parent_after_marker(
+    parent_text: str, marker_text: str, replaced_text: str, displaced_text: str
+) -> None:
+    parent = Path(parent_text)
+    marker = Path(marker_text)
+    deadline = time.monotonic() + 10
+    while not marker.exists():
+        if time.monotonic() >= deadline:
+            raise RuntimeError("cleanup marker was not published")
+        time.sleep(0.001)
+    displaced = Path(displaced_text)
+    parent.rename(displaced)
+    parent.mkdir(mode=0o700)
+    Path(replaced_text).write_text("replaced\n", encoding="utf-8")
 
 
 class RuntimeSelectorTests(unittest.TestCase):
@@ -710,6 +727,79 @@ class RuntimeSelectorTests(unittest.TestCase):
                     after_active_release="new",
                     after_previous_release="old",
                 )
+
+    def test_selector_recovery_rechecks_parent_after_cleanup(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / "selector.json"
+            commit_runtime_selector(path, "old", "older")
+            temporary = root / ".selector.json.0123456789abcdef0123456789abcdef"
+            temporary.write_bytes(b"staged\n")
+            temporary.chmod(0o600)
+
+            def fail_after_cleanup(selector: Path, identity: tuple[int, int]) -> None:
+                del selector, identity
+                raise AuthorityError("runtime selector parent identity changed")
+
+            with (
+                patch.object(upgrade_authority, "_recheck_parent", side_effect=fail_after_cleanup),
+                self.assertRaisesRegex(AuthorityError, "parent identity changed"),
+            ):
+                reconcile_runtime_selector(
+                    path,
+                    before_active_release="old",
+                    before_previous_release="older",
+                    after_active_release="new",
+                    after_previous_release="old",
+                )
+            self.assertFalse(temporary.exists())
+
+    def test_selector_recovery_rejects_real_parent_swap_after_cleanup(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            parent = root / "runtime"
+            parent.mkdir(mode=0o700)
+            path = parent / "selector.json"
+            commit_runtime_selector(path, "old", "older")
+            temporary = parent / ".selector.json.0123456789abcdef0123456789abcdef"
+            temporary.write_bytes(b"staged\n")
+            temporary.chmod(0o600)
+            marker = root / "cleanup-started"
+            replaced = root / "replacement-complete"
+            displaced = root / "displaced"
+            attacker = multiprocessing.get_context("fork").Process(
+                target=_replace_selector_parent_after_marker,
+                args=(str(parent), str(marker), str(replaced), str(displaced)),
+            )
+            attacker.start()
+            real_fsync = os.fsync
+
+            def release_for_parent_swap(descriptor: int) -> None:
+                real_fsync(descriptor)
+                marker.write_text("ready\n", encoding="utf-8")
+                deadline = time.monotonic() + 10
+                while not replaced.exists():
+                    if time.monotonic() >= deadline:
+                        raise RuntimeError("parent replacement did not complete")
+                    time.sleep(0.001)
+
+            with (
+                patch("tools.upgrade_authority.os.fsync", side_effect=release_for_parent_swap),
+                self.assertRaisesRegex(AuthorityError, "parent identity changed"),
+            ):
+                reconcile_runtime_selector(
+                    path,
+                    before_active_release="old",
+                    before_previous_release="older",
+                    after_active_release="new",
+                    after_previous_release="old",
+                )
+            attacker.join(timeout=10)
+            self.assertEqual(0, attacker.exitcode)
+            self.assertEqual(
+                "old", read_runtime_selector(displaced / "selector.json")["active_release"]
+            )
+            self.assertFalse((displaced / temporary.name).exists())
 
     def test_ambiguous_selector_cleanup_failure_preserves_classification(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
