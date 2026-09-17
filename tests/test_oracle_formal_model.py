@@ -7,11 +7,12 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 MODEL = (ROOT / "formal/oracle/OracleInteractionGates.tla").read_text(encoding="utf-8")
 CONFIG = (ROOT / "formal/oracle/OracleInteractionGates.cfg").read_text(encoding="utf-8")
+VERIFY = (ROOT / "formal/handoffctl/verify.sh").read_text(encoding="utf-8")
 
 
 def test_oracle_model_is_admitted_to_fast_tier() -> None:
-    verify = (ROOT / "formal/handoffctl/verify.sh").read_text(encoding="utf-8")
-    assert "run_model OracleInteractionGates" in verify
+    assert "run_model OracleInteractionGates" in VERIFY
+    assert 'config="${SPEC_DIR}/../oracle/OracleInteractionGates.cfg"' in VERIFY
     assert '"OracleInteractionGates"' in (ROOT / "formal/tier-evidence.json").read_text(
         encoding="utf-8"
     )
