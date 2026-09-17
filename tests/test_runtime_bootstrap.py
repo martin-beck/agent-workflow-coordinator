@@ -676,10 +676,13 @@ class RuntimeBootstrapTests(unittest.TestCase):
             selector = root / "runtime-selector.json"
             commit_runtime_selector(selector, "v1.2.3", "v1.2.2")
 
-            with patch(
-                "tools.runtime_bootstrap.verify_runtime_manifest",
-                side_effect=RuntimeError("unexpected verification failure"),
-            ), self.assertRaisesRegex(AuthorityError, "verification failed"):
+            with (
+                patch(
+                    "tools.runtime_bootstrap.verify_runtime_manifest",
+                    side_effect=RuntimeError("unexpected verification failure"),
+                ),
+                self.assertRaisesRegex(AuthorityError, "verification failed"),
+            ):
                 resolve_selected_runtime_bound(
                     selector, releases, self._identity_for_release(), self._verifier
                 )
