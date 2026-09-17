@@ -84,6 +84,21 @@ class ResolvedRuntime:
         if observed != self._directory_identity or named != self._directory_identity:
             raise AuthorityError("resolved runtime identity changed")
 
+    def revalidate_manifest(self) -> None:
+        """Recheck retained manifest bytes and identity before a future dispatch."""
+        manifest = read_runtime_manifest(self.path)
+        identity = ExpectedRuntimeIdentity(
+            manifest["source_commit"],
+            manifest["tag_ref"],
+            manifest["tag_object"],
+            manifest["signature_sha256"],
+            manifest["trust_policy_sha256"],
+            manifest["vendor_manifest_sha256"],
+        )
+        if manifest["release"] != self.identity.release or identity != self.identity.identity:
+            raise AuthorityError("resolved runtime manifest identity changed")
+        verify_runtime_manifest(self.path, self.identity.digest)
+
     def close(self) -> None:
         """Close the retained descriptor; no execution operation is exposed."""
         if self.descriptor >= 0:
