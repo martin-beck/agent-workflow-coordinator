@@ -1,78 +1,37 @@
 {
-  "model": "formal/upgrade/UpgradeRecovery.tla",
-  "config": "formal/upgrade/UpgradeRecovery.cfg",
-  "model_sha256": "616d53832ac5ec18bf3242d47b2412195eb64adb2b1035235514e06cc3edf2ba",
-  "config_sha256": "47425af53affd104aa5e30d7434cf3e71e3c7b69bccb9b05fbd749d3285991a2",
-  "implementation_snapshot": {
-    "revision": "4676a9eeb4f9f87fa9339225457134ed7f6a8964",
-    "runtime_revision": "4676a9eeb4f9f87fa9339225457134ed7f6a8964",
-    "files": {
-      "schema/upgrade-contract.schema.json": "6ef2362107a0c3ff895e6dc96e35899e19b367bebd549b6acee42a680d7a442b",
-      "tools/generate_upgrade_contract.py": "b3db939912bed549eaba17a2e064e776ff9119b82287218016100e25e5ad9ba4",
-      "tools/validate_upgrade_contract.py": "6c264c4775e4ee1a778181d7e127d9f256c56abd4bfebb02c624e13c289dbc4a",
-      "tools/upgrade_contract_runtime.py": "caeb45260b790e7fdf8118ce370558bd26b04035407679df8e9845775e197119",
-      "tools/upgrade_commands.py": "5b6360c39fa10979a77a0c6180968598593f56b9ea0c59de60b59c8017e37071",
-      "tools/handoffctl.py": "97d70980b754eb6bf77918bb7178729caf70d54e07919d97bf67b063f5d00b21",
-      "tests/test_upgrade_commands.py": "4eaa65ac1730c9149156ba76e345dcb1f8e2c44a51042e27f2d4a4b4e7634f32",
-      "tests/test_upgrade_contract.py": "0630ea0c35ad100367a9df0d0682a90b2b0b120057768029fc82fe06a106989c",
-      "tools/rollback_control_store.py": "c87dc9b00867de1406d67a226cc04a383d4c4df8116dc32643b9af178048434a",
-      "tools/upgrade_identity.py": "44bf4479b28e1b684879f7f000f713e8f5177034e1a2d43a30c09745c9c014a6",
-      "tests/test_rollback_control_store.py": "629817aca8351cf0e06c094a1e020fc9c5da36e27ce5e783796fe8616329a7b1",
-      "tests/test_upgrade_identity.py": "0206aef1794ed73ffcdefb4f965f657514f11858d9beb0b2fa92f7dceaaaf905",
-      "tools/mutation_fence.py": "2d314f5a5cc46d0f625135b39ada2d1a464cd35c9d378728c141708df8c0c630",
-      "tools/sqlite_storage.py": "96f4fcb45bb7ccc4936185dfc70192d27075232dca91029fe23295ef1e31e58b",
-      "tests/test_mutation_fence.py": "e2bcea7b96bddd2509b79ff9c5eefd57001d1502949aba30cbbd50a9169e1cbb",
-      "tests/test_sqlite_mutation_barrier.py": "6949425557176bebb3341677d1fed90c0217055bd1d1dcb56bbdf91f60d31fb8",
-      "tests/test_sqlite_storage.py": "498949a2fe69dd2b6c92ba3ca56c407fbe3658f86332adac5416a5f1798e1a27"
-    }
-  },
-  "design_snapshot": {
-    "revision": "bbbef2053bad329e85a8d257493cd642e20e06d2",
-    "files": {
-      "docs/UPGRADE_PROTOCOL.md": "8b3a1e5600165919e9cf4a3943237abfec064c6cc4286ad727b463cf2ddbfc62",
-      "docs/UPGRADE_EXECUTION_REDESIGN.md": "610e937d47cb5b793f684626c139ca1c8b460bedcd3b8f1f4dbdf5cde0c67954"
-    },
-    "status": "design-only-v10; no executable refinement"
-  },
-  "verifier": {
-    "name": "TLC",
-    "version": "2.19 (08 August 2024, rev 5a47802)",
-    "jar_sha256": "936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88"
-  },
-  "bounds": {
-    "operations": ["op1", "op2"],
-    "releases": ["old", "new"],
-    "backends": ["git", "sqlite"]
-  },
-  "result": {
-    "status": "pass",
-    "states_generated": 4501,
-    "distinct_states": 900,
-    "depth": 19,
-    "invariants": [
-      "TypeInvariant",
-      "FunctionalAvailability",
-      "NoReplacementBeforeBackup",
-      "ReleaseOrder",
-      "RollbackProof",
-      "RollbackRequiresBackup"
-    ]
-  },
   "barrier_model": {
-    "model": "formal/upgrade/HandoffctlUpgradeBarrier.tla",
-    "config": "formal/upgrade/HandoffctlUpgradeBarrier.cfg",
-    "model_sha256": "2a1a31f530781645f5e8e76f67ca80a8ed59ec5d1f78706ca2a5530ebefa7b92",
-    "config_sha256": "e38502a22e5c73b175c92d152b21f086269c49e9256d2d25fa9209657697e776",
     "bounds": {
-      "processes": ["p1", "p2"],
       "max_revision": 3,
-      "statuses": ["absent", "held", "releasing", "released", "ambiguous"]
+      "processes": [
+        "p1",
+        "p2"
+      ],
+      "statuses": [
+        "absent",
+        "held",
+        "releasing",
+        "released",
+        "ambiguous"
+      ]
     },
+    "claim_boundary": {
+      "class": "bounded-model",
+      "excluded": [
+        "SQLite VFS and WAL fsync durability",
+        "power loss and arbitrary process termination",
+        "Python implementation equivalence",
+        "coordinator authority mutation routes",
+        "filesystem descriptor and lock semantics"
+      ],
+      "implementation_refinement": "not-proven"
+    },
+    "config": "formal/upgrade/HandoffctlUpgradeBarrier.cfg",
+    "config_sha256": "e38502a22e5c73b175c92d152b21f086269c49e9256d2d25fa9209657697e776",
+    "model": "formal/upgrade/HandoffctlUpgradeBarrier.tla",
+    "model_sha256": "2a1a31f530781645f5e8e76f67ca80a8ed59ec5d1f78706ca2a5530ebefa7b92",
     "result": {
-      "status": "pass",
-      "states_generated": 12575081,
-      "distinct_states": 2518656,
       "depth": 43,
+      "distinct_states": 2518656,
       "invariants": [
         "TypeOK",
         "OneActiveSession",
@@ -88,27 +47,27 @@
         "RecheckEvidence",
         "StaleCASRejected",
         "WriterDrainOnAcquire"
-      ]
-    },
-    "claim_boundary": {
-      "class": "bounded-model",
-      "implementation_refinement": "not-proven",
-      "excluded": [
-        "SQLite VFS and WAL fsync durability",
-        "power loss and arbitrary process termination",
-        "Python implementation equivalence",
-        "coordinator authority mutation routes",
-        "filesystem descriptor and lock semantics"
-      ]
+      ],
+      "states_generated": 12575081,
+      "status": "pass"
     }
+  },
+  "bounds": {
+    "backends": [
+      "git",
+      "sqlite"
+    ],
+    "operations": [
+      "op1",
+      "op2"
+    ],
+    "releases": [
+      "old",
+      "new"
+    ]
   },
   "claim_boundary": {
     "class": "bounded-model",
-    "implementation_refinement": "not-proven",
-    "model_limitations": [
-      "backend backup branches are abstract and do not model Git or SQLite internals",
-      "fence acquisition is modeled, but stale-fence/CAS rejection is not modeled"
-    ],
     "excluded": [
       "Python implementation equivalence",
       "Git refs and archive semantics",
@@ -116,6 +75,65 @@
       "filesystem descriptor and rename atomicity",
       "process scheduling and multiprocess locking",
       "external command behavior"
+    ],
+    "implementation_refinement": "not-proven",
+    "model_limitations": [
+      "backend backup branches are abstract and do not model Git or SQLite internals",
+      "fence acquisition is modeled, but stale-fence/CAS rejection is not modeled"
     ]
+  },
+  "config": "formal/upgrade/UpgradeRecovery.cfg",
+  "config_sha256": "47425af53affd104aa5e30d7434cf3e71e3c7b69bccb9b05fbd749d3285991a2",
+  "design_snapshot": {
+    "files": {
+      "docs/UPGRADE_EXECUTION_REDESIGN.md": "610e937d47cb5b793f684626c139ca1c8b460bedcd3b8f1f4dbdf5cde0c67954",
+      "docs/UPGRADE_PROTOCOL.md": "8b3a1e5600165919e9cf4a3943237abfec064c6cc4286ad727b463cf2ddbfc62"
+    },
+    "revision": "bbbef2053bad329e85a8d257493cd642e20e06d2",
+    "status": "design-only-v10; no executable refinement"
+  },
+  "implementation_snapshot": {
+    "files": {
+      "schema/upgrade-contract.schema.json": "6ef2362107a0c3ff895e6dc96e35899e19b367bebd549b6acee42a680d7a442b",
+      "tests/test_mutation_fence.py": "e2bcea7b96bddd2509b79ff9c5eefd57001d1502949aba30cbbd50a9169e1cbb",
+      "tests/test_rollback_control_store.py": "53a625baf6eaa7e7cf7350319f3adc3887ec7e3c47dbeabd0a83f17ab959fee7",
+      "tests/test_sqlite_mutation_barrier.py": "6949425557176bebb3341677d1fed90c0217055bd1d1dcb56bbdf91f60d31fb8",
+      "tests/test_sqlite_storage.py": "498949a2fe69dd2b6c92ba3ca56c407fbe3658f86332adac5416a5f1798e1a27",
+      "tests/test_upgrade_commands.py": "4eaa65ac1730c9149156ba76e345dcb1f8e2c44a51042e27f2d4a4b4e7634f32",
+      "tests/test_upgrade_contract.py": "0630ea0c35ad100367a9df0d0682a90b2b0b120057768029fc82fe06a106989c",
+      "tests/test_upgrade_identity.py": "0206aef1794ed73ffcdefb4f965f657514f11858d9beb0b2fa92f7dceaaaf905",
+      "tools/generate_upgrade_contract.py": "b3db939912bed549eaba17a2e064e776ff9119b82287218016100e25e5ad9ba4",
+      "tools/handoffctl.py": "97d70980b754eb6bf77918bb7178729caf70d54e07919d97bf67b063f5d00b21",
+      "tools/mutation_fence.py": "2d314f5a5cc46d0f625135b39ada2d1a464cd35c9d378728c141708df8c0c630",
+      "tools/rollback_control_store.py": "c87dc9b00867de1406d67a226cc04a383d4c4df8116dc32643b9af178048434a",
+      "tools/sqlite_storage.py": "96f4fcb45bb7ccc4936185dfc70192d27075232dca91029fe23295ef1e31e58b",
+      "tools/upgrade_commands.py": "5b6360c39fa10979a77a0c6180968598593f56b9ea0c59de60b59c8017e37071",
+      "tools/upgrade_contract_runtime.py": "caeb45260b790e7fdf8118ce370558bd26b04035407679df8e9845775e197119",
+      "tools/upgrade_identity.py": "44bf4479b28e1b684879f7f000f713e8f5177034e1a2d43a30c09745c9c014a6",
+      "tools/validate_upgrade_contract.py": "6c264c4775e4ee1a778181d7e127d9f256c56abd4bfebb02c624e13c289dbc4a"
+    },
+    "revision": "4676a9eeb4f9f87fa9339225457134ed7f6a8964",
+    "runtime_revision": "4676a9eeb4f9f87fa9339225457134ed7f6a8964"
+  },
+  "model": "formal/upgrade/UpgradeRecovery.tla",
+  "model_sha256": "616d53832ac5ec18bf3242d47b2412195eb64adb2b1035235514e06cc3edf2ba",
+  "result": {
+    "depth": 19,
+    "distinct_states": 900,
+    "invariants": [
+      "TypeInvariant",
+      "FunctionalAvailability",
+      "NoReplacementBeforeBackup",
+      "ReleaseOrder",
+      "RollbackProof",
+      "RollbackRequiresBackup"
+    ],
+    "states_generated": 4501,
+    "status": "pass"
+  },
+  "verifier": {
+    "jar_sha256": "936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88",
+    "name": "TLC",
+    "version": "2.19 (08 August 2024, rev 5a47802)"
   }
 }
