@@ -18,6 +18,7 @@ LOCK_NAME = "coordinator.vendor.json"
 SOURCE_FILES: tuple[tuple[str, str], ...] = (
     ("tools/handoffctl", "tools/handoffctl"),
     ("tools/handoffctl.py", "tools/handoffctl.py"),
+    ("tools/oracle_lifecycle.py", "tools/oracle_lifecycle.py"),
     ("tools/sqlite_storage.py", "tools/sqlite_storage.py"),
     ("tools/status_renderer.py", "tools/status_renderer.py"),
     ("tools/upgrade_commands.py", "tools/upgrade_commands.py"),
