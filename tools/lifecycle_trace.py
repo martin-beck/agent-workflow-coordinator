@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from itertools import pairwise
 from typing import Protocol
 
 MODEL_ACTIONS = {
@@ -18,6 +19,18 @@ MODEL_ACTIONS = {
     "rollback_started": "StartRollback",
     "rollback_verified": "VerifyRollback",
     "rollback_released": "ReleaseRollback",
+}
+MODEL_TRANSITIONS = {
+    "acquire": frozenset({"quiesce", "rollback_started"}),
+    "quiesce": frozenset({"backup", "rollback_started"}),
+    "backup": frozenset({"stage", "rollback_started"}),
+    "stage": frozenset({"commit", "rollback_started"}),
+    "commit": frozenset({"validate", "rollback_started"}),
+    "validate": frozenset({"reopen", "rollback_started"}),
+    "reopen": frozenset({"rollback_started"}),
+    "rollback_started": frozenset({"rollback_verified"}),
+    "rollback_verified": frozenset({"rollback_released"}),
+    "rollback_released": frozenset(),
 }
 
 
@@ -75,7 +88,13 @@ def validate_model_trace(events: tuple[LifecycleEvent, ...]) -> tuple[str, ...]:
     token = events[0]._token
     if any(event._token is not token for event in events):
         raise ValueError("lifecycle trace mixes scope-issued events")
+    phases = tuple(event.phase for event in events)
+    if any(
+        next_phase not in MODEL_TRANSITIONS[current_phase]
+        for current_phase, next_phase in pairwise(phases)
+    ):
+        raise ValueError("lifecycle trace transition is not allowed by the model")
     try:
-        return tuple(MODEL_ACTIONS[event.phase] for event in events)
+        return tuple(MODEL_ACTIONS[phase] for phase in phases)
     except KeyError as error:
         raise ValueError("lifecycle trace phase is not mapped to the model") from error
