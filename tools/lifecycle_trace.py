@@ -92,7 +92,7 @@ def validate_terminal_recovery_contract(root: Path) -> None:
         "freshRuntimeVerified' = TRUE",
         "CompleteReopen(p) ==",
         'sessionStatus = "releasing"',
-        "FreshRuntimeRead",
+        "FreshRuntimeRead(p) ==",
         "NoUnheldRollbackGap",
     )
     missing = [name for name in required if name not in text]
