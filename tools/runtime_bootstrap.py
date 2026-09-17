@@ -60,7 +60,11 @@ class DispatchAdmission:
 
     def revalidate(self) -> None:
         """Recheck the retained handle before a consumer uses admission evidence."""
-        self.runtime.revalidate_for_dispatch()
+        try:
+            self.runtime.revalidate_for_dispatch()
+        except AuthorityError:
+            self.runtime.close()
+            raise
 
 
 @dataclass(slots=True)
