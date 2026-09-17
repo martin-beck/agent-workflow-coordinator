@@ -169,6 +169,21 @@ class ResolvedRuntime:
             )
         ):
             raise AuthorityError("resolved runtime identity is unavailable")
+        if (
+            len(expected_identity.source_commit) != 40
+            or any(c not in "0123456789abcdef" for c in expected_identity.source_commit)
+            or len(expected_identity.tag_object) != 40
+            or any(c not in "0123456789abcdef" for c in expected_identity.tag_object)
+            or any(
+                len(value) != 64 or any(c not in "0123456789abcdef" for c in value)
+                for value in (
+                    expected_identity.signature_sha256,
+                    expected_identity.trust_policy_sha256,
+                    expected_identity.vendor_manifest_sha256,
+                )
+            )
+        ):
+            raise AuthorityError("resolved runtime identity is unavailable")
         if not isinstance(self.identity.release, str):
             raise AuthorityError("resolved runtime release is unavailable")
         if (
