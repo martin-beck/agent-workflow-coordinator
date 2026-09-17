@@ -71,6 +71,8 @@ class UpgradeRunbookTests(unittest.TestCase):
         self.assertIn('echo "GITHUB_SHA is not a 40-hex source identity"', workflow)
         self.assertIn('if [[ "$(git rev-parse HEAD)" != "$GITHUB_SHA" ]]; then', workflow)
         self.assertIn('echo "checked-out HEAD does not match GITHUB_SHA"', workflow)
+        self.assertIn('if [[ -n "$(git status --porcelain=v1)" ]]; then', workflow)
+        self.assertIn('echo "checked-out source is not clean"', workflow)
         self.assertIn("printf '%s\\n' \"$GITHUB_SHA\"", workflow)
         self.assertIn(
             "sha256sum release-contract.json release-runbooks/operator.md "
