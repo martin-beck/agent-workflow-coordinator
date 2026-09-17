@@ -45,6 +45,8 @@ def test_release_signer_template_is_self_test_only() -> None:
     assert "required release signer policy" in WORKFLOW
     assert "gpg.ssh.allowedSignersFile" in WORKFLOW
     assert "not authorized by the GitHub release-key policy" in WORKFLOW
+    assert 'canonical_identity = "martin.beck2@gmx.de"' in WORKFLOW
+    assert "does not match the canonical GitHub release identity" in WORKFLOW
     assert "ssh-keygen" in WORKFLOW
     assert 'config("gpg.format") != "ssh"' in WORKFLOW
     assert "config --get gpg.format" in template
