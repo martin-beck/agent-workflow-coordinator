@@ -70,6 +70,12 @@ class DispatchAdmission:
         """Release the retained runtime handle; repeated close is harmless."""
         self.runtime.close()
 
+    def __enter__(self) -> DispatchAdmission:
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        self.close()
+
 
 @dataclass(slots=True)
 class ResolvedRuntime:
