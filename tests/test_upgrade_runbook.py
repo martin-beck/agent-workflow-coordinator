@@ -73,6 +73,13 @@ class UpgradeRunbookTests(unittest.TestCase):
         self.assertIn('echo "checked-out HEAD does not match GITHUB_SHA"', workflow)
         self.assertIn('if [[ -n "$(git status --porcelain=v1)" ]]; then', workflow)
         self.assertIn('echo "checked-out source is not clean"', workflow)
+        self.assertIn(
+            "for artifact in release-contract.json release-runbooks/operator.md "
+            "release-runbooks/agent.md; do",
+            workflow,
+        )
+        self.assertIn('test -f "$RUNNER_TEMP/$artifact"', workflow)
+        self.assertIn('test ! -L "$RUNNER_TEMP/$artifact"', workflow)
         self.assertIn("printf '%s\\n' \"$GITHUB_SHA\"", workflow)
         self.assertIn(
             "sha256sum release-contract.json release-runbooks/operator.md "

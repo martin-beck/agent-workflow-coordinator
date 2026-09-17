@@ -65,6 +65,10 @@ jobs:
             echo "checked-out source is not clean" >&2
             exit 1
           fi
+          for artifact in release-contract.json release-runbooks/operator.md release-runbooks/agent.md; do
+            test -f "$RUNNER_TEMP/$artifact"
+            test ! -L "$RUNNER_TEMP/$artifact"
+          done
           printf '%s\n' "$GITHUB_SHA" > "$RUNNER_TEMP/release-source-commit.txt"
           (
             cd "$RUNNER_TEMP"
