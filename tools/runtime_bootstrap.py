@@ -67,6 +67,8 @@ class DispatchAdmission:
     def revalidate(self) -> None:
         """Recheck the retained handle before a consumer uses admission evidence."""
         try:
+            if self.runtime.identity is not self.identity:
+                raise AuthorityError("dispatch admission identity is not bound")
             self.runtime.revalidate_for_dispatch()
         except AuthorityError:
             self.runtime.close()
