@@ -92,12 +92,14 @@ def _validate_event_schema(events: tuple[LifecycleEvent, ...]) -> None:
             raise ValueError("lifecycle trace identity is invalid")
     identity = (
         events[0].owner,
+        events[0].lock,
         events[0].project_id,
         events[0].session_digest,
         events[0].fencing_token,
     )
     if any(
-        (event.owner, event.project_id, event.session_digest, event.fencing_token) != identity
+        (event.owner, event.lock, event.project_id, event.session_digest, event.fencing_token)
+        != identity
         for event in events
     ):
         raise ValueError("lifecycle trace identity changed")

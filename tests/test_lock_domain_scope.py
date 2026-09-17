@@ -435,6 +435,15 @@ class LockDomainScopeTests(unittest.TestCase):
                     ),
                 )
             )
+        with self.assertRaisesRegex(ValueError, "identity changed"):
+            validate_model_trace(
+                (
+                    _issue_event(token, "acquire", *fields),
+                    _issue_event(
+                        token, "quiesce", 2, "owner-1", "foreign-lock", PROJECT, "digest", "fence"
+                    ),
+                )
+            )
         with self.assertRaisesRegex(ValueError, "revision regressed"):
             validate_model_trace(
                 (
