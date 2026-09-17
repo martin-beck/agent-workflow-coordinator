@@ -301,6 +301,50 @@ def _existing_regular_identity(parent: int, name: str) -> tuple[int, int] | None
             os.close(descriptor)
 
 
+def _remove_selector_temporary(parent: int, entry: str) -> None:
+    descriptor = -1
+    try:
+        descriptor = os.open(entry, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=parent)
+        status = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(status.st_mode)
+            or status.st_uid != os.geteuid()
+            or stat.S_IMODE(status.st_mode) != 0o600
+            or status.st_nlink != 1
+        ):
+            raise AuthorityError("runtime selector temporary is unsafe")
+    except FileNotFoundError:
+        return
+    except OSError as error:
+        raise AuthorityError("runtime selector temporary is unsafe") from error
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+    try:
+        os.unlink(entry, dir_fd=parent)
+    except OSError as error:
+        raise AuthorityError("runtime selector temporary cleanup failed") from error
+
+
+def _cleanup_selector_temporaries(parent: int, name: str) -> None:
+    """Remove only owner-safe abandoned selector staging files."""
+    prefix = f".{name}."
+    try:
+        entries = os.listdir(parent)
+    except OSError as error:
+        raise AuthorityError("runtime selector temporary inventory failed") from error
+    removed = False
+    for entry in entries:
+        if entry.startswith(prefix) and re.fullmatch(r"[0-9a-f]{32}", entry[len(prefix) :]):
+            _remove_selector_temporary(parent, entry)
+            removed = True
+    if removed:
+        try:
+            os.fsync(parent)
+        except OSError as error:
+            raise AuthorityError("runtime selector temporary cleanup is ambiguous") from error
+
+
 def _sidecar_identities(parent: int, name: str) -> dict[str, tuple[int, int] | None]:
     result: dict[str, tuple[int, int] | None] = {}
     for suffix in _SQLITE_SIDECARS:
@@ -763,6 +807,19 @@ def reconcile_runtime_selector(
     with handoffctl.locked():
         current = read_runtime_selector(path)
         pair = (current["active_release"], current["previous_release"])
+        if pair not in {
+            (after_active_release, after_previous_release),
+            (before_active_release, before_previous_release),
+        }:
+            raise AuthorityError("selector reconciliation found an unknown release identity")
+        parent, parent_identity = _open_parent(path)
+        try:
+            _require_owner_only_parent(parent, "runtime selector")
+            if parent_identity != _file_identity(os.fstat(parent)):
+                raise AuthorityError("runtime selector parent identity changed")
+            _cleanup_selector_temporaries(parent, path.name)
+        finally:
+            os.close(parent)
         if pair == (after_active_release, after_previous_release):
             return "committed"
         if pair == (before_active_release, before_previous_release):
