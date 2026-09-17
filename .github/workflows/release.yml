@@ -56,7 +56,7 @@ jobs:
           RELEASE_TRANSITION: ${{ inputs.transition }}
         run: |
           signer_dir="$(mktemp -d)"
-          trap 'rm -rf -- "$signer_dir"' EXIT
+          chmod 700 "$signer_dir"
           python - "$signer_dir/awc-sign-release.sh" <<'PY'
           import hashlib, json, os, shlex, subprocess, sys, tempfile
           from pathlib import Path
@@ -120,7 +120,7 @@ jobs:
           for placeholder, value in values.items(): template = template.replace(placeholder, shlex.quote(value))
           target = Path(sys.argv[1]); target.write_text(template); target.chmod(0o700)
           PY
-          echo "Generated signer: $signer_dir/awc-sign-release.sh (ephemeral self-test only; no signing or publication)" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "Generated signer: $signer_dir/awc-sign-release.sh (runner-local, retained for this job; self-test only, no signing or publication)" | tee -a "$GITHUB_STEP_SUMMARY"
           "$signer_dir/awc-sign-release.sh" --self-test
       - name: Bind published evidence to the exact source
         run: |

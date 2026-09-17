@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Public-safe release signer contract template. Rendering and --self-test are
-# non-publishing; no-argument execution is reserved for an authorized signer.
+# non-publishing; the rendered script is retained only on the signing runner
+# for the job lifetime. No-argument execution is reserved for an authorized signer.
 set -euo pipefail
 readonly RELEASE_VERSION=@RELEASE_VERSION@
 readonly SOURCE_COMMIT=@SOURCE_COMMIT@
