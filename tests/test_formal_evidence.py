@@ -153,8 +153,14 @@ class FormalEvidenceTests(unittest.TestCase):
         self.assertIn("timeout-minutes: ${{", workflow)
         self.assertIn("continue-on-error: ${{ github.event_name == 'schedule' }}", workflow)
         self.assertIn("release_sensitive", workflow)
-        for release_path in ("pyproject.toml", "uv.lock", "CHANGELOG.md", "tools/vendor.py"):
+        for release_path in (
+            "pyproject.toml",
+            "uv.lock",
+            "CHANGELOG.md",
+            "tools/vendor.py",
+        ):
             self.assertIn(release_path, workflow)
+        self.assertIn("tools/lifecycle_trace.py", workflow)
         tier_expression = workflow[
             workflow.index("      TLC_TIER:") : workflow.index(
                 "    steps:", workflow.index("  verify:")

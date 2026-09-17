@@ -74,6 +74,19 @@ def validate_model_action_contract(root: Path) -> None:
         raise ValueError(f"model actions are missing: {', '.join(missing)}")
 
 
+def validate_terminal_recovery_contract(root: Path) -> None:
+    """Require terminal success state to be explicit in the barrier model."""
+    model = root / "formal/upgrade/HandoffctlUpgradeBarrier.tla"
+    try:
+        text = model.read_text(encoding="utf-8")
+    except OSError as error:
+        raise ValueError("terminal recovery model is unavailable") from error
+    required = ("VerifyTerminal", "terminalTarget", "terminalVerified", "freshRuntimeVerified")
+    missing = [name for name in required if name not in text]
+    if missing:
+        raise ValueError(f"terminal recovery model fields are missing: {', '.join(missing)}")
+
+
 @dataclass(frozen=True, slots=True, init=False)
 class LifecycleEvent:
     phase: str
@@ -159,7 +172,9 @@ def validate_model_trace(
         raise ValueError("lifecycle trace must not be empty")
     if any(not isinstance(event, LifecycleEvent) for event in events):
         raise ValueError("lifecycle trace contains an invalid event")
-    validate_model_action_contract(model_root or Path(__file__).resolve().parents[1])
+    contract_root = model_root or Path(__file__).resolve().parents[1]
+    validate_model_action_contract(contract_root)
+    validate_terminal_recovery_contract(contract_root)
     token = events[0]._token
     if any(event._token is not token for event in events):
         raise ValueError("lifecycle trace mixes scope-issued events")
