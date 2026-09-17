@@ -399,6 +399,40 @@ class SQLiteAuthorityAdapterTests(unittest.TestCase):
                 after_previous_release="v0.3.4",
             ),
         )
+        selector.write_text(
+            '{"active_release":"v0.3.4","previous_release":"v0.3.3","schema_version":1}\n',
+            encoding="utf-8",
+        )
+        self.assertEqual(
+            "not-committed",
+            executor.reconcile_selector_publication(
+                "runtime-selector.json",
+                selector_root,
+                1,
+                "barrier",
+                "fence",
+                before_active_release="v0.3.4",
+                before_previous_release="v0.3.3",
+                after_active_release="v0.3.5",
+                after_previous_release="v0.3.4",
+            ),
+        )
+        selector.write_text(
+            '{"active_release":"v0.3.7","previous_release":"v0.3.6","schema_version":1}\n',
+            encoding="utf-8",
+        )
+        with self.assertRaisesRegex(SQLiteAuthorityError, "unknown release identity"):
+            executor.reconcile_selector_publication(
+                "runtime-selector.json",
+                selector_root,
+                1,
+                "barrier",
+                "fence",
+                before_active_release="v0.3.4",
+                before_previous_release="v0.3.3",
+                after_active_release="v0.3.5",
+                after_previous_release="v0.3.4",
+            )
         with self.assertRaisesRegex(SQLiteAuthorityError, "pairs must differ"):
             executor.reconcile_selector_publication(
                 "runtime-selector.json",
