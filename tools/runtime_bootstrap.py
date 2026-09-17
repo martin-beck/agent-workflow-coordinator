@@ -66,6 +66,10 @@ class DispatchAdmission:
             self.runtime.close()
             raise
 
+    def close(self) -> None:
+        """Release the retained runtime handle; repeated close is harmless."""
+        self.runtime.close()
+
 
 @dataclass(slots=True)
 class ResolvedRuntime:
