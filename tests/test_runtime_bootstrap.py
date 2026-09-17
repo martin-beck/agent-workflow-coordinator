@@ -15,6 +15,7 @@ from unittest.mock import patch
 from tools.runtime_bootstrap import (
     ExpectedRuntimeIdentity,
     VerifiedManifest,
+    read_runtime_manifest,
     resolve_selected_runtime,
     verify_runtime_manifest,
 )
@@ -138,6 +139,37 @@ class RuntimeBootstrapTests(unittest.TestCase):
                     ),
                 )
 
+    def test_rejects_selector_manifest_release_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            releases = root / "releases"
+            releases.mkdir(mode=0o700)
+            selected = releases / "v1.2.3"
+            selected.mkdir(mode=0o700)
+            self._write_manifest(selected, "v1.2.4")
+            selector = root / "runtime-selector.json"
+            commit_runtime_selector(selector, "v1.2.3", "v1.2.2")
+            with self.assertRaisesRegex(AuthorityError, "does not match selector"):
+                resolve_selected_runtime(
+                    selector, releases, self._identity_for_release(), self._verifier
+                )
+
+    def test_rejects_manifest_identity_not_matching_expected_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            releases = root / "releases"
+            releases.mkdir(mode=0o700)
+            selected = releases / "v1.2.3"
+            selected.mkdir(mode=0o700)
+            self._write_manifest(selected)
+            selector = root / "runtime-selector.json"
+            commit_runtime_selector(selector, "v1.2.3", "v1.2.2")
+            foreign = ExpectedRuntimeIdentity(
+                "f" * 40, "refs/tags/v1.2.3", "b" * 40, "c" * 64, "d" * 64, "e" * 64
+            )
+            with self.assertRaisesRegex(AuthorityError, "does not match expected identity"):
+                resolve_selected_runtime(selector, releases, foreign, self._verifier)
+
     def test_rejects_manifest_replacement_after_authenticity_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -195,6 +227,58 @@ class RuntimeBootstrapTests(unittest.TestCase):
                 self.assertRaisesRegex(AuthorityError, "unavailable"),
             ):
                 verify_runtime_manifest(runtime, digest)
+
+    def test_manifest_reader_rejects_duplicate_json_fields(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            runtime = Path(directory)
+            manifest = runtime / "runtime-manifest.json"
+            manifest.write_text('{"release":"v1.2.3","release":"v1.2.3"}')
+            manifest.chmod(0o600)
+            with self.assertRaisesRegex(AuthorityError, "duplicate"):
+                read_runtime_manifest(runtime)
+
+    def test_manifest_reader_rejects_invalid_json_and_schema(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            runtime = Path(directory)
+            manifest = runtime / "runtime-manifest.json"
+            manifest.touch()
+            manifest.chmod(0o600)
+            for content, message in (("{", "JSON is invalid"), ('{"release":"v1.2.3"}', "fields")):
+                manifest.write_text(content)
+                with self.assertRaisesRegex(AuthorityError, message):
+                    read_runtime_manifest(runtime)
+
+    def test_manifest_reader_rejects_non_string_and_invalid_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            runtime = Path(directory)
+            manifest = runtime / "runtime-manifest.json"
+            manifest.touch()
+            manifest.chmod(0o600)
+            value = {
+                "release": "v1.2.3",
+                "source_commit": 1,
+                "tag_ref": "refs/tags/v1.2.3",
+                "tag_object": "b" * 40,
+                "signature_sha256": "c" * 64,
+                "trust_policy_sha256": "d" * 64,
+                "vendor_manifest_sha256": "e" * 64,
+            }
+            manifest.write_text(json.dumps(value))
+            with self.assertRaisesRegex(AuthorityError, "identity is invalid"):
+                read_runtime_manifest(runtime)
+            value["source_commit"] = "z" * 40
+            manifest.write_text(json.dumps(value))
+            with self.assertRaisesRegex(AuthorityError, "identity is invalid"):
+                read_runtime_manifest(runtime)
+
+    def test_manifest_reader_rejects_unsafe_permissions(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            runtime = Path(directory)
+            manifest = runtime / "runtime-manifest.json"
+            manifest.write_text("{}")
+            manifest.chmod(0o644)
+            with self.assertRaisesRegex(AuthorityError, "unsafe"):
+                read_runtime_manifest(runtime)
 
     def test_manifest_verifier_reads_complete_content_across_short_reads(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
