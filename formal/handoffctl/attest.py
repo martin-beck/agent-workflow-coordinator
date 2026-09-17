@@ -14,7 +14,7 @@ from pathlib import Path
 
 EXPECTED_MODELS = {
     "portable-smoke": {"HandoffctlBinding"},
-    "pr-fast": {"HandoffctlFast"},
+    "pr-fast": {"HandoffctlFast", "OracleInteractionGates"},
     "pr-publication": {
         "HandoffctlBinding",
         "HandoffctlLocks",
@@ -32,7 +32,11 @@ EXPECTED_MODELS = {
         "HandoffctlRecovery",
     },
 }
-MODEL_SOURCE = {"HandoffctlPR": "Handoffctl", "HandoffctlFast": "HandoffctlBinding"}
+MODEL_SOURCE = {
+    "HandoffctlPR": "Handoffctl",
+    "HandoffctlFast": "HandoffctlBinding",
+    "OracleInteractionGates": "../oracle/OracleInteractionGates",
+}
 
 
 def digest(path: Path) -> str:

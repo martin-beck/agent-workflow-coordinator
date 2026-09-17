@@ -30,6 +30,8 @@ run_model() {
     # The fast tier has its own reduced configuration over the binding spec.
     if [[ "${model}" == "HandoffctlFast" ]]; then
         source=HandoffctlBinding
+    elif [[ "${model}" == "OracleInteractionGates" ]]; then
+        source=../oracle/OracleInteractionGates
     fi
     python3 "${SPEC_DIR}/../../tools/tlc_runner.py" \
         --jar "${JAR}" \
@@ -45,6 +47,7 @@ if [[ "${TIER}" == "portable-smoke" ]]; then
 elif [[ "${TIER}" == "pr-fast" ]]; then
     # Deliberately smaller safety-only required merge gate.
     run_model HandoffctlFast
+    run_model OracleInteractionGates
 elif [[ "${TIER}" == "pr-publication" ]]; then
     # PR publication checks every invariant family. The general lifecycle
     # model uses a one-process configuration; weekly full evidence retains its
