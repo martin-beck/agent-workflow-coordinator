@@ -89,12 +89,11 @@ def validate_model_trace(events: tuple[LifecycleEvent, ...]) -> tuple[str, ...]:
     if any(event._token is not token for event in events):
         raise ValueError("lifecycle trace mixes scope-issued events")
     phases = tuple(event.phase for event in events)
+    if any(phase not in MODEL_ACTIONS for phase in phases):
+        raise ValueError("lifecycle trace phase is not mapped to the model")
     if any(
         next_phase not in MODEL_TRANSITIONS[current_phase]
         for current_phase, next_phase in pairwise(phases)
     ):
         raise ValueError("lifecycle trace transition is not allowed by the model")
-    try:
-        return tuple(MODEL_ACTIONS[phase] for phase in phases)
-    except KeyError as error:
-        raise ValueError("lifecycle trace phase is not mapped to the model") from error
+    return tuple(MODEL_ACTIONS[phase] for phase in phases)

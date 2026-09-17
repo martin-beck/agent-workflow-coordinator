@@ -405,6 +405,13 @@ class LockDomainScopeTests(unittest.TestCase):
             validate_model_trace((first, foreign))
         with self.assertRaisesRegex(ValueError, "not mapped"):
             validate_model_trace((_issue_event(first_token, "scope.reread", *event_fields),))
+        with self.assertRaisesRegex(ValueError, "not mapped"):
+            validate_model_trace(
+                (
+                    _issue_event(first_token, "acquire", *event_fields),
+                    _issue_event(first_token, "scope.reread", *event_fields),
+                )
+            )
 
     def test_model_trace_rejects_invalid_transition_order(self) -> None:
         token = object()
