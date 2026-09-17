@@ -201,6 +201,20 @@ if mode == "kill-after-session-commit":
     store._mark_intent_locked = kill_before_outcome
     store.begin_reopen(2, "new")
 
+if mode == "kill-after-outcome-publication":
+    original_begin_reopen = store.begin_reopen
+
+    def kill_after_return(expected_revision, target):
+        result = original_begin_reopen(expected_revision, target)
+        ready_path.write_text("committed-after-outcome\n", encoding="utf-8")
+        with ready_path.open("rb") as ready:
+            os.fsync(ready.fileno())
+        os.kill(os.getpid(), signal.SIGKILL)
+        return result
+
+    store.begin_reopen = kill_after_return
+    store.begin_reopen(2, "new")
+
 if mode != "kill-during-transaction":
     raise SystemExit("unknown test mode")
 
@@ -779,6 +793,45 @@ class RollbackControlStoreTests(unittest.TestCase):
             assert recovered is not None
             self.assertEqual(("ambiguous", 4), (recovered.status, recovered.revision))
             self.assertEqual(authority_bytes, authority_path.read_bytes())
+
+    def test_v10_subprocess_after_outcome_publication_reopens_releasing(self) -> None:
+        """A death after durable intent publication leaves an inspectable release barrier."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            control_path = root / "control.sqlite"
+            authority_path = root / "authority.sqlite"
+            authority_path.write_bytes(b"authority remains untouched after outcome publication\n")
+            ready_path = root / "ready"
+            process = self._run_session_process(
+                control_path, authority_path, "kill-after-outcome-publication", ready_path
+            )
+            self._wait_for_file(ready_path, process)
+            self.assertEqual(
+                "committed-after-outcome", ready_path.read_text(encoding="utf-8").strip()
+            )
+            self.assertEqual(-signal.SIGKILL, process.wait(timeout=10))
+            stdout, stderr = process.communicate()
+            self.assertEqual("", stderr, msg=stdout)
+            store = SQLiteBarrierSessionStore(
+                SQLiteRollbackControlStore(control_path, PROJECT, authority_path),
+                lambda: "authority-3",
+            )
+            state = store.snapshot()
+            self.assertIsNotNone(state)
+            assert state is not None
+            self.assertEqual(("releasing", 3), (state.status, state.revision))
+            with sqlite3.connect(control_path) as connection:
+                outcomes = connection.execute(
+                    "SELECT outcome FROM barrier_session_intent WHERE project_id=?",
+                    (PROJECT,),
+                ).fetchall()
+            self.assertEqual([("committed",), ("committed",), ("committed",)], outcomes)
+            self.assertEqual(state, store.recover_unknown())
+            self.assertEqual(state, store.snapshot())
+            self.assertEqual(
+                b"authority remains untouched after outcome publication\n",
+                authority_path.read_bytes(),
+            )
 
     def test_v10_durable_session_persists_children_and_reopen(self) -> None:
         from tools.upgrade_identity import BarrierChildIdentity
