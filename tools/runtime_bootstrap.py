@@ -128,6 +128,8 @@ class ResolvedRuntime:
             raise AuthorityError("resolved runtime descriptor is unavailable")
         if self.descriptor < 0:
             raise AuthorityError("resolved runtime is unavailable")
+        if not self.path.is_absolute():
+            raise AuthorityError("resolved runtime path is unavailable")
         directory_identity = self._directory_identity
         if (
             not isinstance(directory_identity, tuple)
