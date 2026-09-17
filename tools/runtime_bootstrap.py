@@ -58,6 +58,10 @@ class DispatchAdmission:
     runtime: ResolvedRuntime
     identity: VerifiedManifest
 
+    def revalidate(self) -> None:
+        """Recheck the retained handle before a consumer uses admission evidence."""
+        self.runtime.revalidate_for_dispatch()
+
 
 @dataclass(slots=True)
 class ResolvedRuntime:
