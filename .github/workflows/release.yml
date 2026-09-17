@@ -19,6 +19,13 @@ jobs:
       - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d
         with:
           version: "0.12.8"
+      - name: Check authorized release signer (non-publishing)
+        run: |
+          # This gate only probes the externally managed signer. It never signs,
+          # creates tags, pushes refs, or publishes a release.
+          signer_path="${AWC_RELEASE_SIGNER_PATH:-/home/martin/bin/awc-sign-release.sh}"
+          test -x "$signer_path"
+          "$signer_path" --self-test
       - name: Generate and validate release contract
         env:
           TRANSITION: ${{ inputs.transition }}
