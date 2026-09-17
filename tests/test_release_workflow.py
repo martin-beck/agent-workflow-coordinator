@@ -20,7 +20,8 @@ def test_release_workflow_probes_external_signer_without_publishing() -> None:
     assert "--barrier-id" in WORKFLOW
     assert "--fencing-token" in WORKFLOW
     assert "--operation-id" in WORKFLOW
-    assert "AWC_TRUST_POLICY_FILE" in WORKFLOW
+    assert "--trust-policy-sha256" in WORKFLOW
+    assert "--vendor-manifest-sha256" in WORKFLOW
     assert 'transition_path.read_text(encoding="utf-8")' in WORKFLOW
     assert 'Path(os.environ["GITHUB_STEP_SUMMARY"]).open("a"' in WORKFLOW
     assert "--push" not in WORKFLOW
@@ -28,8 +29,8 @@ def test_release_workflow_probes_external_signer_without_publishing() -> None:
     assert "Not executed by CI" in WORKFLOW
     assert "/home/martin" not in WORKFLOW
     assert '"--repo", "."' in WORKFLOW
-    assert '"$AWC_RELEASE_OUTPUT"' in WORKFLOW
-    assert "AWC_VENDOR_MANIFEST_FILE" in WORKFLOW
+    assert '"--output",' not in WORKFLOW
+    assert '"--trust-policy",' not in WORKFLOW
     assert '"--repo", os.environ["GITHUB_WORKSPACE"]' not in WORKFLOW
     assert '"--output", os.path.join(os.environ["RUNNER_TEMP"]' not in WORKFLOW
 
