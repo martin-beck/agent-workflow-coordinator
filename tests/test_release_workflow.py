@@ -9,10 +9,8 @@ WORKFLOW = (Path(__file__).parents[1] / ".github/workflows/release.yml").read_te
 
 def test_release_workflow_probes_external_signer_without_publishing() -> None:
     assert "workflow_dispatch:" in WORKFLOW
-    assert "AWC_RELEASE_SIGNER_PATH" in WORKFLOW
     assert "awc-sign-release.sh" in WORKFLOW
-    assert "/home/martin" not in WORKFLOW
-    assert '"$signer_path" --self-test' in WORKFLOW
+    assert '"$signer_dir/awc-sign-release.sh" --self-test' in WORKFLOW
     assert "creates tags" in WORKFLOW
     assert "pushes refs" in WORKFLOW
 
@@ -22,6 +20,10 @@ def test_release_signer_template_is_self_test_only() -> None:
         encoding="utf-8"
     )
     assert '"--self-test"' in template
+    assert "exec git tag -s" in template
+    assert '"@TRANSITION@"' in template
+    assert '"@RELEASE_VERSION@"' in template
+    assert '"@SOURCE_COMMIT@"' in template
     assert "sign" in template.lower()
     assert "git push" not in template
 

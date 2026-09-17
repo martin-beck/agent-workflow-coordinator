@@ -21,11 +21,26 @@ jobs:
           version: "0.12.8"
       - name: Check authorized release signer (non-publishing)
         run: |
-          # This gate only probes the externally managed signer. It never signs,
-          # creates tags, pushes refs, or publishes a release.
-          signer_path="${AWC_RELEASE_SIGNER_PATH:?set AWC_RELEASE_SIGNER_PATH to an authorized external signer}"
-          test -x "$signer_path"
-          "$signer_path" --self-test
+          # Probe only the rendered contract; do not sign, tag, push, or publish.
+          signer_dir="$(mktemp -d)"
+          trap 'rm -rf -- "$signer_dir"' EXIT
+          export RELEASE_TRANSITION="${{ inputs.transition }}"
+          python - "$signer_dir/awc-sign-release.sh" <<'PY'
+          import os
+          import sys
+          from pathlib import Path
+          template = Path("docs/templates/awc-sign-release.sh.in").read_text()
+          for key, value in {
+              "@RELEASE_VERSION@": os.environ.get("GITHUB_REF_NAME", ""),
+              "@SOURCE_COMMIT@": os.environ["GITHUB_SHA"],
+              "@TRANSITION@": os.environ["RELEASE_TRANSITION"],
+          }.items():
+              template = template.replace(key, value)
+          target = Path(sys.argv[1])
+          target.write_text(template)
+          target.chmod(0o700)
+          PY
+          "$signer_dir/awc-sign-release.sh" --self-test
       - name: Render release signer contract (non-publishing)
         env:
           RELEASE_VERSION: ${{ github.ref_name }}

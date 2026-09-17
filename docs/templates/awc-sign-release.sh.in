@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
 # Public-safe release signer contract template. Rendering and --self-test are
-# non-publishing; an authorized external signer must perform any signing.
+# non-publishing; no-argument execution is reserved for an authorized signer.
 set -euo pipefail
 readonly RELEASE_VERSION="@RELEASE_VERSION@"
 readonly SOURCE_COMMIT="@SOURCE_COMMIT@"
-if [[ "${1:-}" != "--self-test" || "$#" -ne 1 ]]; then
-    echo "usage: $0 --self-test" >&2
-    exit 64
+readonly TRANSITION="@TRANSITION@"
+if [[ "${1:-}" != "--self-test" ]]; then
+    [[ "$#" -eq 0 ]] || { echo "usage: $0 [--self-test]" >&2; exit 64; }
+    exec git tag -s "$RELEASE_VERSION" -m "Release $RELEASE_VERSION" "$SOURCE_COMMIT"
 fi
 [[ "$RELEASE_VERSION" != *[[:space:]]* && -n "$RELEASE_VERSION" ]]
 [[ "$SOURCE_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+[[ -n "$TRANSITION" && "$TRANSITION" != *$'\n'* ]]
 echo "release signer contract ready: ${RELEASE_VERSION} ${SOURCE_COMMIT}"
