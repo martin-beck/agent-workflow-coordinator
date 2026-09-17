@@ -174,6 +174,7 @@ class ReleaseIdentityTests(unittest.TestCase):
             outside.write_text("{}", encoding="utf-8")
             inside = root / "transition.json"
             inside.write_text("{}", encoding="utf-8")
+            inside.chmod(0o644)
             self.assertEqual(inside, _transition_path(Path("transition.json"), root))
             with self.assertRaisesRegex(ReleaseIdentityError, "escapes workspace"):
                 _transition_path(outside, root)
@@ -183,6 +184,9 @@ class ReleaseIdentityTests(unittest.TestCase):
             (root / "linkdir").symlink_to(Path(directory))
             with self.assertRaisesRegex(ReleaseIdentityError, "regular workspace file"):
                 _transition_path(Path("linkdir/outside.json"), root)
+            inside.chmod(0o666)
+            with self.assertRaisesRegex(ReleaseIdentityError, "owner-controlled"):
+                _transition_path(Path("transition.json"), root)
 
 
 if __name__ == "__main__":
