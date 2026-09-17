@@ -82,7 +82,7 @@ def validate_terminal_recovery_contract(root: Path) -> None:
     except OSError as error:
         raise ValueError("terminal recovery model is unavailable") from error
     required = (
-        "VerifyTerminal",
+        "VerifyTerminal(p, target) ==",
         "terminalTarget",
         "terminalVerified",
         "freshRuntimeVerified",
