@@ -532,9 +532,11 @@ class LockDomainScopeTests(unittest.TestCase):
                 "VerifyTerminal(op, target) == TRUE\nterminalTarget\n",
                 encoding="utf-8",
             )
-            with self.assertRaisesRegex(ValueError, "terminalVerified"):
+            with self.assertRaisesRegex(ValueError, "Targets"):
                 validate_terminal_recovery_contract(root)
             (root / "formal/upgrade/HandoffctlUpgradeBarrier.tla").write_text(
+                'Targets == {"new", "rollback"}\n'
+                'TerminalResults == {"none", "new", "rollback"}\n'
                 "VerifyTerminal(op, target) == TRUE\n"
                 "terminalTarget terminalVerified freshRuntimeVerified\n"
                 'IF target = "new" rollbackChild # NoChild terminalTarget\' = target\n'
