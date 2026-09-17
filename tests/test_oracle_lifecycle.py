@@ -15,7 +15,7 @@ from tools.oracle_lifecycle import (
     gate_errors,
     transition_allowed,
 )
-from tools.oracle_lifecycle_model import check_bounded_model
+from tools.oracle_lifecycle_model import State, check_bounded_model, step
 
 
 def event(task_revision: int, stage: GateStage, action: str, disposition: str) -> InteractionEvent:
@@ -80,6 +80,116 @@ class OracleLifecycleTests(unittest.TestCase):
             "events": [{"secret": "not-an-event"}],
         }
         self.assertTrue(gate_errors(malformed))
+
+    def test_artifact_and_event_validation_rejects_malformed_values(self) -> None:
+        with self.assertRaisesRegex(GateError, "digest"):
+            ArtifactRef("plan/x", "not-a-digest")
+        valid = event(1, GateStage.INTAKE, "open", "accepted").as_record()
+        for key in (
+            "task_id",
+            "task_revision",
+            "stage",
+            "action",
+            "disposition",
+            "before",
+            "after",
+            "public_ref",
+            "recorded_at",
+        ):
+            malformed = dict(valid)
+            malformed.pop(key)
+            with self.subTest(key=key), self.assertRaises((GateError, KeyError)):
+                InteractionEvent.from_record(malformed)
+        malformed = dict(valid)
+        malformed["stage"] = "unknown"
+        with self.assertRaisesRegex(GateError, "stage"):
+            InteractionEvent.from_record(malformed)
+        malformed = dict(valid)
+        malformed["before"] = [{"ref": "plan/x"}]
+        with self.assertRaises(GateError):
+            InteractionEvent.from_record(malformed)
+        for field, value in (
+            ("task_id", "bad"),
+            ("task_revision", 0),
+            ("action", "bad"),
+            ("disposition", "bad"),
+            ("public_ref", "../secret"),
+            ("recorded_at", "2026-09-17T00:00:00"),
+        ):
+            malformed = dict(valid)
+            malformed[field] = value
+            with self.subTest(field=field), self.assertRaises(GateError):
+                InteractionEvent.from_record(malformed)
+
+    def test_gate_validation_and_transition_reject_invalid_shapes(self) -> None:
+        cases: list[Any] = [
+            [],
+            {"required": False},
+            {"required": True, "open_stage": "bad", "completed": [], "events": []},
+            {"required": True, "open_stage": None, "completed": ["bad"], "events": []},
+            {"required": True, "open_stage": None, "completed": [], "events": [object()]},
+            {"required": True, "open_stage": None, "completed": [], "events": [None] * 33},
+        ]
+        self.assertEqual([], gate_errors(None))
+        for value in cases:
+            with self.subTest(value=value):
+                self.assertTrue(gate_errors(value))
+        meta: dict[str, Any] = {
+            "id": "AR-0022",
+            "task_revision": 1,
+            "oracle_gate": {"required": True, "open_stage": None, "completed": [], "events": []},
+        }
+        transition_allowed(meta, "status")
+        with self.assertRaisesRegex(GateError, "already open"):
+            apply_event(
+                {
+                    "id": "AR-0022",
+                    "task_revision": 1,
+                    "oracle_gate": {
+                        "required": True,
+                        "open_stage": "intake",
+                        "completed": [],
+                        "events": [],
+                    },
+                },
+                event(1, GateStage.INTAKE, "open", "accepted"),
+            )
+
+    def test_event_reconciliation_rejects_invalid_order_and_supports_reopen(self) -> None:
+        meta: dict[str, Any] = {"id": "AR-0022", "task_revision": 1}
+        with self.assertRaisesRegex(GateError, "does not match"):
+            apply_event(meta, event(1, GateStage.INTAKE, "resolve", "accepted"))
+        apply_event(meta, event(1, GateStage.INTAKE, "open", "accepted"))
+        meta["task_revision"] += 1
+        apply_event(meta, event(2, GateStage.INTAKE, "resolve", "accepted"))
+        meta["task_revision"] += 1
+        apply_event(meta, event(3, GateStage.INTAKE, "reopen", "accepted"))
+        self.assertEqual("intake", meta["oracle_gate"]["open_stage"])
+        meta["task_revision"] += 1
+        with self.assertRaisesRegex(GateError, "only a completed"):
+            apply_event(meta, event(4, GateStage.DISCUSSION, "reopen", "accepted"))
+
+    def test_event_history_is_bounded_and_model_rejects_hostile_inputs(self) -> None:
+        meta: dict[str, Any] = {"id": "AR-0022", "task_revision": 1}
+        for stage in GateStage:
+            apply_event(meta, event(meta["task_revision"], stage, "open", "accepted"))
+            meta["task_revision"] += 1
+            apply_event(meta, event(meta["task_revision"], stage, "resolve", "accepted"))
+            meta["task_revision"] += 1
+        for _ in range(12):
+            apply_event(meta, event(meta["task_revision"], GateStage.INTAKE, "reopen", "accepted"))
+            meta["task_revision"] += 1
+            apply_event(meta, event(meta["task_revision"], GateStage.INTAKE, "resolve", "accepted"))
+            meta["task_revision"] += 1
+        with self.assertRaisesRegex(GateError, "bounded"):
+            apply_event(meta, event(meta["task_revision"], GateStage.INTAKE, "reopen", "accepted"))
+        state = State(2, (), "intake")
+        with self.assertRaisesRegex(ValueError, "stale"):
+            step(state, "open", "intake", 1, "accepted")
+        with self.assertRaisesRegex(ValueError, "unresolved"):
+            step(state, "release", "intake", 2, "accepted")
+        with self.assertRaisesRegex(ValueError, "unknown"):
+            step(State(1, (), None), "unknown", "intake", 1, "accepted")
 
 
 if __name__ == "__main__":
