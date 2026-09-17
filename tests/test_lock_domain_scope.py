@@ -514,6 +514,7 @@ class LockDomainScopeTests(unittest.TestCase):
                         "ReleaseOrder == TRUE",
                         "RollbackProof == TRUE",
                         "RollbackRequiresBackup == TRUE",
+                        "THEOREM Spec => []TypeInvariant",
                     )
                 )
             )

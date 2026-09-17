@@ -70,6 +70,8 @@ def validate_model_action_contract(root: Path) -> None:
     missing.extend(
         f"invariant {name.split()[0]}" for name in required_invariants if name not in text
     )
+    if "THEOREM Spec => []TypeInvariant" not in text:
+        missing.append("theorem TypeInvariant")
     if missing:
         raise ValueError(f"model actions are missing: {', '.join(missing)}")
 
