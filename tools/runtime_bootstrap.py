@@ -124,6 +124,10 @@ class ResolvedRuntime:
         """Fail closed if the retained directory or its pathname was replaced."""
         if not isinstance(self.path, Path):
             raise AuthorityError("resolved runtime path is unavailable")
+        if not isinstance(self.descriptor, int) or isinstance(self.descriptor, bool):
+            raise AuthorityError("resolved runtime descriptor is unavailable")
+        if self.descriptor < 0:
+            raise AuthorityError("resolved runtime is unavailable")
         try:
             retained = os.fstat(self.descriptor)
             current = self.path.lstat()
