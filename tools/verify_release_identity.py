@@ -34,6 +34,19 @@ class ReleaseIdentityError(ValueError):
     """A transition release does not match the checked-out Git object."""
 
 
+def _require_owner_controlled(path: Path, *, label: str, directory: bool = False) -> None:
+    try:
+        status = path.stat()
+    except OSError as error:
+        raise ReleaseIdentityError(f"{label} metadata is unavailable") from error
+    if (
+        (directory and not stat.S_ISDIR(status.st_mode))
+        or status.st_uid != os.geteuid()
+        or stat.S_IMODE(status.st_mode) & 0o022
+    ):
+        raise ReleaseIdentityError(f"{label} must be owner-controlled")
+
+
 def _git(root: Path, *args: str, text: bool = True) -> str | bytes:
     try:
         result = subprocess.run(  # noqa: S603
@@ -109,6 +122,7 @@ def verify_transition(root: Path, transition: dict[str, Any]) -> dict[str, str]:
 def _transition_path(value: Path, workspace: Path) -> Path:
     """Resolve a transition only from a non-aliased file under workspace."""
     root = workspace.resolve()
+    _require_owner_controlled(root, label="workspace", directory=True)
     original = root / value if not value.is_absolute() else value
     # Inspect the lexical path before resolving it.  Resolving first would
     # erase an in-workspace symlink component and make the path identity
@@ -118,10 +132,13 @@ def _transition_path(value: Path, workspace: Path) -> Path:
     except ValueError as error:
         raise ReleaseIdentityError("transition path escapes workspace") from error
     current = root
-    for component in lexical_relative.parts:
+    components = lexical_relative.parts
+    for index, component in enumerate(components):
         current /= component
         if current.is_symlink():
             raise ReleaseIdentityError("transition path must be a regular workspace file")
+        if index < len(components) - 1:
+            _require_owner_controlled(current, label="transition parent", directory=True)
     candidate = original.resolve()
     try:
         candidate.relative_to(root)
@@ -129,12 +146,7 @@ def _transition_path(value: Path, workspace: Path) -> Path:
         raise ReleaseIdentityError("transition path escapes workspace") from error
     if original.is_symlink() or not candidate.is_file():
         raise ReleaseIdentityError("transition path must be a regular workspace file")
-    try:
-        file_status = candidate.stat()
-    except OSError as error:
-        raise ReleaseIdentityError("transition path metadata is unavailable") from error
-    if file_status.st_uid != os.geteuid() or stat.S_IMODE(file_status.st_mode) & 0o022:
-        raise ReleaseIdentityError("transition path must be owner-controlled")
+    _require_owner_controlled(candidate, label="transition path")
     return candidate
 
 
