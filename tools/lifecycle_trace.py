@@ -162,7 +162,7 @@ def _validate_event_schema(events: tuple[LifecycleEvent, ...]) -> None:
             )
         ):
             raise ValueError("lifecycle trace identity is invalid")
-        if event.terminal_target not in (None, "new", "old"):
+        if event.terminal_target not in (None, "new", "rollback"):
             raise ValueError("lifecycle trace terminal target is invalid")
         if event.phase not in ("reopen", "rollback_released") and event.terminal_target is not None:
             raise ValueError("lifecycle trace terminal target is premature")
@@ -235,7 +235,7 @@ def validate_terminal_outcome(
         and phases[:3] == ("acquire", "quiesce", "backup")
         and phases[-3:] == ("rollback_started", "rollback_verified", "rollback_released")
     ):
-        if terminal.terminal_target != "old":
+        if terminal.terminal_target != "rollback":
             raise ValueError("rollback terminal outcome has wrong target")
-        return "old"
+        return "rollback"
     raise ValueError("lifecycle trace terminal outcome is incomplete")
