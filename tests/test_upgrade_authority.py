@@ -18,6 +18,7 @@ import time
 import unittest
 from contextlib import contextmanager
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import MagicMock, patch
 
@@ -753,6 +754,131 @@ class RuntimeSelectorTests(unittest.TestCase):
                     after_previous_release="old",
                 )
             self.assertFalse(temporary.exists())
+
+    def test_selector_recovery_rechecks_selector_after_cleanup(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "selector.json"
+            commit_runtime_selector(path, "old", "older")
+            with (
+                patch.object(
+                    upgrade_authority,
+                    "_read_runtime_selector_at",
+                    return_value={"active_release": "new", "previous_release": "old"},
+                ),
+                self.assertRaisesRegex(AuthorityError, "changed during reconciliation"),
+            ):
+                reconcile_runtime_selector(
+                    path,
+                    before_active_release="old",
+                    before_previous_release="older",
+                    after_active_release="new",
+                    after_previous_release="old",
+                )
+
+    def test_selector_descriptor_reader_rejects_boundary_failures(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            parent = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                with self.assertRaisesRegex(AuthorityError, "unavailable"):
+                    upgrade_authority._read_runtime_selector_at(parent, "missing.json")
+                target = root / "selector.json"
+                target.write_text("{}\n", encoding="utf-8")
+                target.chmod(0o600)
+                with self.assertRaisesRegex(AuthorityError, "schema is invalid"):
+                    upgrade_authority._read_runtime_selector_at(parent, "selector.json")
+                target.unlink()
+                target.mkdir(mode=0o700)
+                with self.assertRaisesRegex(AuthorityError, "descriptor is unsafe"):
+                    upgrade_authority._read_runtime_selector_at(parent, "selector.json")
+                target.rmdir()
+                target.write_text("{\n", encoding="utf-8")
+                target.chmod(0o600)
+                with self.assertRaisesRegex(AuthorityError, "unreadable"):
+                    upgrade_authority._read_runtime_selector_at(parent, "selector.json")
+                target.write_text(
+                    '{"schema_version":1,"active_release":"bad value",'
+                    '"previous_release":"older"}\n',
+                    encoding="utf-8",
+                )
+                with self.assertRaisesRegex(AuthorityError, "identity is invalid"):
+                    upgrade_authority._read_runtime_selector_at(parent, "selector.json")
+                target.unlink()
+                target.symlink_to(root / "other")
+                (root / "other").write_text("{}\n", encoding="utf-8")
+                with self.assertRaisesRegex(AuthorityError, "descriptor is unsafe"):
+                    upgrade_authority._read_runtime_selector_at(parent, "selector.json")
+                target.unlink()
+                target.write_text("{}\n", encoding="utf-8")
+                target.chmod(0o600)
+                target.write_text("x" * (64 * 1024 + 1), encoding="utf-8")
+                with self.assertRaisesRegex(AuthorityError, "too large"):
+                    upgrade_authority._read_runtime_selector_at(parent, "selector.json")
+                target.write_text(
+                    '{"schema_version":1,"active_release":"old","previous_release":"older"}\n',
+                    encoding="utf-8",
+                )
+                descriptor = os.open(target, os.O_RDONLY | os.O_NOFOLLOW)
+                try:
+                    status = os.fstat(descriptor)
+                    altered = SimpleNamespace(
+                        st_dev=status.st_dev,
+                        st_ino=status.st_ino + 1,
+                        st_mode=status.st_mode,
+                        st_nlink=status.st_nlink,
+                    )
+                finally:
+                    os.close(descriptor)
+                with (
+                    patch(
+                        "tools.upgrade_authority.os.fstat",
+                        side_effect=[status, altered],
+                    ),
+                    self.assertRaisesRegex(AuthorityError, "identity changed"),
+                ):
+                    upgrade_authority._read_runtime_selector_at(parent, "selector.json")
+            finally:
+                os.close(parent)
+
+    def test_selector_recovery_rejects_same_pair_parent_swap(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            parent = root / "runtime"
+            parent.mkdir(mode=0o700)
+            path = parent / "selector.json"
+            commit_runtime_selector(path, "old", "older")
+            displaced = root / "displaced"
+            original = upgrade_authority._recheck_parent
+            calls = 0
+
+            def swap_after_first_recheck(selector: Path, identity: tuple[int, int]) -> None:
+                nonlocal calls
+                calls += 1
+                original(selector, identity)
+                if calls != 1:
+                    return
+                parent.rename(displaced)
+                parent.mkdir(mode=0o700)
+                commit_runtime_selector(parent / "selector.json", "old", "older")
+
+            with (
+                patch.object(
+                    upgrade_authority,
+                    "_recheck_parent",
+                    side_effect=swap_after_first_recheck,
+                ),
+                self.assertRaisesRegex(AuthorityError, "parent identity changed"),
+            ):
+                reconcile_runtime_selector(
+                    path,
+                    before_active_release="old",
+                    before_previous_release="older",
+                    after_active_release="new",
+                    after_previous_release="old",
+                )
+            self.assertEqual(
+                "old", read_runtime_selector(displaced / "selector.json")["active_release"]
+            )
 
     def test_selector_recovery_rejects_real_parent_swap_after_cleanup(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
