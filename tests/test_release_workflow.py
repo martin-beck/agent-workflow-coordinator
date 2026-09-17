@@ -36,6 +36,7 @@ def test_release_signer_template_is_self_test_only() -> None:
     assert "sign" in template.lower()
     assert "git push" not in template
     assert "contract self-test passed" in template
+    assert 'echo "release signer contract self-test passed"' in template
     assert "echo \"release signer contract ready:" not in template
 
 
