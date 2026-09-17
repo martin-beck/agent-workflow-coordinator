@@ -156,6 +156,8 @@ class ResolvedRuntime:
             self.identity.identity, ExpectedRuntimeIdentity
         ):
             raise AuthorityError("resolved runtime identity is unavailable")
+        if not isinstance(self.identity.digest, str):
+            raise AuthorityError("resolved runtime digest is unavailable")
         manifest = read_runtime_manifest(self.path)
         identity = ExpectedRuntimeIdentity(
             manifest["source_commit"],
