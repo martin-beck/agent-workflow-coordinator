@@ -64,6 +64,11 @@ class UpgradeRunbookTests(unittest.TestCase):
         workflow = (
             Path(__file__).resolve().parents[1] / ".github/workflows/release.yml"
         ).read_text(encoding="utf-8")
+        self.assertIn(
+            'if [[ ! "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]]; then',
+            workflow,
+        )
+        self.assertIn('echo "GITHUB_SHA is not a 40-hex source identity"', workflow)
         self.assertIn("printf '%s\\n' \"$GITHUB_SHA\"", workflow)
         self.assertIn(
             "sha256sum release-contract.json release-runbooks/operator.md "
