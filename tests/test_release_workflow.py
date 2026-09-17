@@ -2,6 +2,9 @@
 # SPDX-License-Identifier: MIT
 """Contract checks for the non-publishing release signer readiness gate."""
 
+import shlex
+import subprocess
+import tempfile
 from pathlib import Path
 
 WORKFLOW = (Path(__file__).parents[1] / ".github/workflows/release.yml").read_text(encoding="utf-8")
@@ -60,3 +63,42 @@ def test_signer_probe_precedes_release_contract_generation() -> None:
     assert WORKFLOW.index("Render and self-test release signer") > WORKFLOW.index(
         "Generate and validate release contract"
     )
+
+
+def test_rendered_signer_self_test_is_fixed_and_private_data_free() -> None:
+    template = (Path(__file__).parents[1] / "docs/templates/awc-sign-release.sh.in").read_text(
+        encoding="utf-8"
+    )
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        policy = root / "allowed-signers"
+        policy.write_text("authorized@example.invalid ssh-ed25519 AAAA\n", encoding="utf-8")
+        values = {
+            "@RELEASE_VERSION@": "v9.9.9",
+            "@SOURCE_COMMIT@": "a" * 40,
+            "@REPOSITORY@": str(root),
+            "@FROM_TAG@": "refs/tags/v9.9.8",
+            "@TO_TAG@": "refs/tags/v9.9.9",
+            "@TRUST_POLICY@": "b" * 64,
+            "@VENDOR_MANIFEST@": "c" * 64,
+            "@OUTPUT@": str(root / "out.json"),
+            "@SIGNING_KEY_REF@": str(root / "release.pub"),
+            "@SIGNING_POLICY_REF@": str(policy),
+            "@SIGNING_IDENTITY@": "authorized@example.invalid",
+            "@SIGNING_KEY_FINGERPRINT@": "SHA256:authorized",
+            "@SIGNING_POLICY_DIGEST@": "d" * 64,
+        }
+        for placeholder, value in values.items():
+            template = template.replace(placeholder, shlex.quote(value))
+        script = root / "signer.sh"
+        script.write_text(template, encoding="utf-8")
+        script.chmod(0o700)
+        result = subprocess.run(  # noqa: S603
+            [str(script), "--self-test"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        assert result.stdout == "release signer contract self-test passed\n"
+        assert "v9.9.9" not in result.stdout
+        assert str(root) not in result.stdout
