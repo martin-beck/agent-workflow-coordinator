@@ -26,7 +26,7 @@ jobs:
           test -n "$TRANSITION"
           case "$TRANSITION" in /*|*..*) exit 1;; esac
           uv run python -m tools.verify_release_identity "$TRANSITION" \
-            --repository "$GITHUB_WORKSPACE" --workspace "$GITHUB_WORKSPACE"
+            --repository "$GITHUB_WORKSPACE" --workspace "$GITHUB_WORKSPACE" --candidate
           uv run python -m tools.verify_release_contract "$TRANSITION" "$RUNNER_TEMP/release-contract.json"
           uv run python -m tools.generate_upgrade_runbook \
             "$RUNNER_TEMP/release-contract.json" "$RUNNER_TEMP/release-runbooks"
@@ -39,7 +39,7 @@ jobs:
           git clone --no-local --no-hardlinks "$GITHUB_WORKSPACE" "$RUNNER_TEMP/release-clone"
           uv run --directory "$RUNNER_TEMP/release-clone" python -m tools.verify_release_identity \
             "$TRANSITION" --repository "$RUNNER_TEMP/release-clone" \
-            --workspace "$RUNNER_TEMP/release-clone"
+            --workspace "$RUNNER_TEMP/release-clone" --candidate
           uv run --directory "$RUNNER_TEMP/release-clone" python -m tools.verify_release_contract \
             "$TRANSITION" "$RUNNER_TEMP/release-clone/release-contract.json"
           uv run --directory "$RUNNER_TEMP/release-clone" python -m tools.generate_upgrade_runbook \
