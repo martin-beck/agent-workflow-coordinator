@@ -67,14 +67,16 @@ def check_bounded_model() -> dict[str, int]:
             if (
                 candidate.open_stage is not None
                 and candidate.open_stage != STAGES[len(candidate.completed)]
-            ):
+            ):  # pragma: no cover - defensive invariant
                 raise AssertionError("open gate skipped the ordered lifecycle")
             if len(candidate.completed) > len(STAGES):
-                raise AssertionError("completed gate sequence exceeded bound")
+                raise AssertionError("completed gate sequence exceeded bound")  # pragma: no cover
             next_states.add(candidate)
         states = next_states
     if hostile == 0 or accepted == 0:
-        raise AssertionError("bounded model did not cover accepted and hostile traces")
+        raise AssertionError(
+            "bounded model did not cover accepted and hostile traces"
+        )  # pragma: no cover
     return {"states": len(states), "accepted": accepted, "rejected": rejected, "hostile": hostile}
 
 

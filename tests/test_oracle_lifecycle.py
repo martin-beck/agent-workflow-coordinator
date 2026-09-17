@@ -72,6 +72,8 @@ class OracleLifecycleTests(unittest.TestCase):
     def test_public_safe_artifacts_and_event_shape_are_fail_closed(self) -> None:
         with self.assertRaisesRegex(GateError, "public-safe"):
             ArtifactRef("/private/plan", "sha256:" + "a" * 64)
+        with self.assertRaisesRegex(GateError, "public-safe"):
+            ArtifactRef("plan/../private", "sha256:" + "a" * 64)
         self.assertEqual([], gate_errors(None))
         malformed = {
             "required": True,
@@ -105,6 +107,10 @@ class OracleLifecycleTests(unittest.TestCase):
         with self.assertRaisesRegex(GateError, "stage"):
             InteractionEvent.from_record(malformed)
         malformed = dict(valid)
+        malformed["before"] = "not-a-list"
+        with self.assertRaisesRegex(GateError, "must be a list"):
+            InteractionEvent.from_record(malformed)
+        malformed = dict(valid)
         for field in ("before", "after"):
             malformed = dict(valid)
             malformed[field] = [{"ref": "plan/x"}]
@@ -122,11 +128,36 @@ class OracleLifecycleTests(unittest.TestCase):
             malformed[field] = value
             with self.subTest(field=field), self.assertRaises(GateError):
                 InteractionEvent.from_record(malformed)
+        with self.assertRaisesRegex(GateError, "requires before and after"):
+            InteractionEvent(
+                task_id="AR-0022",
+                task_revision=1,
+                stage=GateStage.INTAKE,
+                action="open",
+                disposition="accepted",
+                before=(),
+                after=(ArtifactRef("plan/after", "sha256:" + "b" * 64),),
+                public_ref="oracle/decision-1",
+                recorded_at="2026-09-17T00:00:00+00:00",
+            )
+        with self.assertRaisesRegex(GateError, "recorded_at is invalid"):
+            InteractionEvent(
+                task_id="AR-0022",
+                task_revision=1,
+                stage=GateStage.INTAKE,
+                action="open",
+                disposition="accepted",
+                before=(ArtifactRef("plan/before", "sha256:" + "a" * 64),),
+                after=(ArtifactRef("plan/after", "sha256:" + "b" * 64),),
+                public_ref="oracle/decision-1",
+                recorded_at="not-a-timestamp",
+            )
 
     def test_gate_validation_and_transition_reject_invalid_shapes(self) -> None:
         cases: list[Any] = [
             [],
             {"required": False},
+            {"required": False, "open_stage": None, "completed": [], "events": []},
             {"required": True, "open_stage": "bad", "completed": [], "events": []},
             {"required": True, "open_stage": None, "completed": ["bad"], "events": []},
             {"required": True, "open_stage": None, "completed": [], "events": [object()]},
@@ -152,6 +183,25 @@ class OracleLifecycleTests(unittest.TestCase):
                         "open_stage": "intake",
                         "completed": [],
                         "events": [],
+                    },
+                },
+                event(1, GateStage.INTAKE, "open", "accepted"),
+            )
+        with self.assertRaisesRegex(GateError, "does not match task"):
+            apply_event(
+                {"id": "AR-0099", "task_revision": 1},
+                event(1, GateStage.INTAKE, "open", "accepted"),
+            )
+        with self.assertRaisesRegex(GateError, "invalid"):
+            apply_event(
+                {
+                    "id": "AR-0022",
+                    "task_revision": 1,
+                    "oracle_gate": {
+                        "required": True,
+                        "open_stage": None,
+                        "completed": [],
+                        "events": [{"bad": True}],
                     },
                 },
                 event(1, GateStage.INTAKE, "open", "accepted"),

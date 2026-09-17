@@ -1543,10 +1543,14 @@ def _artifact_values(values: list[str], label: str) -> tuple[ArtifactRef, ...]:
 def apply_gate(args: argparse.Namespace, meta: Meta) -> str:
     """Record one typed interaction event as the task's next revision."""
     try:
+        try:
+            stage = GateStage(str(args.stage))
+        except ValueError as error:
+            raise GateError("unknown interaction gate stage") from error
         event = InteractionEvent(
             task_id=str(meta["id"]),
             task_revision=int(args.expected_revision),
-            stage=GateStage(str(args.stage)),
+            stage=stage,
             action=str(args.action),
             disposition=str(args.disposition),
             before=_artifact_values(args.before, "--before"),
