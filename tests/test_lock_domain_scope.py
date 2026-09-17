@@ -532,6 +532,14 @@ class LockDomainScopeTests(unittest.TestCase):
             )
             with self.assertRaisesRegex(ValueError, "theorem FunctionalAvailability"):
                 validate_model_action_contract(root)
+            complete_without_backup_theorem = complete_without_availability_theorem + (
+                "\nTHEOREM Spec => []FunctionalAvailability\n"
+            )
+            (root / "formal/upgrade/UpgradeRecovery.tla").write_text(
+                complete_without_backup_theorem, encoding="utf-8"
+            )
+            with self.assertRaisesRegex(ValueError, "theorem NoReplacementBeforeBackup"):
+                validate_model_action_contract(root)
 
     def test_terminal_recovery_contract_binds_barrier_model(self) -> None:
         validate_terminal_recovery_contract(Path(__file__).resolve().parents[1])

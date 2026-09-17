@@ -74,6 +74,8 @@ def validate_model_action_contract(root: Path) -> None:
         missing.append("theorem TypeInvariant")
     if "THEOREM Spec => []FunctionalAvailability" not in text:
         missing.append("theorem FunctionalAvailability")
+    if "THEOREM Spec => []NoReplacementBeforeBackup" not in text:
+        missing.append("theorem NoReplacementBeforeBackup")
     if missing:
         raise ValueError(f"model actions are missing: {', '.join(missing)}")
 
