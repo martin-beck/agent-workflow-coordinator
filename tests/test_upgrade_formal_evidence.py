@@ -8,8 +8,12 @@ from __future__ import annotations
 import hashlib
 import json
 import subprocess
+import tempfile
 import unittest
 from pathlib import Path
+from typing import cast
+
+from tools.update_upgrade_evidence import refresh
 
 ROOT = Path(__file__).resolve().parents[1]
 EVIDENCE = ROOT / "formal" / "upgrade" / "evidence.json"
@@ -17,6 +21,41 @@ CONTRACT = ROOT / "formal" / "upgrade" / "v10-refinement-contract.json"
 
 
 class UpgradeFormalEvidenceTests(unittest.TestCase):
+    def test_evidence_generator_refreshes_declared_file_digests(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            evidence_path = root / "formal/upgrade/evidence.json"
+            evidence_path.parent.mkdir(parents=True)
+            tracked = root / "tracked.py"
+            tracked.write_bytes(b"current\n")
+            evidence_path.write_text(
+                json.dumps({"implementation_snapshot": {"files": {"tracked.py": "old"}}}),
+                encoding="utf-8",
+            )
+            refreshed = refresh(root)
+            expected = hashlib.sha256(tracked.read_bytes()).hexdigest()
+            snapshot = cast(dict[str, object], refreshed["implementation_snapshot"])
+            files = cast(dict[str, str], snapshot["files"])
+            self.assertEqual(expected, files["tracked.py"])
+            self.assertEqual(
+                expected,
+                json.loads(evidence_path.read_text())["implementation_snapshot"]["files"][
+                    "tracked.py"
+                ],
+            )
+
+    def test_evidence_generator_rejects_missing_declared_file(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            evidence_path = root / "formal/upgrade/evidence.json"
+            evidence_path.parent.mkdir(parents=True)
+            evidence_path.write_text(
+                json.dumps({"implementation_snapshot": {"files": {"missing.py": "old"}}}),
+                encoding="utf-8",
+            )
+            with self.assertRaises(FileNotFoundError):
+                refresh(root)
+
     def test_bound_rollback_inspection_evidence_maps_existing_tests_without_refinement_claim(
         self,
     ) -> None:
