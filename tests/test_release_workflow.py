@@ -12,7 +12,10 @@ def test_release_workflow_probes_external_signer_without_publishing() -> None:
     assert "awc-sign-release.sh" in WORKFLOW
     assert '"$signer_dir/awc-sign-release.sh" --self-test' in WORKFLOW
     assert "GITHUB_STEP_SUMMARY" in WORKFLOW
-    assert "ephemeral self-test only" in WORKFLOW
+    assert "self-test only, no signing or publication" in WORKFLOW
+    assert 'chmod 700 "$signer_dir"' in WORKFLOW
+    assert "retained for this job" in WORKFLOW
+    assert "trap 'rm -rf" not in WORKFLOW
     assert '"@SOURCE_COMMIT@": transition["to"]["source_commit"]' in WORKFLOW
     assert 'transition_path.read_text(encoding="utf-8")' in WORKFLOW
     assert "no signing or publication" in WORKFLOW
