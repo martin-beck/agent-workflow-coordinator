@@ -4,7 +4,6 @@
 
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[1]
 MODEL = (ROOT / "formal/oracle/OracleInteractionGates.tla").read_text(encoding="utf-8")
 CONFIG = (ROOT / "formal/oracle/OracleInteractionGates.cfg").read_text(encoding="utf-8")
