@@ -792,6 +792,11 @@ class RollbackControlStoreTests(unittest.TestCase):
             self.assertIsNotNone(recovered)
             assert recovered is not None
             self.assertEqual(("ambiguous", 4), (recovered.status, recovered.revision))
+            reopened = SQLiteBarrierSessionStore(
+                SQLiteRollbackControlStore(control_path, PROJECT, authority_path),
+                lambda: "authority-3",
+            )
+            self.assertEqual(recovered, reopened.snapshot())
             self.assertEqual(authority_bytes, authority_path.read_bytes())
 
     def test_v10_subprocess_after_outcome_publication_reopens_releasing(self) -> None:
