@@ -20,6 +20,7 @@ def test_release_workflow_probes_external_signer_without_publishing() -> None:
     assert "--barrier-id" in WORKFLOW
     assert "--fencing-token" in WORKFLOW
     assert "--operation-id" in WORKFLOW
+    assert "--candidate" in WORKFLOW
     assert "--trust-policy-sha256" in WORKFLOW
     assert "--vendor-manifest-sha256" in WORKFLOW
     assert 'transition_path.read_text(encoding="utf-8")' in WORKFLOW

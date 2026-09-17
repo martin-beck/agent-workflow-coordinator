@@ -105,14 +105,26 @@ def _release_identity(root: Path, release: dict[str, Any]) -> None:
         raise ReleaseIdentityError(f"release {version} signature does not match transition")
 
 
-def verify_transition(root: Path, transition: dict[str, Any]) -> dict[str, str]:
+def verify_transition(
+    root: Path, transition: dict[str, Any], *, candidate: bool = False
+) -> dict[str, str]:
     """Verify both immutable release identities in a typed transition."""
     try:
         _validate_transition(transition)
     except ContractError as error:
         raise ReleaseIdentityError(str(error)) from error
     _release_identity(root, transition["from"])
-    _release_identity(root, transition["to"])
+    if candidate:
+        target = transition["to"]
+        if (
+            not _OID.fullmatch(str(target.get("source_commit")))
+            or str(_git(root, "rev-parse", "HEAD")) != target["source_commit"]
+        ):
+            raise ReleaseIdentityError("candidate source commit does not match checked-out HEAD")
+        if _git(root, "tag", "--list", str(target["version"])):
+            raise ReleaseIdentityError("candidate target tag already exists")
+    else:
+        _release_identity(root, transition["to"])
     return {
         "status": "pass",
         "from": transition["from"]["version"],
@@ -161,11 +173,19 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("transition", type=Path)
     parser.add_argument("--repository", type=Path, default=Path.cwd())
     parser.add_argument("--workspace", type=Path, default=Path.cwd())
+    parser.add_argument(
+        "--candidate", action="store_true", help="validate an unsigned target candidate"
+    )
     args = parser.parse_args(argv)
     try:
         transition_file = _transition_path(args.transition, args.workspace)
         transition = json.loads(transition_file.read_text(encoding="utf-8"))
-        print(json.dumps(verify_transition(args.repository, transition), sort_keys=True))
+        print(
+            json.dumps(
+                verify_transition(args.repository, transition, candidate=args.candidate),
+                sort_keys=True,
+            )
+        )
     except (OSError, ValueError, json.JSONDecodeError) as error:
         print(f"invalid release identity: {error}", file=sys.stderr)
         return 1
