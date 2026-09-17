@@ -53,10 +53,10 @@ class DiscussionSessionTests(unittest.TestCase):
         )
         for key, value, message in cases:
             with self.subTest(key=key), self.assertRaisesRegex(SessionError, message):
-                cast(Any, SessionEvent)(**{**valid, key: value})
+                SessionEvent(**cast(dict[str, Any], {**valid, key: value}))
 
         with self.assertRaisesRegex(SessionError, "public-safe"):
-            cast(Any, SessionEvent)(**{**valid, "response_ref": "/private"})
+            SessionEvent(**cast(dict[str, Any], {**valid, "response_ref": "/private"}))
 
     def test_bounded_model_covers_hostile_and_accepted_session_traces(self) -> None:
         result = check_bounded_model()

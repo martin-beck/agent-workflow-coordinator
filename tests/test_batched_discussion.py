@@ -93,7 +93,7 @@ class BatchedDiscussionTests(unittest.TestCase):
             ("response_ref", "../private", "public-safe"),
         ):
             with self.subTest(key=key), self.assertRaisesRegex(BatchError, message):
-                cast(Any, BatchEvent)(**{**base, key: value})
+                BatchEvent(**cast(dict[str, Any], {**base, key: value}))
         with self.assertRaisesRegex(BatchError, "identity"):
             BatchState("bad", 1, "session-1", "awg/packet-1", (BatchPoint("p", "a"),))
         with self.assertRaisesRegex(BatchError, "unique"):

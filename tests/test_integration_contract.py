@@ -22,19 +22,22 @@ def evidence(project: str, kind: EvidenceKind) -> Evidence:
 class IntegrationContractTests(unittest.TestCase):
     def test_evidence_and_contract_identity_inputs_fail_closed(self) -> None:
         digest = "sha256:" + "a" * 64
-        for evidence_args, message in (
+        for args, message in (
             (("guidance", "bad", "guidance/evidence/1", digest, 7), "kind"),
             (("guidance", EvidenceKind.GUIDANCE, "../private", digest, 7), "public-safe"),
             (("guidance", EvidenceKind.GUIDANCE, "guidance/evidence/1", "bad", 7), "digest"),
             (("guidance", EvidenceKind.GUIDANCE, "guidance/evidence/1", digest, 0), "positive"),
         ):
-            with (
-                self.subTest(args=evidence_args),
-                self.assertRaisesRegex(IntegrationError, message),
-            ):
-                cast(Any, Evidence)(*evidence_args)
+            with self.subTest(args=args), self.assertRaisesRegex(IntegrationError, message):
+                Evidence(
+                    args[0],
+                    cast(EvidenceKind, args[1]),
+                    args[2],
+                    args[3],
+                    args[4],
+                )
 
-        base: tuple[object, ...] = (
+        base = (
             evidence("guidance", EvidenceKind.GUIDANCE),
             evidence("quality", EvidenceKind.QUALITY),
             evidence("quality", EvidenceKind.FORMAL),
@@ -45,7 +48,14 @@ class IntegrationContractTests(unittest.TestCase):
             (("AR-0025", 7, *base, "../event"), "public-safe"),
         ):
             with self.subTest(message=message), self.assertRaisesRegex(IntegrationError, message):
-                IntegrationContract(*cast(tuple[Any, ...], contract_args))
+                IntegrationContract(
+                    contract_args[0],
+                    contract_args[1],
+                    contract_args[2],
+                    contract_args[3],
+                    contract_args[4],
+                    contract_args[5],
+                )
 
     def test_complete_contract_is_digestable_and_has_single_authority(self) -> None:
         contract = IntegrationContract(
