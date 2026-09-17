@@ -13,6 +13,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from tools.runtime_bootstrap import (
+    DispatchAdmission,
     ExpectedRuntimeIdentity,
     VerifiedManifest,
     read_runtime_manifest,
@@ -193,6 +194,28 @@ class RuntimeBootstrapTests(unittest.TestCase):
                 )
                 with self.assertRaisesRegex(AuthorityError, "identity is not bound"):
                     admission.validate_identity(wrong)
+                self.assertEqual(-1, resolved.descriptor)
+
+    def test_dispatch_admission_rejects_forged_constructor_pair(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            releases = root / "releases"
+            releases.mkdir(mode=0o700)
+            selected = releases / "v1.2.3"
+            selected.mkdir(mode=0o700)
+            self._write_manifest(selected)
+            selector = root / "runtime-selector.json"
+            commit_runtime_selector(selector, "v1.2.3", "v1.2.2")
+            with resolve_selected_runtime_bound(
+                selector, releases, self._identity_for_release(), self._verifier
+            ) as resolved:
+                forged = VerifiedManifest(
+                    resolved.identity.release,
+                    resolved.identity.identity,
+                    resolved.identity.digest,
+                )
+                with self.assertRaisesRegex(AuthorityError, "identity is not bound"):
+                    DispatchAdmission(resolved, forged)
                 self.assertEqual(-1, resolved.descriptor)
 
     def test_dispatch_admission_rejects_malformed_identity_evidence(self) -> None:
