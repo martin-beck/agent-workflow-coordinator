@@ -59,8 +59,10 @@ Blocked(p) == operation[p] \in {"claim", "run", "release"} /\ openStage # "none"
     /\ result' = [result EXCEPT ![p] = "rejected"]
     /\ UNCHANGED <<revision, completed, openStage, operation, requestedStage,
                     expectedRevision, disposition>>
+Idle(p) == openStage = "none" /\ operation[p] = "claim"
+    /\ UNCHANGED vars
 Step(p) == Hostile(p) \/ Stale(p) \/ Open(p) \/ ResolveAccepted(p)
-    \/ ResolveUnresolved(p) \/ Blocked(p)
+    \/ ResolveUnresolved(p) \/ Blocked(p) \/ Idle(p)
 Next == revision < MaxRevision /\ (\E p \in Processes: Step(p))
 Spec == Init /\ [][Next]_vars
 TypeOK == revision \in 1..MaxRevision /\ completed \in Seq(StageSet)

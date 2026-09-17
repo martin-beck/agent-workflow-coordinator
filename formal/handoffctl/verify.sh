@@ -27,16 +27,18 @@ printf '%s  %s\n' "${TLA_SHA256}" "${JAR}" | sha256sum --check --strict
 run_model() {
     local model="$1"
     local source="${2:-${model}}"
+    local config="${SPEC_DIR}/${model}.cfg"
     # The fast tier has its own reduced configuration over the binding spec.
     if [[ "${model}" == "HandoffctlFast" ]]; then
         source=HandoffctlBinding
     elif [[ "${model}" == "OracleInteractionGates" ]]; then
         source=../oracle/OracleInteractionGates
+        config="${SPEC_DIR}/../oracle/OracleInteractionGates.cfg"
     fi
     python3 "${SPEC_DIR}/../../tools/tlc_runner.py" \
         --jar "${JAR}" \
         --model "${SPEC_DIR}/${source}.tla" \
-        --config "${SPEC_DIR}/${model}.cfg" \
+        --config "${config}" \
         --metadir "${TEMP_DIR}/${model}-states"
     printf "%s success\n" "${model}" >> "${MANIFEST}"
 }
