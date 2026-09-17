@@ -14,7 +14,7 @@ def test_release_workflow_probes_external_signer_without_publishing() -> None:
     assert "GITHUB_STEP_SUMMARY" in WORKFLOW
     assert "ephemeral self-test only" in WORKFLOW
     assert '"@SOURCE_COMMIT@": transition["to"]["source_commit"]' in WORKFLOW
-    assert "do not sign" in WORKFLOW
+    assert "no signing or publication" in WORKFLOW
     assert "do not" in WORKFLOW
 
 
@@ -42,6 +42,6 @@ def test_release_signer_template_is_self_test_only() -> None:
 
 
 def test_signer_probe_precedes_release_contract_generation() -> None:
-    assert WORKFLOW.index("Check authorized release signer") < WORKFLOW.index(
+    assert WORKFLOW.index("Render and self-test release signer") > WORKFLOW.index(
         "Generate and validate release contract"
     )
