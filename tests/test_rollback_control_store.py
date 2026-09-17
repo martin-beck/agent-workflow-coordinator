@@ -2784,16 +2784,15 @@ class RollbackControlStoreTests(unittest.TestCase):
             path = Path(directory) / "control.sqlite"
             first = SQLiteRollbackControlStore(path, PROJECT)
             second = SQLiteRollbackControlStore(path, PROJECT)
+            clock = MagicMock()
+            clock.monotonic.side_effect = (0.0, 9.99, 10.0)
             with (
                 first._control_lock(),
-                patch(
-                    "tools.rollback_control_store.time.monotonic",
-                    side_effect=(0.0, 0.0, 9.99, 10.0),
-                ),
-                patch("tools.rollback_control_store.time.sleep") as sleep,
+                patch("tools.rollback_control_store.time", clock),
                 self.assertRaises(ControlStoreError),
             ):
                 second.cas(0, RECORD)
+            sleep = clock.sleep
             self.assertEqual(sleep.call_count, 1)
             self.assertGreater(sleep.call_args_list[-1].args[0], 0)
             self.assertLess(sleep.call_args_list[-1].args[0], 0.05)
