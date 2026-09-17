@@ -70,6 +70,9 @@ jobs:
           for artifact in release-contract.json release-runbooks/operator.md release-runbooks/agent.md; do
             test -f "$RUNNER_TEMP/$artifact"
             test ! -L "$RUNNER_TEMP/$artifact"
+            test "$(stat -c '%u' "$RUNNER_TEMP/$artifact")" = "$(id -u)"
+            artifact_mode="$(stat -c '%a' "$RUNNER_TEMP/$artifact")"
+            (( (8#$artifact_mode & 022) == 0 ))
           done
           printf '%s\n' "$GITHUB_SHA" > "$RUNNER_TEMP/release-source-commit.txt"
           test -s "$RUNNER_TEMP/release-source-commit.txt"

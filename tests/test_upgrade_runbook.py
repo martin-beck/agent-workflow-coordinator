@@ -86,6 +86,12 @@ class UpgradeRunbookTests(unittest.TestCase):
         )
         self.assertIn('test -f "$RUNNER_TEMP/$artifact"', workflow)
         self.assertIn('test ! -L "$RUNNER_TEMP/$artifact"', workflow)
+        self.assertIn(
+            'test "$(stat -c \'%u\' "$RUNNER_TEMP/$artifact")" = "$(id -u)"',
+            workflow,
+        )
+        self.assertIn('artifact_mode="$(stat -c \'%a\' "$RUNNER_TEMP/$artifact")"', workflow)
+        self.assertIn("(( (8#$artifact_mode & 022) == 0 ))", workflow)
         self.assertIn('test -s "$RUNNER_TEMP/release-source-commit.txt"', workflow)
         self.assertIn(
             'test "$(wc -l < "$RUNNER_TEMP/release-source-commit.txt")" -eq 1',
