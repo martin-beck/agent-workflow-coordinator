@@ -23,9 +23,17 @@ jobs:
         run: |
           # This gate only probes the externally managed signer. It never signs,
           # creates tags, pushes refs, or publishes a release.
-          signer_path="${AWC_RELEASE_SIGNER_PATH:-/home/martin/bin/awc-sign-release.sh}"
+          signer_path="${AWC_RELEASE_SIGNER_PATH:?set AWC_RELEASE_SIGNER_PATH to an authorized external signer}"
           test -x "$signer_path"
           "$signer_path" --self-test
+      - name: Render release signer contract (non-publishing)
+        env:
+          RELEASE_VERSION: ${{ github.ref_name }}
+        run: |
+          sed "s/@RELEASE_VERSION@/${RELEASE_VERSION}/g; s/@SOURCE_COMMIT@/${GITHUB_SHA}/g" \
+            docs/templates/awc-sign-release.sh.in > "$RUNNER_TEMP/awc-sign-release.sh"
+          chmod 700 "$RUNNER_TEMP/awc-sign-release.sh"
+          "$RUNNER_TEMP/awc-sign-release.sh" --self-test
       - name: Generate and validate release contract
         env:
           TRANSITION: ${{ inputs.transition }}
@@ -106,4 +114,5 @@ jobs:
             ${{ runner.temp }}/release-runbooks
             ${{ runner.temp }}/release-source-commit.txt
             ${{ runner.temp }}/release-artifacts.sha256
+            ${{ runner.temp }}/awc-sign-release.sh
           if-no-files-found: error
