@@ -3,7 +3,7 @@
 \* SPDX-License-Identifier: MIT
 EXTENDS Naturals, Sequences
 
-CONSTANTS P1, P2
+CONSTANTS P1, P2, MaxRevision
 
 Stages == <<"intake", "discussion", "formal_spec_review", "reconciliation">>
 StageSet == {"intake", "discussion", "formal_spec_review", "reconciliation"}
@@ -61,16 +61,16 @@ Blocked(p) == operation[p] \in {"claim", "run", "release"} /\ openStage # "none"
                     expectedRevision, disposition>>
 Step(p) == Hostile(p) \/ Stale(p) \/ Open(p) \/ ResolveAccepted(p)
     \/ ResolveUnresolved(p) \/ Blocked(p)
-Next == \E p \in Processes: Step(p)
+Next == revision < MaxRevision /\ (\E p \in Processes: Step(p))
 Spec == Init /\ [][Next]_vars
-TypeOK == revision \in Nat /\ completed \in Seq(StageSet)
+TypeOK == revision \in 1..MaxRevision /\ completed \in Seq(StageSet)
     /\ openStage \in StageSet \cup {"none"}
     /\ operation \in [Processes -> Operations]
     /\ requestedStage \in [Processes -> StageSet \cup {"none"}]
     /\ expectedRevision \in [Processes -> Nat]
     /\ disposition \in [Processes -> Dispositions]
 NoSkippedGate == openStage # "none" => openStage = NextStage
-RevisionMonotonic == revision >= 1
+RevisionMonotonic == revision >= 1 /\ revision <= MaxRevision
 CompletedPrefix == completed = SubSeq(Stages, 1, Len(completed))
 OpenGateBlocksAutonomousWork == openStage # "none" =>
     \A p \in Processes: ~(operation[p] \in {"claim", "run", "release"}

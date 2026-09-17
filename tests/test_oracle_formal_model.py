@@ -23,11 +23,11 @@ def test_oracle_model_checks_completion_prefix_and_reachable_outcomes() -> None:
     assert "ResolveAccepted(p)" in MODEL
     assert "ResolveUnresolved(p)" in MODEL
     assert 'operation\' = [operation EXCEPT ![p] = "resolve"]' in MODEL
-    assert 'operation\' = [operation EXCEPT ![p] =' in MODEL
+    assert "operation' = [operation EXCEPT ![p] =" in MODEL
     assert 'disposition\' = [disposition EXCEPT ![p] = "accepted"]' in MODEL
 
 
 def test_oracle_model_keeps_hostile_and_stale_paths_rejected() -> None:
-    assert "Hostile(p) == operation[p] = \"open\"" in MODEL
+    assert 'Hostile(p) == operation[p] = "open"' in MODEL
     assert 'result\' = [result EXCEPT ![p] = "rejected"]' in MODEL
     assert "Stale(p) == expectedRevision[p] # revision" in MODEL
