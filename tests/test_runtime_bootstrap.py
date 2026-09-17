@@ -10,6 +10,7 @@ import tempfile
 import unittest
 from hashlib import sha256
 from pathlib import Path
+from typing import cast
 from unittest.mock import patch
 
 from tools.runtime_bootstrap import (
@@ -298,8 +299,8 @@ class RuntimeBootstrapTests(unittest.TestCase):
             ) as resolved:
                 resolved.identity = VerifiedManifest(
                     resolved.identity.release,
-                    object(),
-                    resolved.identity.digest,  # type: ignore[arg-type]
+                    cast(ExpectedRuntimeIdentity, object()),
+                    resolved.identity.digest,
                 )
                 with self.assertRaisesRegex(AuthorityError, "identity is unavailable"):
                     resolved.revalidate_manifest()
