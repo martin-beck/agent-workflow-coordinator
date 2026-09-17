@@ -134,7 +134,9 @@ def _validate_event_schema(events: tuple[LifecycleEvent, ...]) -> None:
         raise ValueError("lifecycle trace revision regressed")
 
 
-def validate_model_trace(events: tuple[LifecycleEvent, ...]) -> tuple[str, ...]:
+def validate_model_trace(
+    events: tuple[LifecycleEvent, ...], *, model_root: Path | None = None
+) -> tuple[str, ...]:
     """Map one scope-issued lifecycle trace to UpgradeRecovery actions.
 
     The private issuance token binds every event to the same trusted scope;
@@ -144,6 +146,7 @@ def validate_model_trace(events: tuple[LifecycleEvent, ...]) -> tuple[str, ...]:
         raise ValueError("lifecycle trace must not be empty")
     if any(not isinstance(event, LifecycleEvent) for event in events):
         raise ValueError("lifecycle trace contains an invalid event")
+    validate_model_action_contract(model_root or Path(__file__).resolve().parents[1])
     token = events[0]._token
     if any(event._token is not token for event in events):
         raise ValueError("lifecycle trace mixes scope-issued events")
