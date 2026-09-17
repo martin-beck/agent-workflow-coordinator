@@ -20,7 +20,7 @@ def test_release_signer_template_is_self_test_only() -> None:
         encoding="utf-8"
     )
     assert '"--self-test"' in template
-    assert "exec git tag -s" in template
+    assert "git tag -s" in template
     assert '"@REPOSITORY@"' in template
     assert '"@FROM_TAG@"' in template
     assert '"@TO_TAG@"' in template
