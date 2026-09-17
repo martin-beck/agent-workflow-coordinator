@@ -28,6 +28,7 @@ _TAG_REF = re.compile(r"refs/tags/v[0-9]+\.[0-9]+\.[0-9]+")
 _OID = re.compile(r"[0-9a-f]{40}")
 _BEGIN = b"-----BEGIN SSH SIGNATURE-----"
 _END = b"-----END SSH SIGNATURE-----"
+_MAX_TRANSITION_BYTES = 1024 * 1024
 
 
 class ReleaseIdentityError(ValueError):
@@ -147,6 +148,11 @@ def _transition_path(value: Path, workspace: Path) -> Path:
     if original.is_symlink() or not candidate.is_file():
         raise ReleaseIdentityError("transition path must be a regular workspace file")
     _require_owner_controlled(candidate, label="transition path")
+    try:
+        if candidate.stat().st_size > _MAX_TRANSITION_BYTES:
+            raise ReleaseIdentityError("transition path exceeds size limit")
+    except OSError as error:
+        raise ReleaseIdentityError("transition path metadata is unavailable") from error
     return candidate
 
 
