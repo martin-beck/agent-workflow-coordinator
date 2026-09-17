@@ -258,6 +258,13 @@ class RuntimeBootstrapTests(unittest.TestCase):
                     admission.revalidate()
                 self.assertEqual(-1, resolved.descriptor)
 
+    def test_dispatch_admission_revalidate_rejects_malformed_runtime(self) -> None:
+        admission = object.__new__(DispatchAdmission)
+        object.__setattr__(admission, "runtime", object())
+        object.__setattr__(admission, "identity", object())
+        with self.assertRaisesRegex(AuthorityError, "runtime is not retained"):
+            admission.revalidate()
+
     def test_dispatch_admission_rejects_malformed_identity_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
