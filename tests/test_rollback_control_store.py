@@ -788,6 +788,15 @@ class RollbackControlStoreTests(unittest.TestCase):
                 msg=f"stdout={fresh_stdout}; stderr={fresh_stderr}",
             )
             self.assertEqual("wal", fresh_ready.read_text(encoding="utf-8").strip())
+            child_result = root / "child-result"
+            verifier = multiprocessing.get_context("fork").Process(
+                target=_reopen_ambiguous_child,
+                args=(str(control_path), str(authority_path), str(child_result)),
+            )
+            verifier.start()
+            verifier.join(timeout=10)
+            self.assertEqual(0, verifier.exitcode)
+            self.assertEqual("held:2\n", child_result.read_text(encoding="utf-8"))
 
     def test_v10_subprocess_commit_before_outcome_recovers_ambiguously(self) -> None:
         """Cover post-CAS/pre-outcome death; no authority-fencing claim."""
