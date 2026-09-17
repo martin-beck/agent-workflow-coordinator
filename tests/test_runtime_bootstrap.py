@@ -424,6 +424,13 @@ class RuntimeBootstrapTests(unittest.TestCase):
         with self.assertRaisesRegex(AuthorityError, "path is unavailable"):
             runtime.revalidate()
 
+    def test_resolved_runtime_revalidate_rejects_relative_path(self) -> None:
+        runtime = object.__new__(ResolvedRuntime)
+        object.__setattr__(runtime, "path", Path("relative-runtime"))
+        object.__setattr__(runtime, "descriptor", 0)
+        with self.assertRaisesRegex(AuthorityError, "path is unavailable"):
+            runtime.revalidate()
+
     def test_resolved_runtime_revalidate_rejects_malformed_descriptor(self) -> None:
         runtime = object.__new__(ResolvedRuntime)
         object.__setattr__(runtime, "path", Path())
@@ -433,7 +440,7 @@ class RuntimeBootstrapTests(unittest.TestCase):
 
     def test_resolved_runtime_revalidate_rejects_malformed_directory_identity(self) -> None:
         runtime = object.__new__(ResolvedRuntime)
-        object.__setattr__(runtime, "path", Path())
+        object.__setattr__(runtime, "path", Path.cwd())
         object.__setattr__(runtime, "descriptor", 0)
         object.__setattr__(runtime, "_directory_identity", (1, 2, 3, 4, object()))
         with self.assertRaisesRegex(AuthorityError, "identity is unavailable"):
