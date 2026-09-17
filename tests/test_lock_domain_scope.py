@@ -557,7 +557,7 @@ class LockDomainScopeTests(unittest.TestCase):
                 "BeginReopen(p) == TRUE\n",
                 encoding="utf-8",
             )
-            with self.assertRaisesRegex(ValueError, "CompleteReopen"):
+            with self.assertRaisesRegex(ValueError, "authorityRechecked"):
                 validate_terminal_recovery_contract(root)
         event = _issue_event(
             object(), "acquire", 1, "owner-1", "authority", PROJECT, "digest", "fence"
