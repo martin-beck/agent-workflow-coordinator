@@ -32,6 +32,7 @@ jobs:
           from pathlib import Path
           template = Path("docs/templates/awc-sign-release.sh.in").read_text()
           import json
+          import shlex
           transition = json.loads(os.environ["RELEASE_TRANSITION"])
           for key, value in {
               "@RELEASE_VERSION@": transition["to"]["version"],
@@ -43,7 +44,7 @@ jobs:
               "@VENDOR_MANIFEST@": transition["to"]["vendor_manifest_sha256"],
               "@OUTPUT@": os.path.join(os.environ["RUNNER_TEMP"], "release-signature.txt"),
           }.items():
-              template = template.replace(key, value)
+              template = template.replace(key, shlex.quote(value))
           target = Path(sys.argv[1])
           target.write_text(template)
           target.chmod(0o700)
@@ -129,5 +130,4 @@ jobs:
             ${{ runner.temp }}/release-runbooks
             ${{ runner.temp }}/release-source-commit.txt
             ${{ runner.temp }}/release-artifacts.sha256
-            ${{ runner.temp }}/awc-sign-release.sh
           if-no-files-found: error

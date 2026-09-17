@@ -2,17 +2,18 @@
 # Public-safe release signer contract template. Rendering and --self-test are
 # non-publishing; no-argument execution is reserved for an authorized signer.
 set -euo pipefail
-readonly RELEASE_VERSION="@RELEASE_VERSION@"
-readonly SOURCE_COMMIT="@SOURCE_COMMIT@"
-readonly REPOSITORY="@REPOSITORY@"
-readonly FROM_TAG="@FROM_TAG@"
-readonly TO_TAG="@TO_TAG@"
-readonly TRUST_POLICY="@TRUST_POLICY@"
-readonly VENDOR_MANIFEST="@VENDOR_MANIFEST@"
-readonly OUTPUT="@OUTPUT@"
+readonly RELEASE_VERSION=@RELEASE_VERSION@
+readonly SOURCE_COMMIT=@SOURCE_COMMIT@
+readonly REPOSITORY=@REPOSITORY@
+readonly FROM_TAG=@FROM_TAG@
+readonly TO_TAG=@TO_TAG@
+readonly TRUST_POLICY=@TRUST_POLICY@
+readonly VENDOR_MANIFEST=@VENDOR_MANIFEST@
+readonly OUTPUT=@OUTPUT@
 if [[ "${1:-}" != "--self-test" ]]; then
     [[ "$#" -eq 0 ]] || { echo "usage: $0 [--self-test]" >&2; exit 64; }
     test -z "$(git -C "$REPOSITORY" status --porcelain --untracked-files=all)"
+    test "$(git -C "$REPOSITORY" rev-parse HEAD)" = "$SOURCE_COMMIT"
     test -n "$(git -C "$REPOSITORY" diff --cached --name-only)"
     git -C "$REPOSITORY" tag --verify "${FROM_TAG#refs/tags/}"
     test -z "$(git -C "$REPOSITORY" tag --list "${TO_TAG#refs/tags/}")"
@@ -33,4 +34,4 @@ fi
 [[ "$TO_TAG" =~ ^refs/tags/v[0-9]+\.[0-9]+\.[0-9]+$ ]]
 [[ "$TRUST_POLICY" =~ ^[0-9a-f]{64}$ && "$VENDOR_MANIFEST" =~ ^[0-9a-f]{64}$ ]]
 [[ "$OUTPUT" != *$'\n'* && -n "$OUTPUT" ]]
-echo "release signer contract ready: ${RELEASE_VERSION} ${SOURCE_COMMIT}"
+echo "release signer contract self-test passed"
