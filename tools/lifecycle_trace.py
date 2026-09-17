@@ -90,7 +90,7 @@ def validate_terminal_recovery_contract(root: Path) -> None:
         "rollbackChild # NoChild",
         "terminalTarget' = target",
         "freshRuntimeVerified' = TRUE",
-        "CompleteReopen",
+        "CompleteReopen(p) ==",
         'sessionStatus = "releasing"',
         "FreshRuntimeRead",
         "NoUnheldRollbackGap",
