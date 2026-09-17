@@ -17,6 +17,7 @@ from tools.runtime_bootstrap import (
     VerifiedManifest,
     read_runtime_manifest,
     resolve_selected_runtime,
+    resolve_selected_runtime_bound,
     verify_runtime_manifest,
 )
 from tools.upgrade_authority import AuthorityError, commit_runtime_selector
@@ -58,6 +59,104 @@ class RuntimeBootstrapTests(unittest.TestCase):
                 selected,
                 resolve_selected_runtime(selector, releases, expected, self._verifier),
             )
+
+    def test_bound_runtime_rejects_release_directory_replacement(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            releases = root / "releases"
+            releases.mkdir(mode=0o700)
+            selected = releases / "v1.2.3"
+            selected.mkdir(mode=0o700)
+            self._write_manifest(selected)
+            selector = root / "runtime-selector.json"
+            commit_runtime_selector(selector, "v1.2.3", "v1.2.2")
+            with resolve_selected_runtime_bound(
+                selector, releases, self._identity_for_release(), self._verifier
+            ) as resolved:
+                selected.rename(releases / "v1.2.3.old")
+                replacement = releases / "v1.2.3"
+                replacement.mkdir(mode=0o700)
+                self._write_manifest(replacement)
+                with self.assertRaisesRegex(AuthorityError, "identity changed"):
+                    resolved.revalidate()
+                resolved.close()
+            with self.assertRaisesRegex(AuthorityError, "unavailable"):
+                resolved.revalidate()
+
+    def test_bound_runtime_rejects_invalid_evidence_and_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            releases = root / "releases"
+            releases.mkdir(mode=0o700)
+            selected = releases / "v1.2.3"
+            selected.mkdir(mode=0o700)
+            self._write_manifest(selected)
+            selector = root / "runtime-selector.json"
+            commit_runtime_selector(selector, "v1.2.3", "v1.2.2")
+            with self.assertRaisesRegex(AuthorityError, "not bound"):
+                resolve_selected_runtime_bound(
+                    selector,
+                    releases,
+                    self._identity_for_release(),
+                    lambda *_: True,  # type: ignore[arg-type]
+                )
+            with self.assertRaisesRegex(AuthorityError, "expected identity"):
+                resolve_selected_runtime_bound(
+                    selector,
+                    releases,
+                    ExpectedRuntimeIdentity(
+                        "f" * 40,
+                        "refs/tags/v1.2.3",
+                        "b" * 40,
+                        "c" * 64,
+                        "d" * 64,
+                        "e" * 64,
+                    ),
+                    self._verifier,
+                )
+
+    def test_bound_runtime_rejects_selector_and_release_failures(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            releases = root / "releases"
+            releases.mkdir(mode=0o700)
+            selected = releases / "v1.2.3"
+            selected.mkdir(mode=0o700)
+            self._write_manifest(selected)
+            selector = root / "runtime-selector.json"
+            commit_runtime_selector(selector, "v1.2.3", "v1.2.2")
+            selector.write_text(
+                '{"schema_version":1,"active_release":"v1.2.3-extra","previous_release":"v1.2.2"}'
+            )
+            with self.assertRaisesRegex(AuthorityError, "selector release identity"):
+                resolve_selected_runtime_bound(
+                    selector, releases, self._identity_for_release(), self._verifier
+                )
+            commit_runtime_selector(selector, "v1.2.3", "v1.2.2")
+            selected.chmod(0o755)
+            with self.assertRaisesRegex(AuthorityError, "release is unsafe"):
+                resolve_selected_runtime_bound(
+                    selector, releases, self._identity_for_release(), self._verifier
+                )
+
+    def test_bound_runtime_closes_descriptor_on_verifier_oserror(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            releases = root / "releases"
+            releases.mkdir(mode=0o700)
+            selected = releases / "v1.2.3"
+            selected.mkdir(mode=0o700)
+            self._write_manifest(selected)
+            selector = root / "runtime-selector.json"
+            commit_runtime_selector(selector, "v1.2.3", "v1.2.2")
+
+            def fail(_path: Path, _expected: ExpectedRuntimeIdentity) -> VerifiedManifest:
+                raise OSError("verifier unavailable")
+
+            with self.assertRaisesRegex(AuthorityError, "resolved runtime is unavailable"):
+                resolve_selected_runtime_bound(
+                    selector, releases, self._identity_for_release(), fail
+                )
 
     def test_rejects_missing_symlink_and_unbounded_release(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
