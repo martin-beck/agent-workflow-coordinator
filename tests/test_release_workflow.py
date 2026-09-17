@@ -28,7 +28,7 @@ def test_release_signer_template_is_self_test_only() -> None:
     assert "@VENDOR_MANIFEST@" in template
     assert "@OUTPUT@" in template
     assert 'rev-parse HEAD' in template
-    assert '"@RELEASE_VERSION@"' in template
+    assert "@RELEASE_VERSION@" in template
     assert '"@SOURCE_COMMIT@"' in template
     assert "sign" in template.lower()
     assert "git push" not in template
