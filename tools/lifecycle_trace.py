@@ -81,7 +81,15 @@ def validate_terminal_recovery_contract(root: Path) -> None:
         text = model.read_text(encoding="utf-8")
     except OSError as error:
         raise ValueError("terminal recovery model is unavailable") from error
-    required = ("VerifyTerminal", "terminalTarget", "terminalVerified", "freshRuntimeVerified")
+    required = (
+        "VerifyTerminal",
+        "terminalTarget",
+        "terminalVerified",
+        "freshRuntimeVerified",
+        'IF target = "new"',
+        "rollbackChild # NoChild",
+        "terminalTarget' = target",
+    )
     missing = [name for name in required if name not in text]
     if missing:
         raise ValueError(f"terminal recovery model fields are missing: {', '.join(missing)}")
