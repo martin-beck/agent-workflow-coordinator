@@ -169,7 +169,11 @@ class ResolvedRuntime:
             )
         ):
             raise AuthorityError("resolved runtime identity is unavailable")
-        if not isinstance(self.identity.digest, str):
+        if (
+            not isinstance(self.identity.digest, str)
+            or len(self.identity.digest) != 64
+            or any(character not in "0123456789abcdef" for character in self.identity.digest)
+        ):
             raise AuthorityError("resolved runtime digest is unavailable")
         manifest = read_runtime_manifest(self.path)
         identity = ExpectedRuntimeIdentity(
