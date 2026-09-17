@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import os
+import stat
 import tempfile
 import unittest
 from hashlib import sha256
@@ -437,6 +438,29 @@ class RuntimeBootstrapTests(unittest.TestCase):
         object.__setattr__(runtime, "_directory_identity", (1, 2, 3, 4, object()))
         with self.assertRaisesRegex(AuthorityError, "identity is unavailable"):
             runtime.revalidate()
+
+    def test_resolved_runtime_revalidate_rejects_retained_non_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "not-a-directory"
+            path.write_text("not a runtime")
+            descriptor = os.open(path, os.O_RDONLY)
+            try:
+                value = os.fstat(descriptor)
+                identity = (
+                    value.st_dev,
+                    value.st_ino,
+                    stat.S_IMODE(value.st_mode),
+                    value.st_uid,
+                    value.st_nlink,
+                )
+                runtime = object.__new__(ResolvedRuntime)
+                object.__setattr__(runtime, "path", path)
+                object.__setattr__(runtime, "descriptor", descriptor)
+                object.__setattr__(runtime, "_directory_identity", identity)
+                with self.assertRaisesRegex(AuthorityError, "identity changed"):
+                    runtime.revalidate()
+            finally:
+                os.close(descriptor)
 
     def test_dispatch_admission_rejects_malformed_identity_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
