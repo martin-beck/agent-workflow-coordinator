@@ -9,6 +9,7 @@ import os
 import re
 import stat
 from collections.abc import Callable
+from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path
 
@@ -27,6 +28,27 @@ _MANIFEST_FIELDS = {
     "trust_policy_sha256",
     "vendor_manifest_sha256",
 }
+
+
+@dataclass(frozen=True, slots=True)
+class ExpectedRuntimeIdentity:
+    """Caller-supplied identity facts validated independently."""
+
+    source_commit: str
+    tag_ref: str
+    tag_object: str
+    signature_sha256: str
+    trust_policy_sha256: str
+    vendor_manifest_sha256: str
+
+
+@dataclass(frozen=True, slots=True)
+class VerifiedManifest:
+    """Manifest identity retained as one verification result."""
+
+    release: str
+    identity: ExpectedRuntimeIdentity
+    digest: str
 
 
 def _manifest_pairs(pairs: list[tuple[str, object]]) -> dict[str, object]:
