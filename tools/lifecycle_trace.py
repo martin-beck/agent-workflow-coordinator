@@ -82,6 +82,8 @@ def validate_terminal_recovery_contract(root: Path) -> None:
     except OSError as error:
         raise ValueError("terminal recovery model is unavailable") from error
     required = (
+        'Targets == {"new", "rollback"}',
+        'TerminalResults == {"none", "new", "rollback"}',
         "VerifyTerminal(p, target) ==",
         "terminalTarget",
         "terminalVerified",
