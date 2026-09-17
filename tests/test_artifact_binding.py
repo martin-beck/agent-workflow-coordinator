@@ -4,6 +4,7 @@
 """Positive and hostile tests for revision-bound artifact bindings."""
 
 import unittest
+from typing import cast
 
 from tools.artifact_binding import (
     ARTIFACT_TYPES,
@@ -15,7 +16,9 @@ from tools.artifact_binding import (
 )
 
 
-def snapshot(artifact_type: str, *, version: int = 1, digest: str | None = None) -> ArtifactSnapshot:
+def snapshot(
+    artifact_type: str, *, version: int = 1, digest: str | None = None
+) -> ArtifactSnapshot:
     return ArtifactSnapshot(
         artifact_type=ArtifactType(artifact_type),
         ref=f"artifacts/{artifact_type}",
@@ -27,7 +30,9 @@ def snapshot(artifact_type: str, *, version: int = 1, digest: str | None = None)
     )
 
 
-def binding(*, action: str = "record", version: int = 1, reopened: tuple[str, ...] = ()) -> ArtifactBinding:
+def binding(
+    *, action: str = "record", version: int = 1, reopened: tuple[str, ...] = ()
+) -> ArtifactBinding:
     items = tuple(snapshot(item, version=version) for item in ARTIFACT_TYPES)
     return ArtifactBinding(
         task_id="AR-0023",
@@ -46,7 +51,9 @@ class ArtifactBindingTests(unittest.TestCase):
         restored = ArtifactBinding(
             task_id="AR-0023",
             task_revision=4,
-            before=tuple(ArtifactSnapshot.from_record(item) for item in value.as_record()["before"]),
+            before=tuple(
+                ArtifactSnapshot.from_record(item) for item in value.as_record()["before"]
+            ),
             after=tuple(ArtifactSnapshot.from_record(item) for item in value.as_record()["after"]),
         )
         self.assertEqual(value.digest, restored.digest)
@@ -57,7 +64,13 @@ class ArtifactBindingTests(unittest.TestCase):
             ArtifactBinding("AR-0023", 4, items, items)
         wrong = tuple(
             ArtifactSnapshot(
-                item.artifact_type, item.ref, item.digest, item.scope, 3, item.version, item.predecessors
+                item.artifact_type,
+                item.ref,
+                item.digest,
+                item.scope,
+                3,
+                item.version,
+                item.predecessors,
             )
             for item in (snapshot(name) for name in ARTIFACT_TYPES)
         )
@@ -85,6 +98,56 @@ class ArtifactBindingTests(unittest.TestCase):
         malformed = binding().as_record()
         malformed["before"] = malformed["before"][:-1]
         self.assertIn("incomplete", binding_errors(malformed)[0])
+
+    def test_snapshot_and_binding_validation_reject_every_malformed_shape(self) -> None:
+        valid = snapshot("work_plan")
+        cases = (
+            ("unknown", valid.ref, valid.digest, valid.scope, 4, 1, valid.predecessors),
+            (valid.artifact_type, valid.ref, "bad", valid.scope, 4, 1, valid.predecessors),
+            (valid.artifact_type, valid.ref, valid.digest, valid.scope, 0, 1, valid.predecessors),
+            (valid.artifact_type, valid.ref, valid.digest, valid.scope, 4, 0, valid.predecessors),
+            (valid.artifact_type, valid.ref, valid.digest, valid.scope, 4, 1, ("x", "x")),
+        )
+        for args in cases:
+            with self.assertRaises(ArtifactBindingError):
+                ArtifactSnapshot(cast(ArtifactType, args[0]), *args[1:])
+        record = valid.as_record()
+        incomplete = dict(record)
+        incomplete.pop("scope")
+        with self.assertRaisesRegex(ArtifactBindingError, "incomplete"):
+            ArtifactSnapshot.from_record(incomplete)
+        invalid_predecessors = dict(record, predecessors=[1])
+        with self.assertRaisesRegex(ArtifactBindingError, "list"):
+            ArtifactSnapshot.from_record(invalid_predecessors)
+        invalid_value = dict(record, task_revision="bad")
+        with self.assertRaises(ArtifactBindingError):
+            ArtifactSnapshot.from_record(invalid_value)
+
+        items = tuple(snapshot(item) for item in ARTIFACT_TYPES)
+        with self.assertRaisesRegex(ArtifactBindingError, "task id"):
+            ArtifactBinding("bad", 4, items, items)
+        with self.assertRaisesRegex(ArtifactBindingError, "revision"):
+            ArtifactBinding("AR-0023", 0, items, items)
+        with self.assertRaisesRegex(ArtifactBindingError, "action"):
+            ArtifactBinding("AR-0023", 4, items, items, action="bad")
+        with self.assertRaisesRegex(ArtifactBindingError, "incomplete"):
+            ArtifactBinding("AR-0023", 4, items[:-1], items)
+        mismatch = (*items[:-1], snapshot("formal_specification", version=2))
+        with self.assertRaisesRegex(ArtifactBindingError, "explicit reopen"):
+            ArtifactBinding("AR-0023", 4, items, mismatch)
+        with self.assertRaisesRegex(ArtifactBindingError, "unique"):
+            ArtifactBinding(
+                "AR-0023",
+                4,
+                items,
+                items,
+                action="reopen",
+                reopened_dependents=("AR-0024", "AR-0024"),
+            )
+        with self.assertRaisesRegex(ArtifactBindingError, "dependent task"):
+            ArtifactBinding(
+                "AR-0023", 4, items, items, action="reopen", reopened_dependents=("bad",)
+            )
 
 
 if __name__ == "__main__":

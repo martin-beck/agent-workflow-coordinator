@@ -98,14 +98,22 @@ class ArtifactSnapshot:
         }
 
     @classmethod
-    def from_record(cls, value: Mapping[str, Any]) -> "ArtifactSnapshot":
+    def from_record(cls, value: Mapping[str, Any]) -> ArtifactSnapshot:
         required = {
-            "artifact_type", "ref", "digest", "scope", "task_revision", "version", "predecessors"
+            "artifact_type",
+            "ref",
+            "digest",
+            "scope",
+            "task_revision",
+            "version",
+            "predecessors",
         }
         if set(value) != required:
             raise ArtifactBindingError("artifact snapshot fields are incomplete or unknown")
         predecessors = value["predecessors"]
-        if not isinstance(predecessors, list) or any(not isinstance(item, str) for item in predecessors):
+        if not isinstance(predecessors, list) or any(
+            not isinstance(item, str) for item in predecessors
+        ):
             raise ArtifactBindingError("artifact predecessors must be a list of references")
         try:
             return cls(
@@ -132,7 +140,7 @@ class ArtifactBinding:
     action: str = "record"
     reopened_dependents: tuple[str, ...] = ()
 
-    def __post_init__(self) -> None:
+    def __post_init__(self) -> None:  # noqa: C901
         if not TASK_ID.fullmatch(self.task_id):
             raise ArtifactBindingError("binding task id is invalid")
         if type(self.task_revision) is not int or self.task_revision < 1:
@@ -154,11 +162,16 @@ class ArtifactBinding:
         for dependent in self.reopened_dependents:
             if not TASK_ID.fullmatch(dependent):
                 raise ArtifactBindingError("reopened dependent task id is invalid")
-        changed = {item.artifact_type for item in self.before} != {item.artifact_type for item in self.after}
+        changed = {item.artifact_type for item in self.before} != {
+            item.artifact_type for item in self.after
+        }
         changed = changed or any(
             left.digest != right.digest or left.version != right.version
-            for left, right in zip(sorted(self.before, key=lambda item: item.artifact_type.value),
-                                   sorted(self.after, key=lambda item: item.artifact_type.value))
+            for left, right in zip(
+                sorted(self.before, key=lambda item: item.artifact_type.value),
+                sorted(self.after, key=lambda item: item.artifact_type.value),
+                strict=True,
+            )
         )
         if changed and self.action != "reopen":
             raise ArtifactBindingError("changed artifacts require explicit reopen")
@@ -194,8 +207,11 @@ def binding_errors(value: object) -> list[str]:
         before = tuple(ArtifactSnapshot.from_record(item) for item in value["before"])
         after = tuple(ArtifactSnapshot.from_record(item) for item in value["after"])
         ArtifactBinding(
-            task_id=str(value["task_id"]), task_revision=value["task_revision"], before=before,
-            after=after, action=str(value["action"]),
+            task_id=str(value["task_id"]),
+            task_revision=value["task_revision"],
+            before=before,
+            after=after,
+            action=str(value["action"]),
             reopened_dependents=tuple(value["reopened_dependents"]),
         )
     except (ArtifactBindingError, TypeError, ValueError) as error:
