@@ -10,9 +10,20 @@ readonly TO_TAG=@TO_TAG@
 readonly TRUST_POLICY=@TRUST_POLICY@
 readonly VENDOR_MANIFEST=@VENDOR_MANIFEST@
 readonly OUTPUT=@OUTPUT@
+readonly SIGNING_KEY_REF=@SIGNING_KEY_REF@
+readonly SIGNING_POLICY_REF=@SIGNING_POLICY_REF@
+readonly SIGNING_IDENTITY=@SIGNING_IDENTITY@
+readonly SIGNING_KEY_FINGERPRINT=@SIGNING_KEY_FINGERPRINT@
+readonly SIGNING_POLICY_DIGEST=@SIGNING_POLICY_DIGEST@
 if [[ "${1:-}" != "--self-test" ]]; then
     [[ "$#" -eq 0 ]] || { echo "usage: $0 [--self-test]" >&2; exit 64; }
     test -z "$(git -C "$REPOSITORY" status --porcelain --untracked-files=all)"
+    test "$(git -C "$REPOSITORY" config --get user.signingkey)" = "$SIGNING_KEY_REF"
+    test "$(git -C "$REPOSITORY" config --get gpg.format)" = ssh
+    test "$(git -C "$REPOSITORY" config --get gpg.ssh.allowedSignersFile)" = "$SIGNING_POLICY_REF"
+    test "$(git -C "$REPOSITORY" config --get user.email)" = "$SIGNING_IDENTITY"
+    test "$(sha256sum "$SIGNING_POLICY_REF" | cut -d' ' -f1)" = "$SIGNING_POLICY_DIGEST"
+    test "$(ssh-keygen -lf "$SIGNING_KEY_REF" 2>/dev/null | awk '{for (i=1;i<=NF;i++) if ($i ~ /^SHA256:/) print $i; exit}')" = "$SIGNING_KEY_FINGERPRINT"
     test "$(git -C "$REPOSITORY" rev-parse HEAD)" = "$SOURCE_COMMIT"
     test -n "$(git -C "$REPOSITORY" diff --cached --name-only)"
     git -C "$REPOSITORY" tag --verify "${FROM_TAG#refs/tags/}"
@@ -34,4 +45,10 @@ fi
 [[ "$TO_TAG" =~ ^refs/tags/v[0-9]+\.[0-9]+\.[0-9]+$ ]]
 [[ "$TRUST_POLICY" =~ ^[0-9a-f]{64}$ && "$VENDOR_MANIFEST" =~ ^[0-9a-f]{64}$ ]]
 [[ "$OUTPUT" != *$'\n'* && -n "$OUTPUT" ]]
+[[ -n "$SIGNING_KEY_REF" && "$SIGNING_KEY_REF" != *$'\n'* ]]
+[[ -n "$SIGNING_POLICY_REF" && "$SIGNING_POLICY_REF" != *$'\n'* ]]
+[[ -r "$SIGNING_POLICY_REF" ]]
+[[ -n "$SIGNING_IDENTITY" && "$SIGNING_IDENTITY" != *$'\n'* ]]
+[[ "$SIGNING_KEY_FINGERPRINT" =~ ^SHA256:[A-Za-z0-9+/=]+$ ]]
+[[ "$SIGNING_POLICY_DIGEST" =~ ^[0-9a-f]{64}$ ]]
 echo "release signer contract self-test passed"
