@@ -157,7 +157,12 @@ class ResolvedRuntime:
             current.st_uid,
             current.st_nlink,
         )
-        if observed != directory_identity or named != directory_identity:
+        if (
+            not stat.S_ISDIR(retained.st_mode)
+            or not stat.S_ISDIR(current.st_mode)
+            or observed != directory_identity
+            or named != directory_identity
+        ):
             raise AuthorityError("resolved runtime identity changed")
 
     def revalidate_manifest(self) -> None:
