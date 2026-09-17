@@ -258,7 +258,7 @@ class SQLiteLifecycleExecutor:
         barrier_id: str,
         fencing_token: str,
         *,
-        selector_root: Path | None = None,
+        selector_root: Path,
     ) -> Iterator[SQLiteLifecycleSnapshot]:
         """Hold the barrier while a future selector publication is attempted.
 
@@ -273,21 +273,18 @@ class SQLiteLifecycleExecutor:
             self._check_selector_binding(
                 snapshot, selector_ref, expected_state_revision, barrier_id, fencing_token
             )
-            selector_identity: tuple[tuple[int, int, int, int, int], ...] | None = None
-            if selector_root is not None:
-                self._resolve_selector_target(selector_root, selector_ref)
-                selector_identity = self._selector_path_identity(selector_root, selector_ref)
+            self._resolve_selector_target(selector_root, selector_ref)
+            selector_identity = self._selector_path_identity(selector_root, selector_ref)
             try:
                 yield snapshot
             finally:
                 self._assert_snapshot_locked(snapshot)
-                if selector_root is not None and selector_identity is not None:
-                    try:
-                        current_identity = self._selector_path_identity(selector_root, selector_ref)
-                    except SQLiteAuthorityError as error:
-                        raise SQLiteAuthorityError("selector target identity changed") from error
-                    if current_identity != selector_identity:
-                        raise SQLiteAuthorityError("selector target identity changed")
+                try:
+                    current_identity = self._selector_path_identity(selector_root, selector_ref)
+                except SQLiteAuthorityError as error:
+                    raise SQLiteAuthorityError("selector target identity changed") from error
+                if current_identity != selector_identity:
+                    raise SQLiteAuthorityError("selector target identity changed")
 
     @staticmethod
     def _resolve_selector_target(root: Path, selector_ref: str) -> Path:

@@ -366,10 +366,13 @@ class SQLiteAuthorityAdapterTests(unittest.TestCase):
                 "barrier",
                 "fence",
             )
-        with executor.selector_visibility_scope(
-            "runtime-selector.json", 1, "barrier", "fence"
-        ) as held:
-            self.assertEqual(snapshot, held)
+        with (
+            self.assertRaisesRegex(SQLiteAuthorityError, "selector root must be absolute"),
+            executor.selector_visibility_scope(
+                "runtime-selector.json", 1, "barrier", "fence", selector_root=Path("relative")
+            ),
+        ):
+            self.fail("unbound selector publication was admitted")
         selector_root = self.root / "runtime"
         selector_root.mkdir(mode=0o700)
         selector = selector_root / "runtime-selector.json"
@@ -429,14 +432,38 @@ class SQLiteAuthorityAdapterTests(unittest.TestCase):
             old_root = selector_root
             old_root.rename(self.root / "old-runtime")
             replacement_root.rename(old_root)
+        ancestor = self.root / "selector-parent"
+        nested_root = ancestor / "runtime"
+        nested_root.mkdir(parents=True, mode=0o700)
+        nested_selector = nested_root / "runtime-selector.json"
+        nested_selector.write_text("{}\n", encoding="utf-8")
+        nested_selector.chmod(0o600)
+        with (
+            self.assertRaisesRegex(SQLiteAuthorityError, "selector target identity changed"),
+            executor.selector_visibility_scope(
+                "runtime-selector.json", 1, "barrier", "fence", selector_root=nested_root
+            ),
+        ):
+            replacement_ancestor = self.root / "selector-parent-new"
+            replacement_nested = replacement_ancestor / "runtime"
+            replacement_nested.mkdir(parents=True, mode=0o700)
+            replacement_selector = replacement_nested / "runtime-selector.json"
+            replacement_selector.write_text("{}\n", encoding="utf-8")
+            replacement_selector.chmod(0o600)
+            ancestor.rename(self.root / "selector-parent-old")
+            replacement_ancestor.rename(ancestor)
         with (
             self.assertRaisesRegex(RuntimeError, "publication failed"),
-            executor.selector_visibility_scope("runtime-selector.json", 1, "barrier", "fence"),
+            executor.selector_visibility_scope(
+                "runtime-selector.json", 1, "barrier", "fence", selector_root=selector_root
+            ),
         ):
             raise RuntimeError("publication failed")
         with (
             self.assertRaisesRegex(SQLiteAuthorityError, "durable lifecycle state changed"),
-            executor.selector_visibility_scope("runtime-selector.json", 1, "barrier", "fence"),
+            executor.selector_visibility_scope(
+                "runtime-selector.json", 1, "barrier", "fence", selector_root=selector_root
+            ),
         ):
             journal.write_text('{"status":"running","phase":"preflight","records":[]}\n')
 
