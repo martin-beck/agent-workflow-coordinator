@@ -169,6 +169,8 @@ class ResolvedRuntime:
             )
         ):
             raise AuthorityError("resolved runtime identity is unavailable")
+        if not isinstance(self.identity.release, str):
+            raise AuthorityError("resolved runtime release is unavailable")
         if (
             not isinstance(self.identity.digest, str)
             or len(self.identity.digest) != 64
