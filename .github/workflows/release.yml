@@ -36,7 +36,7 @@ jobs:
           transition = json.loads(os.environ["RELEASE_TRANSITION"])
           for key, value in {
               "@RELEASE_VERSION@": transition["to"]["version"],
-              "@SOURCE_COMMIT@": os.environ["GITHUB_SHA"],
+              "@SOURCE_COMMIT@": transition["to"]["source_commit"],
               "@REPOSITORY@": os.environ["GITHUB_WORKSPACE"],
               "@FROM_TAG@": transition["from"]["tag_ref"],
               "@TO_TAG@": transition["to"]["tag_ref"],
