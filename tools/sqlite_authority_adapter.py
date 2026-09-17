@@ -13,6 +13,7 @@ import tempfile
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
+from hashlib import sha256
 from pathlib import Path
 from typing import Any, Literal, TypeVar, cast
 
@@ -346,9 +347,40 @@ class SQLiteLifecycleExecutor:
                 for path in paths
                 for status in (path.lstat(),)
             )
-            import hashlib
-
-            return identities, hashlib.sha256(paths[-1].read_bytes()).hexdigest()
+            target = paths[-1]
+            expected = identities[-1]
+            descriptor = os.open(target, os.O_RDONLY | os.O_NOFOLLOW)
+            try:
+                opened = os.fstat(descriptor)
+                opened_identity = (
+                    opened.st_dev,
+                    opened.st_ino,
+                    opened.st_uid,
+                    stat.S_IMODE(opened.st_mode),
+                    opened.st_nlink,
+                )
+                if opened_identity != expected:
+                    raise SQLiteAuthorityError("selector target identity changed")
+                digest = sha256()
+                total = 0
+                while chunk := os.read(descriptor, 65536):
+                    total += len(chunk)
+                    if total > 16 * 1024 * 1024:
+                        raise SQLiteAuthorityError("selector target is too large")
+                    digest.update(chunk)
+                final = os.fstat(descriptor)
+                final_identity = (
+                    final.st_dev,
+                    final.st_ino,
+                    final.st_uid,
+                    stat.S_IMODE(final.st_mode),
+                    final.st_nlink,
+                )
+                if final_identity != expected:
+                    raise SQLiteAuthorityError("selector target identity changed")
+            finally:
+                os.close(descriptor)
+            return identities, digest.hexdigest()
         except OSError as error:
             raise SQLiteAuthorityError("selector target identity unavailable") from error
 
