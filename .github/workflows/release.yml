@@ -19,6 +19,38 @@ jobs:
       - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d
         with:
           version: "0.12.8"
+      - name: Check authorized release signer (non-publishing)
+        env:
+          RELEASE_TRANSITION: ${{ inputs.transition }}
+        run: |
+          # Probe only the rendered contract; do not sign, tag, push, or publish.
+          signer_dir="$(mktemp -d)"
+          trap 'rm -rf -- "$signer_dir"' EXIT
+          python - "$signer_dir/awc-sign-release.sh" <<'PY'
+          import os
+          import sys
+          from pathlib import Path
+          template = Path("docs/templates/awc-sign-release.sh.in").read_text()
+          import json
+          import shlex
+          transition = json.loads(os.environ["RELEASE_TRANSITION"])
+          for key, value in {
+              "@RELEASE_VERSION@": transition["to"]["version"],
+              "@SOURCE_COMMIT@": transition["to"]["source_commit"],
+              "@REPOSITORY@": os.environ["GITHUB_WORKSPACE"],
+              "@FROM_TAG@": transition["from"]["tag_ref"],
+              "@TO_TAG@": transition["to"]["tag_ref"],
+              "@TRUST_POLICY@": transition["to"]["trust_policy_sha256"],
+              "@VENDOR_MANIFEST@": transition["to"]["vendor_manifest_sha256"],
+              "@OUTPUT@": os.path.join(os.environ["RUNNER_TEMP"], "release-signature.txt"),
+          }.items():
+              template = template.replace(key, shlex.quote(value))
+          target = Path(sys.argv[1])
+          target.write_text(template)
+          target.chmod(0o700)
+          PY
+          echo "Generated signer: $signer_dir/awc-sign-release.sh (ephemeral self-test only; no signing or publication)" | tee -a "$GITHUB_STEP_SUMMARY"
+          "$signer_dir/awc-sign-release.sh" --self-test
       - name: Generate and validate release contract
         env:
           TRANSITION: ${{ inputs.transition }}
