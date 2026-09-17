@@ -110,6 +110,9 @@ class RuntimeBootstrapTests(unittest.TestCase):
                     resolved.admit_for_dispatch()
                 with self.assertRaisesRegex(AuthorityError, "manifest identity changed"):
                     admission.revalidate()
+                self.assertEqual(-1, admission.runtime.descriptor)
+                with self.assertRaisesRegex(AuthorityError, "resolved runtime is unavailable"):
+                    admission.revalidate()
 
     def test_bound_runtime_rejects_invalid_evidence_and_identity(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
