@@ -57,7 +57,7 @@ class TuiBridgeTests(unittest.TestCase):
         }
         updated = apply_tui_response(ar=ar, request=req, response=response)
         self.assertEqual(updated["task_revision"], 3)
-        self.assertFalse(updated["interaction"]["interaction_required"])
+        self.assertIs(updated["interaction"]["interaction_required"], False)
 
     def test_trigger_revision_mismatch_fails_closed(self) -> None:
         ar, req = _request()
