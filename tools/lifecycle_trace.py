@@ -96,6 +96,7 @@ def validate_terminal_recovery_contract(root: Path) -> None:
         "terminalVerified' = TRUE",
         "freshRuntimeVerified' = TRUE",
         "BeginReopen(p) ==",
+        "authorityRechecked",
         "CompleteReopen(p) ==",
         'sessionStatus = "releasing"',
         "FreshRuntimeRead(p) ==",
