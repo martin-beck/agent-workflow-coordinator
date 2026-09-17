@@ -14,6 +14,7 @@ import unittest
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import patch
 
@@ -517,6 +518,41 @@ class SQLiteAuthorityAdapterTests(unittest.TestCase):
             ),
         ):
             journal.write_text('{"status":"running","phase":"preflight","records":[]}\n')
+
+    def test_selector_descriptor_digest_failures_are_fail_closed(self) -> None:
+        root = self.root / "digest-runtime"
+        root.mkdir(mode=0o700)
+        target = root / "selector.json"
+        target.write_text("{}\n", encoding="utf-8")
+        target.chmod(0o600)
+        with (
+            patch("tools.sqlite_authority_adapter.os.open", side_effect=OSError("replaced")),
+            self.assertRaisesRegex(SQLiteAuthorityError, "identity unavailable"),
+        ):
+            SQLiteLifecycleExecutor._selector_path_identity(root, "selector.json")
+        chunks = [b"x" * 65536] * 257 + [b""]
+        with (
+            patch("tools.sqlite_authority_adapter.os.read", side_effect=chunks),
+            self.assertRaisesRegex(SQLiteAuthorityError, "too large"),
+        ):
+            SQLiteLifecycleExecutor._selector_path_identity(root, "selector.json")
+        descriptor = os.open(target, os.O_RDONLY | os.O_NOFOLLOW)
+        try:
+            status = os.fstat(descriptor)
+            altered = SimpleNamespace(
+                st_dev=status.st_dev,
+                st_ino=status.st_ino + 1,
+                st_uid=status.st_uid,
+                st_mode=status.st_mode,
+                st_nlink=status.st_nlink,
+            )
+            with (
+                patch("tools.sqlite_authority_adapter.os.fstat", side_effect=[status, altered]),
+                self.assertRaisesRegex(SQLiteAuthorityError, "identity changed"),
+            ):
+                SQLiteLifecycleExecutor._selector_path_identity(root, "selector.json")
+        finally:
+            os.close(descriptor)
 
     def test_generated_contract_backup_operation_dispatches_directly(self) -> None:
         def release(version: str, seed: str) -> dict[str, str]:
