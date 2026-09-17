@@ -122,6 +122,8 @@ class ResolvedRuntime:
 
     def revalidate(self) -> None:
         """Fail closed if the retained directory or its pathname was replaced."""
+        if not isinstance(self.path, Path):
+            raise AuthorityError("resolved runtime path is unavailable")
         try:
             retained = os.fstat(self.descriptor)
             current = self.path.lstat()
