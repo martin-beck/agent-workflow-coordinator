@@ -91,6 +91,7 @@ def validate_terminal_recovery_contract(root: Path) -> None:
         'IF target = "new"',
         "rollbackChild # NoChild",
         "ELSE rollbackChild # NoChild",
+        "~terminalVerified",
         "terminalTarget' = target",
         "terminalVerified' = TRUE",
         "freshRuntimeVerified' = TRUE",

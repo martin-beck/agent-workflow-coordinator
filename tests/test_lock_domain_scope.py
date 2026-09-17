@@ -540,7 +540,7 @@ class LockDomainScopeTests(unittest.TestCase):
                 "VerifyTerminal(op, target) == TRUE\n"
                 "terminalTarget terminalVerified freshRuntimeVerified\n"
                 'IF target = "new" rollbackChild # NoChild ELSE rollbackChild # NoChild '
-                "terminalTarget' = target\n"
+                "~terminalVerified terminalTarget' = target\n"
                 "freshRuntimeVerified' = TRUE\n",
                 encoding="utf-8",
             )
