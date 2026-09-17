@@ -370,6 +370,40 @@ class SQLiteAuthorityAdapterTests(unittest.TestCase):
             "runtime-selector.json", 1, "barrier", "fence"
         ) as held:
             self.assertEqual(snapshot, held)
+        selector_root = self.root / "runtime"
+        selector_root.mkdir(mode=0o700)
+        selector = selector_root / "runtime-selector.json"
+        selector.write_text("{}\n", encoding="utf-8")
+        selector.chmod(0o600)
+        with executor.selector_visibility_scope(
+            "runtime-selector.json", 1, "barrier", "fence", selector_root=selector_root
+        ) as held:
+            self.assertEqual(snapshot, held)
+        with self.assertRaisesRegex(SQLiteAuthorityError, "selector target is unsafe"):
+            selector.chmod(0o644)
+            with executor.selector_visibility_scope(
+                "runtime-selector.json", 1, "barrier", "fence", selector_root=selector_root
+            ):
+                self.fail("unsafe selector was admitted")
+        selector.chmod(0o600)
+        alias = selector_root / "alias.json"
+        alias.symlink_to(selector)
+        with (
+            self.assertRaisesRegex(SQLiteAuthorityError, "selector target is unsafe"),
+            executor.selector_visibility_scope(
+                "alias.json", 1, "barrier", "fence", selector_root=selector_root
+            ),
+        ):
+            self.fail("symlink selector was admitted")
+        linked_root = self.root / "linked-runtime"
+        linked_root.symlink_to(selector_root, target_is_directory=True)
+        with (
+            self.assertRaisesRegex(SQLiteAuthorityError, "selector root contains a symlink"),
+            executor.selector_visibility_scope(
+                "runtime-selector.json", 1, "barrier", "fence", selector_root=linked_root
+            ),
+        ):
+            self.fail("symlink root was admitted")
         with (
             self.assertRaisesRegex(RuntimeError, "publication failed"),
             executor.selector_visibility_scope("runtime-selector.json", 1, "barrier", "fence"),
