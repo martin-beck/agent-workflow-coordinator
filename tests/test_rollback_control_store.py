@@ -598,6 +598,15 @@ class RollbackControlStoreTests(unittest.TestCase):
                 msg=f"restarted stale stdout={restarted_stdout}; stderr={restarted_stderr}",
             )
             self.assertEqual(b"authority remains untouched\n", authority_path.read_bytes())
+            child_result = root / "child-result"
+            verifier = multiprocessing.get_context("fork").Process(
+                target=_reopen_ambiguous_child,
+                args=(str(control_path), str(authority_path), str(child_result)),
+            )
+            verifier.start()
+            verifier.join(timeout=10)
+            self.assertEqual(0, verifier.exitcode)
+            self.assertEqual("held:1\n", child_result.read_text(encoding="utf-8"))
             with locked() as guard:
                 self.assertIsNotNone(guard)
             final = seed.snapshot()
