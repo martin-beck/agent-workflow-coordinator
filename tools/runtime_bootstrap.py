@@ -413,7 +413,7 @@ def resolve_selected_runtime(
     if (
         not isinstance(verified, VerifiedManifest)
         or verified.release != release
-        or verified.identity != expected_identity
+        or verified.identity is not expected_identity
         or _DIGEST.fullmatch(verified.digest) is None
     ):
         raise AuthorityError("runtime authenticity evidence is not bound to selected release")
@@ -471,7 +471,7 @@ def resolve_selected_runtime_bound(  # noqa: C901
         if (
             not isinstance(verified, VerifiedManifest)
             or verified.release != release
-            or verified.identity != expected_identity
+            or verified.identity is not expected_identity
             or _DIGEST.fullmatch(verified.digest) is None
         ):
             raise AuthorityError("runtime authenticity evidence is not bound to selected release")
