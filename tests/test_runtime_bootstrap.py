@@ -665,6 +665,25 @@ class RuntimeBootstrapTests(unittest.TestCase):
                     selector, releases, self._identity_for_release(), fail
                 )
 
+    def test_bound_runtime_closes_descriptor_on_unexpected_verification_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            releases = root / "releases"
+            releases.mkdir(mode=0o700)
+            selected = releases / "v1.2.3"
+            selected.mkdir(mode=0o700)
+            self._write_manifest(selected)
+            selector = root / "runtime-selector.json"
+            commit_runtime_selector(selector, "v1.2.3", "v1.2.2")
+
+            with patch(
+                "tools.runtime_bootstrap.verify_runtime_manifest",
+                side_effect=RuntimeError("unexpected verification failure"),
+            ), self.assertRaisesRegex(AuthorityError, "verification failed"):
+                resolve_selected_runtime_bound(
+                    selector, releases, self._identity_for_release(), self._verifier
+                )
+
     def test_rejects_missing_symlink_and_unbounded_release(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
