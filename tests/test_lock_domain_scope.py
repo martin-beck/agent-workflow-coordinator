@@ -538,7 +538,7 @@ class LockDomainScopeTests(unittest.TestCase):
                 'Targets == {"new", "rollback"}\n'
                 'TerminalResults == {"none", "new", "rollback"}\n'
                 "VerifyTerminal(op, target) == TRUE\n"
-                "ControlHeld(p) AuthorityHeld(p)\n"
+                "ControlHeld(p) AuthorityHeld(p) activeAttempt = p\n"
                 "terminalTarget terminalVerified freshRuntimeVerified\n"
                 'IF target = "new" rollbackChild # NoChild ELSE rollbackChild # NoChild '
                 "~terminalVerified terminalTarget' = target\n"
