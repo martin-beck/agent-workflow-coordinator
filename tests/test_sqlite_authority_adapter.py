@@ -538,10 +538,15 @@ class SQLiteAuthorityAdapterTests(unittest.TestCase):
             replacement_selector.chmod(0o600)
             ancestor.rename(self.root / "selector-parent-old")
             replacement_ancestor.rename(ancestor)
+        clean_root = self.root / "runtime-clean"
+        clean_root.mkdir(mode=0o700)
+        clean_selector = clean_root / "runtime-selector.json"
+        clean_selector.write_text("{}\n", encoding="utf-8")
+        clean_selector.chmod(0o600)
         with (
             self.assertRaisesRegex(RuntimeError, "publication failed"),
             executor.selector_visibility_scope(
-                "runtime-selector.json", 1, "barrier", "fence", selector_root=selector_root
+                "runtime-selector.json", 1, "barrier", "fence", selector_root=clean_root
             ),
         ):
             raise RuntimeError("publication failed")
