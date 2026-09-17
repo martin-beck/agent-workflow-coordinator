@@ -51,6 +51,13 @@ jobs:
             "$RUNNER_TEMP/release-clone/release-runbooks/operator.md"
           cmp -- "$RUNNER_TEMP/release-runbooks/agent.md" \
             "$RUNNER_TEMP/release-clone/release-runbooks/agent.md"
+      - name: Bind published evidence to the exact source
+        run: |
+          printf '%s\n' "$GITHUB_SHA" > "$RUNNER_TEMP/release-source-commit.txt"
+          (
+            cd "$RUNNER_TEMP"
+            sha256sum release-contract.json release-runbooks/operator.md release-runbooks/agent.md
+          ) > "$RUNNER_TEMP/release-artifacts.sha256"
       - name: Upload sanitized contract evidence
         uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08
         with:
@@ -58,4 +65,6 @@ jobs:
           path: |
             ${{ runner.temp }}/release-contract.json
             ${{ runner.temp }}/release-runbooks
+            ${{ runner.temp }}/release-source-commit.txt
+            ${{ runner.temp }}/release-artifacts.sha256
           if-no-files-found: error
