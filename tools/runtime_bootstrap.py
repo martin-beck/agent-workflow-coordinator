@@ -74,12 +74,20 @@ class DispatchAdmission:
 
     def revalidate(self) -> None:
         """Recheck the retained handle before a consumer uses admission evidence."""
+        runtime_candidate: object = self.runtime
+        if not isinstance(runtime_candidate, ResolvedRuntime):
+            raise AuthorityError("dispatch admission runtime is not retained")
+        runtime = runtime_candidate
         try:
-            if self.runtime.identity is not self.identity:
+            identity_candidate: object = runtime.identity
+            if (
+                not isinstance(identity_candidate, VerifiedManifest)
+                or identity_candidate is not self.identity
+            ):
                 raise AuthorityError("dispatch admission identity is not bound")
-            self.runtime.revalidate_for_dispatch()
+            runtime.revalidate_for_dispatch()
         except AuthorityError:
-            self.runtime.close()
+            runtime.close()
             raise
 
     def validate_identity(self, expected: VerifiedManifest) -> None:
