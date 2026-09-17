@@ -50,6 +50,15 @@ def _contract() -> dict[str, Any]:
 
 
 class UpgradeRunbookTests(unittest.TestCase):
+    def test_release_workflow_generates_and_verifies_sanitized_runbooks(self) -> None:
+        workflow = (
+            Path(__file__).resolve().parents[1] / ".github/workflows/release.yml"
+        ).read_text(encoding="utf-8")
+        self.assertIn("tools.generate_upgrade_runbook", workflow)
+        self.assertIn("tools.verify_upgrade_runbook", workflow)
+        self.assertIn("${{ runner.temp }}/release-runbooks", workflow)
+        self.assertIn("if-no-files-found: error", workflow)
+
     def test_checked_in_release_fixture_matches_generator_and_is_private(self) -> None:
         root = Path(__file__).resolve().parents[1]
         fixture = root / "examples/upgrade/fixture-v0.3.8-to-v0.3.9"
