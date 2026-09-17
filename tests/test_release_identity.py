@@ -197,6 +197,11 @@ class ReleaseIdentityTests(unittest.TestCase):
             nested_transition.chmod(0o644)
             with self.assertRaisesRegex(ReleaseIdentityError, "parent must be owner-controlled"):
                 _transition_path(Path("nested/transition.json"), root)
+            oversized = root / "oversized.json"
+            oversized.write_bytes(b"{" + b" " * (1024 * 1024) + b"}")
+            oversized.chmod(0o644)
+            with self.assertRaisesRegex(ReleaseIdentityError, "exceeds size limit"):
+                _transition_path(Path("oversized.json"), root)
 
 
 if __name__ == "__main__":
