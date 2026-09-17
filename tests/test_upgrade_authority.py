@@ -8,7 +8,9 @@
 from __future__ import annotations
 
 import importlib
+import multiprocessing
 import os
+import signal
 import subprocess
 import sys
 import tempfile
@@ -51,6 +53,33 @@ def _init_git_repo(root: Path) -> None:
         ],
         check=True,
     )
+
+
+def _publish_selector_then_die(path_text: str) -> None:
+    path = Path(path_text)
+    real_fsync = os.fsync
+    calls = 0
+
+    def crash_after_rename(descriptor: int) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            os.kill(os.getpid(), signal.SIGKILL)
+        real_fsync(descriptor)
+
+    with patch("tools.upgrade_authority.os.fsync", side_effect=crash_after_rename):
+        commit_runtime_selector(path, "new", "old")
+
+
+def _reconcile_selector_in_child(path_text: str, result_text: str) -> None:
+    result = reconcile_runtime_selector(
+        Path(path_text),
+        before_active_release="old",
+        before_previous_release="older",
+        after_active_release="new",
+        after_previous_release="old",
+    )
+    Path(result_text).write_text(result, encoding="utf-8")
 
 
 class RuntimeSelectorTests(unittest.TestCase):
@@ -493,6 +522,7 @@ class RuntimeSelectorTests(unittest.TestCase):
                 {"selector.json"},
                 {entry.name for entry in path.parent.iterdir()},
             )
+
             handoffctl.locked.assert_called_once_with()
             handoffctl.locked.return_value.__enter__.assert_called_once_with()
             commit_runtime_selector(path, "old", "older")
@@ -515,6 +545,27 @@ class RuntimeSelectorTests(unittest.TestCase):
                     after_active_release="new",
                     after_previous_release="old",
                 )
+
+    def test_child_death_after_selector_rename_is_reconcilable(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / "selector.json"
+            commit_runtime_selector(path, "old", "older")
+            process = multiprocessing.get_context("fork").Process(
+                target=_publish_selector_then_die, args=(str(path),)
+            )
+            process.start()
+            process.join(timeout=10)
+            self.assertEqual(-signal.SIGKILL, process.exitcode)
+            result = root / "result"
+            verifier = multiprocessing.get_context("fork").Process(
+                target=_reconcile_selector_in_child, args=(str(path), str(result))
+            )
+            verifier.start()
+            verifier.join(timeout=10)
+            self.assertEqual(0, verifier.exitcode)
+            self.assertEqual("committed", result.read_text(encoding="utf-8"))
+            self.assertEqual({"selector.json", "result"}, {entry.name for entry in root.iterdir()})
             with self.assertRaisesRegex(AuthorityError, "identities are invalid"):
                 reconcile_runtime_selector(
                     path,
