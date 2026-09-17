@@ -4,6 +4,7 @@
 """Recovery, mapping, duplicate-save, and privacy-boundary tests."""
 
 import unittest
+from typing import Any, cast
 
 from tools.safe_exit import ExitError, ExitEvent, ExitSnapshot, FutureDiscussion, SafeExitJournal
 
@@ -49,7 +50,7 @@ class SafeExitTests(unittest.TestCase):
                 "action": "checkpoint",
             }
             with self.subTest(kwargs=kwargs), self.assertRaisesRegex(ExitError, message):
-                ExitEvent(**{**args, **kwargs})
+                cast(Any, ExitEvent)(**{**args, **kwargs})
         with self.assertRaisesRegex(ExitError, "identity"):
             SafeExitJournal("bad", 1)
         with self.assertRaisesRegex(ExitError, "identity"):

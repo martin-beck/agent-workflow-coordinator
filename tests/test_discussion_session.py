@@ -4,6 +4,7 @@
 """Hostile and positive tests for revision-bound discussion sessions."""
 
 import unittest
+from typing import Any, cast
 
 from tools.discussion_session import SessionActor, SessionError, SessionEvent, SessionState
 from tools.discussion_session_model import ModelState, check_bounded_model, step
@@ -52,10 +53,10 @@ class DiscussionSessionTests(unittest.TestCase):
         )
         for key, value, message in cases:
             with self.subTest(key=key), self.assertRaisesRegex(SessionError, message):
-                SessionEvent(**{**valid, key: value})
+                cast(Any, SessionEvent)(**{**valid, key: value})
 
         with self.assertRaisesRegex(SessionError, "public-safe"):
-            SessionEvent(**{**valid, "response_ref": "/private"})
+            cast(Any, SessionEvent)(**{**valid, "response_ref": "/private"})
 
     def test_bounded_model_covers_hostile_and_accepted_session_traces(self) -> None:
         result = check_bounded_model()

@@ -4,6 +4,7 @@
 """Focused batch-point, coupling, stale-anchor, and re-ask tests."""
 
 import unittest
+from typing import Any, cast
 
 from tools.batched_discussion import BatchError, BatchEvent, BatchPoint, BatchState
 
@@ -92,7 +93,7 @@ class BatchedDiscussionTests(unittest.TestCase):
             ("response_ref", "../private", "public-safe"),
         ):
             with self.subTest(key=key), self.assertRaisesRegex(BatchError, message):
-                BatchEvent(**{**base, key: value})
+                cast(Any, BatchEvent)(**{**base, key: value})
         with self.assertRaisesRegex(BatchError, "identity"):
             BatchState("bad", 1, "session-1", "awg/packet-1", (BatchPoint("p", "a"),))
         with self.assertRaisesRegex(BatchError, "unique"):
