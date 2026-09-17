@@ -604,11 +604,11 @@ class LockDomainScopeTests(unittest.TestCase):
             validate_terminal_outcome(incomplete)
         valid = tuple(
             _issue_event(
-                token, phase, *fields, terminal_target="old" if phase == phases[-1] else None
+                token, phase, *fields, terminal_target="rollback" if phase == phases[-1] else None
             )
             for phase in phases
         )
-        self.assertEqual("old", validate_terminal_outcome(valid))
+        self.assertEqual("rollback", validate_terminal_outcome(valid))
 
     def test_terminal_outcome_rejects_invalid_or_premature_target_metadata(self) -> None:
         token = object()
