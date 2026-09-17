@@ -1,3 +1,6 @@
+# Copyright (C) Huawei Technologies Co., Ltd. 2026. All rights reserved.
+# SPDX-License-Identifier: MIT
+
 import pytest
 
 from tools.tui_bridge import TuiBridgeError, apply_tui_response, build_tui_request
