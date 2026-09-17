@@ -745,6 +745,32 @@ class RuntimeBootstrapTests(unittest.TestCase):
                     ),
                 )
 
+    def test_rejects_equal_but_distinct_verified_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            releases = root / "releases"
+            releases.mkdir(mode=0o700)
+            selected = releases / "v1.2.3"
+            selected.mkdir(mode=0o700)
+            self._write_manifest(selected)
+            selector = root / "runtime-selector.json"
+            commit_runtime_selector(selector, "v1.2.3", "v1.2.2")
+
+            def verifier(path: Path, expected: ExpectedRuntimeIdentity) -> VerifiedManifest:
+                equivalent = ExpectedRuntimeIdentity(
+                    expected.source_commit,
+                    expected.tag_ref,
+                    expected.tag_object,
+                    expected.signature_sha256,
+                    expected.trust_policy_sha256,
+                    expected.vendor_manifest_sha256,
+                )
+                digest = sha256(path.joinpath("runtime-manifest.json").read_bytes()).hexdigest()
+                return VerifiedManifest("v1.2.3", equivalent, digest)
+
+            with self.assertRaisesRegex(AuthorityError, "not bound"):
+                resolve_selected_runtime(selector, releases, self._identity_for_release(), verifier)
+
     def test_rejects_selector_manifest_release_mismatch(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
