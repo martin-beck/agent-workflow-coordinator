@@ -50,6 +50,16 @@ def _contract() -> dict[str, Any]:
 
 
 class UpgradeRunbookTests(unittest.TestCase):
+    def test_release_workflow_revalidates_from_fresh_clone(self) -> None:
+        workflow = (
+            Path(__file__).resolve().parents[1] / ".github/workflows/release.yml"
+        ).read_text(encoding="utf-8")
+        self.assertIn('git clone --no-local --no-hardlinks "$GITHUB_WORKSPACE"', workflow)
+        self.assertIn('uv run --directory "$RUNNER_TEMP/release-clone"', workflow)
+        self.assertIn('cmp -- "$RUNNER_TEMP/release-contract.json"', workflow)
+        self.assertIn('cmp -- "$RUNNER_TEMP/release-runbooks/operator.md"', workflow)
+        self.assertIn('cmp -- "$RUNNER_TEMP/release-runbooks/agent.md"', workflow)
+
     def test_release_workflow_generates_and_verifies_sanitized_runbooks(self) -> None:
         workflow = (
             Path(__file__).resolve().parents[1] / ".github/workflows/release.yml"
