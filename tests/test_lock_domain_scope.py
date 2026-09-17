@@ -24,7 +24,12 @@ from tools.admission_lease import (
 )
 from tools.admitted_control_store import AdmittedControlBinding
 from tools.handoffctl import locked
-from tools.lifecycle_trace import LifecycleEvent, _issue_event, validate_model_trace
+from tools.lifecycle_trace import (
+    LifecycleEvent,
+    _issue_event,
+    validate_model_action_contract,
+    validate_model_trace,
+)
 from tools.lock_domain import LockDomainContract, LockDomainError
 from tools.lock_domain_scope import LockDomainScope
 from tools.mutation_fence import MutationFence, provision, provision_control_binding
@@ -455,6 +460,29 @@ class LockDomainScopeTests(unittest.TestCase):
             )
         with self.assertRaisesRegex(ValueError, "revision is invalid"):
             validate_model_trace((_issue_event(token, "acquire", -1, *fields[1:]),))
+
+    def test_model_action_contract_binds_authoritative_upgrade_model(self) -> None:
+        validate_model_action_contract(Path(__file__).resolve().parents[1])
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "formal/upgrade").mkdir(parents=True)
+            (root / "formal/upgrade/UpgradeRecovery.tla").write_text(
+                "Preflight(op) == TRUE\n", encoding="utf-8"
+            )
+            with self.assertRaisesRegex(ValueError, "model actions are missing"):
+                validate_model_action_contract(root)
+            with self.assertRaisesRegex(ValueError, "model is unavailable"):
+                validate_model_action_contract(root / "missing")
+
+    def test_model_trace_rejects_empty_invalid_and_malformed_events(self) -> None:
+        with self.assertRaisesRegex(ValueError, "must not be empty"):
+            validate_model_trace(())
+        with self.assertRaisesRegex(ValueError, "invalid event"):
+            validate_model_trace((object(),))  # type: ignore[arg-type]
+        with self.assertRaisesRegex(ValueError, "identity is invalid"):
+            validate_model_trace(
+                (_issue_event(object(), "acquire", 1, "", "authority", PROJECT, "digest", "fence"),)
+            )
 
     def test_hold_performs_trusted_authority_reread_after_lock_acquisition(self) -> None:
         reads: list[str] = []

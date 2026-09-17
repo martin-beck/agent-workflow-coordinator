@@ -6,6 +6,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from itertools import pairwise
+from pathlib import Path
 from typing import Protocol
 
 MODEL_ACTIONS = {
@@ -32,6 +33,32 @@ MODEL_TRANSITIONS = {
     "rollback_verified": frozenset({"rollback_released"}),
     "rollback_released": frozenset(),
 }
+
+
+def validate_model_action_contract(root: Path) -> None:
+    """Require every trace action to remain defined by the authoritative TLA+ model."""
+    model = root / "formal/upgrade/UpgradeRecovery.tla"
+    try:
+        text = model.read_text(encoding="utf-8")
+    except OSError as error:
+        raise ValueError("authoritative upgrade model is unavailable") from error
+    definitions = {
+        "Preflight": ("Preflight(op) ==",),
+        "Quiesce": ("Quiesce(op) ==",),
+        "Backup": ("BackupGit(op) ==", "BackupSQLite(op) =="),
+        "Stage": ("Stage(op) ==",),
+        "Commit": ("Commit(op) ==",),
+        "Validate": ("Validate(op) ==",),
+        "Reopen": ("Reopen(op) ==",),
+        "StartRollback": ("StartRollback(op) ==",),
+        "VerifyRollback": ("VerifyRollback(op) ==",),
+        "ReleaseRollback": ("ReleaseRollback(op) ==",),
+    }
+    missing = [
+        action for action, names in definitions.items() if not any(name in text for name in names)
+    ]
+    if missing:
+        raise ValueError(f"model actions are missing: {', '.join(missing)}")
 
 
 @dataclass(frozen=True, slots=True, init=False)
