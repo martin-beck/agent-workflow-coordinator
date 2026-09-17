@@ -273,12 +273,21 @@ class SQLiteLifecycleExecutor:
             self._check_selector_binding(
                 snapshot, selector_ref, expected_state_revision, barrier_id, fencing_token
             )
+            selector_identity: tuple[tuple[int, int, int, int, int], ...] | None = None
             if selector_root is not None:
                 self._resolve_selector_target(selector_root, selector_ref)
+                selector_identity = self._selector_path_identity(selector_root, selector_ref)
             try:
                 yield snapshot
             finally:
                 self._assert_snapshot_locked(snapshot)
+                if selector_root is not None and selector_identity is not None:
+                    try:
+                        current_identity = self._selector_path_identity(selector_root, selector_ref)
+                    except SQLiteAuthorityError as error:
+                        raise SQLiteAuthorityError("selector target identity changed") from error
+                    if current_identity != selector_identity:
+                        raise SQLiteAuthorityError("selector target identity changed")
 
     @staticmethod
     def _resolve_selector_target(root: Path, selector_ref: str) -> Path:
@@ -314,6 +323,33 @@ class SQLiteLifecycleExecutor:
         ):
             raise SQLiteAuthorityError("selector target is unsafe")
         return target
+
+    @classmethod
+    def _selector_path_identity(
+        cls, root: Path, selector_ref: str
+    ) -> tuple[tuple[int, int, int, int, int], ...]:
+        """Capture identities for the root's ancestors, root, and selector."""
+        cls._resolve_selector_target(root, selector_ref)
+        paths = []
+        component = Path(root.anchor)
+        for part in root.parts[1:]:
+            component /= part
+            paths.append(component)
+        paths.append(root / selector_ref)
+        try:
+            return tuple(
+                (
+                    status.st_dev,
+                    status.st_ino,
+                    status.st_uid,
+                    stat.S_IMODE(status.st_mode),
+                    status.st_nlink,
+                )
+                for path in paths
+                for status in (path.lstat(),)
+            )
+        except OSError as error:
+            raise SQLiteAuthorityError("selector target identity unavailable") from error
 
     def execute_generated_operation(
         self,

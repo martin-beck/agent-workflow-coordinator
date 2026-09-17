@@ -404,6 +404,31 @@ class SQLiteAuthorityAdapterTests(unittest.TestCase):
             ),
         ):
             self.fail("symlink root was admitted")
+        selector.chmod(0o600)
+        with (
+            self.assertRaisesRegex(SQLiteAuthorityError, "selector target identity changed"),
+            executor.selector_visibility_scope(
+                "runtime-selector.json", 1, "barrier", "fence", selector_root=selector_root
+            ),
+        ):
+            replacement = selector_root / ".replacement"
+            replacement.write_text("replacement\n", encoding="utf-8")
+            replacement.chmod(0o600)
+            replacement.replace(selector)
+        selector.write_text("{}\n", encoding="utf-8")
+        with (
+            self.assertRaisesRegex(SQLiteAuthorityError, "selector target identity changed"),
+            executor.selector_visibility_scope(
+                "runtime-selector.json", 1, "barrier", "fence", selector_root=selector_root
+            ),
+        ):
+            replacement_root = self.root / "replacement-runtime"
+            replacement_root.mkdir(mode=0o700)
+            replacement_root.joinpath("runtime-selector.json").write_text("{}\n", encoding="utf-8")
+            replacement_root.joinpath("runtime-selector.json").chmod(0o600)
+            old_root = selector_root
+            old_root.rename(self.root / "old-runtime")
+            replacement_root.rename(old_root)
         with (
             self.assertRaisesRegex(RuntimeError, "publication failed"),
             executor.selector_visibility_scope("runtime-selector.json", 1, "barrier", "fence"),
