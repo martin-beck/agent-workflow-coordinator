@@ -128,8 +128,8 @@ class RuntimeBootstrapTests(unittest.TestCase):
                 selector, releases, self._identity_for_release(), self._verifier
             ) as resolved:
                 admission = resolved.admit_for_dispatch()
-                resolved.close()
-                resolved.close()
+                admission.close()
+                admission.close()
                 self.assertEqual(-1, admission.runtime.descriptor)
                 with self.assertRaisesRegex(AuthorityError, "resolved runtime is unavailable"):
                     admission.revalidate()
