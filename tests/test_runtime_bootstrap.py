@@ -96,7 +96,9 @@ class RuntimeBootstrapTests(unittest.TestCase):
             with resolve_selected_runtime_bound(
                 selector, releases, self._identity_for_release(), self._verifier
             ) as resolved:
-                resolved.revalidate_for_dispatch()
+                admission = resolved.admit_for_dispatch()
+                self.assertIs(admission.runtime, resolved)
+                self.assertEqual(resolved.identity, admission.identity)
                 manifest = selected / "runtime-manifest.json"
                 replacement = selected / "replacement.json"
                 replacement.write_text(manifest.read_text().replace("v1.2.3", "v1.2.4"))
@@ -104,7 +106,7 @@ class RuntimeBootstrapTests(unittest.TestCase):
                 manifest.unlink()
                 replacement.rename(manifest)
                 with self.assertRaisesRegex(AuthorityError, "manifest identity changed"):
-                    resolved.revalidate_for_dispatch()
+                    resolved.admit_for_dispatch()
 
     def test_bound_runtime_rejects_invalid_evidence_and_identity(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

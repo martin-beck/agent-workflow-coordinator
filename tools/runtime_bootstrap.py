@@ -51,6 +51,14 @@ class VerifiedManifest:
     digest: str
 
 
+@dataclass(frozen=True, slots=True)
+class DispatchAdmission:
+    """Read-only admission evidence bound to one retained runtime handle."""
+
+    runtime: ResolvedRuntime
+    identity: VerifiedManifest
+
+
 @dataclass(slots=True)
 class ResolvedRuntime:
     """Opaque descriptor-bound runtime result; dispatch is intentionally absent."""
@@ -103,6 +111,11 @@ class ResolvedRuntime:
         """Run the complete retained identity gate before future dispatch."""
         self.revalidate()
         self.revalidate_manifest()
+
+    def admit_for_dispatch(self) -> DispatchAdmission:
+        """Return admission evidence only after the complete identity gate."""
+        self.revalidate_for_dispatch()
+        return DispatchAdmission(self, self.identity)
 
     def close(self) -> None:
         """Close the retained descriptor; no execution operation is exposed."""
