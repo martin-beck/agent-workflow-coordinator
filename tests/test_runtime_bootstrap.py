@@ -365,6 +365,27 @@ class RuntimeBootstrapTests(unittest.TestCase):
                 with self.assertRaisesRegex(AuthorityError, "digest is unavailable"):
                     resolved.revalidate_manifest()
 
+    def test_resolved_runtime_revalidate_rejects_malformed_release(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            releases = root / "releases"
+            releases.mkdir(mode=0o700)
+            selected = releases / "v1.2.3"
+            selected.mkdir(mode=0o700)
+            self._write_manifest(selected)
+            selector = root / "runtime-selector.json"
+            commit_runtime_selector(selector, "v1.2.3", "v1.2.2")
+            with resolve_selected_runtime_bound(
+                selector, releases, self._identity_for_release(), self._verifier
+            ) as resolved:
+                resolved.identity = VerifiedManifest(
+                    cast(str, object()),
+                    resolved.identity.identity,
+                    resolved.identity.digest,
+                )
+                with self.assertRaisesRegex(AuthorityError, "release is unavailable"):
+                    resolved.revalidate_manifest()
+
     def test_dispatch_admission_close_rejects_malformed_runtime(self) -> None:
         admission = object.__new__(DispatchAdmission)
         object.__setattr__(admission, "runtime", object())
