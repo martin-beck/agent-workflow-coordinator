@@ -24,7 +24,7 @@ from tools.admission_lease import (
 )
 from tools.admitted_control_store import AdmittedControlBinding
 from tools.handoffctl import locked
-from tools.lifecycle_trace import LifecycleEvent
+from tools.lifecycle_trace import LifecycleEvent, _issue_event, validate_model_trace
 from tools.lock_domain import LockDomainContract, LockDomainError
 from tools.lock_domain_scope import LockDomainScope
 from tools.mutation_fence import MutationFence, provision, provision_control_binding
@@ -392,6 +392,19 @@ class LockDomainScopeTests(unittest.TestCase):
             LifecycleEvent(
                 "scope.reread", 1, "owner-1", "authority", PROJECT, "digest", "fence", object()
             )
+
+    def test_scope_events_map_to_model_actions_and_reject_mixed_tokens(self) -> None:
+        first_token = object()
+        second_token = object()
+        event_fields = (1, "owner-1", "authority", PROJECT, "digest", "fence")
+        first = _issue_event(first_token, "acquire", *event_fields)
+        second = _issue_event(first_token, "quiesce", *event_fields)
+        self.assertEqual(("Preflight", "Quiesce"), validate_model_trace((first, second)))
+        foreign = _issue_event(second_token, "backup", *event_fields)
+        with self.assertRaisesRegex(ValueError, "mixes scope"):
+            validate_model_trace((first, foreign))
+        with self.assertRaisesRegex(ValueError, "not mapped"):
+            validate_model_trace((_issue_event(first_token, "scope.reread", *event_fields),))
 
     def test_hold_performs_trusted_authority_reread_after_lock_acquisition(self) -> None:
         reads: list[str] = []
