@@ -462,7 +462,12 @@ def resolve_selected_runtime_bound(  # noqa: C901
         )
         if manifest_identity != expected_identity:
             raise AuthorityError("runtime manifest identity does not match expected identity")
-        verified = verify_authenticity(release_path, expected_identity)
+        try:
+            verified = verify_authenticity(release_path, expected_identity)
+        except OSError:
+            raise
+        except Exception as error:
+            raise AuthorityError("runtime authenticity verification failed") from error
         if (
             not isinstance(verified, VerifiedManifest)
             or verified.release != release
