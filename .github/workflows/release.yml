@@ -72,6 +72,9 @@ jobs:
               raise SystemExit("release signing requires gpg.format=ssh")
           policy = config("gpg.ssh.allowedSignersFile")
           identity = config("user.email")
+          canonical_identity = "martin.beck2@gmx.de"
+          if identity != canonical_identity:
+              raise SystemExit("configured release identity does not match the canonical GitHub release identity")
           policy_path = Path(policy).expanduser()
           key_path = Path(key).expanduser()
           if not key_path.is_file():
