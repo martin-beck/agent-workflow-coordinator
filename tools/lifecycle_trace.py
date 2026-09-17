@@ -89,6 +89,7 @@ def validate_terminal_recovery_contract(root: Path) -> None:
         'IF target = "new"',
         "rollbackChild # NoChild",
         "terminalTarget' = target",
+        "freshRuntimeVerified' = TRUE",
     )
     missing = [name for name in required if name not in text]
     if missing:
