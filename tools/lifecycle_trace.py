@@ -85,6 +85,8 @@ def validate_terminal_recovery_contract(root: Path) -> None:
         'Targets == {"new", "rollback"}',
         'TerminalResults == {"none", "new", "rollback"}',
         "VerifyTerminal(p, target) ==",
+        "ControlHeld(p)",
+        "AuthorityHeld(p)",
         "terminalTarget",
         "terminalVerified",
         "freshRuntimeVerified",
