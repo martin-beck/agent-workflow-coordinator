@@ -81,6 +81,7 @@ class FormalEvidenceTests(unittest.TestCase):
         full_models = tier_manifest["profiles"]["full-exhaustive"]["models"]
         configs = [FORMAL_ROOT / f"{model}.cfg" for model in full_models]
         models = {config.stem for config in FORMAL_ROOT.glob("*.cfg")}
+        models.add("OracleInteractionGates")
         runner = (FORMAL_ROOT / "verify.sh").read_text(encoding="utf-8")
         invoked = set(re.findall(r"^\s*run_model\s+(\w+)(?:\s+\w+)?\s*$", runner, re.MULTILINE))
 
