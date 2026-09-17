@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## v0.3.10 - 2026-09-18
+
+- Add the Coordinator TUI bridge adapter with typed, fail-closed response handling.
+- Add unsigned release-candidate identity validation and portable signing-command guidance.
+
 ## v0.3.8 - 2026-09-15
 
 - Publish the complete formal-runtime vendor closure under a new immutable release tag because
