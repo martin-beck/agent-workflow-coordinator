@@ -473,6 +473,11 @@ class LockDomainScopeTests(unittest.TestCase):
                 validate_model_action_contract(root)
             with self.assertRaisesRegex(ValueError, "model is unavailable"):
                 validate_model_action_contract(root / "missing")
+            event = _issue_event(
+                object(), "acquire", 1, "owner-1", "authority", PROJECT, "digest", "fence"
+            )
+            with self.assertRaisesRegex(ValueError, "model actions are missing"):
+                validate_model_trace((event,), model_root=root)
 
     def test_model_trace_rejects_empty_invalid_and_malformed_events(self) -> None:
         with self.assertRaisesRegex(ValueError, "must not be empty"):
