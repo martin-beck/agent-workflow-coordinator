@@ -83,6 +83,22 @@ def _publish_selector_before_fsync_then_die(path_text: str) -> None:
         commit_runtime_selector(path, "new", "old")
 
 
+def _publish_selector_after_directory_fsync_then_die(path_text: str) -> None:
+    path = Path(path_text)
+    real_fsync = os.fsync
+    calls = 0
+
+    def crash_after_directory_fsync(descriptor: int) -> None:
+        nonlocal calls
+        calls += 1
+        real_fsync(descriptor)
+        if calls == 2:
+            os.kill(os.getpid(), signal.SIGKILL)
+
+    with patch("tools.upgrade_authority.os.fsync", side_effect=crash_after_directory_fsync):
+        commit_runtime_selector(path, "new", "old")
+
+
 def _reconcile_selector_in_child(path_text: str, result_text: str) -> None:
     result = reconcile_runtime_selector(
         Path(path_text),
@@ -639,6 +655,27 @@ class RuntimeSelectorTests(unittest.TestCase):
                     after_active_release="same",
                     after_previous_release="pair",
                 )
+
+    def test_child_death_after_directory_fsync_reconciles_new_pair(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / "selector.json"
+            commit_runtime_selector(path, "old", "older")
+            process = multiprocessing.get_context("fork").Process(
+                target=_publish_selector_after_directory_fsync_then_die, args=(str(path),)
+            )
+            process.start()
+            process.join(timeout=10)
+            self.assertEqual(-signal.SIGKILL, process.exitcode)
+            result = root / "result"
+            verifier = multiprocessing.get_context("fork").Process(
+                target=_reconcile_and_verify_selector_in_child, args=(str(path), str(result))
+            )
+            verifier.start()
+            verifier.join(timeout=10)
+            self.assertEqual(0, verifier.exitcode)
+            self.assertEqual("committed:new:old", result.read_text(encoding="utf-8"))
+            self.assertEqual({"selector.json", "result"}, {entry.name for entry in root.iterdir()})
 
     def test_selector_recovery_rejects_unsafe_abandoned_temporary(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
