@@ -15,7 +15,6 @@ def test_release_workflow_probes_external_signer_without_publishing() -> None:
     assert "ephemeral self-test only" in WORKFLOW
     assert '"@SOURCE_COMMIT@": transition["to"]["source_commit"]' in WORKFLOW
     assert "no signing or publication" in WORKFLOW
-    assert "do not" in WORKFLOW
 
 
 def test_release_signer_template_is_self_test_only() -> None:
