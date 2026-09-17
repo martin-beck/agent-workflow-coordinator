@@ -4,10 +4,12 @@
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import stat
 from collections.abc import Callable
+from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path
 
@@ -15,7 +17,91 @@ from tools.upgrade_authority import AuthorityError, read_runtime_selector
 
 _RELEASE = re.compile(r"v[0-9]+\.[0-9]+\.[0-9]+\Z")
 _DIGEST = re.compile(r"[0-9a-f]{64}\Z")
+_OID = re.compile(r"[0-9a-f]{40}\Z")
 _MAX_MANIFEST_BYTES = 16 * 1024 * 1024
+_MANIFEST_FIELDS = {
+    "release",
+    "source_commit",
+    "tag_ref",
+    "tag_object",
+    "signature_sha256",
+    "trust_policy_sha256",
+    "vendor_manifest_sha256",
+}
+
+
+@dataclass(frozen=True, slots=True)
+class ExpectedRuntimeIdentity:
+    """Caller-supplied identity facts validated independently."""
+
+    source_commit: str
+    tag_ref: str
+    tag_object: str
+    signature_sha256: str
+    trust_policy_sha256: str
+    vendor_manifest_sha256: str
+
+
+@dataclass(frozen=True, slots=True)
+class VerifiedManifest:
+    """Manifest identity retained as one verification result."""
+
+    release: str
+    identity: ExpectedRuntimeIdentity
+    digest: str
+
+
+def _manifest_pairs(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    value = dict(pairs)
+    if len(value) != len(pairs):
+        raise AuthorityError("runtime manifest contains duplicate fields")
+    return value
+
+
+def read_runtime_manifest(runtime_root: Path) -> dict[str, str]:
+    """Read and strictly validate a runtime manifest through one descriptor."""
+    manifest = runtime_root / "runtime-manifest.json"
+    try:
+        descriptor = os.open(manifest, os.O_RDONLY | os.O_NOFOLLOW)
+        try:
+            value = os.fstat(descriptor)
+            if (
+                not stat.S_ISREG(value.st_mode)
+                or value.st_uid != os.geteuid()
+                or value.st_nlink != 1
+                or stat.S_IMODE(value.st_mode) != 0o600
+            ):
+                raise AuthorityError("runtime manifest is unsafe")
+            data = bytearray()
+            while chunk := os.read(descriptor, 65536):
+                data.extend(chunk)
+                if len(data) > _MAX_MANIFEST_BYTES:
+                    raise AuthorityError("runtime manifest is too large")
+        finally:
+            os.close(descriptor)
+    except OSError as error:
+        raise AuthorityError("runtime manifest is unavailable") from error
+    try:
+        parsed = json.loads(bytes(data), object_pairs_hook=_manifest_pairs)
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise AuthorityError("runtime manifest JSON is invalid") from error
+    if not isinstance(parsed, dict) or set(parsed) != _MANIFEST_FIELDS:
+        raise AuthorityError("runtime manifest fields are invalid")
+    if any(not isinstance(item, str) for item in parsed.values()):
+        raise AuthorityError("runtime manifest identity is invalid")
+    result = {key: str(parsed[key]) for key in _MANIFEST_FIELDS}
+    if (
+        _RELEASE.fullmatch(result["release"]) is None
+        or result["tag_ref"] != f"refs/tags/{result['release']}"
+        or _OID.fullmatch(result["source_commit"]) is None
+        or _OID.fullmatch(result["tag_object"]) is None
+        or any(
+            _DIGEST.fullmatch(result[key]) is None
+            for key in _MANIFEST_FIELDS - {"release", "source_commit", "tag_ref", "tag_object"}
+        )
+    ):
+        raise AuthorityError("runtime manifest identity is invalid")
+    return result
 
 
 def verify_runtime_manifest(runtime_root: Path, expected_digest: str) -> bool:
@@ -66,24 +152,7 @@ def verify_runtime_manifest(runtime_root: Path, expected_digest: str) -> bool:
     return True
 
 
-def resolve_selected_runtime(
-    selector: Path,
-    releases_root: Path,
-    verify_authenticity: Callable[[Path], bool] | None = None,
-) -> Path:
-    """Resolve one selected release without executing or mutating anything.
-
-    The selector and release directory must be owner-only regular objects.  A
-    release token is bounded to one direct child of ``releases_root``; symlink
-    and hard-link aliases are rejected before a caller can execute the result.
-    """
-    selected = read_runtime_selector(selector)
-    if verify_authenticity is None:
-        raise AuthorityError("runtime authenticity verifier is required")
-    release = selected["active_release"]
-    if not isinstance(release, str) or _RELEASE.fullmatch(release) is None:
-        raise AuthorityError("runtime selector release identity is invalid")
-    root = releases_root.absolute()
+def _release_path(root: Path, release: str) -> Path:
     try:
         component = Path(root.anchor)
         for part in root.parts[1:]:
@@ -104,10 +173,52 @@ def resolve_selected_runtime(
         or stat.S_IMODE(value.st_mode) != 0o700
     ):
         raise AuthorityError("selected runtime release is unsafe")
+    return release_path
+
+
+def resolve_selected_runtime(
+    selector: Path,
+    releases_root: Path,
+    expected_identity: ExpectedRuntimeIdentity | None = None,
+    verify_authenticity: Callable[[Path, ExpectedRuntimeIdentity], VerifiedManifest] | None = None,
+) -> Path:
+    """Resolve one selected release without executing or mutating anything.
+
+    The selector and release directory must be owner-only regular objects.  A
+    release token is bounded to one direct child of ``releases_root``; symlink
+    and hard-link aliases are rejected before a caller can execute the result.
+    """
+    selected = read_runtime_selector(selector)
+    if expected_identity is None or verify_authenticity is None:
+        raise AuthorityError("runtime authenticity verifier and expected identity are required")
+    release = selected["active_release"]
+    if not isinstance(release, str) or _RELEASE.fullmatch(release) is None:
+        raise AuthorityError("runtime selector release identity is invalid")
+    root = releases_root.absolute()
+    release_path = _release_path(root, release)
+    manifest = read_runtime_manifest(release_path)
+    if manifest["release"] != release:
+        raise AuthorityError("runtime manifest release does not match selector")
+    manifest_identity = ExpectedRuntimeIdentity(
+        source_commit=manifest["source_commit"],
+        tag_ref=manifest["tag_ref"],
+        tag_object=manifest["tag_object"],
+        signature_sha256=manifest["signature_sha256"],
+        trust_policy_sha256=manifest["trust_policy_sha256"],
+        vendor_manifest_sha256=manifest["vendor_manifest_sha256"],
+    )
+    if manifest_identity != expected_identity:
+        raise AuthorityError("runtime manifest identity does not match expected identity")
     try:
-        verified = verify_authenticity(release_path)
+        verified = verify_authenticity(release_path, expected_identity)
     except Exception as error:
         raise AuthorityError("runtime authenticity verification failed") from error
-    if verified is not True:
-        raise AuthorityError("runtime authenticity verification failed")
+    if (
+        not isinstance(verified, VerifiedManifest)
+        or verified.release != release
+        or verified.identity != expected_identity
+        or _DIGEST.fullmatch(verified.digest) is None
+    ):
+        raise AuthorityError("runtime authenticity evidence is not bound to selected release")
+    verify_runtime_manifest(release_path, verified.digest)
     return release_path
