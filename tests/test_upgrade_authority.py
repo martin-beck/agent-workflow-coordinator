@@ -151,6 +151,22 @@ def _publish_selector_directory_fsync_failure(path_text: str) -> None:
         commit_runtime_selector(path, "new", "old")
 
 
+def _publish_selector_final_recheck_failure(path_text: str) -> None:
+    path = Path(path_text)
+    original_recheck = upgrade_authority._recheck_parent
+    calls = 0
+
+    def fail_final_recheck(selector: Path, identity: tuple[int, int]) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise AuthorityError("injected final parent identity failure")
+        original_recheck(selector, identity)
+
+    with patch.object(upgrade_authority, "_recheck_parent", side_effect=fail_final_recheck):
+        commit_runtime_selector(path, "new", "old")
+
+
 def _reconcile_selector_in_child(path_text: str, result_text: str) -> None:
     result = reconcile_runtime_selector(
         Path(path_text),
@@ -778,6 +794,27 @@ class RuntimeSelectorTests(unittest.TestCase):
             commit_runtime_selector(path, "old", "older")
             process = multiprocessing.get_context("fork").Process(
                 target=_publish_selector_directory_fsync_failure, args=(str(path),)
+            )
+            process.start()
+            process.join(timeout=10)
+            self.assertNotEqual(0, process.exitcode)
+            result = root / "result"
+            verifier = multiprocessing.get_context("fork").Process(
+                target=_reconcile_and_verify_selector_in_child, args=(str(path), str(result))
+            )
+            verifier.start()
+            verifier.join(timeout=10)
+            self.assertEqual(0, verifier.exitcode)
+            self.assertEqual("committed:new:old", result.read_text(encoding="utf-8"))
+            self.assertEqual({"selector.json", "result"}, {entry.name for entry in root.iterdir()})
+
+    def test_final_recheck_failure_reconciles_new_pair(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / "selector.json"
+            commit_runtime_selector(path, "old", "older")
+            process = multiprocessing.get_context("fork").Process(
+                target=_publish_selector_final_recheck_failure, args=(str(path),)
             )
             process.start()
             process.join(timeout=10)
