@@ -554,7 +554,8 @@ class LockDomainScopeTests(unittest.TestCase):
                 'IF target = "new" rollbackChild # NoChild ELSE rollbackChild # NoChild '
                 "~terminalVerified terminalTarget' = target\n"
                 "freshRuntimeVerified' = TRUE\n"
-                "BeginReopen(p) == TRUE\n",
+                "BeginReopen(p) == TRUE\n"
+                "controlRevision < MaxRevision\n",
                 encoding="utf-8",
             )
             with self.assertRaisesRegex(ValueError, "authorityRechecked"):
