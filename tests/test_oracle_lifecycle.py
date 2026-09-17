@@ -69,6 +69,20 @@ class OracleLifecycleTests(unittest.TestCase):
         with self.assertRaisesRegex(GateError, "unresolved"):
             transition_allowed(meta, "run")
 
+    def test_legacy_completed_gate_metadata_remains_compatible(self) -> None:
+        legacy = {
+            "id": "AR-0022",
+            "oracle_gate": {"required": True, "open_stage": None},
+        }
+        transition_allowed(legacy, "release")
+
+        incomplete = {
+            "id": "AR-0022",
+            "oracle_gate": {"required": True, "open_stage": None, "completed": []},
+        }
+        with self.assertRaisesRegex(GateError, "reconciliation"):
+            transition_allowed(incomplete, "release")
+
     def test_public_safe_artifacts_and_event_shape_are_fail_closed(self) -> None:
         with self.assertRaisesRegex(GateError, "public-safe"):
             ArtifactRef("/private/plan", "sha256:" + "a" * 64)
