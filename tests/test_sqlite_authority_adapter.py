@@ -33,6 +33,7 @@ from tools.sqlite_authority_adapter import (
     SQLiteAuthorityError,
     SQLiteLifecycleExecutor,
 )
+from tools.upgrade_authority import commit_runtime_selector
 from tools.upgrade_engine import BoundRollbackCapability, PhaseContext, UpgradeEngine
 from tools.upgrade_identity import (
     BarrierSessionIdentity,
@@ -382,6 +383,56 @@ class SQLiteAuthorityAdapterTests(unittest.TestCase):
             "runtime-selector.json", 1, "barrier", "fence", selector_root=selector_root
         ) as held:
             self.assertEqual(snapshot, held)
+        commit_runtime_selector(selector, "v0.3.5", "v0.3.4")
+        self.assertEqual(
+            "committed",
+            executor.reconcile_selector_publication(
+                "runtime-selector.json",
+                selector_root,
+                1,
+                "barrier",
+                "fence",
+                before_active_release="v0.3.4",
+                before_previous_release="v0.3.3",
+                after_active_release="v0.3.5",
+                after_previous_release="v0.3.4",
+            ),
+        )
+        with self.assertRaisesRegex(SQLiteAuthorityError, "pairs must differ"):
+            executor.reconcile_selector_publication(
+                "runtime-selector.json",
+                selector_root,
+                1,
+                "barrier",
+                "fence",
+                before_active_release="v0.3.4",
+                before_previous_release="v0.3.3",
+                after_active_release="v0.3.4",
+                after_previous_release="v0.3.3",
+            )
+        with self.assertRaisesRegex(SQLiteAuthorityError, "identity is invalid"):
+            executor.reconcile_selector_publication(
+                "runtime-selector.json",
+                selector_root,
+                1,
+                "barrier",
+                "fence",
+                before_active_release="v0.3.4",
+                before_previous_release="v0.3.3",
+                after_active_release="x" * 129,
+                after_previous_release="v0.3.4",
+            )
+        with (
+            self.assertRaisesRegex(SQLiteAuthorityError, "selector target identity changed"),
+            executor.selector_visibility_scope(
+                "runtime-selector.json", 1, "barrier", "fence", selector_root=selector_root
+            ),
+        ):
+            selector.write_text(
+                '{"active_release":"v0.3.5","previous_release":"v0.3.4",'
+                '"schema_version":1,"padding":"changed"}\n',
+                encoding="utf-8",
+            )
         with self.assertRaisesRegex(SQLiteAuthorityError, "selector target is unsafe"):
             selector.chmod(0o644)
             with executor.selector_visibility_scope(

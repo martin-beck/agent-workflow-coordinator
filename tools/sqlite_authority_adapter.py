@@ -6,14 +6,16 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sqlite3
 import stat
 import tempfile
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
+from hashlib import sha256
 from pathlib import Path
-from typing import Any, TypeVar, cast
+from typing import Any, Literal, TypeVar, cast
 
 from tools.admission_lease import AdmissionLease, AdmissionRecheck
 from tools.lifecycle_session import LifecycleSession, _issue
@@ -324,7 +326,7 @@ class SQLiteLifecycleExecutor:
     @classmethod
     def _selector_path_identity(
         cls, root: Path, selector_ref: str
-    ) -> tuple[tuple[int, int, int, int, int], ...]:
+    ) -> tuple[tuple[tuple[int, int, int, int, int], ...], str]:
         """Capture identities for the root's ancestors, root, and selector."""
         cls._resolve_selector_target(root, selector_ref)
         paths = []
@@ -334,7 +336,7 @@ class SQLiteLifecycleExecutor:
             paths.append(component)
         paths.append(root / selector_ref)
         try:
-            return tuple(
+            identities = tuple(
                 (
                     status.st_dev,
                     status.st_ino,
@@ -345,8 +347,94 @@ class SQLiteLifecycleExecutor:
                 for path in paths
                 for status in (path.lstat(),)
             )
+            target = paths[-1]
+            expected = identities[-1]
+            descriptor = os.open(target, os.O_RDONLY | os.O_NOFOLLOW)
+            try:
+                opened = os.fstat(descriptor)
+                opened_identity = (
+                    opened.st_dev,
+                    opened.st_ino,
+                    opened.st_uid,
+                    stat.S_IMODE(opened.st_mode),
+                    opened.st_nlink,
+                )
+                if opened_identity != expected:
+                    raise SQLiteAuthorityError("selector target identity changed")
+                digest = sha256()
+                total = 0
+                while chunk := os.read(descriptor, 65536):
+                    total += len(chunk)
+                    if total > 16 * 1024 * 1024:
+                        raise SQLiteAuthorityError("selector target is too large")
+                    digest.update(chunk)
+                final = os.fstat(descriptor)
+                final_identity = (
+                    final.st_dev,
+                    final.st_ino,
+                    final.st_uid,
+                    stat.S_IMODE(final.st_mode),
+                    final.st_nlink,
+                )
+                if final_identity != expected:
+                    raise SQLiteAuthorityError("selector target identity changed")
+            finally:
+                os.close(descriptor)
+            return identities, digest.hexdigest()
         except OSError as error:
             raise SQLiteAuthorityError("selector target identity unavailable") from error
+
+    def reconcile_selector_publication(
+        self,
+        selector_ref: str,
+        selector_root: Path,
+        expected_state_revision: int,
+        barrier_id: str,
+        fencing_token: str,
+        *,
+        before_active_release: str,
+        before_previous_release: str,
+        after_active_release: str,
+        after_previous_release: str,
+    ) -> Literal["committed", "not-committed"]:
+        """Reconcile an uncertain selector result under the held barrier.
+
+        This only classifies the already-published selector as the exact old
+        or new pair.  It never writes the selector or authorizes an upgrade.
+        """
+        from tools.upgrade_authority import read_runtime_selector
+
+        releases = (
+            before_active_release,
+            before_previous_release,
+            after_active_release,
+            after_previous_release,
+        )
+        if not all(
+            isinstance(value, str) and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", value)
+            for value in releases
+        ):
+            raise SQLiteAuthorityError("selector release identity is invalid")
+        if (before_active_release, before_previous_release) == (
+            after_active_release,
+            after_previous_release,
+        ):
+            raise SQLiteAuthorityError("selector release pairs must differ")
+
+        with self.selector_visibility_scope(
+            selector_ref,
+            expected_state_revision,
+            barrier_id,
+            fencing_token,
+            selector_root=selector_root,
+        ):
+            current = read_runtime_selector(selector_root / selector_ref)
+            pair = (current["active_release"], current["previous_release"])
+            if pair == (after_active_release, after_previous_release):
+                return "committed"
+            if pair == (before_active_release, before_previous_release):
+                return "not-committed"
+            raise SQLiteAuthorityError("selector reconciliation found unknown release identity")
 
     def execute_generated_operation(
         self,
