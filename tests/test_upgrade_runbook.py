@@ -85,6 +85,15 @@ class UpgradeRunbookTests(unittest.TestCase):
         )
         self.assertIn('test -f "$RUNNER_TEMP/$artifact"', workflow)
         self.assertIn('test ! -L "$RUNNER_TEMP/$artifact"', workflow)
+        self.assertIn('test -s "$RUNNER_TEMP/release-source-commit.txt"', workflow)
+        self.assertIn(
+            'test "$(wc -l < "$RUNNER_TEMP/release-source-commit.txt")" -eq 1',
+            workflow,
+        )
+        self.assertIn(
+            'test "$(cat "$RUNNER_TEMP/release-source-commit.txt")" = "$GITHUB_SHA"',
+            workflow,
+        )
         self.assertIn("printf '%s\\n' \"$GITHUB_SHA\"", workflow)
         self.assertIn(
             "sha256sum release-contract.json release-runbooks/operator.md "
