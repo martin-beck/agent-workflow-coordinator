@@ -26,6 +26,10 @@ def test_release_workflow_probes_external_signer_without_publishing() -> None:
     assert '.removeprefix("refs/tags/")' in WORKFLOW
     assert "Not executed by CI" in WORKFLOW
     assert "/home/martin" not in WORKFLOW
+    assert '"--repo", "."' in WORKFLOW
+    assert '"./release-signature.json"' in WORKFLOW
+    assert '"--repo", os.environ["GITHUB_WORKSPACE"]' not in WORKFLOW
+    assert '"--output", os.path.join(os.environ["RUNNER_TEMP"]' not in WORKFLOW
 
 
 def test_signing_command_is_after_release_contract_validation() -> None:
