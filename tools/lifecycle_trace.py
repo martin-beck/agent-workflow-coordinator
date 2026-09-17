@@ -104,6 +104,7 @@ def validate_terminal_recovery_contract(root: Path) -> None:
         "CompleteReopen(p) ==",
         'sessionStatus = "releasing"',
         'sessionStatus\' = "released"',
+        "controlRevision' = controlRevision + 1",
         "FreshRuntimeRead(p) ==",
         "NoUnheldRollbackGap",
         "terminalTarget \\in Targets",
