@@ -540,6 +540,15 @@ class RollbackControlStoreTests(unittest.TestCase):
             assert state is not None
             self.assertEqual(("held", 2), (state.status, state.revision))
             self.assertIsNotNone(state.forward_child)
+            child_result = root / "child-result"
+            verifier = multiprocessing.get_context("fork").Process(
+                target=_reopen_ambiguous_child,
+                args=(str(control_path), str(authority_path), str(child_result)),
+            )
+            verifier.start()
+            verifier.join(timeout=10)
+            self.assertEqual(0, verifier.exitcode)
+            self.assertEqual("held:2\n", child_result.read_text(encoding="utf-8"))
             self.assertEqual(authority_bytes, authority_path.read_bytes())
 
     def test_v10_multiprocess_stale_fence_writer_is_rejected(self) -> None:
