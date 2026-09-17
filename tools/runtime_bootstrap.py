@@ -99,6 +99,11 @@ class ResolvedRuntime:
             raise AuthorityError("resolved runtime manifest identity changed")
         verify_runtime_manifest(self.path, self.identity.digest)
 
+    def revalidate_for_dispatch(self) -> None:
+        """Run the complete retained identity gate before future dispatch."""
+        self.revalidate()
+        self.revalidate_manifest()
+
     def close(self) -> None:
         """Close the retained descriptor; no execution operation is exposed."""
         if self.descriptor >= 0:
