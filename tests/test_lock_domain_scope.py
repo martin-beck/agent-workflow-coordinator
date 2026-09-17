@@ -502,6 +502,23 @@ class LockDomainScopeTests(unittest.TestCase):
             (root / "formal/upgrade/UpgradeRecovery.tla").write_text(all_actions, encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "invariant NoReplacementBeforeBackup"):
                 validate_model_action_contract(root)
+            all_but_availability = (
+                all_actions
+                + "\n"
+                + "\n".join(
+                    (
+                        "NoReplacementBeforeBackup == TRUE",
+                        "ReleaseOrder == TRUE",
+                        "RollbackProof == TRUE",
+                        "RollbackRequiresBackup == TRUE",
+                    )
+                )
+            )
+            (root / "formal/upgrade/UpgradeRecovery.tla").write_text(
+                all_but_availability, encoding="utf-8"
+            )
+            with self.assertRaisesRegex(ValueError, "invariant FunctionalAvailability"):
+                validate_model_action_contract(root)
 
     def test_model_trace_rejects_empty_invalid_and_malformed_events(self) -> None:
         with self.assertRaisesRegex(ValueError, "must not be empty"):
