@@ -13,7 +13,7 @@ Initialization creates three tracked files:
 
 Every command after `init` verifies the profile UUID, state checkout root and origin, product
 identity from private runtime configuration, product checkout origin, and the caller's current
-working directory. Calls from another project fail before locking or reading/mutating task state.
+working directory. Calls from another project fail before locking or reading/mutating task status.
 The binding is an accidental-misuse boundary, not protection against someone who deliberately
 rewrites the coordinator source, Git history, and binding files.
 

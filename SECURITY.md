@@ -1,7 +1,7 @@
 # Security policy
 
 Report suspected vulnerabilities privately through GitHub's security-advisory interface. Do not
-open a public issue containing an exploit, credential, private path or sensitive task state.
+open a public issue containing an exploit, credential, private path or sensitive task status.
 
 The supported boundary is cooperating processes, a local filesystem implementing SQLite WAL
 locking/shared memory (or POSIX flock for the Git backend), trusted repository source/history, and

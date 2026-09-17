@@ -27,6 +27,7 @@ The native-to-shared boundary is intentional:
 | Supply-chain policy | coordinator vendor manifest and locked quality policy |
 
 AWQ adapter execution remains opt-in and does not acquire tools at runtime.
-The coordinator-specific `terminology` profile is deferred until a reviewed
-terminology registry and negative fixtures are added.
-
+The coordinator-owned `quality/terminology.json` registry supplies the terms;
+AWQ performs bounded offline lexical checking in the declared documentation and
+example scopes. This is a terminology-contract gate, not semantic or policy
+proof. Native coordinator gates remain authoritative.

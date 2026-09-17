@@ -48,6 +48,10 @@ Read [the formal proof boundary](formal/handoffctl/README.md): these guarantees 
 processes on a local filesystem and do not cover malicious source edits, direct writers, unreliable
 NFS locking, arbitrary command correctness, kernel/storage failure, or power loss.
 
+The canonical vocabulary for these guarantees is defined in
+[Coordinator terminology](docs/TERMINOLOGY.md) and enforced by the reviewed
+AWQ terminology profile.
+
 ## Adopt it in a project
 
 Prerequisites for normal local SQLite coordination are Python 3.12+, Git, and a local filesystem

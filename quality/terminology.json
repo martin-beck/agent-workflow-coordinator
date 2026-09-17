@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "default_scope": "normative",
+  "formats": [".json", ".md"],
+  "scope_rules": [{"scope": "example", "paths": ["examples/**"]}],
+  "terms": [
+    {"id": "TERM-TASK", "canonical": "task", "aliases": ["work item"], "scopes": ["normative", "example"], "severity": "error", "case_policy": "casefold"},
+    {"id": "TERM-STATUS", "canonical": "status", "aliases": ["task state"], "scopes": ["normative", "example"], "severity": "error", "case_policy": "casefold"},
+    {"id": "TERM-OWNER", "canonical": "owner", "aliases": ["assignee"], "scopes": ["normative", "example"], "severity": "error", "case_policy": "casefold"},
+    {"id": "TERM-CLAIM", "canonical": "claim", "aliases": ["reservation"], "scopes": ["normative", "example"], "severity": "error", "case_policy": "casefold"},
+    {"id": "TERM-LEASE", "canonical": "lease", "aliases": ["ownership timeout"], "scopes": ["normative", "example"], "severity": "error", "case_policy": "casefold"},
+    {"id": "TERM-REVISION", "canonical": "revision", "aliases": ["version number"], "scopes": ["normative", "example"], "severity": "error", "case_policy": "casefold"},
+    {"id": "TERM-BACKEND-AUTHORITY", "canonical": "backend authority", "aliases": ["source of truth"], "scopes": ["normative", "example"], "severity": "error", "case_policy": "casefold"},
+    {"id": "TERM-PROJECTION", "canonical": "projection", "aliases": ["derived view"], "scopes": ["normative", "example"], "severity": "error", "case_policy": "casefold"},
+    {"id": "TERM-BINDING", "canonical": "binding", "aliases": ["project association"], "scopes": ["normative", "example"], "severity": "error", "case_policy": "casefold"},
+    {"id": "TERM-RECONCILIATION", "canonical": "reconciliation", "aliases": ["state synchronization"], "scopes": ["normative", "example"], "severity": "error", "case_policy": "casefold"},
+    {"id": "TERM-VENDOR-SYNC", "canonical": "vendor sync", "aliases": ["vendor update"], "scopes": ["normative", "example"], "severity": "error", "case_policy": "casefold"},
+    {"id": "TERM-TASK-RELEASE", "canonical": "task release", "aliases": ["task completion"], "scopes": ["normative", "example"], "severity": "error", "case_policy": "casefold"},
+    {"id": "TERM-SOFTWARE-RELEASE", "canonical": "software release", "aliases": ["product release"], "scopes": ["normative", "example"], "severity": "error", "case_policy": "casefold"}
+  ],
+  "exceptions": []
+}
