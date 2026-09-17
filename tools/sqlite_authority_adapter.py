@@ -9,6 +9,7 @@ import os
 import re
 import sqlite3
 import stat
+import sys
 import tempfile
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager, nullcontext
@@ -280,13 +281,16 @@ class SQLiteLifecycleExecutor:
             try:
                 yield snapshot
             finally:
+                body_error = sys.exc_info()[1]
                 self._assert_snapshot_locked(snapshot)
                 try:
                     current_identity = self._selector_path_identity(selector_root, selector_ref)
                 except SQLiteAuthorityError as error:
-                    raise SQLiteAuthorityError("selector target identity changed") from error
-                if current_identity != selector_identity:
-                    raise SQLiteAuthorityError("selector target identity changed")
+                    if body_error is None:
+                        raise SQLiteAuthorityError("selector target identity changed") from error
+                else:
+                    if current_identity != selector_identity and body_error is None:
+                        raise SQLiteAuthorityError("selector target identity changed")
 
     @staticmethod
     def _resolve_selector_target(root: Path, selector_ref: str) -> Path:

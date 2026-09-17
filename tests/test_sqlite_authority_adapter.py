@@ -433,6 +433,25 @@ class SQLiteAuthorityAdapterTests(unittest.TestCase):
                 after_active_release="v0.3.5",
                 after_previous_release="v0.3.4",
             )
+        with (
+            self.assertRaisesRegex(SQLiteAuthorityError, "unknown release identity"),
+            patch.object(
+                executor,
+                "_selector_path_identity",
+                side_effect=[(1, 2), SQLiteAuthorityError("injected identity failure")],
+            ),
+        ):
+            executor.reconcile_selector_publication(
+                "runtime-selector.json",
+                selector_root,
+                1,
+                "barrier",
+                "fence",
+                before_active_release="v0.3.4",
+                before_previous_release="v0.3.3",
+                after_active_release="v0.3.5",
+                after_previous_release="v0.3.4",
+            )
         with self.assertRaisesRegex(SQLiteAuthorityError, "pairs must differ"):
             executor.reconcile_selector_publication(
                 "runtime-selector.json",
