@@ -13,7 +13,9 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import re
+import stat
 import subprocess
 import sys
 from pathlib import Path
@@ -127,6 +129,12 @@ def _transition_path(value: Path, workspace: Path) -> Path:
         raise ReleaseIdentityError("transition path escapes workspace") from error
     if original.is_symlink() or not candidate.is_file():
         raise ReleaseIdentityError("transition path must be a regular workspace file")
+    try:
+        file_status = candidate.stat()
+    except OSError as error:
+        raise ReleaseIdentityError("transition path metadata is unavailable") from error
+    if file_status.st_uid != os.geteuid() or stat.S_IMODE(file_status.st_mode) & 0o022:
+        raise ReleaseIdentityError("transition path must be owner-controlled")
     return candidate
 
 
