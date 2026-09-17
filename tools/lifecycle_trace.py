@@ -111,6 +111,7 @@ def validate_terminal_recovery_contract(root: Path) -> None:
         "terminalTarget \\in Targets",
         "THEOREM Spec => []NoUnheldRollbackGap",
         "THEOREM Spec => []ReleaseEvidence",
+        "THEOREM Spec => []WriterDrainOnAcquire",
     )
     missing = [name for name in required if name not in text]
     if missing:
