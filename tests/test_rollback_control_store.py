@@ -103,7 +103,11 @@ import sys
 import time
 from pathlib import Path
 
-from tools.rollback_control_store import SQLiteBarrierSessionStore, SQLiteRollbackControlStore
+from tools.rollback_control_store import (
+    BarrierSessionState,
+    SQLiteBarrierSessionStore,
+    SQLiteRollbackControlStore,
+)
 from tools.upgrade_identity import BarrierChildIdentity, BarrierSessionIdentity
 
 
@@ -143,7 +147,35 @@ if mode == "probe-after-sidecar":
     raise SystemExit(0)
 
 store.create(identity)
-store.bind_child(1, BarrierChildIdentity.bind(identity, "subprocess-forward", "new"))
+if mode != "kill-after-ambiguous-replacement-commit":
+    store.bind_child(1, BarrierChildIdentity.bind(identity, "subprocess-forward", "new"))
+
+if mode == "kill-after-ambiguous-replacement-commit":
+    store.mark_ambiguous(1, "seed-ambiguity")
+    replacement_record = dict(identity_record)
+    replacement_record.update(
+        {
+            "attempt_id": "subprocess-replacement",
+            "state_revision": 4,
+            "durable_barrier_id": "barrier-replacement",
+            "fencing_token": "fence-replacement",
+        }
+    )
+    replacement_record["identity_digest"] = canonical_barrier_session_digest(replacement_record)
+    replacement = BarrierSessionState(
+        BarrierSessionIdentity.from_record(replacement_record), "held", 1
+    )
+    original_mark_intent = store._mark_intent_locked
+
+    def kill_before_reconciled(connection, intent_id, outcome, cause_code=None):
+        ready_path.write_text("replacement-committed-before-outcome\n", encoding="utf-8")
+        with ready_path.open("rb") as ready:
+            os.fsync(ready.fileno())
+        os.kill(os.getpid(), signal.SIGKILL)
+        original_mark_intent(connection, intent_id, outcome, cause_code)
+
+    store._mark_intent_locked = kill_before_reconciled
+    store.reconcile_ambiguous(2, replacement)
 
 if mode == "clean":
     with sqlite3.connect(control_path) as connection:
@@ -920,6 +952,50 @@ class RollbackControlStoreTests(unittest.TestCase):
                 b"authority remains untouched after outcome publication\n",
                 authority_path.read_bytes(),
             )
+
+    def test_v10_subprocess_death_after_ambiguous_replacement_commit_is_fenced(self) -> None:
+        """A fresh process fences an unreported ambiguous-session replacement."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            control_path = root / "control.sqlite"
+            authority_path = root / "authority.sqlite"
+            authority_bytes = b"authority remains untouched after replacement crash\n"
+            authority_path.write_bytes(authority_bytes)
+            ready_path = root / "ready"
+            process = self._run_session_process(
+                control_path,
+                authority_path,
+                "kill-after-ambiguous-replacement-commit",
+                ready_path,
+            )
+            self._wait_for_file(ready_path, process)
+            self.assertEqual(
+                "replacement-committed-before-outcome",
+                ready_path.read_text(encoding="utf-8").strip(),
+            )
+            self.assertEqual(-signal.SIGKILL, process.wait(timeout=10))
+            stdout, stderr = process.communicate()
+            self.assertEqual("", stderr, msg=stdout)
+
+            verifier_result = root / "recovered-child-result"
+            verifier = multiprocessing.get_context("fork").Process(
+                target=_recover_ambiguous_child,
+                args=(str(control_path), str(authority_path), str(verifier_result)),
+            )
+            verifier.start()
+            verifier.join(timeout=10)
+            self.assertEqual(0, verifier.exitcode)
+            self.assertEqual("held:1\n", verifier_result.read_text(encoding="utf-8"))
+
+            reopened = SQLiteBarrierSessionStore(
+                SQLiteRollbackControlStore(control_path, PROJECT, authority_path),
+                lambda: "authority-3",
+            ).snapshot()
+            self.assertIsNotNone(reopened)
+            assert reopened is not None
+            self.assertEqual(("held", 1), (reopened.status, reopened.revision))
+            self.assertEqual("subprocess-replacement", reopened.identity.attempt_id)
+            self.assertEqual(authority_bytes, authority_path.read_bytes())
 
     def test_v10_durable_session_persists_children_and_reopen(self) -> None:
         from tools.upgrade_identity import BarrierChildIdentity
