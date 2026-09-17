@@ -66,6 +66,13 @@ class DispatchAdmission:
             self.runtime.close()
             raise
 
+    def validate_identity(self, expected: VerifiedManifest) -> None:
+        """Require the consumer's identity evidence to match this admission."""
+        if expected != self.identity:
+            self.runtime.close()
+            raise AuthorityError("dispatch admission identity is not bound")
+        self.revalidate()
+
     def close(self) -> None:
         """Release the retained runtime handle; repeated close is harmless."""
         self.runtime.close()
