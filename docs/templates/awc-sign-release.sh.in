@@ -22,8 +22,8 @@ if [[ "${1:-}" != "--self-test" ]]; then
     git -C "$REPOSITORY" tag -s "${TO_TAG#refs/tags/}" -m "Release $RELEASE_VERSION" "$source_commit"
     git -C "$REPOSITORY" verify-tag "${TO_TAG#refs/tags/}"
     tag_object="$(git -C "$REPOSITORY" rev-parse "${TO_TAG}^{tag}")"
-    printf '{"repository":"%s","from":"%s","to":"%s","source_commit":"%s","tag_object":"%s","trust_policy":"%s","vendor_manifest":"%s"}\n' \
-        "$REPOSITORY" "$FROM_TAG" "$TO_TAG" "$source_commit" "$tag_object" \
+    printf '{"from":"%s","to":"%s","source_commit":"%s","tag_object":"%s","trust_policy":"%s","vendor_manifest":"%s"}\n' \
+        "$FROM_TAG" "$TO_TAG" "$source_commit" "$tag_object" \
         "$TRUST_POLICY" "$VENDOR_MANIFEST" > "$OUTPUT"
     exit 0
 fi

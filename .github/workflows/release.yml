@@ -49,6 +49,7 @@ jobs:
           target.write_text(template)
           target.chmod(0o700)
           PY
+          echo "Generated signer: $signer_dir/awc-sign-release.sh (ephemeral self-test only; no signing or publication)" | tee -a "$GITHUB_STEP_SUMMARY"
           "$signer_dir/awc-sign-release.sh" --self-test
       - name: Generate and validate release contract
         env:

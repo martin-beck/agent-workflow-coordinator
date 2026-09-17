@@ -11,6 +11,8 @@ def test_release_workflow_probes_external_signer_without_publishing() -> None:
     assert "workflow_dispatch:" in WORKFLOW
     assert "awc-sign-release.sh" in WORKFLOW
     assert '"$signer_dir/awc-sign-release.sh" --self-test' in WORKFLOW
+    assert 'GITHUB_STEP_SUMMARY' in WORKFLOW
+    assert "ephemeral self-test only" in WORKFLOW
     assert '"@SOURCE_COMMIT@": transition["to"]["source_commit"]' in WORKFLOW
     assert "do not sign" in WORKFLOW
     assert "do not" in WORKFLOW
