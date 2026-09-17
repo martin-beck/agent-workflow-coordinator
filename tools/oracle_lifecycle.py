@@ -118,7 +118,10 @@ class InteractionEvent:
             raw = value[name]
             if not isinstance(raw, list):
                 raise GateError(f"event {name} must be a list")
-            return tuple(ArtifactRef(str(item["ref"]), str(item["digest"])) for item in raw)
+            try:
+                return tuple(ArtifactRef(str(item["ref"]), str(item["digest"])) for item in raw)
+            except (KeyError, TypeError) as error:
+                raise GateError(f"event {name} contains an invalid artifact") from error
 
         try:
             stage = GateStage(str(value["stage"]))
