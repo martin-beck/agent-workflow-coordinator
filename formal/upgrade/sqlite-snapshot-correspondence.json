@@ -4,6 +4,8 @@
   "model": {
     "path": "formal/upgrade/UpgradeRecovery.tla",
     "sha256": "616d53832ac5ec18bf3242d47b2412195eb64adb2b1035235514e06cc3edf2ba",
+    "config": "formal/upgrade/UpgradeRecovery.cfg",
+    "config_sha256": "47425af53affd104aa5e30d7434cf3e71e3c7b69bccb9b05fbd749d3285991a2",
     "states": ["running", "safe_mode"],
     "barriers": ["held", "ambiguous"]
   },
