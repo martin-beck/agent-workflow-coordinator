@@ -1161,6 +1161,15 @@ class RuntimeBootstrapTests(unittest.TestCase):
             with self.assertRaisesRegex(AuthorityError, "unsafe"):
                 read_runtime_manifest(runtime)
 
+    def test_manifest_reader_rejects_hard_link_alias(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            runtime = Path(directory)
+            self._write_manifest(runtime)
+            alias = runtime / "manifest-alias.json"
+            os.link(runtime / "runtime-manifest.json", alias)
+            with self.assertRaisesRegex(AuthorityError, "unsafe"):
+                read_runtime_manifest(runtime)
+
     def test_manifest_verifier_reads_complete_content_across_short_reads(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             runtime = Path(directory)
