@@ -2,13 +2,13 @@
 # SPDX-License-Identifier: MIT
 
 import unittest
-from typing import Any
+from typing import Any, cast
 
 from tools.decision_batch_policy import ARDecision
 from tools.tui_bridge import (
+    TuiBridgeError,
     TuiSession,
     TuiSessionState,
-    TuiBridgeError,
     apply_tui_response,
     build_tui_request,
     plan_tui_escalation,
@@ -44,6 +44,37 @@ def _request() -> tuple[dict[str, Any], dict[str, Any]]:
 
 
 class TuiBridgeTests(unittest.TestCase):
+    def test_session_rejects_invalid_identity_and_host(self) -> None:
+        for args in (
+            ("", "AR-0001", 1, "AWG-X", "AWTUI-S-1"),
+            ("p", "bad", 1, "AWG-X", "AWTUI-S-1"),
+            ("p", "AR-0001", 0, "AWG-X", "AWTUI-S-1"),
+            ("p", "AR-0001", 1, "bad", "AWTUI-S-1"),
+            ("p", "AR-0001", 1, "AWG-X", "bad"),
+        ):
+            with self.subTest(args=args), self.assertRaises(TuiBridgeError):
+                TuiSession(*args)
+        session = TuiSession("p", "AR-0001", 1, "AWG-X", "AWTUI-S-1")
+        for host in ("", "../host", "host/child"):
+            with self.subTest(host=host), self.assertRaises(TuiBridgeError):
+                session.attach(host)
+
+    def test_session_rejects_invalid_state_transitions_and_stale_sequence(self) -> None:
+        session = TuiSession("p", "AR-0001", 1, "AWG-X", "AWTUI-S-1")
+        attached = session.attach("host")
+        with self.assertRaises(TuiBridgeError):
+            attached.attach("other")
+        with self.assertRaises(TuiBridgeError):
+            session.detach()
+        awaiting = attached.await_response()
+        with self.assertRaises(TuiBridgeError):
+            awaiting.await_response()
+        with self.assertRaises(TuiBridgeError):
+            awaiting.resolved(0)
+        resolved = awaiting.resolved(1)
+        with self.assertRaises(TuiBridgeError):
+            resolved.detach()
+
     def test_session_launch_attach_await_detach_and_resume(self) -> None:
         ar, request = _request()
         request["session_id"] = "AWTUI-SESSION-1"
@@ -51,11 +82,9 @@ class TuiBridgeTests(unittest.TestCase):
             project_id="p",
             ar=ar,
             guidance_request={
-                **{
-                    "human_interaction": {
-                        **request["interaction"],
-                        "decision_request_ref": "AWG-X",
-                    }
+                "human_interaction": {
+                    **request["interaction"],
+                    "decision_request_ref": "AWG-X",
                 },
                 "request_id": "AWG-X",
             },
@@ -73,6 +102,42 @@ class TuiBridgeTests(unittest.TestCase):
             session.await_response()
         with self.assertRaises(TuiBridgeError):
             session.attach("../host")
+        with self.assertRaises(TuiBridgeError):
+            session.attach("")
+        attached = session.attach("host").await_response()
+        with self.assertRaises(TuiBridgeError):
+            attached.await_response()
+        with self.assertRaises(TuiBridgeError):
+            attached.detach().detach()
+        with self.assertRaises(TuiBridgeError):
+            attached.resolved(0)
+
+    def test_session_rejects_invalid_identity(self) -> None:
+        for values in (
+            {
+                "project_id": "",
+                "ar_id": "AR-0001",
+                "request_ref": "AWG-X",
+                "session_id": "AWTUI-S-1",
+            },
+            {"project_id": "p", "ar_id": "bad", "request_ref": "AWG-X", "session_id": "AWTUI-S-1"},
+            {
+                "project_id": "p",
+                "ar_id": "AR-0001",
+                "request_ref": "bad",
+                "session_id": "AWTUI-S-1",
+            },
+            {"project_id": "p", "ar_id": "AR-0001", "request_ref": "AWG-X", "session_id": "bad"},
+            {
+                "project_id": "p",
+                "ar_id": "AR-0001",
+                "request_ref": "AWG-X",
+                "session_id": "AWTUI-S-1",
+                "sequence": -1,
+            },
+        ):
+            with self.subTest(values=values), self.assertRaises(TuiBridgeError):
+                TuiSession(task_revision=1, **values)
 
     def test_escalation_plan_finishes_ready_work_first(self) -> None:
         plan = plan_tui_escalation(
@@ -107,6 +172,14 @@ class TuiBridgeTests(unittest.TestCase):
         updated = apply_tui_response(ar=ar, request=req, response=response)
         self.assertEqual(updated["task_revision"], 3)
         self.assertIs(updated["interaction"]["interaction_required"], False)
+
+        pending_response = {
+            **response,
+            "ar_update": dict(cast(dict[str, Any], response["ar_update"])),
+        }
+        cast(dict[str, Any], pending_response["ar_update"])["decision_status"] = "pending"
+        pending = apply_tui_response(ar=ar, request=req, response=pending_response)
+        self.assertIs(pending["interaction"]["interaction_required"], True)
 
     def test_trigger_revision_mismatch_fails_closed(self) -> None:
         ar, req = _request()

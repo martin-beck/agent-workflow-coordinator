@@ -5,10 +5,10 @@
 
 from __future__ import annotations
 
+import re
 from copy import deepcopy
 from dataclasses import dataclass, replace
 from enum import StrEnum
-import re
 from typing import Any
 
 from tools.decision_batch_policy import ARDecision, ProgressPlan, plan_progress
@@ -51,24 +51,24 @@ class TuiSession:
         if self.sequence < 0:
             raise TuiBridgeError("TUI session sequence is invalid")
 
-    def attach(self, host_ref: str) -> "TuiSession":
+    def attach(self, host_ref: str) -> TuiSession:
         if self.state not in {TuiSessionState.LAUNCH_PENDING, TuiSessionState.DETACHED}:
             raise TuiBridgeError(f"cannot attach TUI session from {self.state}")
         if not host_ref or "/" in host_ref or ".." in host_ref:
             raise TuiBridgeError("TUI host reference is invalid")
         return replace(self, state=TuiSessionState.ATTACHED, host_ref=host_ref)
 
-    def await_response(self) -> "TuiSession":
+    def await_response(self) -> TuiSession:
         if self.state != TuiSessionState.ATTACHED:
             raise TuiBridgeError(f"cannot await response from {self.state}")
         return replace(self, state=TuiSessionState.AWAITING_RESPONSE)
 
-    def detach(self) -> "TuiSession":
+    def detach(self) -> TuiSession:
         if self.state not in {TuiSessionState.ATTACHED, TuiSessionState.AWAITING_RESPONSE}:
             raise TuiBridgeError(f"cannot detach TUI session from {self.state}")
         return replace(self, state=TuiSessionState.DETACHED)
 
-    def resolved(self, sequence: int) -> "TuiSession":
+    def resolved(self, sequence: int) -> TuiSession:
         if self.state != TuiSessionState.AWAITING_RESPONSE:
             raise TuiBridgeError(f"cannot resolve TUI session from {self.state}")
         if sequence <= self.sequence:

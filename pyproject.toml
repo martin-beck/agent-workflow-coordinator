@@ -1,6 +1,6 @@
 [project]
 name = "agent-workflow-coordinator-quality"
-version = "0.3.14"
+version = "0.3.15"
 requires-python = ">=3.12"
 dependencies = []
 
