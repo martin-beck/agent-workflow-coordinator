@@ -75,6 +75,15 @@ class DurableBindingTests(unittest.TestCase):
             self.assertNotEqual(git_binding.identity, sqlite_binding.identity)
 
     def test_replacement_and_symlink_are_rejected(self) -> None:
+        correspondence_path = (
+            Path(__file__).parents[1] / "formal" / "upgrade" / "sqlite-snapshot-correspondence.json"
+        )
+        correspondence = json.loads(correspondence_path.read_text(encoding="utf-8"))
+        transition = next(
+            item for item in correspondence["transitions"] if item["name"] == "identity-reread"
+        )
+        self.assertEqual("AuthorityIdentity.reread", transition["implementation"][1])
+        self.assertEqual("no-op", transition["model"]["action"])
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             authority = root / "authority.sqlite"
