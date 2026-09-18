@@ -436,6 +436,19 @@ class StaticAuthorityRuntimeRereader:
 
 
 class RollbackControlStoreTests(unittest.TestCase):
+    def test_legacy_barrier_schema_is_rejected_without_mutation(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "control.sqlite"
+            with sqlite3.connect(path) as connection:
+                connection.execute(
+                    "CREATE TABLE barrier (operation_id TEXT PRIMARY KEY, manifest TEXT NOT NULL)"
+                )
+            with self.assertRaisesRegex(ControlStoreError, "legacy"):
+                SQLiteRollbackControlStore(path, PROJECT).snapshot("missing")
+            with sqlite3.connect(path) as connection:
+                columns = {row[1] for row in connection.execute("PRAGMA table_info(barrier)")}
+            self.assertNotIn("selector_ref", columns)
+
     def test_snapshot_owned_by_caller_requires_and_reuses_operation_lock(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

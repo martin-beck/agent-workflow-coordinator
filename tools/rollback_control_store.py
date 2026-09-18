@@ -39,7 +39,7 @@ from tools.upgrade_identity import (
     validate_envelope,
 )
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 SIDECAR_SUFFIXES = ("-wal", "-shm")
 IDENTITY_FIELDS = ENVELOPE_FIELDS
 STATUSES = {"held", "releasing", "released", "ambiguous"}
@@ -710,6 +710,33 @@ class SQLiteRollbackControlStore:
             os.close(parent)
             raise
         try:
+            # Inspect legacy metadata before enabling WAL or issuing any DDL.
+            # Historical rows cannot be assigned a selector identity safely.
+            if type(connection) is sqlite3.Connection:
+                existing_tables = {
+                    row[0]
+                    for row in connection.execute(
+                        "SELECT name FROM sqlite_master WHERE type='table'"
+                    ).fetchall()
+                }
+                if "control_meta" in existing_tables:
+                    version_row = connection.execute(
+                        "SELECT value FROM control_meta WHERE key='schema_version'"
+                    ).fetchone()
+                    if version_row is not None and version_row[0] != str(SCHEMA_VERSION):
+                        raise ControlStoreError(
+                            "control store schema version is legacy; explicit migration is required"
+                        )
+                if "barrier" in existing_tables:
+                    existing_columns = {
+                        row[1]
+                        for row in connection.execute("PRAGMA table_info(barrier)").fetchall()
+                    }
+                    if "selector_ref" not in existing_columns:
+                        raise ControlStoreError(
+                            "control store schema is legacy; explicit selector "
+                            "migration is required"
+                        )
             mode = str(connection.execute("PRAGMA journal_mode=WAL").fetchone()[0]).lower()
             if mode != "wal":
                 raise ControlStoreError("control store WAL is unavailable")
@@ -743,14 +770,6 @@ class SQLiteRollbackControlStore:
                     revision INTEGER NOT NULL
                 )"""
             )
-            columns = {
-                row[1] for row in connection.execute("PRAGMA table_info(barrier)").fetchall()
-            }
-            if "selector_ref" not in columns:
-                connection.execute(
-                    "ALTER TABLE barrier ADD COLUMN selector_ref TEXT NOT NULL "
-                    "DEFAULT '.runtime/runtime-selector.json'"
-                )
             connection.execute(
                 "CREATE UNIQUE INDEX IF NOT EXISTS one_active_barrier_per_project "
                 "ON barrier(project_id) WHERE status IN ('held','releasing')"
