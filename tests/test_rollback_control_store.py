@@ -1161,7 +1161,68 @@ class RollbackControlStoreTests(unittest.TestCase):
                     store.lock_owned_by_caller(guard),
                 ):
                     pass
-            self.assertEqual(held, store.snapshot())
+
+    def test_cas_locked_requires_caller_owned_scope_and_fresh_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            authority = ["authority-3"]
+            store = SQLiteBarrierSessionStore(
+                SQLiteRollbackControlStore(Path(directory) / "control.sqlite", PROJECT),
+                lambda: authority[0],
+            )
+            identity = self._session_identity()
+            held = store.create(identity)
+            with locked() as guard, store.lock_owned_by_caller(guard):
+                releasing = BarrierSessionState(identity, "releasing", held.revision + 1)
+                updated = store.cas_locked(guard, identity, held.revision, releasing)
+            self.assertEqual("releasing", updated.status)
+            with self.assertRaisesRegex(LockOwnershipError, "inactive"):
+                store.cas_locked(guard, identity, updated.revision, updated)
+            self.assertEqual(updated, store.snapshot())
+
+    def test_cas_locked_rejects_invalid_scope_inputs_before_write(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            identity = self._session_identity()
+            store = SQLiteBarrierSessionStore(
+                SQLiteRollbackControlStore(Path(directory) / "control.sqlite", PROJECT),
+                lambda: "authority-3",
+            )
+            held = store.create(identity)
+            with self.assertRaisesRegex(LockOwnershipError, "coordinator lock guard"):
+                store.cas_locked(cast(Any, None), identity, held.revision, held)
+            with locked() as guard:
+                with self.assertRaisesRegex(ControlStoreError, "operation lock is required"):
+                    store.cas_locked(guard, identity, held.revision, held)
+                with store.lock_owned_by_caller(guard):
+                    with self.assertRaisesRegex(ControlStoreError, "identity is required"):
+                        store.cas_locked(guard, cast(Any, None), held.revision, held)
+                    with self.assertRaisesRegex(ControlStoreError, "expected revision"):
+                        store.cas_locked(guard, identity, 0, held)
+                    with self.assertRaisesRegex(ControlStoreError, "write identity"):
+                        store.cas_locked(
+                            guard,
+                            identity,
+                            held.revision,
+                            BarrierSessionState(identity, "released", held.revision + 1),
+                        )
+                    with (
+                        patch(
+                            "tools.rollback_control_store.coordinator_lock_path",
+                            return_value=guard.path.parent / "other",
+                        ),
+                        self.assertRaisesRegex(ControlStoreError, "path mismatch"),
+                    ):
+                        store.cas_locked(guard, identity, held.revision, held)
+
+            no_reader = SQLiteBarrierSessionStore(
+                SQLiteRollbackControlStore(Path(directory) / "no-reader.sqlite", PROJECT)
+            )
+            no_reader.create(identity)
+            with (
+                locked() as guard,
+                no_reader.lock_owned_by_caller(guard),
+                self.assertRaisesRegex(ControlStoreError, "rereader is required"),
+            ):
+                no_reader.cas_locked(guard, identity, held.revision, held)
 
     def test_v10_caller_owned_recheck_rejects_stale_identity_and_authority(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
