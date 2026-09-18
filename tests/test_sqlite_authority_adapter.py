@@ -1066,6 +1066,68 @@ class SQLiteAuthorityAdapterTests(unittest.TestCase):
         self.assertFalse(list(journal.parent.glob(".upgrade-journal-*.json")))
         self.assertFalse(self.session.operation_owned_by_current_thread)
 
+    def test_generated_backup_fdopen_failure_preserves_journal(self) -> None:
+        journal = self.root / "generated-fdopen-failure-journal.json"
+        journal.write_text(
+            '{"status":"running","phase":"backup","records":[{"operation_id":"campaign",'
+            '"step_id":"campaign:backup","phase":"backup","outcome":"started",'
+            '"context":{"selector_ref":"runtime-selector.json","state_revision":1,'
+            '"durable_barrier_id":"barrier","fencing_token":"fence"}}]}\n',
+            encoding="utf-8",
+        )
+        operation = {
+            "operation_id": "campaign:backup",
+            "opcode": "backend.backup",
+            "inputs": {
+                "backend": "sqlite",
+                "selector_ref": "runtime-selector.json",
+                "expected_state_revision": 1,
+                "barrier_id": "barrier",
+                "fencing_token": "fence",
+                "backup_operation_id": "campaign:backup",
+            },
+            "timeout_seconds": 300,
+            "resources": ["maintenance-barrier", "durable-operation-record"],
+            "preconditions": ["previous-phase-complete"],
+            "postconditions": ["backup-contract-satisfied"],
+            "evidence": ["durable-operation-record"],
+            "durable_record": "operation-id-and-outcome",
+        }
+        executor = self.adapter.bind_lifecycle_executor(self.session, journal)
+        before_journal = journal.read_bytes()
+        original_close = os.close
+        original_mkstemp = tempfile.mkstemp
+        allocated: list[int] = []
+        closed: list[int] = []
+
+        def record_mkstemp(*args: Any, **kwargs: Any) -> tuple[int, str]:
+            result = original_mkstemp(*args, **kwargs)
+            allocated.append(result[0])
+            return result
+
+        def record_close(descriptor: int) -> None:
+            closed.append(descriptor)
+            original_close(descriptor)
+
+        with (
+            patch.object(self.adapter, "backup_bound", return_value={"backup_verified": True}),
+            patch(
+                "tools.sqlite_authority_adapter.os.fdopen",
+                side_effect=OSError("injected temporary journal fdopen failure"),
+            ),
+            patch("tools.sqlite_authority_adapter.tempfile.mkstemp", side_effect=record_mkstemp),
+            patch("tools.sqlite_authority_adapter.os.close", side_effect=record_close),
+            self.assertRaisesRegex(SQLiteAuthorityError, "publication failed"),
+        ):
+            executor.execute_generated_operation(
+                operation, self.root / "generated-fdopen-failure.sqlite", {}
+            )
+        self.assertEqual(before_journal, journal.read_bytes())
+        self.assertEqual(1, len(allocated))
+        self.assertIn(allocated[0], closed)
+        self.assertFalse(list(journal.parent.glob(".upgrade-journal-*.json")))
+        self.assertFalse(self.session.operation_owned_by_current_thread)
+
     def test_generated_backup_rejects_journal_replacement_before_publication(self) -> None:
         journal = self.root / "replacement-journal.json"
         journal.write_text(
