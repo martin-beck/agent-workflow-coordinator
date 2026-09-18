@@ -127,6 +127,19 @@ class ReleaseIdentityTests(unittest.TestCase):
                 verify_transition(Path(directory), transition),
             )
 
+            signed_from = cast(dict[str, str], transition["from"])
+            signed_to = cast(dict[str, str], transition["to"])
+            transition["from"] = {
+                key: value for key, value in signed_from.items() if key != "signature_sha256"
+            }
+            transition["to"] = {
+                key: value for key, value in signed_to.items() if key != "signature_sha256"
+            }
+            self.assertEqual(
+                {"status": "pass", "from": "v0.3.7", "to": "v0.3.8"},
+                verify_transition(Path(directory), transition),
+            )
+
     def test_transition_verifies_immutable_lightweight_tags(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -151,6 +164,15 @@ class ReleaseIdentityTests(unittest.TestCase):
                 "fencing_token": "fence-7",
                 "from": _release("v0.3.7", old_commit, old_commit, "0" * 64),
                 "to": _release("v0.3.8", new_commit, new_commit, "0" * 64),
+            }
+            self.assertEqual(
+                {"status": "pass", "from": "v0.3.7", "to": "v0.3.8"},
+                verify_transition(root, transition),
+            )
+
+            unsigned_to = cast(dict[str, str], transition["to"])
+            transition["to"] = {
+                key: value for key, value in unsigned_to.items() if key != "signature_sha256"
             }
             self.assertEqual(
                 {"status": "pass", "from": "v0.3.7", "to": "v0.3.8"},

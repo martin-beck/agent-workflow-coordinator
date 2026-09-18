@@ -140,6 +140,14 @@ class UpgradeCommandTests(unittest.TestCase):
         with self.assertRaisesRegex(UpgradeCommandError, "unavailable or unsafe"):
             execute_upgrade_command("check", self.path, "sqlite")
 
+    def test_unsigned_tag_contract_is_accepted(self) -> None:
+        document = contract()
+        document["from"].pop("signature_sha256")
+        document["to"].pop("signature_sha256")
+        self.path.write_text(json.dumps(document), encoding="utf-8")
+        with redirect_stdout(io.StringIO()):
+            self.assertEqual(0, execute_upgrade_command("check", self.path, "sqlite"))
+
     def test_contract_symlinked_parent_is_rejected_before_dispatch(self) -> None:
         real = self.root / "real"
         real.mkdir()

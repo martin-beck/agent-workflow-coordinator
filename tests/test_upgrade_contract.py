@@ -201,6 +201,14 @@ class UpgradeContractTests(unittest.TestCase):
             next(phase for phase in phases if phase["id"] == "reopen")["requires"], ["validate"]
         )
 
+    def test_unsigned_tag_release_identity_is_valid(self) -> None:
+        schema = json.loads((ROOT / "schema/upgrade-contract.schema.json").read_text())
+        document = contract()
+        document["from"].pop("signature_sha256")
+        document["to"].pop("signature_sha256")
+        jsonschema.Draft202012Validator(schema).validate(document)
+        validate_contract(document)
+
     def test_graph_rejects_duplicate_or_forward_dependencies(self) -> None:
         document = contract()
         phases = document["phases"]

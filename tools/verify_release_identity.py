@@ -116,7 +116,7 @@ def _release_identity(root: Path, release: dict[str, Any]) -> None:
     if source_commit != release.get("source_commit"):
         raise ReleaseIdentityError(f"release {version} source commit does not match transition")
     signature_digest = _tag_signature_digest(root, tag_ref, tag_object, tag_type)
-    if signature_digest != release.get("signature_sha256"):
+    if "signature_sha256" in release and signature_digest != release["signature_sha256"]:
         raise ReleaseIdentityError(f"release {version} signature does not match transition")
 
 
