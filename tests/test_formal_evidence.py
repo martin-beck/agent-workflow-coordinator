@@ -388,6 +388,8 @@ class FormalEvidenceTests(unittest.TestCase):
         self.assertTrue(all(coverage[name] for name in names))
         covered = {reference for values in coverage.values() for reference in values}
         self.assertTrue(covered.issubset(set(artifact["evidence"]["tests"])))
+        for name, references in coverage.items():
+            self.assertEqual(len(references), len(set(references)), name)
 
     def test_sqlite_correspondence_artifact_schema_is_explicit(self) -> None:
         artifact = json.loads(
