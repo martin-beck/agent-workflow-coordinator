@@ -190,6 +190,36 @@ def prepare_tui_session(
     )
 
 
+def _order_ar_graph(ars: tuple[dict[str, Any], ...]) -> list[dict[str, Any]]:
+    by_id = {ar.get("id"): ar for ar in ars}
+    if len(by_id) != len(ars) or any(not isinstance(key, str) for key in by_id):
+        raise TuiBridgeError("AR graph contains duplicate or invalid IDs")
+    indegree = {ar["id"]: 0 for ar in ars}
+    dependents: dict[str, list[str]] = {ar["id"]: [] for ar in ars}
+    for ar in ars:
+        dependencies = ar.get("depends_on", ())
+        if not isinstance(dependencies, (list, tuple)) or any(
+            dep not in by_id for dep in dependencies
+        ):
+            raise TuiBridgeError(f"AR {ar.get('id')} has an unknown dependency")
+        for dependency in dependencies:
+            indegree[ar["id"]] += 1
+            dependents[dependency].append(ar["id"])
+    ready = sorted(ar_id for ar_id, degree in indegree.items() if degree == 0)
+    ordered_ids: list[str] = []
+    while ready:
+        ar_id = ready.pop(0)
+        ordered_ids.append(ar_id)
+        for dependent in sorted(dependents[ar_id]):
+            indegree[dependent] -= 1
+            if indegree[dependent] == 0:
+                ready.append(dependent)
+        ready.sort()
+    if len(ordered_ids) != len(ars):
+        raise TuiBridgeError("AR graph contains a dependency cycle")
+    return [by_id[ar_id] for ar_id in ordered_ids]
+
+
 def generate_tui_documents(
     ars: tuple[dict[str, Any], ...], *, decision_requests: tuple[dict[str, Any], ...] = ()
 ) -> dict[str, str]:
@@ -201,16 +231,7 @@ def generate_tui_documents(
     """
     if not ars:
         raise TuiBridgeError("cannot generate TUI documents without ARs")
-    by_id = {ar.get("id"): ar for ar in ars}
-    if len(by_id) != len(ars) or any(not isinstance(key, str) for key in by_id):
-        raise TuiBridgeError("AR graph contains duplicate or invalid IDs")
-    for ar in ars:
-        dependencies = ar.get("depends_on", ())
-        if not isinstance(dependencies, (list, tuple)) or any(
-            dep not in by_id for dep in dependencies
-        ):
-            raise TuiBridgeError(f"AR {ar.get('id')} has an unknown dependency")
-    ordered = sorted(ars, key=lambda ar: str(ar["id"]))
+    ordered = _order_ar_graph(ars)
     request_by_task = {
         request.get("context", {}).get("task_ref"): request for request in decision_requests
     }
