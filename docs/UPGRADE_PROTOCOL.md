@@ -80,7 +80,8 @@ Every generated contract contains these ordered phases:
    selector, projections, refs, and task history; verify integrity and restore
    equivalence before continuing.
 5. `stage`: prepare the new runtime outside authority and verify manifests,
-   signatures, vendor hashes, schemas, and generated release steps.
+   tag identity, vendor hashes, schemas, and generated release steps. Tag
+   signatures are optional; exact tag and commit binding remains required.
 6. `commit`: atomically select the staged runtime while the barrier remains
    held. No ambiguous external command may be retried without its durable
    operation ID being reconciled.
@@ -158,10 +159,16 @@ token grammar and cannot contain whitespace, path separators, or controls.
 The schema and contract tests reject duplicate or non-contiguous phase orders,
 unknown or forward dependencies, missing phase operations, unbounded time or
 resource declarations, and incomplete release identity. Every release binds
-its version to a full source commit, tag reference and object, signature,
+its version to a full source commit, tag reference and object,
 trust-policy digest, and vendor-manifest digest. Every backend contract must
 name its authority, backup, restore, selector, projections, and
 authority-compatible round-trip evidence; SQLite additionally declares WAL
+
+The project release policy permits unsigned lightweight tags. The GitHub
+repository must therefore protect the `v*` tag pattern against deletion and
+force-update, and only the release authority may create those tags. The
+coordinator verifies the exact tag and source commit it receives; remote
+protection is the authorization and immutability boundary.
 handling. A generated plan must also prove that only `commit` mutates
 authority, that `commit` depends on both quiescence and backup, and that
 `reopen` depends on validation.

@@ -94,7 +94,7 @@
   },
   "implementation_snapshot": {
     "files": {
-      "schema/upgrade-contract.schema.json": "6ef2362107a0c3ff895e6dc96e35899e19b367bebd549b6acee42a680d7a442b",
+      "schema/upgrade-contract.schema.json": "2f16e6990b59651656d89973237ca522e5ed8ff1a4b3d46d98e22108f8e689d5",
       "tests/test_mutation_fence.py": "e2bcea7b96bddd2509b79ff9c5eefd57001d1502949aba30cbbd50a9169e1cbb",
       "tests/test_rollback_control_store.py": "8fdbe3afff4ebc138dba95ab4795b31f331bc14fe3211103329a0125e23e2dab",
       "tests/test_sqlite_mutation_barrier.py": "6949425557176bebb3341677d1fed90c0217055bd1d1dcb56bbdf91f60d31fb8",
@@ -102,7 +102,7 @@
       "tests/test_upgrade_commands.py": "4eaa65ac1730c9149156ba76e345dcb1f8e2c44a51042e27f2d4a4b4e7634f32",
       "tests/test_upgrade_contract.py": "0630ea0c35ad100367a9df0d0682a90b2b0b120057768029fc82fe06a106989c",
       "tests/test_upgrade_identity.py": "0206aef1794ed73ffcdefb4f965f657514f11858d9beb0b2fa92f7dceaaaf905",
-      "tools/generate_upgrade_contract.py": "b3db939912bed549eaba17a2e064e776ff9119b82287218016100e25e5ad9ba4",
+      "tools/generate_upgrade_contract.py": "aa9a2ed072df3937b7799b33559d03b1744d3b9049891180d1a4852531df3ada",
       "tools/handoffctl.py": "1859018a5cd7ae76cb2a351b5b68e701c9524446641161962f3f2ef58065e1e6",
       "tools/mutation_fence.py": "2d314f5a5cc46d0f625135b39ada2d1a464cd35c9d378728c141708df8c0c630",
       "tools/rollback_control_store.py": "c87dc9b00867de1406d67a226cc04a383d4c4df8116dc32643b9af178048434a",

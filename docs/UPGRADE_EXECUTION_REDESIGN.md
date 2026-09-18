@@ -200,7 +200,8 @@ changes between validation and execution. It passes the independently
 validated state root to the selected runtime, which revalidates permanent
 project binding before command dispatch.
 
-Staging requires an immutable manifest, source/tag/signature identity, and a
+Staging requires an immutable manifest and source/tag identity; tag signatures
+are optional, and a
 concrete trust-policy verifier. Contract hashes are assertions, not
 authenticity evidence. Flat vendoring cannot be the atomic upgrade mechanism;
 the old runtime remains intact, staging populates a distinct versioned
