@@ -53,6 +53,14 @@ def configured_bounds(configs: list[Path]) -> dict[str, int]:
 
 
 class FormalEvidenceTests(unittest.TestCase):
+    def test_sqlite_correspondence_revision_shape(self) -> None:
+        artifact = json.loads(
+            (ROOT / "formal" / "upgrade" / "sqlite-snapshot-correspondence.json").read_text()
+        )
+        revision = artifact["implementation"]["revision"]
+        self.assertIsInstance(revision, str)
+        self.assertRegex(revision, r"^[0-9a-f]{40}$")
+
     def test_sqlite_correspondence_source_digest_shapes(self) -> None:
         artifact = json.loads(
             (ROOT / "formal" / "upgrade" / "sqlite-snapshot-correspondence.json").read_text()
