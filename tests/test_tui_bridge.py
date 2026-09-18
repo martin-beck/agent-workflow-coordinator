@@ -6,9 +6,9 @@ from typing import Any
 
 from tools.decision_batch_policy import ARDecision
 from tools.tui_bridge import (
+    TuiBridgeError,
     TuiSession,
     TuiSessionState,
-    TuiBridgeError,
     apply_tui_response,
     build_tui_request,
     plan_tui_escalation,
@@ -48,15 +48,16 @@ class TuiBridgeTests(unittest.TestCase):
         ar, request = _request()
         request["session_id"] = "AWTUI-SESSION-1"
         session, _ = prepare_tui_session(
-            project_id="p", ar=ar, guidance_request={
-                **{
-                    "human_interaction": {
-                        **request["interaction"],
-                        "decision_request_ref": "AWG-X",
-                    }
+            project_id="p",
+            ar=ar,
+            guidance_request={
+                "human_interaction": {
+                    **request["interaction"],
+                    "decision_request_ref": "AWG-X",
                 },
                 "request_id": "AWG-X",
-            }, session_id="AWTUI-SESSION-1"
+            },
+            session_id="AWTUI-SESSION-1",
         )
         self.assertEqual(TuiSessionState.LAUNCH_PENDING, session.state)
         session = session.attach("host-1").await_response()
@@ -70,6 +71,7 @@ class TuiBridgeTests(unittest.TestCase):
             session.await_response()
         with self.assertRaises(TuiBridgeError):
             session.attach("../host")
+
     def test_escalation_plan_finishes_ready_work_first(self) -> None:
         plan = plan_tui_escalation(
             (
