@@ -8,9 +8,17 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Any
 
+from tools.decision_batch_policy import ARDecision, ProgressPlan, plan_progress
+
 
 class TuiBridgeError(ValueError):
     """Reject malformed, stale, or cross-task TUI traffic."""
+
+
+def plan_tui_escalation(decisions: tuple[ARDecision, ...]) -> ProgressPlan:
+    """Expose the Coordinator-owned autonomous-before-human planning boundary."""
+
+    return plan_progress(decisions)
 
 
 def build_tui_request(
