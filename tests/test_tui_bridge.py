@@ -4,7 +4,13 @@
 import unittest
 from typing import Any
 
-from tools.tui_bridge import TuiBridgeError, apply_tui_response, build_tui_request
+from tools.decision_batch_policy import ARDecision
+from tools.tui_bridge import (
+    TuiBridgeError,
+    apply_tui_response,
+    build_tui_request,
+    plan_tui_escalation,
+)
 
 
 def _request() -> tuple[dict[str, Any], dict[str, Any]]:
@@ -35,6 +41,16 @@ def _request() -> tuple[dict[str, Any], dict[str, Any]]:
 
 
 class TuiBridgeTests(unittest.TestCase):
+    def test_escalation_plan_finishes_ready_work_first(self) -> None:
+        plan = plan_tui_escalation(
+            (
+                ARDecision("AR-0001", 1, "ready"),
+                ARDecision("AR-0002", 1, "uncertain", True, "batch-1", "AWG-AR-0002"),
+            )
+        )
+        self.assertEqual(plan.autonomous_ar_ids, ("AR-0001",))
+        self.assertEqual(plan.human_batches[0].ar_ids, ("AR-0002",))
+
     def test_build_and_apply_response(self) -> None:
         ar, req = _request()
         response = {
