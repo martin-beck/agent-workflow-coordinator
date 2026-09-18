@@ -211,6 +211,19 @@ class ReleaseIdentityTests(unittest.TestCase):
             with self.assertRaisesRegex(ReleaseIdentityError, "tag object"):
                 verify_transition(root, transition)
 
+    def test_candidate_rejects_existing_target_tag(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            transition = self._transition_fixture(root)
+            self._run_git(root, "tag", "-d", "v0.3.8")
+            self.assertEqual(
+                {"status": "pass", "from": "v0.3.7", "to": "v0.3.8"},
+                verify_transition(root, transition, candidate=True),
+            )
+            self._run_git(root, "tag", "v0.3.8", transition["to"]["source_commit"])
+            with self.assertRaisesRegex(ReleaseIdentityError, "already exists"):
+                verify_transition(root, transition, candidate=True)
+
     def test_transition_rejects_forged_signature(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             transition = self._transition_fixture(Path(directory))
