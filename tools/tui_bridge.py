@@ -206,10 +206,14 @@ def generate_tui_documents(
         raise TuiBridgeError("AR graph contains duplicate or invalid IDs")
     for ar in ars:
         dependencies = ar.get("depends_on", ())
-        if not isinstance(dependencies, (list, tuple)) or any(dep not in by_id for dep in dependencies):
+        if not isinstance(dependencies, (list, tuple)) or any(
+            dep not in by_id for dep in dependencies
+        ):
             raise TuiBridgeError(f"AR {ar.get('id')} has an unknown dependency")
     ordered = sorted(ars, key=lambda ar: str(ar["id"]))
-    request_by_task = {request.get("context", {}).get("task_ref"): request for request in decision_requests}
+    request_by_task = {
+        request.get("context", {}).get("task_ref"): request for request in decision_requests
+    }
     design = ["# Design", "", "## AR decision context"]
     workplan = ["# Work plan", "", "## Dependency-ordered AR work"]
     for ar in ordered:
@@ -222,30 +226,50 @@ def generate_tui_documents(
         design.extend([f"### {ar_id}: {summary}", description, f"Decision focus: {phrase}", ""])
         dependencies = ", ".join(str(dep) for dep in ar.get("depends_on", ())) or "none"
         workplan.extend([f"### {ar_id}", f"Depends on: {dependencies}", f"Work item: {phrase}", ""])
-    return {"design": "\n".join(design).rstrip() + "\n", "workplan": "\n".join(workplan).rstrip() + "\n"}
+    return {
+        "design": "\n".join(design).rstrip() + "\n",
+        "workplan": "\n".join(workplan).rstrip() + "\n",
+    }
 
 
 def prepare_tui_batch_session(
-    *, project_id: str, entries: tuple[tuple[dict[str, Any], dict[str, Any]], ...],
-    session_id: str, ars: tuple[dict[str, Any], ...] | None = None,
+    *,
+    project_id: str,
+    entries: tuple[tuple[dict[str, Any], dict[str, Any]], ...],
+    session_id: str,
+    ars: tuple[dict[str, Any], ...] | None = None,
 ) -> tuple[TuiSession, dict[str, Any]]:
     """Create one TUI session for all independent decisions in a batch."""
     if not entries:
         raise TuiBridgeError("TUI batch cannot be empty")
-    documents = generate_tui_documents(ars or tuple(ar for ar, _request in entries), decision_requests=tuple(request for _ar, request in entries))
+    documents = generate_tui_documents(
+        ars or tuple(ar for ar, _request in entries),
+        decision_requests=tuple(request for _ar, request in entries),
+    )
     first_ar, first_request = entries[0]
-    request = build_tui_request(project_id=project_id, ar=first_ar, guidance_request=first_request, session_id=session_id, documents=documents)
+    request = build_tui_request(
+        project_id=project_id,
+        ar=first_ar,
+        guidance_request=first_request,
+        session_id=session_id,
+        documents=documents,
+    )
     request["batch"] = [
-        build_tui_request(project_id=project_id, ar=ar, guidance_request=guidance, session_id=session_id, documents=documents)
+        build_tui_request(
+            project_id=project_id,
+            ar=ar,
+            guidance_request=guidance,
+            session_id=session_id,
+            documents=documents,
+        )
         | {"documents": documents}
         for ar, guidance in entries
     ]
-    return TuiSession(project_id, first_ar["id"], first_ar["task_revision"], request["interaction"]["decision_request_ref"], session_id), request
     return (
         TuiSession(
             project_id=project_id,
-            ar_id=ar["id"],
-            task_revision=ar["task_revision"],
+            ar_id=first_ar["id"],
+            task_revision=first_ar["task_revision"],
             request_ref=request["interaction"]["decision_request_ref"],
             session_id=session_id,
         ),
