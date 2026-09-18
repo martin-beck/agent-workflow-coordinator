@@ -138,6 +138,27 @@ class RuntimeBootstrapTests(unittest.TestCase):
                 with self.assertRaisesRegex(AuthorityError, "identity changed"):
                     resolved.admit_for_dispatch()
 
+    def test_dispatch_rejects_selector_parent_swap_after_resolution(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            releases = root / "releases"
+            releases.mkdir(mode=0o700)
+            selected = releases / "v1.2.3"
+            selected.mkdir(mode=0o700)
+            self._write_manifest(selected)
+            selector_parent = root / "selector"
+            selector_parent.mkdir(mode=0o700)
+            selector = selector_parent / "runtime-selector.json"
+            commit_runtime_selector(selector, "v1.2.3", "v1.2.2")
+            with resolve_selected_runtime_bound(
+                selector, releases, self._identity_for_release(), self._verifier
+            ) as resolved:
+                moved = root / "selector-original"
+                selector_parent.rename(moved)
+                selector_parent.symlink_to(moved, target_is_directory=True)
+                with self.assertRaisesRegex(AuthorityError, "selector"):
+                    resolved.admit_for_dispatch()
+
     def test_dispatch_rejects_malformed_retained_manifest_identity(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
