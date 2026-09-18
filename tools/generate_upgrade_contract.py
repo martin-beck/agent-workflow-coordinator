@@ -136,9 +136,9 @@ def generate(transition: dict[str, Any]) -> dict[str, Any]:
                 "id": "RELEASE.AUTHENTICITY",
                 "effect": "read-only",
                 "failure_mode": "stop-before-mutation",
-                "preconditions": ["immutable-tag-and-commit", "trusted-signature"],
+                "preconditions": ["immutable-tag-and-commit"],
                 "postconditions": ["release-identity-recorded"],
-                "evidence": ["release-manifest", "signature-verification"],
+                "evidence": ["release-manifest", "tag-binding"],
             },
             {
                 "id": "BACKEND.COMPATIBILITY",

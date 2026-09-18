@@ -4,8 +4,9 @@
 """Verify release identities in a transition against an immutable Git checkout.
 
 This is a read-only gate.  It does not fetch, checkout, install, or mutate a
-repository.  The signed-tag digest is the SHA-256 of the exact ASCII signature
-block stored in the annotated tag object, including its begin/end markers.
+repository. Releases are bound to immutable Git tag and commit identities;
+cryptographic tag signatures are optional. For an unsigned or lightweight tag,
+``signature_sha256`` is the all-zero digest.
 """
 
 from __future__ import annotations
@@ -75,6 +76,24 @@ def _signature_digest(tag_contents: bytes) -> str:
     return hashlib.sha256(tag_contents[begin:end]).hexdigest()
 
 
+_UNSIGNED_DIGEST = "0" * 64
+
+
+def _tag_signature_digest(root: Path, tag_ref: str, tag_object: str, tag_type: str) -> str:
+    if tag_type != "tag":
+        return _UNSIGNED_DIGEST
+    try:
+        _git(root, "verify-tag", tag_ref)
+    except ReleaseIdentityError:
+        return _UNSIGNED_DIGEST
+    contents = _git(root, "cat-file", "tag", tag_object, text=False)
+    if not isinstance(contents, bytes):  # pragma: no cover - subprocess contract
+        raise ReleaseIdentityError("release tag contents were not read as bytes")
+    if _BEGIN not in contents or _END not in contents:
+        return _UNSIGNED_DIGEST
+    return _signature_digest(contents)
+
+
 def _release_identity(root: Path, release: dict[str, Any]) -> None:
     version = release.get("version")
     tag_ref = release.get("tag_ref")
@@ -84,24 +103,20 @@ def _release_identity(root: Path, release: dict[str, Any]) -> None:
     if tag_ref != expected_ref or _TAG_REF.fullmatch(tag_ref) is None:
         raise ReleaseIdentityError(f"release tag reference is invalid: {tag_ref}")
 
-    try:
-        # Verify the tag's cryptographic signature against the checkout's
-        # configured trust policy before accepting any identity fields.
-        _git(root, "verify-tag", tag_ref)
-        tag_object = str(_git(root, "rev-parse", f"{tag_ref}^{{tag}}"))
-        source_commit = str(_git(root, "rev-parse", f"{tag_ref}^{{commit}}"))
-        contents = _git(root, "cat-file", "tag", tag_object, text=False)
-    except ReleaseIdentityError:
-        raise
+    # A release tag is the publication boundary. It may be a lightweight tag
+    # (the supported default) or an annotated tag. Do not require a signing key
+    # or trust-policy configuration; remote tag protection supplies immutability.
+    tag_object = str(_git(root, "rev-parse", tag_ref))
+    source_commit = str(_git(root, "rev-parse", f"{tag_ref}^{{commit}}"))
+    tag_type = str(_git(root, "cat-file", "-t", tag_ref))
     if not _OID.fullmatch(tag_object) or not _OID.fullmatch(source_commit):
         raise ReleaseIdentityError(f"release {version} has an invalid Git identity")
     if tag_object != release.get("tag_object"):
         raise ReleaseIdentityError(f"release {version} tag object does not match transition")
     if source_commit != release.get("source_commit"):
         raise ReleaseIdentityError(f"release {version} source commit does not match transition")
-    if not isinstance(contents, bytes):  # pragma: no cover - subprocess contract
-        raise ReleaseIdentityError("release tag contents were not read as bytes")
-    if _signature_digest(contents) != release.get("signature_sha256"):
+    signature_digest = _tag_signature_digest(root, tag_ref, tag_object, tag_type)
+    if signature_digest != release.get("signature_sha256"):
         raise ReleaseIdentityError(f"release {version} signature does not match transition")
 
 

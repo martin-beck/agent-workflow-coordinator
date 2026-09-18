@@ -16,6 +16,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
+          fetch-depth: 0
       - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d
         with:
           version: "0.12.8"
@@ -51,7 +52,7 @@ jobs:
             "$RUNNER_TEMP/release-clone/release-runbooks/operator.md"
           cmp -- "$RUNNER_TEMP/release-runbooks/agent.md" \
             "$RUNNER_TEMP/release-clone/release-runbooks/agent.md"
-      - name: Prepare release signing command (non-publishing)
+      - name: Prepare release tag command (non-publishing)
         env:
           TRANSITION: ${{ inputs.transition }}
         run: |
@@ -60,14 +61,17 @@ jobs:
           from pathlib import Path
           transition_path = Path(os.environ["TRANSITION"])
           transition = json.loads(transition_path.read_text(encoding="utf-8"))
-          to, old = transition["to"], transition["from"]
-          args = ["awc-sign-release.sh", "--repo", ".", "--version", to["version"], "--from-tag", old["tag_ref"].removeprefix("refs/tags/"), "--trust-policy-sha256", to["trust_policy_sha256"], "--vendor-manifest-sha256", to["vendor_manifest_sha256"], "--backend", transition["backend"], "--selector-ref", transition["selector_ref"], "--state-revision", str(transition["expected_state_revision"]), "--barrier-id", transition["barrier_id"], "--fencing-token", transition["fencing_token"], "--operation-id", transition["operation_id"]]
-          command = " ".join(shlex.quote(arg) for arg in args)
-          print("Run this command from a clean checkout whose HEAD equals the transition source commit; the external signer performs the signing mutation only when explicitly invoked.")
-          print("Release signing command (copy/paste on the authorized signing runner; not executed by CI):")
+          to = transition["to"]
+          tag = to["version"]
+          source = to["source_commit"]
+          command = " ".join(shlex.quote(arg) for arg in ["git", "tag", tag, source])
+          push = " ".join(shlex.quote(arg) for arg in ["git", "push", "origin", tag])
+          print("Run these commands from a clean checkout whose HEAD equals the transition source commit; CI does not create or push tags.")
+          print("Release tag command (copy/paste on the authorized release runner; not executed by CI):")
           print(command)
+          print(push)
           with Path(os.environ["GITHUB_STEP_SUMMARY"]).open("a", encoding="utf-8") as summary:
-              summary.write("## Release signing command\n\n```sh\n" + command + "\n```\n\nNot executed by CI; requires the authorized signing runner and real transition.\n")
+              summary.write("## Release tag command\n\n```sh\n" + command + "\n" + push + "\n```\n\nNot executed by CI; requires the authorized release runner and real transition.\n")
       - name: Bind published evidence to the exact source
         run: |
           if [[ ! "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]]; then

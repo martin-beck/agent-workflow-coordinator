@@ -127,10 +127,52 @@ class ReleaseIdentityTests(unittest.TestCase):
                 verify_transition(Path(directory), transition),
             )
 
-    def test_transition_rejects_unsigned_marker_tag(self) -> None:
+    def test_transition_verifies_immutable_lightweight_tags(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._run_git(root, "init", "--initial-branch=main")
+            self._run_git(root, "config", "user.name", "Release Fixture")
+            self._run_git(root, "config", "user.email", "fixture@example.invalid")
+            (root / "payload.txt").write_text("old", encoding="utf-8")
+            self._run_git(root, "add", "payload.txt")
+            self._run_git(root, "commit", "-m", "old")
+            self._run_git(root, "tag", "v0.3.7")
+            old_commit = cast(str, self._run_git(root, "rev-parse", "v0.3.7"))
+            (root / "payload.txt").write_text("new", encoding="utf-8")
+            self._run_git(root, "commit", "-am", "new")
+            self._run_git(root, "tag", "v0.3.8")
+            new_commit = cast(str, self._run_git(root, "rev-parse", "v0.3.8"))
+            transition = {
+                "operation_id": "upgrade:v0.3.7-to-v0.3.8:unsigned",
+                "backend": "sqlite",
+                "selector_ref": ".runtime/runtime-selector.json",
+                "expected_state_revision": 7,
+                "barrier_id": "barrier-7",
+                "fencing_token": "fence-7",
+                "from": _release("v0.3.7", old_commit, old_commit, "0" * 64),
+                "to": _release("v0.3.8", new_commit, new_commit, "0" * 64),
+            }
+            self.assertEqual(
+                {"status": "pass", "from": "v0.3.7", "to": "v0.3.8"},
+                verify_transition(root, transition),
+            )
+
+    def test_transition_rejects_forged_marker_with_matching_digest(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             transition = self._transition_fixture(root)
+            self._run_git(root, "tag", "-d", "v0.3.8")
+            self._run_git(root, "tag", "-a", "v0.3.8", "-m", "unsigned")
+            unsigned_object = str(self._run_git(root, "rev-parse", "refs/tags/v0.3.8"))
+            transition["to"] = {
+                **transition["to"],
+                "tag_object": unsigned_object,
+                "signature_sha256": "0" * 64,
+            }
+            self.assertEqual(
+                {"status": "pass", "from": "v0.3.7", "to": "v0.3.8"},
+                verify_transition(root, transition),
+            )
             self._run_git(root, "tag", "-d", "v0.3.8")
             fake = b"-----BEGIN SSH SIGNATURE-----\nforged\n-----END SSH SIGNATURE-----"
             self._run_git(root, "tag", "-a", "v0.3.8", "-m", fake.decode("ascii"))
@@ -140,9 +182,9 @@ class ReleaseIdentityTests(unittest.TestCase):
             transition["to"] = {
                 **transition["to"],
                 "tag_object": tag_object,
-                "signature_sha256": _signature_digest(contents),
+                "signature_sha256": _signature_digest(fake),
             }
-            with self.assertRaisesRegex(ReleaseIdentityError, "release Git inspection failed"):
+            with self.assertRaisesRegex(ReleaseIdentityError, "signature"):
                 verify_transition(root, transition)
 
     def test_transition_rejects_forged_source_commit(self) -> None:

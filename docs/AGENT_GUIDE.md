@@ -14,7 +14,7 @@ For autonomous or interactive agents using a project that embeds handoffctl:
 6. Route every product/Git/review/publication mutation through `handoffctl run`.
 7. After every material result or failure, update the task immediately. Heartbeat before expiry.
 8. If a command times out or has an ambiguous response, inspect durable state before any retry.
-9. Run all project-specific gates on the exact candidate, review privacy and signatures, then
+9. Run all project-specific gates on the exact candidate, review privacy and tag identity, then
    publish only with the authority granted by project policy.
 10. Release stopped work as `done`, `open`, or `blocked`; reconcile and run `doctor --live`.
 
