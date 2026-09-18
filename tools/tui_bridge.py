@@ -77,12 +77,21 @@ class TuiSession:
 
 
 def prepare_tui_session(
-    *, project_id: str, ar: dict[str, Any], guidance_request: dict[str, Any], session_id: str
+    *,
+    project_id: str,
+    ar: dict[str, Any],
+    guidance_request: dict[str, Any],
+    session_id: str,
+    documents: dict[str, str] | None = None,
 ) -> tuple[TuiSession, dict[str, Any]]:
     """Create the launch-pending record and its exact request envelope."""
 
     request = build_tui_request(
-        project_id=project_id, ar=ar, guidance_request=guidance_request, session_id=session_id
+        project_id=project_id,
+        ar=ar,
+        guidance_request=guidance_request,
+        session_id=session_id,
+        documents=documents,
     )
     return (
         TuiSession(
@@ -103,7 +112,12 @@ def plan_tui_escalation(decisions: tuple[ARDecision, ...]) -> ProgressPlan:
 
 
 def build_tui_request(
-    *, project_id: str, ar: dict[str, Any], guidance_request: dict[str, Any], session_id: str
+    *,
+    project_id: str,
+    ar: dict[str, Any],
+    guidance_request: dict[str, Any],
+    session_id: str,
+    documents: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     interaction = guidance_request.get("human_interaction")
     if not isinstance(interaction, dict) or interaction.get("interaction_required") is not True:
@@ -112,7 +126,7 @@ def build_tui_request(
         "task_revision"
     ):
         raise TuiBridgeError("trigger does not match AR revision")
-    return {
+    request = {
         "schema_version": "1.0",
         "kind": "coordinator-tui-request",
         "project_id": project_id,
@@ -127,6 +141,13 @@ def build_tui_request(
         "interaction": interaction,
         "guidance_request": guidance_request,
     }
+    if documents is not None:
+        if set(documents) - {"design", "workplan"} or not all(
+            isinstance(value, str) for value in documents.values()
+        ):
+            raise TuiBridgeError("TUI documents must be design/workplan Markdown strings")
+        request["documents"] = dict(documents)
+    return request
 
 
 def apply_tui_response(
