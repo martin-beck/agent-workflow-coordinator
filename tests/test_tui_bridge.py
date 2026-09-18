@@ -55,8 +55,18 @@ def _request() -> tuple[dict[str, Any], dict[str, Any]]:
 class TuiBridgeTests(unittest.TestCase):
     def test_complete_ar_graph_generates_both_documents_and_matching_focus(self) -> None:
         ars = (
-            {"id": "AR-0001", "summary": "Boundary", "description": "Choose boundary", "depends_on": []},
-            {"id": "AR-0002", "summary": "Rollout", "description": "Choose rollout", "depends_on": ["AR-0001"]},
+            {
+                "id": "AR-0001",
+                "summary": "Boundary",
+                "description": "Choose boundary",
+                "depends_on": [],
+            },
+            {
+                "id": "AR-0002",
+                "summary": "Rollout",
+                "description": "Choose rollout",
+                "depends_on": ["AR-0001"],
+            },
         )
         request = {"context": {"task_ref": "AR-0001", "objective": "Choose boundary"}}
         docs = generate_tui_documents(ars, decision_requests=(request,))
@@ -69,13 +79,29 @@ class TuiBridgeTests(unittest.TestCase):
         first_ar, first_wrapper = _request()
         first = first_wrapper["guidance_request"]
         second_ar = {**first_ar, "id": "AR-0002", "task_revision": 1}
-        second = {**first, "request_id": "AWG-Y", "context": {"task_ref": "AR-0002", "task_revision": 1}, "human_interaction": {**first["human_interaction"], "task_ref": "AR-0002", "task_revision": 1, "decision_request_ref": "AWG-Y"}}
+        second = {
+            **first,
+            "request_id": "AWG-Y",
+            "context": {"task_ref": "AR-0002", "task_revision": 1},
+            "human_interaction": {
+                **first["human_interaction"],
+                "task_ref": "AR-0002",
+                "task_revision": 1,
+                "decision_request_ref": "AWG-Y",
+            },
+        }
         session, request = prepare_tui_batch_session(
-            project_id="p", entries=((first_ar, first), (second_ar, second)), session_id="AWTUI-BATCH-1"
+            project_id="p",
+            entries=((first_ar, first), (second_ar, second)),
+            session_id="AWTUI-BATCH-1",
         )
         self.assertEqual(session.ar_id, "AR-0001")
         self.assertEqual(len(request["batch"]), 2)
-        self.assertEqual({item["guidance_request"]["request_id"] for item in request["batch"]}, {"AWG-X", "AWG-Y"})
+        self.assertEqual(
+            {item["guidance_request"]["request_id"] for item in request["batch"]},
+            {"AWG-X", "AWG-Y"},
+        )
+
     def test_session_rejects_invalid_identity_and_host(self) -> None:
         for args in (
             ("", "AR-0001", 1, "AWG-X", "AWTUI-S-1"),
