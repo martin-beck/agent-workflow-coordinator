@@ -703,6 +703,7 @@ class SQLiteAuthorityAdapterTests(unittest.TestCase):
         }
         executor = self.adapter.bind_lifecycle_executor(self.session, journal)
         before = executor.snapshot()
+        before_journal = journal.read_bytes()
         with (
             patch.object(self.adapter, "backup_bound", side_effect=KeyboardInterrupt),
             self.assertRaises(KeyboardInterrupt),
@@ -711,6 +712,7 @@ class SQLiteAuthorityAdapterTests(unittest.TestCase):
                 operation, self.root / "generated-abort.sqlite", {}
             )
         self.assertEqual(before, executor.snapshot())
+        self.assertEqual(before_journal, journal.read_bytes())
         self.assertFalse(self.session.operation_owned_by_current_thread)
 
     def test_generated_backup_rejects_journal_replacement_before_publication(self) -> None:
