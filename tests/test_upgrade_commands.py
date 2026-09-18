@@ -138,6 +138,16 @@ class UpgradeCommandTests(unittest.TestCase):
         with self.assertRaisesRegex(UpgradeCommandError, "unavailable or unsafe"):
             execute_upgrade_command("check", self.path, "sqlite")
 
+    def test_contract_symlinked_parent_is_rejected_before_dispatch(self) -> None:
+        real = self.root / "real"
+        real.mkdir()
+        target = real / "contract.json"
+        target.write_text(json.dumps(contract()), encoding="utf-8")
+        linked = self.root / "linked"
+        linked.symlink_to(real, target_is_directory=True)
+        with self.assertRaisesRegex(UpgradeCommandError, "parent is a symlink"):
+            execute_upgrade_command("check", linked / "contract.json", "sqlite")
+
     def test_stdlib_validator_rejects_every_typed_contract_boundary(self) -> None:
         mutations: tuple[Callable[[dict[str, Any]], object], ...] = (
             lambda value: value.update(schema_version=True),

@@ -38,8 +38,23 @@ def _reject_constant(value: str) -> NoReturn:
     raise ValueError(f"non-finite JSON constant: {value}")
 
 
+def _reject_symlinked_ancestors(path: Path) -> None:
+    """Reject a contract reached through a replaceable symlinked directory."""
+    absolute = path.absolute()
+    current = Path(absolute.anchor)
+    for component in absolute.parts[1:-1]:
+        current /= component
+        try:
+            mode = os.lstat(current).st_mode
+        except OSError as error:
+            raise UpgradeCommandError("upgrade contract is unavailable or unsafe") from error
+        if stat.S_ISLNK(mode):
+            raise UpgradeCommandError("upgrade contract parent is a symlink")
+
+
 def _read_contract(path: Path) -> dict[str, Any]:  # noqa: C901
     """Read one bounded regular contract without following its leaf symlink."""
+    _reject_symlinked_ancestors(path)
     descriptor = -1
     try:
         descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
