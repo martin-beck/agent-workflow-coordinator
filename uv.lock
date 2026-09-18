@@ -28,7 +28,7 @@ quality = [
 
 [package.metadata.requires-dev]
 quality = [
-    { name = "agent-workflow-quality", git = "https://github.com/martin-beck/agent-workflow-quality.git?rev=f1c40859e9d10cacbc79100ed136c38bce48cd39" },
+    { name = "agent-workflow-quality", git = "https://github.com/martin-beck/agent-workflow-quality.git?rev=d3d46a5f540fb03f65f30dd4c2af325f6f018a6e" },
     { name = "coverage", specifier = "==7.13.4" },
     { name = "jsonschema", extras = ["format"], specifier = "==4.25.1" },
     { name = "lizard", specifier = "==1.24.0" },
@@ -41,8 +41,8 @@ quality = [
 
 [[package]]
 name = "agent-workflow-quality"
-version = "0.32.0"
-source = { git = "https://github.com/martin-beck/agent-workflow-quality.git?rev=f1c40859e9d10cacbc79100ed136c38bce48cd39#f1c40859e9d10cacbc79100ed136c38bce48cd39" }
+version = "0.35.0"
+source = { git = "https://github.com/martin-beck/agent-workflow-quality.git?rev=d3d46a5f540fb03f65f30dd4c2af325f6f018a6e#d3d46a5f540fb03f65f30dd4c2af325f6f018a6e" }
 
 [[package]]
 name = "arrow"

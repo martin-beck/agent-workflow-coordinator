@@ -1,0 +1,81 @@
+name: Formal
+
+"on":
+  push:
+    branches: [main]
+  workflow_dispatch:
+  schedule:
+    - cron: "17 3 * * 0"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  formal-trusted:
+    if: github.ref == 'refs/heads/main'
+    runs-on: [self-hosted, Linux, X64, agent-workflow-coordinator-ci]
+    timeout-minutes: ${{ github.event_name == 'schedule' && 360 || 30 }}
+    continue-on-error: ${{ github.event_name == 'schedule' }}
+    env:
+      TLC_TIER: ${{ github.event_name == 'schedule' && 'full-exhaustive' || 'pr-fast' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d
+        with:
+          version: "0.12.8"
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - run: uv sync --locked --only-group quality
+      - name: Establish existing runner user bus and cgroup prerequisite
+        shell: bash
+        run: |
+          runner_uid=$(id -u)
+          runtime_dir="/run/user/${runner_uid}"
+          bus_address="unix:path=${runtime_dir}/bus"
+          echo "XDG_RUNTIME_DIR=${runtime_dir}" >> "$GITHUB_ENV"
+          echo "DBUS_SESSION_BUS_ADDRESS=${bus_address}" >> "$GITHUB_ENV"
+          test -S "${runtime_dir}/bus"
+          test "$(stat -fc %T /sys/fs/cgroup)" = cgroup2fs
+          required_bytes=$((6 * 1024 * 1024 * 1024))
+          host_bytes=$(awk '/^MemTotal:/ {print $2 * 1024}' /proc/meminfo)
+          test "${host_bytes}" -ge "${required_bytes}"
+          cgroup_relative=$(awk -F: '$1 == "0" {print $3; exit}' /proc/self/cgroup)
+          cgroup_mount=$(awk '$0 ~ / - cgroup2 / {print $5; exit}' /proc/self/mountinfo)
+          test -n "${cgroup_relative}"
+          test -n "${cgroup_mount}"
+          cgroup_dir="${cgroup_mount%/}${cgroup_relative:-/}"
+          test -r "${cgroup_dir}/memory.max"
+          test -r "${cgroup_dir}/memory.swap.max"
+          parent_memory=$(cat "${cgroup_dir}/memory.max")
+          if [[ "${parent_memory}" != max ]]; then test "${parent_memory}" -ge "${required_bytes}"; fi
+          parent_swap=$(cat "${cgroup_dir}/memory.swap.max")
+          if [[ "${parent_swap}" != max ]]; then test "${parent_swap}" -ge "${required_bytes}"; fi
+          XDG_RUNTIME_DIR="${runtime_dir}" DBUS_SESSION_BUS_ADDRESS="${bus_address}" \
+            systemd-run --user --wait --pipe --quiet --service-type=exec \
+              --property=MemoryMax=6G --property=MemorySwapMax=6G --property=TasksMax=64 true
+      - name: Run required formal tier
+        env:
+          TLC_CGROUP_MODE: required
+          TLC_HEAP: ${{ github.event_name == 'schedule' && '4096m' || '2048m' }}
+          TLC_MEMORY_MAX: ${{ github.event_name == 'schedule' && '6G' || '3G' }}
+          TLC_SWAP_MAX: ${{ github.event_name == 'schedule' && '6G' || '3G' }}
+          TLC_TIMEOUT_SECONDS: ${{ github.event_name == 'schedule' && '6000' || '1200' }}
+          TLC_ATTESTATION_PATH: ${{ runner.temp }}/formal-attestation.json
+        run: formal/handoffctl/verify.sh --tier "$TLC_TIER"
+      - name: Publish exact-head tier attestation
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08
+        with:
+          name: handoffctl-${{ env.TLC_TIER }}-${{ github.sha }}
+          path: ${{ runner.temp }}/formal-attestation.json
+          if-no-files-found: error
