@@ -674,6 +674,45 @@ class SQLiteAuthorityAdapterTests(unittest.TestCase):
         self.assertEqual("campaign:backup", result["operation_id"])
         self.assertEqual("completed", result["outcome"])
 
+    def test_generated_backup_abort_releases_lock_and_preserves_journal(self) -> None:
+        journal = self.root / "generated-abort-journal.json"
+        journal.write_text(
+            '{"status":"running","phase":"backup","records":[{"operation_id":"campaign",'
+            '"step_id":"campaign:backup","phase":"backup","outcome":"started",'
+            '"context":{"selector_ref":"runtime-selector.json","state_revision":1,'
+            '"durable_barrier_id":"barrier","fencing_token":"fence"}}]}\n',
+            encoding="utf-8",
+        )
+        operation = {
+            "operation_id": "campaign:backup",
+            "opcode": "backend.backup",
+            "inputs": {
+                "backend": "sqlite",
+                "selector_ref": "runtime-selector.json",
+                "expected_state_revision": 1,
+                "barrier_id": "barrier",
+                "fencing_token": "fence",
+                "backup_operation_id": "campaign:backup",
+            },
+            "timeout_seconds": 300,
+            "resources": ["maintenance-barrier", "durable-operation-record"],
+            "preconditions": ["previous-phase-complete"],
+            "postconditions": ["backup-contract-satisfied"],
+            "evidence": ["durable-operation-record"],
+            "durable_record": "operation-id-and-outcome",
+        }
+        executor = self.adapter.bind_lifecycle_executor(self.session, journal)
+        before = executor.snapshot()
+        with (
+            patch.object(self.adapter, "backup_bound", side_effect=KeyboardInterrupt),
+            self.assertRaises(KeyboardInterrupt),
+        ):
+            executor.execute_generated_operation(
+                operation, self.root / "generated-abort.sqlite", {}
+            )
+        self.assertEqual(before, executor.snapshot())
+        self.assertFalse(self.session.operation_owned_by_current_thread)
+
     def test_generated_backup_rejects_journal_replacement_before_publication(self) -> None:
         journal = self.root / "replacement-journal.json"
         journal.write_text(
