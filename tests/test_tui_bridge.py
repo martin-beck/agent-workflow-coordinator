@@ -1,7 +1,10 @@
 # Copyright (C) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 # SPDX-License-Identifier: MIT
 
+import json
+import tempfile
 import unittest
+from pathlib import Path
 from typing import Any, cast
 
 from tools.decision_batch_policy import ARDecision
@@ -13,6 +16,7 @@ from tools.tui_bridge import (
     build_tui_request,
     plan_tui_escalation,
     prepare_tui_session,
+    read_tui_event_journal,
 )
 
 
@@ -218,6 +222,40 @@ class TuiBridgeTests(unittest.TestCase):
                 session_id="AWTUI-S-1",
                 documents={"design": "x", "private_path": "/secret"},
             )
+
+    def test_event_journal_reader_validates_identity_and_sequence(self) -> None:
+        _ar, request = _request()
+        events = [
+            {
+                "project_id": "p",
+                "ar_id": "AR-0001",
+                "task_revision": 2,
+                "session_id": "s",
+                "sequence": 1,
+                "event_type": "select",
+            },
+            {
+                "project_id": "p",
+                "ar_id": "AR-0001",
+                "task_revision": 2,
+                "session_id": "s",
+                "sequence": 2,
+                "event_type": "safe-exit",
+            },
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "session.events.jsonl"
+            with path.open("w", encoding="utf-8") as stream:
+                for event in events:
+                    stream.write(json.dumps(event) + "\n")
+            path.chmod(0o600)
+            self.assertEqual(events, list(read_tui_event_journal(path, request=request)))
+            events[1]["sequence"] = 4
+            with path.open("w", encoding="utf-8") as stream:
+                for event in events:
+                    stream.write(json.dumps(event) + "\n")
+            with self.assertRaisesRegex(TuiBridgeError, "contiguous"):
+                read_tui_event_journal(path, request=request)
 
     def test_trigger_revision_mismatch_fails_closed(self) -> None:
         ar, req = _request()
