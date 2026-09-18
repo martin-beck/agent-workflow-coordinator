@@ -61,12 +61,20 @@ class DurableBindingTests(unittest.TestCase):
 
             class Store:
                 authority_path = authority
+                control_store_path = root / "control.sqlite"
+                control_lock_path = root / "control.lock"
 
                 def operation_lock(self) -> _Lock:
                     return _Lock()
 
-            session = SQLiteCompatibilitySession(binding, Store())
+            Store.control_store_path.touch(mode=0o600)
+            Store.control_lock_path.touch(mode=0o600)
+            journal = root / "journal.json"
+            journal.write_bytes(b'{"status":"running"}\n')
+            session = SQLiteCompatibilitySession(binding, Store(), journal)
             session.assert_current()
+            snapshot = session.snapshot()
+            self.assertEqual(snapshot, session.assert_snapshot_current(snapshot))
             with session.operation_lock():
                 pass
             with self.assertRaisesRegex(DurableBindingError, "outcome publication"):
@@ -83,12 +91,47 @@ class DurableBindingTests(unittest.TestCase):
 
             class Store:
                 authority_path = foreign
+                control_store_path = root / "control.sqlite"
+                control_lock_path = root / "control.lock"
 
                 def operation_lock(self) -> _Lock:
                     return _Lock()
 
             with self.assertRaisesRegex(DurableBindingError, "foreign authority"):
-                SQLiteCompatibilitySession(binding, Store())
+                SQLiteCompatibilitySession(binding, Store(), root / "journal.json")
+
+    def test_sqlite_snapshot_rejects_journal_replacement_as_ambiguous(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            authority = root / "authority.sqlite"
+            with sqlite3.connect(authority) as connection:
+                connection.execute("CREATE TABLE records (id INTEGER PRIMARY KEY)")
+            authority.chmod(0o600)
+            control = root / "control.sqlite"
+            lock = root / "control.lock"
+            control.touch(mode=0o600)
+            lock.touch(mode=0o600)
+            journal = root / "journal.json"
+            journal.write_bytes(b'{"status":"running"}\n')
+            binding = FilesystemAuthorityBinding.bind(authority, "sqlite")
+
+            class Store:
+                authority_path = authority
+                control_store_path = control
+                control_lock_path = lock
+
+                @staticmethod
+                def operation_lock() -> _Lock:
+                    return _Lock()
+
+            session = SQLiteCompatibilitySession(binding, Store(), journal)
+            expected = session.snapshot()
+            replacement = root / "replacement-journal.json"
+            replacement.write_bytes(b'{"status":"replaced"}\n')
+            journal.unlink()
+            replacement.rename(journal)
+            with self.assertRaisesRegex(DurableBindingError, "ambiguous"):
+                session.assert_snapshot_current(expected)
 
 
 class _Lock(AbstractContextManager[None]):

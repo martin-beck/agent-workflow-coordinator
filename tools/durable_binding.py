@@ -107,10 +107,27 @@ class DurableUpgradeSession(Protocol):
     def record_outcome(self, operation_id: str, result: object) -> None: ...
 
 
+@dataclass(frozen=True, slots=True)
+class SQLiteDurableSnapshot:
+    """Immutable read-only snapshot of all SQLite session authorities."""
+
+    authority: AuthorityIdentity
+    control_store: tuple[int, int, int, int]
+    control_lock: tuple[int, int, int, int]
+    journal: tuple[int, int, int, int]
+    journal_bytes: bytes
+
+
 @runtime_checkable
 class _SQLiteSessionStore(Protocol):
     @property
     def authority_path(self) -> Path | None: ...
+
+    @property
+    def control_store_path(self) -> Path: ...
+
+    @property
+    def control_lock_path(self) -> Path: ...
 
     def operation_lock(self) -> AbstractContextManager[None]: ...
 
@@ -123,18 +140,63 @@ class SQLiteCompatibilitySession:
     """
 
     def __init__(
-        self, binding: FilesystemAuthorityBinding, session_store: _SQLiteSessionStore
+        self,
+        binding: FilesystemAuthorityBinding,
+        session_store: _SQLiteSessionStore,
+        journal: Path,
     ) -> None:
         if binding.identity.kind != "sqlite":
             raise DurableBindingError("SQLite compatibility requires SQLite identity")
         authority_path = session_store.authority_path
         if authority_path != binding.identity.path:
             raise DurableBindingError("SQLite session is bound to a foreign authority")
+        if not isinstance(journal, Path) or journal.is_symlink():
+            raise DurableBindingError("SQLite session journal is unsafe")
         self.binding = binding
         self._session_store = session_store
+        self._journal = journal.absolute()
 
     def assert_current(self) -> AuthorityIdentity:
         return self.binding.assert_current()
+
+    @staticmethod
+    def _path_identity(path: Path) -> tuple[int, int, int, int]:
+        try:
+            parent = path.parent.lstat()
+            value = path.lstat()
+        except OSError as error:
+            raise DurableBindingError("ambiguous durable session state") from error
+        if stat.S_ISLNK(parent.st_mode) or stat.S_ISLNK(value.st_mode):
+            raise DurableBindingError("ambiguous durable session state")
+        if not stat.S_ISREG(value.st_mode) or value.st_nlink != 1:
+            raise DurableBindingError("ambiguous durable session state")
+        return parent.st_dev, parent.st_ino, value.st_dev, value.st_ino
+
+    def snapshot(self) -> SQLiteDurableSnapshot:
+        """Capture control, lock, journal, and authority state under the lock."""
+        try:
+            with self._session_store.operation_lock():
+                control = self._path_identity(self._session_store.control_store_path)
+                lock = self._path_identity(self._session_store.control_lock_path)
+                journal = self._path_identity(self._journal)
+                journal_bytes = self._journal.read_bytes()
+                authority = self.binding.assert_current()
+                if self._path_identity(self._journal) != journal:
+                    raise DurableBindingError("ambiguous durable session state")
+                return SQLiteDurableSnapshot(authority, control, lock, journal, journal_bytes)
+        except DurableBindingError:
+            raise
+        except Exception as error:
+            raise DurableBindingError("ambiguous durable session state") from error
+
+    def assert_snapshot_current(self, expected: SQLiteDurableSnapshot) -> SQLiteDurableSnapshot:
+        """Reread all durable inputs and reject any replacement or content drift."""
+        if not isinstance(expected, SQLiteDurableSnapshot):
+            raise DurableBindingError("foreign durable session snapshot")
+        current = self.snapshot()
+        if current != expected:
+            raise DurableBindingError("ambiguous durable session state")
+        return current
 
     def operation_lock(self) -> AbstractContextManager[None]:
         self.assert_current()
