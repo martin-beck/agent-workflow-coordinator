@@ -155,8 +155,11 @@ class SQLiteCompatibilitySession:
         self.binding = binding
         self._session_store = session_store
         self._journal = journal.absolute()
+        self._ambiguous = False
 
     def assert_current(self) -> AuthorityIdentity:
+        if self._ambiguous:
+            raise DurableBindingError("SQLite session is in ambiguous safe mode")
         return self.binding.assert_current()
 
     @staticmethod
@@ -174,6 +177,8 @@ class SQLiteCompatibilitySession:
 
     def snapshot(self) -> SQLiteDurableSnapshot:
         """Capture control, lock, journal, and authority state under the lock."""
+        if self._ambiguous:
+            raise DurableBindingError("SQLite session is in ambiguous safe mode")
         try:
             with self._session_store.operation_lock():
                 control = self._path_identity(self._session_store.control_store_path)
@@ -185,8 +190,10 @@ class SQLiteCompatibilitySession:
                     raise DurableBindingError("ambiguous durable session state")
                 return SQLiteDurableSnapshot(authority, control, lock, journal, journal_bytes)
         except DurableBindingError:
+            self._ambiguous = True
             raise
         except Exception as error:
+            self._ambiguous = True
             raise DurableBindingError("ambiguous durable session state") from error
 
     def assert_snapshot_current(self, expected: SQLiteDurableSnapshot) -> SQLiteDurableSnapshot:
@@ -201,6 +208,11 @@ class SQLiteCompatibilitySession:
     def operation_lock(self) -> AbstractContextManager[None]:
         self.assert_current()
         return self._session_store.operation_lock()
+
+    @property
+    def safe_mode(self) -> bool:
+        """Whether an uncertain durable observation permanently fenced this session."""
+        return self._ambiguous
 
     def record_outcome(self, _operation_id: str, _result: object) -> None:
         raise DurableBindingError("durable outcome publication is not enabled")

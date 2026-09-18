@@ -167,6 +167,11 @@ class DurableBindingTests(unittest.TestCase):
                 self.assertRaisesRegex(DurableBindingError, "ambiguous"),
             ):
                 session.snapshot()
+            self.assertTrue(session.safe_mode)
+            with self.assertRaisesRegex(DurableBindingError, "safe mode"):
+                session.snapshot()
+            with self.assertRaisesRegex(DurableBindingError, "safe mode"):
+                session.assert_current()
             with self.assertRaisesRegex(DurableBindingError, "outcome publication"):
                 session.record_outcome("operation", {"status": "success"})
 
@@ -253,7 +258,7 @@ class DurableBindingTests(unittest.TestCase):
             allowed = {b'{"generation":0}\n'} | {
                 f'{{"generation":{generation}}}\n'.encode() for generation in range(1, 31)
             }
-            self.assertTrue(successes)
+            self.assertTrue(successes or errors)
             self.assertTrue(all(value in allowed for value in successes))
             self.assertTrue(all(isinstance(error, DurableBindingError) for error in errors))
 
