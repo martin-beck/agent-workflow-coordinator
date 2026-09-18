@@ -64,6 +64,18 @@ class FormalEvidenceTests(unittest.TestCase):
                     f"{transition['name']}: {symbol}",
                 )
 
+    def test_sqlite_correspondence_model_actions_exist_or_are_state_preserving(self) -> None:
+        artifact = json.loads(
+            (ROOT / "formal" / "upgrade" / "sqlite-snapshot-correspondence.json").read_text()
+        )
+        model = (ROOT / artifact["model"]["path"]).read_text(encoding="utf-8")
+        for transition in artifact["transitions"]:
+            action = transition["model"]["action"]
+            if action == "no-op":
+                self.assertIn("state", transition["postcondition"])
+            else:
+                self.assertRegex(model, rf"\b{re.escape(action)}\(")
+
     def test_sqlite_correspondence_evidence_references_resolve_to_tests(self) -> None:
         artifact = json.loads(
             (ROOT / "formal" / "upgrade" / "sqlite-snapshot-correspondence.json").read_text()

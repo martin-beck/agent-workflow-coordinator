@@ -208,7 +208,7 @@ class DurableBindingTests(unittest.TestCase):
         fence = next(
             item for item in correspondence["transitions"] if item["name"] == "ambiguous-fence"
         )
-        self.assertEqual("Acquire", fence["model"]["action"])
+        self.assertEqual("no-op", fence["model"]["action"])
         self.assertEqual("reject", fence["model"]["result"])
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
