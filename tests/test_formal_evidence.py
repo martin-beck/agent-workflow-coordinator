@@ -500,6 +500,13 @@ class FormalEvidenceTests(unittest.TestCase):
                 reference,
             )
 
+    def test_sqlite_correspondence_evidence_test_references_are_unique(self) -> None:
+        artifact = json.loads(
+            (ROOT / "formal" / "upgrade" / "sqlite-snapshot-correspondence.json").read_text()
+        )
+        references = artifact["evidence"]["tests"]
+        self.assertEqual(len(references), len(set(references)))
+
     def test_sqlite_snapshot_correspondence_map_is_bounded_and_fail_closed(self) -> None:
         value = json.loads(
             (ROOT / "formal" / "upgrade" / "sqlite-snapshot-correspondence.json").read_text()
