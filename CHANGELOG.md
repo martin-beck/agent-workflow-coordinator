@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.3.16 - 2026-09-18
+
+- Publish Markdown documents through the Coordinator/TUI handoff while preserving
+  revision-bound sessions, explicit human-interaction triggers, and fail-closed
+  response handling.
+
 ## v0.3.14 - 2026-09-18
 
 - Expose the autonomous-before-human TUI escalation planner and preserve
