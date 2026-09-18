@@ -1320,6 +1320,58 @@ class RollbackControlStoreTests(unittest.TestCase):
                 invalid.recheck_held_locked(guard, identity, 1)
             self.assertEqual(1, held.revision)
 
+    def test_v10_process_death_recovery_rejects_missing_or_mismatched_session(self) -> None:
+        for mutate_session, expected_error in (
+            ("delete", "prepared session intent has no session"),
+            ("identity", "prepared session intent identity is invalid"),
+        ):
+            with (
+                self.subTest(mutate_session=mutate_session),
+                tempfile.TemporaryDirectory() as directory,
+            ):
+                path = Path(directory) / "control.sqlite"
+                store = SQLiteBarrierSessionStore(
+                    SQLiteRollbackControlStore(path, PROJECT), lambda: "authority-3"
+                )
+                identity = self._session_identity()
+                held = store.create(identity)
+                with sqlite3.connect(path) as connection:
+                    intent_id = connection.execute(
+                        "SELECT intent_id FROM barrier_session_intent WHERE project_id=?",
+                        (PROJECT,),
+                    ).fetchone()[0]
+                    connection.execute(
+                        "UPDATE barrier_session_intent SET outcome='prepared' WHERE intent_id=?",
+                        (intent_id,),
+                    )
+                    if mutate_session == "delete":
+                        connection.execute(
+                            "DELETE FROM barrier_session WHERE project_id=?", (PROJECT,)
+                        )
+                    else:
+                        connection.execute(
+                            "UPDATE barrier_session_intent SET identity_digest=? WHERE intent_id=?",
+                            ("f" * 64, intent_id),
+                        )
+                    connection.commit()
+                with self.assertRaisesRegex(ControlStoreError, expected_error):
+                    store.recover_unknown()
+                self.assertFalse(store.operation_owned_by_current_thread)
+                with sqlite3.connect(path) as connection:
+                    outcome = connection.execute(
+                        "SELECT outcome FROM barrier_session_intent WHERE intent_id=?",
+                        (intent_id,),
+                    ).fetchone()[0]
+                    self.assertEqual("prepared", outcome)
+                    if mutate_session == "delete":
+                        self.assertIsNone(
+                            connection.execute(
+                                "SELECT 1 FROM barrier_session WHERE project_id=?", (PROJECT,)
+                            ).fetchone()
+                        )
+                    else:
+                        self.assertEqual(held, store.snapshot())
+
     def test_v10_session_intent_recovery_fences_and_requires_newer_fence(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "control.sqlite"
