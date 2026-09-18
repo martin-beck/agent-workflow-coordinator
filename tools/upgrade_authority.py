@@ -382,9 +382,13 @@ def _read_runtime_selector_at(parent: int, name: str) -> dict[str, Any]:  # noqa
         "previous_release",
     }:
         raise AuthorityError("runtime selector schema is invalid")
-    if value["schema_version"] != 1 or not all(
-        isinstance(value[key], str) and _RELEASE_IDENTITY.fullmatch(value[key]) is not None
-        for key in ("active_release", "previous_release")
+    if (
+        value["schema_version"] != 1
+        or value["active_release"] == value["previous_release"]
+        or not all(
+            isinstance(value[key], str) and _RELEASE_IDENTITY.fullmatch(value[key]) is not None
+            for key in ("active_release", "previous_release")
+        )
     ):
         raise AuthorityError("runtime selector identity is invalid")
     return cast(dict[str, Any], value)
@@ -468,9 +472,13 @@ def _read_runtime_selector_bound(path: Path) -> dict[str, Any]:
     value = _read_bound_json(path, label="runtime selector", private_parent=True)
     if set(value) != {"schema_version", "active_release", "previous_release"}:
         raise AuthorityError("runtime selector schema is invalid")
-    if value["schema_version"] != 1 or not all(
-        isinstance(value[key], str) and _RELEASE_IDENTITY.fullmatch(value[key]) is not None
-        for key in ("active_release", "previous_release")
+    if (
+        value["schema_version"] != 1
+        or value["active_release"] == value["previous_release"]
+        or not all(
+            isinstance(value[key], str) and _RELEASE_IDENTITY.fullmatch(value[key]) is not None
+            for key in ("active_release", "previous_release")
+        )
     ):
         raise AuthorityError("runtime selector identity is invalid")
     return value
@@ -703,9 +711,12 @@ def commit_runtime_selector(  # noqa: C901
     path: Path, active_release: str, previous_release: str
 ) -> None:
     """Atomically publish through a retained, owner-only parent descriptor."""
-    if not all(
-        isinstance(value, str) and _RELEASE_IDENTITY.fullmatch(value) is not None
-        for value in (active_release, previous_release)
+    if (
+        not all(
+            isinstance(value, str) and _RELEASE_IDENTITY.fullmatch(value) is not None
+            for value in (active_release, previous_release)
+        )
+        or active_release == previous_release
     ):
         raise AuthorityError("runtime selector identity is invalid")
     parent, parent_identity = _open_parent(path)
