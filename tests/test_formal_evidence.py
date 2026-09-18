@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import io
 import json
 import re
@@ -51,6 +52,14 @@ def configured_bounds(configs: list[Path]) -> dict[str, int]:
 
 
 class FormalEvidenceTests(unittest.TestCase):
+    def test_sqlite_correspondence_model_digest_matches_exact_source(self) -> None:
+        artifact = json.loads(
+            (ROOT / "formal" / "upgrade" / "sqlite-snapshot-correspondence.json").read_text()
+        )
+        model_path = ROOT / artifact["model"]["path"]
+        digest = hashlib.sha256(model_path.read_bytes()).hexdigest()
+        self.assertEqual(artifact["model"]["sha256"], digest)
+
     def test_sqlite_correspondence_implementation_symbols_resolve(self) -> None:
         artifact = json.loads(
             (ROOT / "formal" / "upgrade" / "sqlite-snapshot-correspondence.json").read_text()
