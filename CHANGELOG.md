@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.18
+
+- Fail closed when important agent decisions bypass the workflow TUI.
+- Classify design, impact, uncertainty, and policy signals before routing.
+
 ## v0.3.17 - 2026-09-18
 
 - Publish the TUI event-journal reader for durable, revision-aware inspection of
