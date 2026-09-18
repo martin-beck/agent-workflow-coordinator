@@ -168,6 +168,7 @@ def prepare_tui_session(
     guidance_request: dict[str, Any],
     session_id: str,
     documents: dict[str, str] | None = None,
+    host_handoff: dict[str, Any] | None = None,
 ) -> tuple[TuiSession, dict[str, Any]]:
     """Create the launch-pending record and its exact request envelope."""
 
@@ -177,6 +178,7 @@ def prepare_tui_session(
         guidance_request=guidance_request,
         session_id=session_id,
         documents=documents,
+        host_handoff=host_handoff,
     )
     return (
         TuiSession(
@@ -259,6 +261,7 @@ def prepare_tui_batch_session(
     entries: tuple[tuple[dict[str, Any], dict[str, Any]], ...],
     session_id: str,
     ars: tuple[dict[str, Any], ...] | None = None,
+    host_handoff: dict[str, Any] | None = None,
 ) -> tuple[TuiSession, dict[str, Any]]:
     """Create one TUI session for all independent decisions in a batch."""
     if not entries:
@@ -274,6 +277,7 @@ def prepare_tui_batch_session(
         guidance_request=first_request,
         session_id=session_id,
         documents=documents,
+        host_handoff=host_handoff,
     )
     request["batch"] = [
         build_tui_request(
@@ -282,6 +286,7 @@ def prepare_tui_batch_session(
             guidance_request=guidance,
             session_id=session_id,
             documents=documents,
+            host_handoff=host_handoff,
         )
         | {"documents": documents}
         for ar, guidance in entries
@@ -311,6 +316,7 @@ def build_tui_request(
     guidance_request: dict[str, Any],
     session_id: str,
     documents: dict[str, str] | None = None,
+    host_handoff: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     interaction = guidance_request.get("human_interaction")
     if not isinstance(interaction, dict) or interaction.get("interaction_required") is not True:
@@ -340,6 +346,16 @@ def build_tui_request(
         ):
             raise TuiBridgeError("TUI documents must be design/workplan Markdown strings")
         request["documents"] = dict(documents)
+    if host_handoff is not None:
+        required = {"ssh_host", "remote_session_file", "remote_event_file", "client_capabilities"}
+        if set(host_handoff) != required:
+            raise TuiBridgeError("host_handoff must contain exactly the SSH paths and client capabilities")
+        if not isinstance(host_handoff["ssh_host"], str) or not re.fullmatch(r"[A-Za-z0-9._-]+", host_handoff["ssh_host"]):
+            raise TuiBridgeError("host_handoff ssh_host is invalid")
+        capabilities = host_handoff["client_capabilities"]
+        if not isinstance(capabilities, dict) or capabilities.get("platform") not in {"windows", "linux", "macos", "freebsd"} or capabilities.get("shell") not in {"powershell", "cmd", "bash", "zsh", "sh"}:
+            raise TuiBridgeError("host_handoff client capabilities are invalid")
+        request["host_handoff"] = deepcopy(host_handoff)
     return request
 
 

@@ -327,6 +327,28 @@ class TuiBridgeTests(unittest.TestCase):
         self.assertEqual("# Design\n\nBoundary", request["documents"]["design"])
         self.assertEqual("# Work plan\n\nValidate", request["documents"]["workplan"])
 
+    def test_prepare_session_carries_explicit_windows_ssh_handoff(self) -> None:
+        ar, _ = _request()
+        guidance = {
+            "human_interaction": {
+                **_request()[1]["interaction"],
+                "task_ref": "AR-0001",
+                "task_revision": 2,
+            },
+            "request_id": "AWG-X",
+        }
+        handoff = {
+            "ssh_host": "project-prod",
+            "remote_session_file": "/srv/state/request.json",
+            "remote_event_file": "/srv/state/response.json",
+            "client_capabilities": {"platform": "windows", "shell": "powershell"},
+        }
+        _session, request = prepare_tui_session(
+            project_id="p", ar=ar, guidance_request=guidance,
+            session_id="AWTUI-S-1", host_handoff=handoff,
+        )
+        self.assertEqual(handoff, request["host_handoff"])
+
     def test_prepare_session_rejects_private_or_unknown_document_fields(self) -> None:
         ar, request = _request()
         guidance = {
