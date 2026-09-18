@@ -1199,6 +1199,29 @@ class RollbackControlStoreTests(unittest.TestCase):
                 )
             self.assertIsNone(store.snapshot())
 
+    def test_cas_locked_rejects_authority_rotation_before_write(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            authority = ["authority-3"]
+            store = SQLiteBarrierSessionStore(
+                SQLiteRollbackControlStore(Path(directory) / "control.sqlite", PROJECT),
+                lambda: authority[0],
+            )
+            identity = self._session_identity()
+            held = store.create(identity)
+            authority[0] = "authority-rotated"
+            with (
+                locked() as guard,
+                store.lock_owned_by_caller(guard),
+                self.assertRaisesRegex(ControlStoreError, "authority revision changed"),
+            ):
+                store.cas_locked(
+                    guard,
+                    identity,
+                    held.revision,
+                    BarrierSessionState(identity, "releasing", held.revision + 1),
+                )
+            self.assertEqual(held, store.snapshot())
+
     def test_cas_locked_rejects_invalid_scope_inputs_before_write(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             identity = self._session_identity()

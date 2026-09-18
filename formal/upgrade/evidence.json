@@ -96,7 +96,7 @@
     "files": {
       "schema/upgrade-contract.schema.json": "2f16e6990b59651656d89973237ca522e5ed8ff1a4b3d46d98e22108f8e689d5",
       "tests/test_mutation_fence.py": "e2bcea7b96bddd2509b79ff9c5eefd57001d1502949aba30cbbd50a9169e1cbb",
-      "tests/test_rollback_control_store.py": "d33da06b4c3c5d0e0250ea15edb56d1ee6314c199b5d410b18dbcf9f21ba75e5",
+      "tests/test_rollback_control_store.py": "213b2ed4ee7ecff4c3d7c471bf02669c5dd05ae7e2d866e02af92e89369ae394",
       "tests/test_sqlite_mutation_barrier.py": "6949425557176bebb3341677d1fed90c0217055bd1d1dcb56bbdf91f60d31fb8",
       "tests/test_sqlite_storage.py": "153e538c57740beb3b1bb83002e09c69fe6a213a9e67b3429b3e08480c950575",
       "tests/test_upgrade_commands.py": "4eaa65ac1730c9149156ba76e345dcb1f8e2c44a51042e27f2d4a4b4e7634f32",
