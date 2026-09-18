@@ -929,6 +929,29 @@ class RuntimeBootstrapTests(unittest.TestCase):
             with self.assertRaisesRegex(AuthorityError, "does not match"):
                 resolve_selected_runtime(selector, releases, self._identity_for_release(), replace)
 
+    def test_rejects_forged_vendor_identity_replacement_after_authenticity(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            releases = root / "releases"
+            releases.mkdir(mode=0o700)
+            selected = releases / "v1.2.3"
+            selected.mkdir(mode=0o700)
+            self._write_manifest(selected)
+            selector = root / "runtime-selector.json"
+            commit_runtime_selector(selector, "v1.2.3", "v1.2.2")
+
+            def replace(path: Path, expected: ExpectedRuntimeIdentity) -> VerifiedManifest:
+                manifest = path / "runtime-manifest.json"
+                value = json.loads(manifest.read_text())
+                value["vendor_manifest_sha256"] = "f" * 64
+                manifest.write_text(json.dumps(value, separators=(",", ":")))
+                manifest.chmod(0o600)
+                digest = sha256(manifest.read_bytes()).hexdigest()
+                return VerifiedManifest("v1.2.3", expected, digest)
+
+            with self.assertRaisesRegex(AuthorityError, "does not match"):
+                resolve_selected_runtime(selector, releases, self._identity_for_release(), replace)
+
     def test_rejects_selector_replacement_during_authenticity_validation(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
