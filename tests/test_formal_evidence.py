@@ -365,6 +365,10 @@ class FormalEvidenceTests(unittest.TestCase):
             implementation = transition["implementation"]
             self.assertTrue(implementation, transition["name"])
             self.assertEqual(len(implementation), len(set(implementation)), transition["name"])
+            self.assertTrue(
+                all(isinstance(symbol, str) and symbol.strip() for symbol in implementation),
+                transition["name"],
+            )
             for symbol in transition["implementation"]:
                 name = symbol.rsplit(".", 1)[-1]
                 self.assertIsNotNone(
