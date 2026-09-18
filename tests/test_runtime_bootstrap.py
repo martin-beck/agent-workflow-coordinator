@@ -1205,6 +1205,37 @@ class RuntimeBootstrapTests(unittest.TestCase):
                     expected_file_identity=(original.st_dev, original.st_ino),
                 )
 
+    def test_manifest_verifier_rejects_parent_replacement_after_read(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            runtime = Path(directory) / "runtime"
+            runtime.mkdir(mode=0o700)
+            manifest = runtime / "runtime-manifest.json"
+            manifest.write_text('{"release":"v1.2.3"}\n')
+            manifest.chmod(0o600)
+            digest = sha256(manifest.read_bytes()).hexdigest()
+            original_lstat = Path.lstat
+            parent_lstat_calls = 0
+
+            def replace_parent(path: Path) -> os.stat_result:
+                nonlocal parent_lstat_calls
+                if path == runtime:
+                    parent_lstat_calls += 1
+                    if parent_lstat_calls == 2:
+                        moved = runtime.with_name("runtime-original")
+                        runtime.rename(moved)
+                        runtime.symlink_to(moved, target_is_directory=True)
+                return original_lstat(path)
+
+            with (
+                patch(
+                    "tools.runtime_bootstrap.Path.lstat",
+                    autospec=True,
+                    side_effect=replace_parent,
+                ),
+                self.assertRaisesRegex(AuthorityError, "parent identity changed"),
+            ):
+                verify_runtime_manifest(runtime, digest)
+
     def test_rejects_symlinked_release_root_ancestor(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
