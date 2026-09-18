@@ -224,6 +224,15 @@ class ReleaseIdentityTests(unittest.TestCase):
             with self.assertRaisesRegex(ReleaseIdentityError, "already exists"):
                 verify_transition(root, transition, candidate=True)
 
+    def test_candidate_rejects_target_source_different_from_head(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            transition = self._transition_fixture(root)
+            self._run_git(root, "tag", "-d", "v0.3.8")
+            transition["to"] = {**transition["to"], "source_commit": "a" * 40}
+            with self.assertRaisesRegex(ReleaseIdentityError, "checked-out HEAD"):
+                verify_transition(root, transition, candidate=True)
+
     def test_transition_rejects_forged_signature(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             transition = self._transition_fixture(Path(directory))
