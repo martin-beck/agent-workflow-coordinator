@@ -51,12 +51,10 @@ class TuiBridgeTests(unittest.TestCase):
             project_id="p",
             ar=ar,
             guidance_request={
-                
-                    "human_interaction": {
-                        **request["interaction"],
-                        "decision_request_ref": "AWG-X",
-                    }
-                ,
+                "human_interaction": {
+                    **request["interaction"],
+                    "decision_request_ref": "AWG-X",
+                },
                 "request_id": "AWG-X",
             },
             session_id="AWTUI-SESSION-1",
