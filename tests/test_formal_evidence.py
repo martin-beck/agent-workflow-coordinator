@@ -84,6 +84,7 @@ class FormalEvidenceTests(unittest.TestCase):
         model = (ROOT / "formal" / "upgrade" / "UpgradeRecovery.tla").read_text()
         constants = re.findall(r"^CONSTANT\s+(\w+)\s*=", config, re.MULTILINE)
         self.assertTrue(constants)
+        self.assertEqual(len(constants), len(set(constants)))
         declaration = re.search(r"^CONSTANTS\s+(.+)$", model, re.MULTILINE)
         self.assertIsNotNone(declaration)
         assert declaration is not None
