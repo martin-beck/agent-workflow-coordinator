@@ -152,6 +152,14 @@ class DurableBindingTests(unittest.TestCase):
                 SQLiteCompatibilitySession(binding, Store(), root / "journal.json")
 
     def test_sqlite_snapshot_rejects_journal_replacement_as_ambiguous(self) -> None:
+        correspondence_path = (
+            Path(__file__).parents[1] / "formal" / "upgrade" / "sqlite-snapshot-correspondence.json"
+        )
+        correspondence = json.loads(correspondence_path.read_text(encoding="utf-8"))
+        transition = next(
+            item for item in correspondence["transitions"] if item["name"] == "identity-reread"
+        )
+        self.assertEqual("reject", transition["model"]["failure_outcome"])
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             authority = root / "authority.sqlite"
