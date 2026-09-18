@@ -52,6 +52,15 @@ def configured_bounds(configs: list[Path]) -> dict[str, int]:
 
 
 class FormalEvidenceTests(unittest.TestCase):
+    def test_sqlite_correspondence_provenance_is_bounded(self) -> None:
+        artifact = json.loads(
+            (ROOT / "formal" / "upgrade" / "sqlite-snapshot-correspondence.json").read_text()
+        )
+        self.assertRegex(artifact["implementation"]["revision"], r"^[0-9a-f]{40}$")
+        self.assertEqual("bounded-trace-map-only", artifact["evidence"]["status"])
+        self.assertEqual("not-proven", artifact["evidence"]["correspondence_claim"])
+        self.assertEqual("rejection-only", artifact["implementation"]["mutation_gate"])
+
     def test_sqlite_correspondence_nonclaims_cover_limits(self) -> None:
         artifact = json.loads(
             (ROOT / "formal" / "upgrade" / "sqlite-snapshot-correspondence.json").read_text()
