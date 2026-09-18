@@ -12,6 +12,7 @@
   "implementation": {
     "revision": "3faec8447734219e8680ea0f25ff4ac54507ae06",
     "module": "tools/durable_binding.py",
+    "module_sha256": "8d28ae28f9aae60e2d9acc37bfde4f21c505060230d868e181a2d1b0bbb50c17",
     "mutation_gate": "rejection-only"
   },
   "transitions": [
