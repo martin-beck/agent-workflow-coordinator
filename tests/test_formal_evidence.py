@@ -51,6 +51,19 @@ def configured_bounds(configs: list[Path]) -> dict[str, int]:
 
 
 class FormalEvidenceTests(unittest.TestCase):
+    def test_sqlite_correspondence_implementation_symbols_resolve(self) -> None:
+        artifact = json.loads(
+            (ROOT / "formal" / "upgrade" / "sqlite-snapshot-correspondence.json").read_text()
+        )
+        source = (ROOT / artifact["implementation"]["module"]).read_text(encoding="utf-8")
+        for transition in artifact["transitions"]:
+            for symbol in transition["implementation"]:
+                name = symbol.rsplit(".", 1)[-1]
+                self.assertIsNotNone(
+                    re.search(rf"\bdef {re.escape(name)}\(", source),
+                    f"{transition['name']}: {symbol}",
+                )
+
     def test_sqlite_correspondence_evidence_references_resolve_to_tests(self) -> None:
         artifact = json.loads(
             (ROOT / "formal" / "upgrade" / "sqlite-snapshot-correspondence.json").read_text()
