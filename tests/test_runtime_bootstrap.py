@@ -834,6 +834,29 @@ class RuntimeBootstrapTests(unittest.TestCase):
                     selector, releases, self._identity_for_release(), self._verifier
                 )
 
+    def test_bound_runtime_closes_descriptor_on_verifier_process_abort(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            releases = root / "releases"
+            releases.mkdir(mode=0o700)
+            selected = releases / "v1.2.3"
+            selected.mkdir(mode=0o700)
+            self._write_manifest(selected)
+            selector = root / "runtime-selector.json"
+            commit_runtime_selector(selector, "v1.2.3", "v1.2.2")
+
+            def abort(_path: Path, _expected: ExpectedRuntimeIdentity) -> VerifiedManifest:
+                raise KeyboardInterrupt
+
+            with (
+                patch("tools.runtime_bootstrap.os.close", wraps=os.close) as close,
+                self.assertRaises(KeyboardInterrupt),
+            ):
+                resolve_selected_runtime_bound(
+                    selector, releases, self._identity_for_release(), abort
+                )
+            self.assertGreaterEqual(close.call_count, 1)
+
     def test_rejects_missing_symlink_and_unbounded_release(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
