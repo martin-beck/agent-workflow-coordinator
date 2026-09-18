@@ -370,6 +370,8 @@ class FormalEvidenceTests(unittest.TestCase):
         model = (ROOT / artifact["model"]["path"]).read_text(encoding="utf-8")
         for transition in artifact["transitions"]:
             action = transition["model"]["action"]
+            self.assertIsInstance(action, str)
+            self.assertTrue(action.strip(), transition["name"])
             if action == "no-op":
                 self.assertIn("state", transition["postcondition"])
             else:
