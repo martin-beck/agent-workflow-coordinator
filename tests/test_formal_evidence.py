@@ -385,7 +385,14 @@ class FormalEvidenceTests(unittest.TestCase):
         names = {transition["name"] for transition in artifact["transitions"]}
         coverage = artifact["evidence"]["by_transition"]
         self.assertEqual(names, set(coverage))
-        self.assertTrue(all(coverage[name] for name in names))
+        for name in names:
+            references = coverage[name]
+            self.assertIsInstance(references, list, name)
+            self.assertTrue(references, name)
+            self.assertTrue(
+                all(isinstance(reference, str) and reference.strip() for reference in references),
+                name,
+            )
         covered = {reference for values in coverage.values() for reference in values}
         self.assertTrue(covered.issubset(set(artifact["evidence"]["tests"])))
         for name, references in coverage.items():
