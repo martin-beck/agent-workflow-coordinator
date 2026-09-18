@@ -13,7 +13,7 @@
   },
   "transitions": [
     {"name": "snapshot-read", "implementation": ["SQLiteCompatibilitySession.snapshot", "_read_journal"], "model": {"journal_before": "running", "barrier_before": "held", "action": "no-op"}, "postcondition": "immutable authority/control/lock/journal evidence"},
-    {"name": "identity-reread", "implementation": ["SQLiteCompatibilitySession.snapshot", "AuthorityIdentity.reread"], "model": {"journal_before": "running", "barrier_before": "held", "action": "no-op"}, "postcondition": "authority and journal identity remain unchanged"},
+    {"name": "identity-reread", "implementation": ["SQLiteCompatibilitySession.snapshot", "AuthorityIdentity.reread"], "model": {"journal_before": "running", "barrier_before": "held", "action": "no-op", "failure_outcome": "reject"}, "postcondition": "authority and journal identity remain unchanged; replacement or symlink uncertainty rejects the reread"},
     {"name": "read-or-close-uncertainty", "implementation": ["SQLiteCompatibilitySession._read_journal", "SQLiteCompatibilitySession.snapshot"], "model": {"journal_before": "running", "barrier_before": "held", "action": "Crash", "journal_after": "safe_mode", "barrier_after": "ambiguous"}, "postcondition": "session becomes permanently write-closed in memory"},
     {"name": "ambiguous-fence", "implementation": ["SQLiteCompatibilitySession.safe_mode", "SQLiteCompatibilitySession.assert_current", "SQLiteCompatibilitySession.operation_lock"], "model": {"journal": "safe_mode", "barrier": "ambiguous", "action": "Acquire", "result": "reject"}, "postcondition": "later operations and outcome publication remain rejected"}
   ],

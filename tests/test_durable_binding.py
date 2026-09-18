@@ -84,6 +84,7 @@ class DurableBindingTests(unittest.TestCase):
         )
         self.assertEqual("AuthorityIdentity.reread", transition["implementation"][1])
         self.assertEqual("no-op", transition["model"]["action"])
+        self.assertEqual("reject", transition["model"]["failure_outcome"])
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             authority = root / "authority.sqlite"
