@@ -1128,7 +1128,7 @@ class SQLiteAuthorityAdapterTests(unittest.TestCase):
         self.assertFalse(list(journal.parent.glob(".upgrade-journal-*.json")))
         self.assertFalse(self.session.operation_owned_by_current_thread)
 
-    def test_generated_backup_directory_close_failure_retains_published_outcome(self) -> None:
+    def test_generated_backup_directory_close_failure_retries_and_closes(self) -> None:
         journal = self.root / "generated-directory-close-failure-journal.json"
         journal.write_text(
             '{"status":"running","phase":"backup","records":[{"operation_id":"campaign",'
@@ -1159,6 +1159,7 @@ class SQLiteAuthorityAdapterTests(unittest.TestCase):
         original_open = os.open
         original_close = os.close
         directory_fds: list[int] = []
+        close_attempts = 0
 
         def record_directory_open(
             path: str | bytes, flags: int, mode: int = 0o777, **kwargs: Any
@@ -1170,23 +1171,24 @@ class SQLiteAuthorityAdapterTests(unittest.TestCase):
             return fd
 
         def fail_directory_close(descriptor: int) -> None:
+            nonlocal close_attempts
             if descriptor in directory_fds:
-                raise OSError("injected journal directory close failure")
+                close_attempts += 1
+                if close_attempts == 1:
+                    raise OSError("injected transient journal directory close failure")
             original_close(descriptor)
 
-        try:
-            with (
-                patch.object(self.adapter, "backup_bound", return_value={"backup_verified": True}),
-                patch("tools.sqlite_authority_adapter.os.open", side_effect=record_directory_open),
-                patch("tools.sqlite_authority_adapter.os.close", side_effect=fail_directory_close),
-                self.assertRaisesRegex(SQLiteAuthorityError, "publication failed"),
-            ):
-                executor.execute_generated_operation(
-                    operation, self.root / "generated-directory-close-failure.sqlite", {}
-                )
-        finally:
-            for descriptor in directory_fds:
-                original_close(descriptor)
+        with (
+            patch.object(self.adapter, "backup_bound", return_value={"backup_verified": True}),
+            patch("tools.sqlite_authority_adapter.os.open", side_effect=record_directory_open),
+            patch("tools.sqlite_authority_adapter.os.close", side_effect=fail_directory_close),
+        ):
+            result = executor.execute_generated_operation(
+                operation, self.root / "generated-directory-close-failure.sqlite", {}
+            )
+        self.assertEqual("completed", result["outcome"])
+        self.assertEqual(1, len(directory_fds))
+        self.assertEqual(2, close_attempts)
         record = json.loads(journal.read_text(encoding="utf-8"))["records"][-1]
         self.assertEqual("success", record["outcome"])
         self.assertEqual({"backup_verified": True}, record["result"])
