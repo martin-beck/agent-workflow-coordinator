@@ -1128,6 +1128,73 @@ class SQLiteAuthorityAdapterTests(unittest.TestCase):
         self.assertFalse(list(journal.parent.glob(".upgrade-journal-*.json")))
         self.assertFalse(self.session.operation_owned_by_current_thread)
 
+    def test_generated_backup_directory_close_failure_retries_and_closes(self) -> None:
+        journal = self.root / "generated-directory-close-failure-journal.json"
+        journal.write_text(
+            '{"status":"running","phase":"backup","records":[{"operation_id":"campaign",'
+            '"step_id":"campaign:backup","phase":"backup","outcome":"started",'
+            '"context":{"selector_ref":"runtime-selector.json","state_revision":1,'
+            '"durable_barrier_id":"barrier","fencing_token":"fence"}}]}\n',
+            encoding="utf-8",
+        )
+        operation = {
+            "operation_id": "campaign:backup",
+            "opcode": "backend.backup",
+            "inputs": {
+                "backend": "sqlite",
+                "selector_ref": "runtime-selector.json",
+                "expected_state_revision": 1,
+                "barrier_id": "barrier",
+                "fencing_token": "fence",
+                "backup_operation_id": "campaign:backup",
+            },
+            "timeout_seconds": 300,
+            "resources": ["maintenance-barrier", "durable-operation-record"],
+            "preconditions": ["previous-phase-complete"],
+            "postconditions": ["backup-contract-satisfied"],
+            "evidence": ["durable-operation-record"],
+            "durable_record": "operation-id-and-outcome",
+        }
+        executor = self.adapter.bind_lifecycle_executor(self.session, journal)
+        original_open = os.open
+        original_close = os.close
+        directory_fds: list[int] = []
+        close_attempts = 0
+
+        def record_directory_open(
+            path: str | bytes, flags: int, mode: int = 0o777, **kwargs: Any
+        ) -> int:
+            fd = int(cast(Any, original_open)(path, flags, mode, **kwargs))
+            path_value = path.decode() if isinstance(path, bytes) else path
+            if flags & os.O_DIRECTORY and not kwargs and Path(path_value) == journal.parent:
+                directory_fds.append(fd)
+            return fd
+
+        def fail_directory_close(descriptor: int) -> None:
+            nonlocal close_attempts
+            if descriptor in directory_fds:
+                close_attempts += 1
+                if close_attempts == 1:
+                    raise OSError("injected transient journal directory close failure")
+            original_close(descriptor)
+
+        with (
+            patch.object(self.adapter, "backup_bound", return_value={"backup_verified": True}),
+            patch("tools.sqlite_authority_adapter.os.open", side_effect=record_directory_open),
+            patch("tools.sqlite_authority_adapter.os.close", side_effect=fail_directory_close),
+        ):
+            result = executor.execute_generated_operation(
+                operation, self.root / "generated-directory-close-failure.sqlite", {}
+            )
+        self.assertEqual("completed", result["outcome"])
+        self.assertEqual(1, len(directory_fds))
+        self.assertEqual(2, close_attempts)
+        record = json.loads(journal.read_text(encoding="utf-8"))["records"][-1]
+        self.assertEqual("success", record["outcome"])
+        self.assertEqual({"backup_verified": True}, record["result"])
+        self.assertFalse(list(journal.parent.glob(".upgrade-journal-*.json")))
+        self.assertFalse(self.session.operation_owned_by_current_thread)
+
     def test_generated_backup_rejects_journal_replacement_before_publication(self) -> None:
         journal = self.root / "replacement-journal.json"
         journal.write_text(

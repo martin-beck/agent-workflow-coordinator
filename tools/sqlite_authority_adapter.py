@@ -613,7 +613,7 @@ class SQLiteLifecycleExecutor:
                 try:
                     os.fsync(directory)
                 finally:
-                    os.close(directory)
+                    self._close_directory_with_retry(directory)
             except OSError as error:
                 raise SQLiteAuthorityError("generated backup outcome publication failed") from error
             finally:
@@ -623,6 +623,16 @@ class SQLiteLifecycleExecutor:
                     raise SQLiteAuthorityError(
                         "generated backup temporary cleanup failed"
                     ) from error
+
+    @staticmethod
+    def _close_directory_with_retry(directory: int) -> None:
+        try:
+            os.close(directory)
+        except OSError as error:
+            try:
+                os.close(directory)
+            except OSError:
+                raise error from None
 
     def restore(
         self, backup: Path, destination: Path, manifest: dict[str, Any], binding: dict[str, Any]
