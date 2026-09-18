@@ -157,7 +157,7 @@ class ReleaseIdentityTests(unittest.TestCase):
                 verify_transition(root, transition),
             )
 
-    def test_transition_rejects_unsigned_marker_digest_mismatch(self) -> None:
+    def test_transition_rejects_forged_marker_with_matching_digest(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             transition = self._transition_fixture(root)
@@ -182,7 +182,7 @@ class ReleaseIdentityTests(unittest.TestCase):
             transition["to"] = {
                 **transition["to"],
                 "tag_object": tag_object,
-                "signature_sha256": "a" * 64,
+                "signature_sha256": _signature_digest(fake),
             }
             with self.assertRaisesRegex(ReleaseIdentityError, "signature"):
                 verify_transition(root, transition)

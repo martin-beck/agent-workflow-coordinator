@@ -79,8 +79,12 @@ def _signature_digest(tag_contents: bytes) -> str:
 _UNSIGNED_DIGEST = "0" * 64
 
 
-def _tag_signature_digest(root: Path, tag_object: str, tag_type: str) -> str:
+def _tag_signature_digest(root: Path, tag_ref: str, tag_object: str, tag_type: str) -> str:
     if tag_type != "tag":
+        return _UNSIGNED_DIGEST
+    try:
+        _git(root, "verify-tag", tag_ref)
+    except ReleaseIdentityError:
         return _UNSIGNED_DIGEST
     contents = _git(root, "cat-file", "tag", tag_object, text=False)
     if not isinstance(contents, bytes):  # pragma: no cover - subprocess contract
@@ -111,7 +115,7 @@ def _release_identity(root: Path, release: dict[str, Any]) -> None:
         raise ReleaseIdentityError(f"release {version} tag object does not match transition")
     if source_commit != release.get("source_commit"):
         raise ReleaseIdentityError(f"release {version} source commit does not match transition")
-    signature_digest = _tag_signature_digest(root, tag_object, tag_type)
+    signature_digest = _tag_signature_digest(root, tag_ref, tag_object, tag_type)
     if signature_digest != release.get("signature_sha256"):
         raise ReleaseIdentityError(f"release {version} signature does not match transition")
 
