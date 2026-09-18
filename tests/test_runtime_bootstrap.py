@@ -848,14 +848,26 @@ class RuntimeBootstrapTests(unittest.TestCase):
             def abort(_path: Path, _expected: ExpectedRuntimeIdentity) -> VerifiedManifest:
                 raise KeyboardInterrupt
 
+            real_open = os.open
+            opened_directories: set[int] = set()
+
+            def capture_open(path: str | Path, flags: int, *mode: int, **kwargs: int) -> int:
+                descriptor = real_open(path, flags, *mode, **kwargs)
+                if stat.S_ISDIR(os.fstat(descriptor).st_mode):
+                    opened_directories.add(descriptor)
+                return descriptor
+
             with (
+                patch("tools.runtime_bootstrap.os.open", side_effect=capture_open),
                 patch("tools.runtime_bootstrap.os.close", wraps=os.close) as close,
                 self.assertRaises(KeyboardInterrupt),
             ):
                 resolve_selected_runtime_bound(
                     selector, releases, self._identity_for_release(), abort
                 )
-            self.assertGreaterEqual(close.call_count, 1)
+            closed_descriptors = {call.args[0] for call in close.call_args_list}
+            self.assertTrue(opened_directories)
+            self.assertTrue(opened_directories <= closed_descriptors)
 
     def test_rejects_missing_symlink_and_unbounded_release(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
