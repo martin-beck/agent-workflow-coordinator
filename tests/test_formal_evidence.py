@@ -52,6 +52,18 @@ def configured_bounds(configs: list[Path]) -> dict[str, int]:
 
 
 class FormalEvidenceTests(unittest.TestCase):
+    def test_sqlite_correspondence_nonclaims_cover_limits(self) -> None:
+        artifact = json.loads(
+            (ROOT / "formal" / "upgrade" / "sqlite-snapshot-correspondence.json").read_text()
+        )
+        nonclaims = artifact["evidence"]["nonclaims"]
+        self.assertTrue(nonclaims)
+        self.assertEqual(len(nonclaims), len(set(nonclaims)))
+        joined = " ".join(nonclaims).lower()
+        self.assertIn("refinement", joined)
+        self.assertIn("authorize", joined)
+        self.assertIn("crash", joined)
+
     def test_sqlite_correspondence_paths_are_safe_repository_paths(self) -> None:
         artifact = json.loads(
             (ROOT / "formal" / "upgrade" / "sqlite-snapshot-correspondence.json").read_text()
