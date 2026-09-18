@@ -4,11 +4,14 @@
 
 from __future__ import annotations
 
+import os
 import sqlite3
 import tempfile
+import threading
 import unittest
 from contextlib import AbstractContextManager
 from pathlib import Path
+from unittest.mock import patch
 
 from tools.durable_binding import (
     DurableBindingError,
@@ -132,6 +135,126 @@ class DurableBindingTests(unittest.TestCase):
             replacement.rename(journal)
             with self.assertRaisesRegex(DurableBindingError, "ambiguous"):
                 session.assert_snapshot_current(expected)
+
+    def test_snapshot_read_failure_is_ambiguous_and_outcome_stays_disabled(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            authority = root / "authority.sqlite"
+            with sqlite3.connect(authority) as connection:
+                connection.execute("CREATE TABLE records (id INTEGER PRIMARY KEY)")
+            authority.chmod(0o600)
+            control = root / "control.sqlite"
+            lock = root / "control.lock"
+            journal = root / "journal.json"
+            control.touch(mode=0o600)
+            lock.touch(mode=0o600)
+            journal.write_bytes(b'{"status":"running"}\n')
+            binding = FilesystemAuthorityBinding.bind(authority, "sqlite")
+
+            class Store:
+                authority_path = authority
+                control_store_path = control
+                control_lock_path = lock
+
+                @staticmethod
+                def operation_lock() -> _Lock:
+                    return _Lock()
+
+            session = SQLiteCompatibilitySession(binding, Store(), journal)
+            with (
+                patch.object(Path, "read_bytes", side_effect=OSError("close/fsync uncertain")),
+                self.assertRaisesRegex(DurableBindingError, "ambiguous"),
+            ):
+                session.snapshot()
+            with self.assertRaisesRegex(DurableBindingError, "outcome publication"):
+                session.record_outcome("operation", {"status": "success"})
+
+    def test_snapshot_process_death_does_not_authorize_outcome(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            authority = root / "authority.sqlite"
+            with sqlite3.connect(authority) as connection:
+                connection.execute("CREATE TABLE records (id INTEGER PRIMARY KEY)")
+            authority.chmod(0o600)
+            control = root / "control.sqlite"
+            lock = root / "control.lock"
+            journal = root / "journal.json"
+            control.touch(mode=0o600)
+            lock.touch(mode=0o600)
+            journal.write_bytes(b'{"status":"running"}\n')
+            binding = FilesystemAuthorityBinding.bind(authority, "sqlite")
+
+            class Store:
+                authority_path = authority
+                control_store_path = control
+                control_lock_path = lock
+
+                @staticmethod
+                def operation_lock() -> _Lock:
+                    return _Lock()
+
+            session = SQLiteCompatibilitySession(binding, Store(), journal)
+            child = os.fork()
+            if child == 0:  # pragma: no cover - executed in the forked process
+                try:
+                    session.snapshot()
+                finally:
+                    os._exit(17)
+            _, status = os.waitpid(child, 0)
+            self.assertEqual(17, os.waitstatus_to_exitcode(status))
+            snapshot = session.snapshot()
+            self.assertEqual(snapshot, session.assert_snapshot_current(snapshot))
+            with self.assertRaisesRegex(DurableBindingError, "outcome publication"):
+                session.record_outcome("after-process-death", {})
+
+    def test_concurrent_journal_replacement_yields_only_stable_or_ambiguous_results(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            authority = root / "authority.sqlite"
+            with sqlite3.connect(authority) as connection:
+                connection.execute("CREATE TABLE records (id INTEGER PRIMARY KEY)")
+            authority.chmod(0o600)
+            control = root / "control.sqlite"
+            lock = root / "control.lock"
+            journal = root / "journal.json"
+            control.touch(mode=0o600)
+            lock.touch(mode=0o600)
+            journal.write_bytes(b'{"generation":0}\n')
+            binding = FilesystemAuthorityBinding.bind(authority, "sqlite")
+
+            class Store:
+                authority_path = authority
+                control_store_path = control
+                control_lock_path = lock
+
+                @staticmethod
+                def operation_lock() -> _Lock:
+                    return _Lock()
+
+            session = SQLiteCompatibilitySession(binding, Store(), journal)
+            errors: list[BaseException] = []
+            successes: list[bytes] = []
+
+            def reader() -> None:
+                for _ in range(30):
+                    try:
+                        successes.append(session.snapshot().journal_bytes)
+                    except DurableBindingError as error:
+                        errors.append(error)
+
+            thread = threading.Thread(target=reader)
+            thread.start()
+            for generation in range(30):
+                temporary = root / f"journal-{generation}.tmp"
+                temporary.write_bytes(f'{{"generation":{generation + 1}}}\n'.encode())
+                temporary.replace(journal)
+            thread.join()
+            allowed = {b'{"generation":0}\n'} | {
+                f'{{"generation":{generation}}}\n'.encode() for generation in range(1, 31)
+            }
+            self.assertTrue(successes)
+            self.assertTrue(all(value in allowed for value in successes))
+            self.assertTrue(all(isinstance(error, DurableBindingError) for error in errors))
 
 
 class _Lock(AbstractContextManager[None]):
