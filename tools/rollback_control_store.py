@@ -1625,6 +1625,17 @@ class SQLiteBarrierSessionStore:
         if self.operation_owned_by_current_thread:
             raise ControlStoreError("control store lock is non-reentrant")
         with self.operation_lock():
+            # Recheck under the write lock: authority may rotate after the
+            # caller's admission check but before this CAS is serialized.
+            if self._authority_revision_reader is not None:
+                try:
+                    current_authority = self._authority_revision_reader()
+                except Exception as error:
+                    raise ControlStoreError("fresh authority reread failed") from error
+                if not isinstance(current_authority, str) or not current_authority:
+                    raise ControlStoreError("fresh authority revision is invalid")
+                if current_authority != state.identity.authority_revision_at_acquire:
+                    raise ControlStoreError("barrier session authority revision changed")
             return self._cas_locked(expected_revision, state)
 
     def _cas_locked(  # noqa: C901

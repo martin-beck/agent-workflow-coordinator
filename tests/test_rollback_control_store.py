@@ -1079,9 +1079,11 @@ class RollbackControlStoreTests(unittest.TestCase):
 
             failing = SQLiteBarrierSessionStore(
                 SQLiteRollbackControlStore(Path(directory) / "failing.sqlite", PROJECT),
+            )
+            failing = SQLiteBarrierSessionStore(
+                SQLiteRollbackControlStore(Path(directory) / "failing.sqlite", PROJECT),
                 lambda: (_ for _ in ()).throw(OSError("authority unavailable")),
             )
-            failing.create(self._session_identity())
             with self.assertRaisesRegex(ControlStoreError, "reread failed"):
                 failing.recheck_held(1)
 
@@ -1089,9 +1091,38 @@ class RollbackControlStoreTests(unittest.TestCase):
                 SQLiteRollbackControlStore(Path(directory) / "invalid.sqlite", PROJECT),
                 lambda: "",
             )
-            invalid.create(self._session_identity())
             with self.assertRaisesRegex(ControlStoreError, "revision is invalid"):
                 invalid.recheck_held(1)
+
+    def test_v10_cas_rereads_authority_under_write_lock(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            authority = ["authority-3"]
+            store = SQLiteBarrierSessionStore(
+                SQLiteRollbackControlStore(Path(directory) / "control.sqlite", PROJECT),
+                lambda: authority[0],
+            )
+            identity = self._session_identity()
+            held = store.create(identity)
+            authority[0] = "authority-rotated"
+            with self.assertRaisesRegex(ControlStoreError, "authority revision changed"):
+                store.cas(
+                    held.revision,
+                    BarrierSessionState(identity, "releasing", held.revision + 1),
+                )
+            self.assertEqual(held, store.snapshot())
+
+    def test_v10_cas_zero_rereads_authority_before_bootstrap_write(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            authority = ["authority-3"]
+            store = SQLiteBarrierSessionStore(
+                SQLiteRollbackControlStore(Path(directory) / "control.sqlite", PROJECT),
+                lambda: authority[0],
+            )
+            identity = self._session_identity()
+            authority[0] = "authority-rotated"
+            with self.assertRaisesRegex(ControlStoreError, "authority revision changed"):
+                store.cas(0, BarrierSessionState(identity, "held", 1))
+            self.assertIsNone(store.snapshot())
 
     def test_v10_caller_owned_recheck_requires_guard_and_is_read_only(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -1189,9 +1220,12 @@ class RollbackControlStoreTests(unittest.TestCase):
 
             failing = SQLiteBarrierSessionStore(
                 SQLiteRollbackControlStore(Path(directory) / "failing.sqlite", PROJECT),
-                lambda: (_ for _ in ()).throw(OSError("authority unavailable")),
             )
             failing.create(identity)
+            failing = SQLiteBarrierSessionStore(
+                SQLiteRollbackControlStore(Path(directory) / "failing.sqlite", PROJECT),
+                lambda: (_ for _ in ()).throw(OSError("authority unavailable")),
+            )
             with (
                 locked() as guard,
                 failing.lock_owned_by_caller(guard),
@@ -1203,7 +1237,6 @@ class RollbackControlStoreTests(unittest.TestCase):
                 SQLiteRollbackControlStore(Path(directory) / "invalid.sqlite", PROJECT),
                 lambda: "",
             )
-            invalid.create(identity)
             with (
                 locked() as guard,
                 invalid.lock_owned_by_caller(guard),
