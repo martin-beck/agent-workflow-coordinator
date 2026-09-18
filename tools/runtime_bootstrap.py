@@ -254,6 +254,40 @@ class ResolvedRuntime:
         self.close()
 
 
+def _selector_identity(selector: Path) -> tuple[tuple[int, int], tuple[int, int]]:
+    """Capture selector parent and inode identity without following aliases."""
+    try:
+        parent = selector.parent.lstat()
+        value = selector.lstat()
+    except OSError as error:
+        raise AuthorityError("runtime selector is unavailable") from error
+    if not stat.S_ISDIR(parent.st_mode) or stat.S_ISLNK(parent.st_mode):
+        raise AuthorityError("runtime selector parent is unsafe")
+    if (
+        not stat.S_ISREG(value.st_mode)
+        or value.st_uid != os.geteuid()
+        or value.st_nlink != 1
+        or stat.S_IMODE(value.st_mode) != 0o600
+    ):
+        raise AuthorityError("runtime selector is unsafe")
+    return (parent.st_dev, parent.st_ino), (value.st_dev, value.st_ino)
+
+
+def _require_selector_unchanged(
+    selector: Path,
+    initial_identity: tuple[tuple[int, int], tuple[int, int]],
+    initial_value: dict[str, object],
+) -> None:
+    """Reject selector replacement or content changes during validation."""
+    try:
+        final_identity = _selector_identity(selector)
+        final_value = read_runtime_selector(selector)
+    except AuthorityError as error:
+        raise AuthorityError("runtime selector changed during validation") from error
+    if final_identity != initial_identity or final_value != initial_value:
+        raise AuthorityError("runtime selector changed during validation")
+
+
 def _manifest_pairs(pairs: list[tuple[str, object]]) -> dict[str, object]:
     value = dict(pairs)
     if len(value) != len(pairs):
@@ -391,6 +425,7 @@ def resolve_selected_runtime(
     release token is bounded to one direct child of ``releases_root``; symlink
     and hard-link aliases are rejected before a caller can execute the result.
     """
+    selector_identity = _selector_identity(selector)
     selected = read_runtime_selector(selector)
     if expected_identity is None or verify_authenticity is None:
         raise AuthorityError("runtime authenticity verifier and expected identity are required")
@@ -424,6 +459,7 @@ def resolve_selected_runtime(
     ):
         raise AuthorityError("runtime authenticity evidence is not bound to selected release")
     verify_runtime_manifest(release_path, verified.digest)
+    _require_selector_unchanged(selector, selector_identity, selected)
     return release_path
 
 
@@ -434,6 +470,7 @@ def resolve_selected_runtime_bound(  # noqa: C901
     verify_authenticity: Callable[[Path, ExpectedRuntimeIdentity], VerifiedManifest],
 ) -> ResolvedRuntime:
     """Resolve and retain the selected release directory without dispatching it."""
+    selector_identity = _selector_identity(selector)
     selected = read_runtime_selector(selector)
     release = selected["active_release"]
     if not isinstance(release, str) or _RELEASE.fullmatch(release) is None:
@@ -484,6 +521,7 @@ def resolve_selected_runtime_bound(  # noqa: C901
         verify_runtime_manifest(release_path, verified.digest)
         result = ResolvedRuntime(release_path, descriptor, verified, directory_identity)
         result.revalidate()
+        _require_selector_unchanged(selector, selector_identity, selected)
         return result
     except AuthorityError:
         if "descriptor" in locals():
