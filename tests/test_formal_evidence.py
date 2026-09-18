@@ -53,6 +53,21 @@ def configured_bounds(configs: list[Path]) -> dict[str, int]:
 
 
 class FormalEvidenceTests(unittest.TestCase):
+    def test_upgrade_config_specification_exists_in_model(self) -> None:
+        config = (ROOT / "formal" / "upgrade" / "UpgradeRecovery.cfg").read_text()
+        model = (ROOT / "formal" / "upgrade" / "UpgradeRecovery.tla").read_text()
+        specification = re.search(r"^SPECIFICATION\s+(\w+)$", config, re.MULTILINE)
+        self.assertIsNotNone(specification)
+        assert specification is not None
+        self.assertIsNotNone(
+            re.search(
+                rf"^\s*{re.escape(specification.group(1))}\s*==",
+                model,
+                re.MULTILINE,
+            ),
+            specification.group(1),
+        )
+
     def test_upgrade_config_invariants_exist_in_model(self) -> None:
         config = (ROOT / "formal" / "upgrade" / "UpgradeRecovery.cfg").read_text()
         model = (ROOT / "formal" / "upgrade" / "UpgradeRecovery.tla").read_text()
