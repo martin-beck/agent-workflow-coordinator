@@ -176,6 +176,7 @@ class SQLiteStorageTest(unittest.TestCase):
 
                 retained = root / "retained-wal"
                 retained.write_bytes(b"retained")
+                retained.chmod(0o600)
                 descriptor, identity = SQLiteAuthorityBinding._open_retained(
                     parent, retained.name, "sidecar"
                 )
@@ -186,6 +187,12 @@ class SQLiteStorageTest(unittest.TestCase):
                             parent, retained.name, descriptor, identity, "sidecar"
                         )
                     retained.write_bytes(b"replacement")
+                    retained.chmod(0o600)
+                    with self.assertRaisesRegex(RuntimeError, "sidecar identity changed"):
+                        SQLiteAuthorityBinding._assert_retained(
+                            parent, retained.name, descriptor, identity, "sidecar"
+                        )
+                    retained.chmod(0o644)
                     with self.assertRaisesRegex(RuntimeError, "sidecar identity changed"):
                         SQLiteAuthorityBinding._assert_retained(
                             parent, retained.name, descriptor, identity, "sidecar"
@@ -194,7 +201,7 @@ class SQLiteStorageTest(unittest.TestCase):
                     os.close(descriptor)
 
                 Path(f"{authority}-wal").write_bytes(b"wal")
-                with self.assertRaisesRegex(RuntimeError, "sidecar is unavailable"):
+                with self.assertRaisesRegex(RuntimeError, "sidecar is unsafe"):
                     SQLiteAuthorityBinding._open_sidecar_set(parent, authority)
             finally:
                 os.close(parent)

@@ -258,6 +258,7 @@ class SQLiteAuthorityBinding:
             not stat.S_ISREG(status.st_mode)
             or status.st_nlink != 1
             or status.st_uid != os.geteuid()
+            or stat.S_IMODE(status.st_mode) != 0o600
         ):
             os.close(descriptor)
             raise RuntimeError(f"SQLite authority {label} is unsafe")
@@ -280,6 +281,8 @@ class SQLiteAuthorityBinding:
             not stat.S_ISREG(current.st_mode)
             or current.st_nlink != 1
             or current.st_uid != os.geteuid()
+            or stat.S_IMODE(current.st_mode) != 0o600
+            or stat.S_IMODE(retained.st_mode) != 0o600
             or (retained.st_dev, retained.st_ino) != expected
             or (current.st_dev, current.st_ino) != expected
         ):
