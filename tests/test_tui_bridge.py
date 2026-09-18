@@ -431,7 +431,7 @@ class TuiBridgeTests(unittest.TestCase):
 
     def test_bridge_rejects_direct_host_question_for_important_decision(self) -> None:
         assessment = assess_decision(decision_class="design")
-        with self.assertRaisesRegex(TuiBridgeError, "workflow-tui"):
+        with self.assertRaisesRegex(TuiBridgeError, "workflow-ui"):
             enforce_decision_route(
                 assessment,
                 trigger={"interaction_required": True, "decision_request_ref": "AWG-X"},

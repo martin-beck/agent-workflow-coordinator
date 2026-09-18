@@ -2,9 +2,7 @@
 
 ## 0.3.20
 
-- Harden release and upgrade identity checks against tag retargeting, source mismatches,
-  hard-link aliases, and symlinked contract paths while preserving fail-closed mutation boundaries.
-- Preserve durable upgrade evidence across injected journal and selector publication failures.
+- Make `workflow-ui` the mandatory human-decision channel with GUI-first/TUI-fallback routing.
 
 ## 0.3.19
 

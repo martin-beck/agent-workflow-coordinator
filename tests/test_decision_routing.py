@@ -58,12 +58,12 @@ class DecisionRoutingTests(unittest.TestCase):
         assessment = assess_decision(decision_class="design")
         self.assertTrue(assessment.requires_tui)
         require_tui_route(
-            assessment, trigger=trigger(), request_ref="AWG-AR-0001", channel="workflow-tui"
+            assessment, trigger=trigger(), request_ref="AWG-AR-0001", channel="workflow-ui"
         )
 
     def test_high_impact_operational_choice_requires_tui(self) -> None:
         assessment = assess_decision(decision_class="operational", impact="high")
-        with self.assertRaisesRegex(DecisionRoutingError, "workflow-tui"):
+        with self.assertRaisesRegex(DecisionRoutingError, "workflow-ui"):
             require_tui_route(
                 assessment,
                 trigger=trigger(),
@@ -76,7 +76,7 @@ class DecisionRoutingTests(unittest.TestCase):
         assessment = assess_decision(decision_class="operational", uncertainty=True)
         with self.assertRaisesRegex(DecisionRoutingError, "active human trigger"):
             require_tui_route(
-                assessment, trigger=None, request_ref="AWG-AR-0001", channel="workflow-tui"
+                assessment, trigger=None, request_ref="AWG-AR-0001", channel="workflow-ui"
             )
 
     def test_routine_choice_can_continue_without_tui(self) -> None:
@@ -87,7 +87,7 @@ class DecisionRoutingTests(unittest.TestCase):
         assessment = assess_decision(decision_class="conceptual")
         with self.assertRaisesRegex(DecisionRoutingError, "references"):
             require_tui_route(
-                assessment, trigger=trigger(), request_ref="AWG-OTHER", channel="workflow-tui"
+                assessment, trigger=trigger(), request_ref="AWG-OTHER", channel="workflow-ui"
             )
 
     def test_required_route_rejects_missing_and_malformed_request(self) -> None:
@@ -101,7 +101,7 @@ class DecisionRoutingTests(unittest.TestCase):
                     assessment,
                     trigger=trigger(),
                     request_ref=request_ref,
-                    channel="workflow-tui",
+                    channel="workflow-ui",
                 )
 
     def test_batch_route_requires_each_item(self) -> None:
