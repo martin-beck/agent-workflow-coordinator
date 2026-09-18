@@ -35,6 +35,7 @@ def envelope() -> dict[str, object]:
         "source": "/authority.sqlite",
         "destination": "/artifacts/backup.sqlite",
         "manifest": "/artifacts/manifest.json",
+        "selector_ref": ".runtime/runtime-selector.json",
         "barrier_identity_digest": "0" * 64,
         "target": "rollback",
         "envelope_digest": "0" * 64,
@@ -132,7 +133,7 @@ class UpgradeIdentityTests(unittest.TestCase):
             value["barrier_identity_digest"],
         )
         self.assertEqual(
-            "d1374baad0069e56df81ab9220d58a76940dec67de1bc52507169f11f8d9ece6",
+            "0cba5194ced5b74a07f5093f0b79a5e5f4f6df0556731a5b4e93e561c30dbde6",
             value["envelope_digest"],
         )
         self.assertEqual(set(ENVELOPE_FIELDS), set(validate_envelope(value)))
@@ -164,6 +165,9 @@ class UpgradeIdentityTests(unittest.TestCase):
             ("source", "relative.sqlite"),
             ("destination", "/outside/backup.sqlite"),
             ("manifest", "/artifacts/backup.sqlite/manifest.json"),
+            ("selector_ref", "../runtime-selector.json"),
+            ("selector_ref", "/etc/runtime-selector.json"),
+            ("selector_ref", "runtime/./selector.json"),
         ):
             changed = {**envelope(), field: path}
             changed["barrier_identity_digest"] = canonical_barrier_digest(changed)

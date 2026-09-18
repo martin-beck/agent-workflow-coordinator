@@ -47,6 +47,7 @@ def complete(names: tuple[str, ...]) -> dict[str, object]:
             "source": "/authority.sqlite",
             "destination": "/artifacts/backup.sqlite",
             "manifest": "/artifacts/manifest.json",
+            "selector_ref": ".runtime/runtime-selector.json",
             "barrier_identity_digest": "0" * 64,
             "target": "new",
             "envelope_digest": "0" * 64,

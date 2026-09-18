@@ -267,6 +267,7 @@ class PhaseContext:
     source: str
     destination: str
     manifest: str
+    selector_ref: str
     barrier_identity_digest: str
     target: str
     envelope_digest: str

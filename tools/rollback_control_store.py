@@ -39,7 +39,7 @@ from tools.upgrade_identity import (
     validate_envelope,
 )
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 SIDECAR_SUFFIXES = ("-wal", "-shm")
 IDENTITY_FIELDS = ENVELOPE_FIELDS
 STATUSES = {"held", "releasing", "released", "ambiguous"}
@@ -52,21 +52,22 @@ STATUS_TRANSITIONS = {
 _COLUMNS = (*IDENTITY_FIELDS, "status", "revision")
 _SELECT_COLUMNS = (
     "schema_version,backend,project_id,operation_id,state_revision,authority_revision,"
-    "fencing_token,fencing_owner,durable_barrier_id,artifact_root,source,destination,manifest,"
+    "fencing_token,fencing_owner,durable_barrier_id,artifact_root,source,destination,manifest,selector_ref,"
     "barrier_identity_digest,target,envelope_digest,status,revision"
 )
 _SELECT_SQL = f"SELECT {_SELECT_COLUMNS} FROM barrier WHERE operation_id=?"  # noqa: S608
 _INSERT_SQL = (
     "INSERT INTO barrier (schema_version,backend,project_id,operation_id,state_revision,"
     "authority_revision,fencing_token,fencing_owner,durable_barrier_id,artifact_root,source,"
-    "destination,manifest,barrier_identity_digest,target,envelope_digest,status,revision) "
-    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
+    "destination,manifest,selector_ref,barrier_identity_digest,target,envelope_digest,status,"
+    "revision) "
+    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
 )
 _UPDATE_FIELDS = tuple(field for field in _COLUMNS if field != "operation_id")
 _UPDATE_SQL = (
     "UPDATE barrier SET schema_version=?,backend=?,project_id=?,state_revision=?,"
     "authority_revision=?,fencing_token=?,fencing_owner=?,durable_barrier_id=?,artifact_root=?,"
-    "source=?,destination=?,manifest=?,barrier_identity_digest=?,target=?,envelope_digest=?,"
+    "source=?,destination=?,manifest=?,selector_ref=?,barrier_identity_digest=?,target=?,envelope_digest=?,"
     "status=?,revision=? "
     "WHERE operation_id=? AND revision=?"
 )
@@ -709,6 +710,33 @@ class SQLiteRollbackControlStore:
             os.close(parent)
             raise
         try:
+            # Inspect legacy metadata before enabling WAL or issuing any DDL.
+            # Historical rows cannot be assigned a selector identity safely.
+            if type(connection) is sqlite3.Connection:
+                existing_tables = {
+                    row[0]
+                    for row in connection.execute(
+                        "SELECT name FROM sqlite_master WHERE type='table'"
+                    ).fetchall()
+                }
+                if "control_meta" in existing_tables:
+                    version_row = connection.execute(
+                        "SELECT value FROM control_meta WHERE key='schema_version'"
+                    ).fetchone()
+                    if version_row is not None and version_row[0] != str(SCHEMA_VERSION):
+                        raise ControlStoreError(
+                            "control store schema version is legacy; explicit migration is required"
+                        )
+                if "barrier" in existing_tables:
+                    existing_columns = {
+                        row[1]
+                        for row in connection.execute("PRAGMA table_info(barrier)").fetchall()
+                    }
+                    if "selector_ref" not in existing_columns:
+                        raise ControlStoreError(
+                            "control store schema is legacy; explicit selector "
+                            "migration is required"
+                        )
             mode = str(connection.execute("PRAGMA journal_mode=WAL").fetchone()[0]).lower()
             if mode != "wal":
                 raise ControlStoreError("control store WAL is unavailable")
@@ -734,6 +762,7 @@ class SQLiteRollbackControlStore:
                     source TEXT NOT NULL,
                     destination TEXT NOT NULL,
                     manifest TEXT NOT NULL,
+                    selector_ref TEXT NOT NULL,
                     barrier_identity_digest TEXT NOT NULL,
                     target TEXT NOT NULL,
                     envelope_digest TEXT NOT NULL,
