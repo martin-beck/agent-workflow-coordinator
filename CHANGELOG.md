@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## v0.3.13 - 2026-09-18
+
+- Accept protected lightweight Git tags as sufficient release identity while
+  retaining exact tag/source binding and optional annotated-tag verification.
+
 ## v0.3.10 - 2026-09-18
 
 - Add the Coordinator TUI bridge adapter with typed, fail-closed response handling.
