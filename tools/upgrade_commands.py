@@ -38,11 +38,41 @@ def _reject_constant(value: str) -> NoReturn:
     raise ValueError(f"non-finite JSON constant: {value}")
 
 
+def _open_contract(path: Path) -> int:
+    """Open a contract through directory fds so parent replacement cannot redirect it."""
+    absolute = path.absolute()
+    directory = -1
+    try:
+        directory = os.open(
+            absolute.anchor,
+            os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC,
+        )
+        for component in absolute.parts[1:-1]:
+            next_directory = os.open(
+                component,
+                os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
+                dir_fd=directory,
+            )
+            os.close(directory)
+            directory = next_directory
+        descriptor = os.open(
+            absolute.name,
+            os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC,
+            dir_fd=directory,
+        )
+    except OSError as error:
+        raise UpgradeCommandError("upgrade contract is unavailable or unsafe") from error
+    finally:
+        if directory >= 0:
+            os.close(directory)
+    return descriptor
+
+
 def _read_contract(path: Path) -> dict[str, Any]:  # noqa: C901
     """Read one bounded regular contract without following its leaf symlink."""
     descriptor = -1
     try:
-        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+        descriptor = _open_contract(path)
         status = os.fstat(descriptor)
         if not stat.S_ISREG(status.st_mode) or status.st_nlink != 1:
             raise UpgradeCommandError("upgrade contract must be a single-link regular file")

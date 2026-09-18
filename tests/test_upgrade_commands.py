@@ -7,12 +7,14 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import tempfile
 import unittest
 from collections.abc import Callable
 from contextlib import redirect_stdout
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 
 from tools.generate_upgrade_contract import generate
 from tools.upgrade_commands import (
@@ -137,6 +139,54 @@ class UpgradeCommandTests(unittest.TestCase):
         self.path.symlink_to(target)
         with self.assertRaisesRegex(UpgradeCommandError, "unavailable or unsafe"):
             execute_upgrade_command("check", self.path, "sqlite")
+
+    def test_contract_symlinked_parent_is_rejected_before_dispatch(self) -> None:
+        real = self.root / "real"
+        real.mkdir()
+        target = real / "contract.json"
+        target.write_text(json.dumps(contract()), encoding="utf-8")
+        linked = self.root / "linked"
+        linked.symlink_to(real, target_is_directory=True)
+        with self.assertRaisesRegex(UpgradeCommandError, "unavailable or unsafe"):
+            execute_upgrade_command("check", linked / "contract.json", "sqlite")
+
+    def test_contract_parent_swap_after_open_cannot_redirect_read(self) -> None:
+        linked = self.root / "linked"
+        linked.mkdir()
+        target = linked / "contract.json"
+        target.write_text(json.dumps(contract()), encoding="utf-8")
+        requested = linked / "contract.json"
+        evil = self.root / "evil"
+        evil.mkdir()
+        forged = contract()
+        forged["operation_id"] = "upgrade:forged:001"
+        (evil / "contract.json").write_text(json.dumps(forged), encoding="utf-8")
+
+        original_open = os.open
+        swapped = False
+
+        def swap_parent_after_open(*args: Any, **kwargs: Any) -> int:
+            nonlocal swapped
+            descriptor = original_open(*args, **kwargs)
+            if (
+                args
+                and args[0] == "contract.json"
+                and kwargs.get("dir_fd") is not None
+                and not swapped
+            ):
+                swapped = True
+                displaced = self.root / "displaced"
+                linked.rename(displaced)
+                linked.symlink_to(evil, target_is_directory=True)
+            return descriptor
+
+        with (
+            patch.object(os, "open", side_effect=swap_parent_after_open),
+            redirect_stdout(io.StringIO()) as output,
+        ):
+            self.assertEqual(0, execute_upgrade_command("check", requested, "sqlite"))
+        self.assertTrue(swapped)
+        self.assertEqual(contract()["operation_id"], json.loads(output.getvalue())["operation_id"])
 
     def test_stdlib_validator_rejects_every_typed_contract_boundary(self) -> None:
         mutations: tuple[Callable[[dict[str, Any]], object], ...] = (
