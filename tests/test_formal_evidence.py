@@ -53,6 +53,16 @@ def configured_bounds(configs: list[Path]) -> dict[str, int]:
 
 
 class FormalEvidenceTests(unittest.TestCase):
+    def test_upgrade_spec_composes_init_and_next(self) -> None:
+        model = (ROOT / "formal" / "upgrade" / "UpgradeRecovery.tla").read_text()
+        specification = re.search(
+            r"^Spec\s*==(?P<body>.*?)(?=^THEOREM)", model, re.MULTILINE | re.DOTALL
+        )
+        self.assertIsNotNone(specification)
+        assert specification is not None
+        self.assertRegex(specification.group("body"), r"\bInit\b")
+        self.assertRegex(specification.group("body"), r"\[\]\[Next\]_vars")
+
     def test_upgrade_config_constants_exist_in_model(self) -> None:
         config = (ROOT / "formal" / "upgrade" / "UpgradeRecovery.cfg").read_text()
         model = (ROOT / "formal" / "upgrade" / "UpgradeRecovery.tla").read_text()
