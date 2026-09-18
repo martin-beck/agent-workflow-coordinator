@@ -53,6 +53,17 @@ def configured_bounds(configs: list[Path]) -> dict[str, int]:
 
 
 class FormalEvidenceTests(unittest.TestCase):
+    def test_upgrade_config_invariants_exist_in_model(self) -> None:
+        config = (ROOT / "formal" / "upgrade" / "UpgradeRecovery.cfg").read_text()
+        model = (ROOT / "formal" / "upgrade" / "UpgradeRecovery.tla").read_text()
+        invariants = re.findall(r"^INVARIANT\s+(\w+)$", config, re.MULTILINE)
+        self.assertTrue(invariants)
+        for invariant in invariants:
+            self.assertIsNotNone(
+                re.search(rf"^\s*{re.escape(invariant)}\s*==", model, re.MULTILINE),
+                invariant,
+            )
+
     def test_sqlite_correspondence_revision_binds_module_digest(self) -> None:
         artifact = json.loads(
             (ROOT / "formal" / "upgrade" / "sqlite-snapshot-correspondence.json").read_text()
