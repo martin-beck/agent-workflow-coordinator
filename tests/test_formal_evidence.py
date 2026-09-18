@@ -52,6 +52,20 @@ def configured_bounds(configs: list[Path]) -> dict[str, int]:
 
 
 class FormalEvidenceTests(unittest.TestCase):
+    def test_sqlite_correspondence_declarations_match_model_and_config(self) -> None:
+        artifact = json.loads(
+            (ROOT / "formal" / "upgrade" / "sqlite-snapshot-correspondence.json").read_text()
+        )
+        model = (ROOT / artifact["model"]["path"]).read_text(encoding="utf-8")
+        config = (ROOT / artifact["model"]["config"]).read_text(encoding="utf-8")
+        self.assertRegex(model, r"Journals == .*\"running\".*\"safe_mode\"")
+        self.assertRegex(model, r"Barriers == .*\"held\".*\"ambiguous\"")
+        self.assertIn('CONSTANT Backends = {"git", "sqlite"}', config)
+        self.assertIn("running", artifact["model"]["states"])
+        self.assertIn("safe_mode", artifact["model"]["states"])
+        self.assertIn("held", artifact["model"]["barriers"])
+        self.assertIn("ambiguous", artifact["model"]["barriers"])
+
     def test_sqlite_correspondence_model_digest_matches_exact_source(self) -> None:
         artifact = json.loads(
             (ROOT / "formal" / "upgrade" / "sqlite-snapshot-correspondence.json").read_text()
