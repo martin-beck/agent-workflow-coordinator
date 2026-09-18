@@ -857,6 +857,22 @@ class SQLiteStorageTest(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "BACKEND_INACTIVE"):
             backend.load_tasks()
 
+    def test_retire_selector_failure_rolls_back_database_state(self) -> None:
+        backend = self.create()
+
+        def fail_selector() -> None:
+            raise RuntimeError("selector switch failed")
+
+        with self.assertRaisesRegex(RuntimeError, "selector switch failed"):
+            backend.retire(lambda _tasks: None, fail_selector)
+
+        self.assertEqual("open", backend.load_tasks()[0][1]["status"])
+        with sqlite3.connect(self.database) as connection:
+            self.assertEqual(
+                "active",
+                connection.execute("SELECT value FROM metadata WHERE key='state'").fetchone()[0],
+            )
+
     def test_git_writer_waiting_across_backend_switch_is_fenced(self) -> None:
         self.configure_core(backend="git")
         self.write_git_tasks()
