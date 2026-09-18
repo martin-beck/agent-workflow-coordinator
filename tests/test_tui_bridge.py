@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, cast
 
 from tools.decision_batch_policy import ARDecision
+from tools.decision_routing import assess_decision
 from tools.tui_bridge import (
     MAX_TUI_EVENT_JOURNAL_BYTES,
     TuiBridgeError,
@@ -15,12 +16,11 @@ from tools.tui_bridge import (
     TuiSessionState,
     apply_tui_response,
     build_tui_request,
+    enforce_decision_route,
     plan_tui_escalation,
     prepare_tui_session,
     read_tui_event_journal,
-    enforce_decision_route,
 )
-from tools.decision_routing import assess_decision
 
 
 def _request() -> tuple[dict[str, Any], dict[str, Any]]:
