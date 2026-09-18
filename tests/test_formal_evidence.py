@@ -53,6 +53,23 @@ def configured_bounds(configs: list[Path]) -> dict[str, int]:
 
 
 class FormalEvidenceTests(unittest.TestCase):
+    def test_sqlite_model_actions_are_in_next(self) -> None:
+        artifact = json.loads(
+            (ROOT / "formal" / "upgrade" / "sqlite-snapshot-correspondence.json").read_text()
+        )
+        model = (ROOT / artifact["model"]["path"]).read_text(encoding="utf-8")
+        next_definition = re.search(
+            r"^Next\s*==(?P<body>.*?)(?=^FunctionalAvailability)",
+            model,
+            re.MULTILINE | re.DOTALL,
+        )
+        self.assertIsNotNone(next_definition)
+        assert next_definition is not None
+        for transition in artifact["transitions"]:
+            action = transition["model"]["action"]
+            if action != "no-op":
+                self.assertIn(f"{action}(", next_definition.group("body"), action)
+
     def test_upgrade_next_declared_before_spec(self) -> None:
         model = (ROOT / "formal" / "upgrade" / "UpgradeRecovery.tla").read_text()
         next_match = re.search(r"^Next\s*==", model, re.MULTILINE)
