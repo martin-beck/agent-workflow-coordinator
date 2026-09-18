@@ -199,6 +199,17 @@ class SQLiteStorageTest(unittest.TestCase):
             finally:
                 os.close(parent)
 
+    def test_retained_authority_parent_identity_rejects_ancestor_replacement(self) -> None:
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            authority = root / "authority.sqlite"
+            authority.write_bytes(b"authority")
+            parent = root.stat()
+            with self.assertRaisesRegex(RuntimeError, "parent identity changed"):
+                SQLiteAuthorityBinding._assert_parent_identity(
+                    authority, (parent.st_dev, parent.st_ino), (parent.st_dev, parent.st_ino + 1)
+                )
+
     def setUp(self) -> None:
         self.temporary = TemporaryDirectory()
         self.root = Path(self.temporary.name)

@@ -152,19 +152,26 @@ class SQLiteBackendBinding:
 class SQLiteAuthorityBinding:
     """Immutable dual binding for control-session and authority descriptors."""
 
-    __slots__ = ("_control", "_identity", "_path")
+    __slots__ = ("_control", "_identity", "_parent_identity", "_path")
     _control: SQLiteBackendBinding
     _identity: tuple[int, int]
+    _parent_identity: tuple[int, int]
     _path: Path
 
     def __init__(
-        self, control: SQLiteBackendBinding, path: Path, identity: tuple[int, int], sentinel: object
+        self,
+        control: SQLiteBackendBinding,
+        path: Path,
+        identity: tuple[int, int],
+        parent_identity: tuple[int, int],
+        sentinel: object,
     ) -> None:
         if sentinel is not _FACTORY_SENTINEL:
             raise TypeError("SQLiteAuthorityBinding must be issued by bind()")
         object.__setattr__(self, "_control", control)
         object.__setattr__(self, "_path", path)
         object.__setattr__(self, "_identity", identity)
+        object.__setattr__(self, "_parent_identity", parent_identity)
 
     def __setattr__(self, name: str, value: object) -> None:
         raise AttributeError("SQLiteAuthorityBinding is immutable")
@@ -192,8 +199,15 @@ class SQLiteAuthorityBinding:
             raise ValueError("authority binding path does not match the admission scope authority")
         if path.is_symlink() or not path.is_file():
             raise ValueError("authority must be a regular non-symlink file")
+        parent_status = path.parent.stat()
         status = path.stat()
-        return cls(control, path, (status.st_dev, status.st_ino), _FACTORY_SENTINEL)
+        return cls(
+            control,
+            path,
+            (status.st_dev, status.st_ino),
+            (parent_status.st_dev, parent_status.st_ino),
+            _FACTORY_SENTINEL,
+        )
 
     @property
     def path(self) -> Path:
@@ -203,14 +217,33 @@ class SQLiteAuthorityBinding:
     def descriptor_identity(self) -> tuple[int, int]:
         return self._identity
 
+    @staticmethod
+    def _assert_parent_identity(
+        path: Path, expected: tuple[int, int], observed: tuple[int, int] | None = None
+    ) -> None:
+        if observed is None:
+            try:
+                status = path.parent.stat()
+            except OSError as error:
+                raise RuntimeError("SQLite authority parent identity unavailable") from error
+            actual = (status.st_dev, status.st_ino)
+        else:
+            actual = observed
+        if actual != expected:
+            raise RuntimeError("SQLite authority parent identity changed")
+
     def assert_current(self) -> None:
         self._control.assert_current()
         try:
             if self._path.is_symlink():
                 raise RuntimeError("SQLite authority descriptor is a symlink")
+            parent = self._path.parent.stat()
             status = self._path.stat()
         except OSError as error:
             raise RuntimeError("SQLite authority descriptor reread failed") from error
+        self._assert_parent_identity(
+            self._path, self._parent_identity, (parent.st_dev, parent.st_ino)
+        )
         if (status.st_dev, status.st_ino) != self._identity:
             raise RuntimeError("SQLite authority descriptor identity changed")
 

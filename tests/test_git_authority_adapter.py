@@ -621,7 +621,13 @@ class GitAuthorityAdapterTests(unittest.TestCase):
             (authority_status.st_dev, authority_status.st_ino), authority.descriptor_identity
         )
         with self.assertRaises(TypeError):
-            SQLiteAuthorityBinding(control, authority_path, authority.descriptor_identity, object())
+            SQLiteAuthorityBinding(
+                control,
+                authority_path,
+                authority.descriptor_identity,
+                (authority_path.parent.stat().st_dev, authority_path.parent.stat().st_ino),
+                object(),
+            )
         with self.assertRaises(AttributeError):
             authority._path = authority_path.with_name("forged.sqlite")
 
