@@ -68,6 +68,21 @@ class FormalEvidenceTests(unittest.TestCase):
             hashlib.sha256(recorded).hexdigest(),
         )
 
+    def test_sqlite_correspondence_revision_binds_config_digest(self) -> None:
+        artifact = json.loads(
+            (ROOT / "formal" / "upgrade" / "sqlite-snapshot-correspondence.json").read_text()
+        )
+        revision = artifact["implementation"]["revision"]
+        config = artifact["model"]["config"]
+        recorded = subprocess.check_output(  # noqa: S603 - fixed Git provenance query
+            ["git", "show", f"{revision}:{config}"],  # noqa: S607 - fixed Git query
+            cwd=ROOT,
+        )
+        self.assertEqual(
+            artifact["model"]["config_sha256"],
+            hashlib.sha256(recorded).hexdigest(),
+        )
+
     def test_sqlite_correspondence_referenced_paths_exist(self) -> None:
         artifact = json.loads(
             (ROOT / "formal" / "upgrade" / "sqlite-snapshot-correspondence.json").read_text()
