@@ -9,6 +9,7 @@ import sqlite3
 import tempfile
 import threading
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import AbstractContextManager
 from pathlib import Path
 from unittest.mock import patch
@@ -255,6 +256,72 @@ class DurableBindingTests(unittest.TestCase):
             self.assertTrue(successes)
             self.assertTrue(all(value in allowed for value in successes))
             self.assertTrue(all(isinstance(error, DurableBindingError) for error in errors))
+
+    def test_repeated_snapshot_identity_is_stable_across_lock_boundary(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            authority = root / "authority.sqlite"
+            with sqlite3.connect(authority) as connection:
+                connection.execute("CREATE TABLE records (id INTEGER PRIMARY KEY)")
+            authority.chmod(0o600)
+            control = root / "control.sqlite"
+            lock = root / "control.lock"
+            journal = root / "journal.json"
+            control.touch(mode=0o600)
+            lock.touch(mode=0o600)
+            journal.write_bytes(b'{"generation":0}\n')
+            binding = FilesystemAuthorityBinding.bind(authority, "sqlite")
+
+            class Store:
+                authority_path = authority
+                control_store_path = control
+                control_lock_path = lock
+
+                @staticmethod
+                def operation_lock() -> _Lock:
+                    return _Lock()
+
+            session = SQLiteCompatibilitySession(binding, Store(), journal)
+            expected = session.snapshot()
+            snapshots = [session.snapshot() for _ in range(64)]
+            self.assertTrue(all(snapshot == expected for snapshot in snapshots))
+            self.assertTrue(
+                all(session.assert_snapshot_current(snapshot) == expected for snapshot in snapshots)
+            )
+
+    def test_concurrent_readers_observe_one_stable_snapshot(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            authority = root / "authority.sqlite"
+            with sqlite3.connect(authority) as connection:
+                connection.execute("CREATE TABLE records (id INTEGER PRIMARY KEY)")
+            authority.chmod(0o600)
+            control = root / "control.sqlite"
+            lock = root / "control.lock"
+            journal = root / "journal.json"
+            control.touch(mode=0o600)
+            lock.touch(mode=0o600)
+            journal.write_bytes(b'{"generation":0}\n')
+            binding = FilesystemAuthorityBinding.bind(authority, "sqlite")
+
+            class Store:
+                authority_path = authority
+                control_store_path = control
+                control_lock_path = lock
+
+                @staticmethod
+                def operation_lock() -> _Lock:
+                    return _Lock()
+
+            session = SQLiteCompatibilitySession(binding, Store(), journal)
+            with ThreadPoolExecutor(max_workers=8) as executor:
+                snapshots = list(executor.map(lambda _index: session.snapshot(), range(64)))
+            self.assertTrue(snapshots)
+            expected = snapshots[0]
+            self.assertTrue(all(snapshot == expected for snapshot in snapshots))
+            self.assertTrue(
+                all(session.assert_snapshot_current(snapshot) == expected for snapshot in snapshots)
+            )
 
 
 class _Lock(AbstractContextManager[None]):
