@@ -58,6 +58,7 @@ class FormalEvidenceTests(unittest.TestCase):
         model = (ROOT / "formal" / "upgrade" / "UpgradeRecovery.tla").read_text()
         invariants = re.findall(r"^INVARIANT\s+(\w+)$", config, re.MULTILINE)
         self.assertTrue(invariants)
+        self.assertEqual(len(invariants), len(set(invariants)))
         for invariant in invariants:
             self.assertIsNotNone(
                 re.search(
