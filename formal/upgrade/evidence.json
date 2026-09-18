@@ -99,7 +99,7 @@
       "tests/test_rollback_control_store.py": "213b2ed4ee7ecff4c3d7c471bf02669c5dd05ae7e2d866e02af92e89369ae394",
       "tests/test_sqlite_mutation_barrier.py": "6949425557176bebb3341677d1fed90c0217055bd1d1dcb56bbdf91f60d31fb8",
       "tests/test_sqlite_storage.py": "2d62e37249161575b9c7c773cea6e090f4bd341f44ccf3b96f6727e5b66b2a0e",
-      "tests/test_upgrade_commands.py": "4eaa65ac1730c9149156ba76e345dcb1f8e2c44a51042e27f2d4a4b4e7634f32",
+      "tests/test_upgrade_commands.py": "8385aea01c3f47b961a4a169223326bfe2b2012953dbf2538dc93f9a27b6e310",
       "tests/test_upgrade_contract.py": "0630ea0c35ad100367a9df0d0682a90b2b0b120057768029fc82fe06a106989c",
       "tests/test_upgrade_identity.py": "d677ab21c8048fdda10e8b302082c05b0aa387a8e0ba1f81e189f84011cc89f3",
       "tools/generate_upgrade_contract.py": "aa9a2ed072df3937b7799b33559d03b1744d3b9049891180d1a4852531df3ada",
