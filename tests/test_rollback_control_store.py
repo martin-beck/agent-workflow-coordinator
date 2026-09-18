@@ -3251,6 +3251,10 @@ class RollbackControlStoreTests(unittest.TestCase):
 
     def test_sidecars_require_private_provisioning_and_stable_regular_identities(self) -> None:
         class SwappingSidecarStore(SQLiteRollbackControlStore):
+            def __init__(self, path: Path, project_id: str, suffix: str) -> None:
+                super().__init__(path, project_id)
+                self.suffix = suffix
+
             def _cas_connection(
                 self,
                 connection: sqlite3.Connection,
@@ -3258,9 +3262,9 @@ class RollbackControlStoreTests(unittest.TestCase):
                 supplied: dict[str, object],
             ) -> dict[str, object]:
                 result = super()._cas_connection(connection, expected_revision, supplied)
-                wal = Path(f"{self.path}-wal")
-                wal.rename(Path(f"{self.path}-previous-wal"))
-                wal.touch()
+                sidecar = Path(f"{self.path}{self.suffix}")
+                sidecar.rename(Path(f"{sidecar}-previous"))
+                sidecar.touch()
                 return result
 
         with tempfile.TemporaryDirectory() as directory:
@@ -3290,10 +3294,12 @@ class RollbackControlStoreTests(unittest.TestCase):
             with self.assertRaisesRegex(ControlStoreError, "sidecar is not private and regular"):
                 hardlink_store.cas(0, RECORD)
 
-            swapping_path = root / "swapping.sqlite"
-            swapping_store = SwappingSidecarStore(swapping_path, PROJECT)
-            with self.assertRaisesRegex(ControlStoreError, "WAL sidecar identity changed"):
-                swapping_store.cas(0, RECORD)
+            for suffix in ("-wal", "-shm"):
+                with self.subTest(swapped_suffix=suffix):
+                    swapping_path = root / f"swapping{suffix}.sqlite"
+                    swapping_store = SwappingSidecarStore(swapping_path, PROJECT, suffix)
+                    with self.assertRaisesRegex(ControlStoreError, "WAL sidecar identity changed"):
+                        swapping_store.cas(0, RECORD)
 
     def test_release_authorization_rejects_delegate_mutation_and_external_revision_tamper(
         self,
