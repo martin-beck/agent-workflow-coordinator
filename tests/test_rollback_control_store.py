@@ -1179,6 +1179,26 @@ class RollbackControlStoreTests(unittest.TestCase):
                 store.cas_locked(guard, identity, updated.revision, updated)
             self.assertEqual(updated, store.snapshot())
 
+    def test_cas_locked_cannot_bootstrap_revision_zero(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            identity = self._session_identity()
+            store = SQLiteBarrierSessionStore(
+                SQLiteRollbackControlStore(Path(directory) / "control.sqlite", PROJECT),
+                lambda: "authority-3",
+            )
+            with (
+                locked() as guard,
+                store.lock_owned_by_caller(guard),
+                self.assertRaisesRegex(ControlStoreError, "expected revision"),
+            ):
+                store.cas_locked(
+                    guard,
+                    identity,
+                    0,
+                    BarrierSessionState(identity, "held", 1),
+                )
+            self.assertIsNone(store.snapshot())
+
     def test_cas_locked_rejects_invalid_scope_inputs_before_write(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             identity = self._session_identity()
