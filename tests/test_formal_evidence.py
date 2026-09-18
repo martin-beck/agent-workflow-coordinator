@@ -60,6 +60,14 @@ class FormalEvidenceTests(unittest.TestCase):
         digest = hashlib.sha256(model_path.read_bytes()).hexdigest()
         self.assertEqual(artifact["model"]["sha256"], digest)
 
+    def test_sqlite_correspondence_config_digest_matches_exact_source(self) -> None:
+        artifact = json.loads(
+            (ROOT / "formal" / "upgrade" / "sqlite-snapshot-correspondence.json").read_text()
+        )
+        config_path = ROOT / artifact["model"]["config"]
+        digest = hashlib.sha256(config_path.read_bytes()).hexdigest()
+        self.assertEqual(artifact["model"]["config_sha256"], digest)
+
     def test_sqlite_correspondence_implementation_symbols_resolve(self) -> None:
         artifact = json.loads(
             (ROOT / "formal" / "upgrade" / "sqlite-snapshot-correspondence.json").read_text()
