@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.3.14 - 2026-09-18
+
+- Expose the autonomous-before-human TUI escalation planner and preserve
+  explicit, revision-bound decision batching.
+
 ## Unreleased
 
 ## v0.3.13 - 2026-09-18
