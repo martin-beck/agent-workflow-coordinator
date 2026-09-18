@@ -64,6 +64,7 @@ class FormalEvidenceTests(unittest.TestCase):
         self.assertFalse(module_path.is_absolute())
         self.assertNotIn("..", module_path.parts)
         self.assertTrue((ROOT / module_path).is_file())
+        self.assertFalse((ROOT / module_path).is_symlink())
 
     def test_sqlite_transition_model_mappings_have_actions(self) -> None:
         artifact = json.loads(
