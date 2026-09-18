@@ -14,10 +14,33 @@ from pathlib import Path
 from typing import Any
 
 from tools.decision_batch_policy import ARDecision, ProgressPlan, plan_progress
+from tools.decision_routing import DecisionAssessment, require_tui_route
 
 
 class TuiBridgeError(ValueError):
     """Reject malformed, stale, or cross-task TUI traffic."""
+
+
+def enforce_decision_route(
+    assessment: DecisionAssessment,
+    *,
+    trigger: dict[str, Any] | None,
+    request_ref: str | None,
+    channel: str,
+    host_direct_question: bool = False,
+) -> None:
+    """Apply the mandatory routing gate at the Coordinator/TUI boundary."""
+
+    try:
+        require_tui_route(
+            assessment,
+            trigger=trigger,
+            request_ref=request_ref,
+            channel=channel,
+            host_direct_question=host_direct_question,
+        )
+    except ValueError as error:
+        raise TuiBridgeError(str(error)) from error
 
 
 MAX_TUI_EVENT_JOURNAL_BYTES = 2 * 1024 * 1024

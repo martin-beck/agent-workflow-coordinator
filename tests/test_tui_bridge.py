@@ -18,7 +18,9 @@ from tools.tui_bridge import (
     plan_tui_escalation,
     prepare_tui_session,
     read_tui_event_journal,
+    enforce_decision_route,
 )
+from tools.decision_routing import assess_decision
 
 
 def _request() -> tuple[dict[str, Any], dict[str, Any]]:
@@ -362,3 +364,14 @@ class TuiBridgeTests(unittest.TestCase):
                 response = {**base, key: value}
                 with self.assertRaisesRegex(TuiBridgeError, message):
                     apply_tui_response(ar=ar, request=req, response=response)
+
+    def test_bridge_rejects_direct_host_question_for_important_decision(self) -> None:
+        assessment = assess_decision(decision_class="design")
+        with self.assertRaisesRegex(TuiBridgeError, "workflow-tui"):
+            enforce_decision_route(
+                assessment,
+                trigger={"interaction_required": True, "decision_request_ref": "AWG-X"},
+                request_ref="AWG-X",
+                channel="codex-host",
+                host_direct_question=True,
+            )
