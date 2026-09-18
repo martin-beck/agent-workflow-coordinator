@@ -59,6 +59,7 @@ class FormalEvidenceTests(unittest.TestCase):
         )
         nonclaims = artifact["evidence"]["nonclaims"]
         self.assertTrue(nonclaims)
+        self.assertEqual(len(nonclaims), len(set(nonclaims)))
         self.assertTrue(
             all(isinstance(nonclaim, str) and nonclaim.strip() for nonclaim in nonclaims)
         )
