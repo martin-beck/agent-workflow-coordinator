@@ -354,6 +354,7 @@ class FormalEvidenceTests(unittest.TestCase):
         source = (ROOT / artifact["implementation"]["module"]).read_text(encoding="utf-8")
         for transition in artifact["transitions"]:
             implementation = transition["implementation"]
+            self.assertTrue(implementation, transition["name"])
             self.assertEqual(len(implementation), len(set(implementation)), transition["name"])
             for symbol in transition["implementation"]:
                 name = symbol.rsplit(".", 1)[-1]
