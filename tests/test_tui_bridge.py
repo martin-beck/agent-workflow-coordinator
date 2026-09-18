@@ -172,7 +172,6 @@ class TuiBridgeTests(unittest.TestCase):
         updated = apply_tui_response(ar=ar, request=req, response=response)
         self.assertEqual(updated["task_revision"], 3)
         self.assertIs(updated["interaction"]["interaction_required"], False)
-
         pending_response = {
             **response,
             "ar_update": dict(cast(dict[str, Any], response["ar_update"])),
@@ -180,6 +179,45 @@ class TuiBridgeTests(unittest.TestCase):
         cast(dict[str, Any], pending_response["ar_update"])["decision_status"] = "pending"
         pending = apply_tui_response(ar=ar, request=req, response=pending_response)
         self.assertIs(pending["interaction"]["interaction_required"], True)
+
+    def test_prepare_session_preserves_markdown_documents(self) -> None:
+        ar, _ = _request()
+        guidance = {
+            "human_interaction": {
+                **_request()[1]["interaction"],
+                "task_ref": "AR-0001",
+                "task_revision": 2,
+            },
+            "request_id": "AWG-X",
+        }
+        _session, request = prepare_tui_session(
+            project_id="p",
+            ar=ar,
+            guidance_request=guidance,
+            session_id="AWTUI-S-1",
+            documents={"design": "# Design\n\nBoundary", "workplan": "# Work plan\n\nValidate"},
+        )
+        self.assertEqual("# Design\n\nBoundary", request["documents"]["design"])
+        self.assertEqual("# Work plan\n\nValidate", request["documents"]["workplan"])
+
+    def test_prepare_session_rejects_private_or_unknown_document_fields(self) -> None:
+        ar, request = _request()
+        guidance = {
+            "human_interaction": {
+                **request["interaction"],
+                "task_ref": "AR-0001",
+                "task_revision": 2,
+            },
+            "request_id": "AWG-X",
+        }
+        with self.assertRaisesRegex(TuiBridgeError, "documents"):
+            prepare_tui_session(
+                project_id="p",
+                ar=ar,
+                guidance_request=guidance,
+                session_id="AWTUI-S-1",
+                documents={"design": "x", "private_path": "/secret"},
+            )
 
     def test_trigger_revision_mismatch_fails_closed(self) -> None:
         ar, req = _request()
