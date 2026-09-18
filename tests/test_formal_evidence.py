@@ -52,6 +52,27 @@ def configured_bounds(configs: list[Path]) -> dict[str, int]:
 
 
 class FormalEvidenceTests(unittest.TestCase):
+    def test_sqlite_correspondence_artifact_schema_is_explicit(self) -> None:
+        artifact = json.loads(
+            (ROOT / "formal" / "upgrade" / "sqlite-snapshot-correspondence.json").read_text()
+        )
+        self.assertEqual(
+            {"schema_version", "kind", "model", "implementation", "transitions", "evidence"},
+            set(artifact),
+        )
+        self.assertEqual(1, artifact["schema_version"])
+        self.assertEqual("rejection-only", artifact["implementation"]["mutation_gate"])
+        self.assertEqual("bounded-trace-map-only", artifact["evidence"]["status"])
+        self.assertEqual("not-proven", artifact["evidence"]["correspondence_claim"])
+        for transition in artifact["transitions"]:
+            self.assertEqual(
+                {"name", "implementation", "model", "postcondition"},
+                set(transition),
+            )
+            self.assertIsInstance(transition["implementation"], list)
+            self.assertTrue(transition["implementation"])
+            self.assertIn("action", transition["model"])
+
     def test_sqlite_correspondence_declarations_match_model_and_config(self) -> None:
         artifact = json.loads(
             (ROOT / "formal" / "upgrade" / "sqlite-snapshot-correspondence.json").read_text()
