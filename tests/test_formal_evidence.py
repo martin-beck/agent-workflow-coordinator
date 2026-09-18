@@ -411,6 +411,7 @@ class FormalEvidenceTests(unittest.TestCase):
         artifact = json.loads(
             (ROOT / "formal" / "upgrade" / "sqlite-snapshot-correspondence.json").read_text()
         )
+        self.assertIsInstance(artifact["evidence"], dict)
         self.assertEqual(
             {"schema_version", "kind", "model", "implementation", "transitions", "evidence"},
             set(artifact),
