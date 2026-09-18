@@ -200,8 +200,7 @@ class SQLiteStorageTest(unittest.TestCase):
                 finally:
                     os.close(descriptor)
 
-                Path(f"{authority}-wal").write_bytes(b"wal")
-                with self.assertRaisesRegex(RuntimeError, "sidecar is unsafe"):
+                with self.assertRaisesRegex(RuntimeError, "sidecar is unavailable"):
                     SQLiteAuthorityBinding._open_sidecar_set(parent, authority)
             finally:
                 os.close(parent)
