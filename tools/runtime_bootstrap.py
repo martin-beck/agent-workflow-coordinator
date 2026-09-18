@@ -29,6 +29,15 @@ _MANIFEST_FIELDS = {
     "trust_policy_sha256",
     "vendor_manifest_sha256",
 }
+_MANIFEST_ORDER = (
+    "release",
+    "source_commit",
+    "tag_ref",
+    "tag_object",
+    "signature_sha256",
+    "trust_policy_sha256",
+    "vendor_manifest_sha256",
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -305,6 +314,17 @@ def _manifest_pairs(pairs: list[tuple[str, object]]) -> dict[str, object]:
     return value
 
 
+def _require_canonical_manifest(data: bytearray, parsed: object) -> None:
+    """Require the exact serialized bytes for the validated manifest schema."""
+    if not isinstance(parsed, dict):
+        return
+    canonical = json.dumps(
+        {key: parsed[key] for key in _MANIFEST_ORDER}, separators=(",", ":")
+    ).encode()
+    if bytes(data) != canonical:
+        raise AuthorityError("runtime manifest is not canonical")
+
+
 def read_runtime_manifest(runtime_root: Path) -> dict[str, str]:
     """Read and strictly validate a runtime manifest through one descriptor."""
     manifest = runtime_root / "runtime-manifest.json"
@@ -348,6 +368,7 @@ def read_runtime_manifest(runtime_root: Path) -> dict[str, str]:
         )
     ):
         raise AuthorityError("runtime manifest identity is invalid")
+    _require_canonical_manifest(data, parsed)
     return result
 
 
