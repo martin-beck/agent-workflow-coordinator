@@ -369,6 +369,11 @@ class FormalEvidenceTests(unittest.TestCase):
                 all(isinstance(symbol, str) and symbol.strip() for symbol in implementation),
                 transition["name"],
             )
+            for symbol in implementation:
+                owner, separator, member = symbol.partition(".")
+                qualified = owner and separator and re.fullmatch(r"\w+", member)
+                local = not separator and re.fullmatch(r"\w+", symbol)
+                self.assertTrue(qualified or local, symbol)
             for symbol in transition["implementation"]:
                 name = symbol.rsplit(".", 1)[-1]
                 self.assertIsNotNone(
