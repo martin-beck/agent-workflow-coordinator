@@ -756,6 +756,26 @@ class SQLiteAuthorityAdapterTests(unittest.TestCase):
         self.assertEqual(before, executor.snapshot())
         self.assertFalse(self.session.operation_owned_by_current_thread)
 
+    def test_bound_lifecycle_executor_restore_abort_releases_lock(self) -> None:
+        journal = self.root / "engine-restore-abort-journal.json"
+        journal.write_text(
+            '{"status":"running","phase":"rollback","records":[]}\n', encoding="utf-8"
+        )
+        executor = self.adapter.bind_lifecycle_executor(self.session, journal)
+        before = executor.snapshot()
+        with (
+            patch.object(self.adapter, "restore_bound", side_effect=KeyboardInterrupt),
+            self.assertRaises(KeyboardInterrupt),
+        ):
+            executor.restore(
+                self.root / "backup-abort.sqlite",
+                self.root / "destination-abort.sqlite",
+                {},
+                {},
+            )
+        self.assertEqual(before, executor.snapshot())
+        self.assertFalse(self.session.operation_owned_by_current_thread)
+
     def test_bound_lifecycle_executor_rejects_failed_effect_journal_mutation(self) -> None:
         journal = self.root / "engine-journal.json"
         journal.write_text('{"status":"running","phase":"backup","records":[]}\n', encoding="utf-8")
