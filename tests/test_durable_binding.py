@@ -175,6 +175,18 @@ class DurableBindingTests(unittest.TestCase):
                 session.assert_snapshot_current(expected)
 
     def test_snapshot_read_failure_is_ambiguous_and_outcome_stays_disabled(self) -> None:
+        correspondence_path = (
+            Path(__file__).parents[1] / "formal" / "upgrade" / "sqlite-snapshot-correspondence.json"
+        )
+        correspondence = json.loads(correspondence_path.read_text(encoding="utf-8"))
+        transition = next(
+            item
+            for item in correspondence["transitions"]
+            if item["name"] == "read-or-close-uncertainty"
+        )
+        self.assertEqual("Crash", transition["model"]["action"])
+        self.assertEqual("safe_mode", transition["model"]["journal_after"])
+        self.assertEqual("ambiguous", transition["model"]["barrier_after"])
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             authority = root / "authority.sqlite"
