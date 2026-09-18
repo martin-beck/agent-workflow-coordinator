@@ -4,6 +4,16 @@ This is an evidence map, not a refinement proof. The model actions identify
 the obligations that implementation tests must cover; the current checkpoint
 records only the TLC result in `evidence.json`.
 
+## SQLite snapshot safe-mode trace map
+
+`sqlite-snapshot-correspondence.json` maps the existing read-only
+`SQLiteCompatibilitySession` to `UpgradeRecovery`: snapshot reads and identity
+rereads leave the abstract state unchanged; read or descriptor-close
+uncertainty maps to `Crash` from `running`/`held` into `safe_mode`/`ambiguous`;
+and the permanent in-memory fence rejects a later `Acquire`. The artifact is
+bounded evidence scaffolding, not an implementation-refinement proof. It does
+not authorize writes, outcome publication, Git dispatch, apply, or rollback.
+
 The machine-readable `v10-refinement-contract.json` records the same bounded
 model/config hashes, implementation snapshot, action-to-obligation mapping,
 required executable evidence, and explicit non-claims. It is a publication

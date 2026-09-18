@@ -51,6 +51,27 @@ def configured_bounds(configs: list[Path]) -> dict[str, int]:
 
 
 class FormalEvidenceTests(unittest.TestCase):
+    def test_sqlite_snapshot_correspondence_map_is_bounded_and_fail_closed(self) -> None:
+        value = json.loads(
+            (ROOT / "formal" / "upgrade" / "sqlite-snapshot-correspondence.json").read_text()
+        )
+        self.assertEqual("bounded-sqlite-snapshot-correspondence", value["kind"])
+        self.assertEqual("formal/upgrade/UpgradeRecovery.tla", value["model"]["path"])
+        self.assertEqual("rejection-only", value["implementation"]["mutation_gate"])
+        transitions = {item["name"]: item for item in value["transitions"]}
+        self.assertEqual(
+            {"snapshot-read", "identity-reread", "read-or-close-uncertainty", "ambiguous-fence"},
+            set(transitions),
+        )
+        uncertainty = transitions["read-or-close-uncertainty"]["model"]
+        self.assertEqual("Crash", uncertainty["action"])
+        self.assertEqual("safe_mode", uncertainty["journal_after"])
+        self.assertEqual("ambiguous", uncertainty["barrier_after"])
+        self.assertEqual("reject", transitions["ambiguous-fence"]["model"]["result"])
+        self.assertEqual("bounded-trace-map-only", value["evidence"]["status"])
+        self.assertEqual("not-proven", value["evidence"]["correspondence_claim"])
+        self.assertTrue(value["evidence"]["nonclaims"])
+
     def test_evidence_has_exact_awq_v024_contract_fields(self) -> None:
         evidence = load_evidence()
         self.assertEqual(
