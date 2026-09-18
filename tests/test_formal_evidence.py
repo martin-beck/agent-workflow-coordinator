@@ -370,6 +370,11 @@ class FormalEvidenceTests(unittest.TestCase):
         transitions = artifact["transitions"]
         names = [transition["name"] for transition in transitions]
         references = artifact["evidence"]["tests"]
+        self.assertIsInstance(references, list)
+        self.assertTrue(references)
+        self.assertTrue(
+            all(isinstance(reference, str) and reference.strip() for reference in references)
+        )
         self.assertEqual(len(names), len(set(names)))
         self.assertEqual(len(references), len(set(references)))
         self.assertEqual(
