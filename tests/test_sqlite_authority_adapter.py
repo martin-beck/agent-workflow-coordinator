@@ -674,6 +674,129 @@ class SQLiteAuthorityAdapterTests(unittest.TestCase):
         self.assertEqual("campaign:backup", result["operation_id"])
         self.assertEqual("completed", result["outcome"])
 
+    def test_generated_backup_campaign_uses_real_sqlite_backup_and_durable_outcome(self) -> None:
+        with sqlite3.connect(self.authority) as connection:
+            connection.execute("CREATE TABLE metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+            connection.executemany(
+                "INSERT INTO metadata(key, value) VALUES (?, ?)",
+                (
+                    ("schema_version", "1"),
+                    ("backend", "sqlite"),
+                    ("project_id", PROJECT),
+                    ("state_repository", "state-repository"),
+                    ("product_repository", "product-repository"),
+                    ("state", "active"),
+                ),
+            )
+        journal = self.root / "real-generated-journal.json"
+        journal.write_text(
+            '{"status":"running","phase":"backup","records":[{"operation_id":"campaign",'
+            '"step_id":"campaign:backup","phase":"backup","outcome":"started",'
+            '"context":{"selector_ref":"runtime-selector.json","state_revision":1,'
+            '"durable_barrier_id":"barrier","fencing_token":"fence"}}]}\n',
+            encoding="utf-8",
+        )
+        operation = {
+            "operation_id": "campaign:backup",
+            "opcode": "backend.backup",
+            "inputs": {
+                "backend": "sqlite",
+                "selector_ref": "runtime-selector.json",
+                "expected_state_revision": 1,
+                "barrier_id": "barrier",
+                "fencing_token": "fence",
+                "backup_operation_id": "campaign:backup",
+            },
+            "timeout_seconds": 300,
+            "resources": ["maintenance-barrier", "durable-operation-record"],
+            "preconditions": ["previous-phase-complete"],
+            "postconditions": ["backup-contract-satisfied"],
+            "evidence": ["durable-operation-record"],
+            "durable_record": "operation-id-and-outcome",
+        }
+        executor = self.adapter.bind_lifecycle_executor(self.session, journal)
+        destination = self.root / "real-generated-backup.sqlite"
+        result = executor.execute_generated_operation(
+            operation,
+            destination,
+            {
+                "project_id": PROJECT,
+                "state_repository": "state-repository",
+                "product_repository": "product-repository",
+            },
+        )
+        self.assertEqual("completed", result["outcome"])
+        self.assertTrue(result["binding_verified"])
+        with sqlite3.connect(destination) as connection:
+            self.assertEqual(("clean",), connection.execute("SELECT body FROM records").fetchone())
+            self.assertEqual(
+                ("active",),
+                connection.execute("SELECT value FROM metadata WHERE key = 'state'").fetchone(),
+            )
+        record = json.loads(journal.read_text(encoding="utf-8"))["records"][-1]
+        self.assertEqual("success", record["outcome"])
+        self.assertEqual("campaign:backup", record["step_id"])
+        self.assertEqual(result["binding_verified"], record["result"]["binding_verified"])
+        self.assertFalse(self.session.operation_owned_by_current_thread)
+
+    def test_generated_backup_rejects_existing_destination_without_journal_mutation(self) -> None:
+        with sqlite3.connect(self.authority) as connection:
+            connection.execute("CREATE TABLE metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+            connection.executemany(
+                "INSERT INTO metadata(key, value) VALUES (?, ?)",
+                (
+                    ("schema_version", "1"),
+                    ("backend", "sqlite"),
+                    ("project_id", PROJECT),
+                    ("state_repository", "state-repository"),
+                    ("product_repository", "product-repository"),
+                    ("state", "active"),
+                ),
+            )
+        journal = self.root / "real-failure-journal.json"
+        journal.write_text(
+            '{"status":"running","phase":"backup","records":[{"operation_id":"campaign",'
+            '"step_id":"campaign:backup","phase":"backup","outcome":"started",'
+            '"context":{"selector_ref":"runtime-selector.json","state_revision":1,'
+            '"durable_barrier_id":"barrier","fencing_token":"fence"}}]}\n',
+            encoding="utf-8",
+        )
+        operation = {
+            "operation_id": "campaign:backup",
+            "opcode": "backend.backup",
+            "inputs": {
+                "backend": "sqlite",
+                "selector_ref": "runtime-selector.json",
+                "expected_state_revision": 1,
+                "barrier_id": "barrier",
+                "fencing_token": "fence",
+                "backup_operation_id": "campaign:backup",
+            },
+            "timeout_seconds": 300,
+            "resources": ["maintenance-barrier", "durable-operation-record"],
+            "preconditions": ["previous-phase-complete"],
+            "postconditions": ["backup-contract-satisfied"],
+            "evidence": ["durable-operation-record"],
+            "durable_record": "operation-id-and-outcome",
+        }
+        destination = self.root / "existing-backup.sqlite"
+        destination.write_bytes(b"immutable destination")
+        executor = self.adapter.bind_lifecycle_executor(self.session, journal)
+        before = journal.read_bytes()
+        with self.assertRaisesRegex(SQLiteAuthorityError, "generated SQLite backup failed"):
+            executor.execute_generated_operation(
+                operation,
+                destination,
+                {
+                    "project_id": PROJECT,
+                    "state_repository": "state-repository",
+                    "product_repository": "product-repository",
+                },
+            )
+        self.assertEqual(before, journal.read_bytes())
+        self.assertEqual(b"immutable destination", destination.read_bytes())
+        self.assertFalse(self.session.operation_owned_by_current_thread)
+
     def test_generated_backup_abort_releases_lock_and_preserves_journal(self) -> None:
         journal = self.root / "generated-abort-journal.json"
         journal.write_text(
