@@ -53,6 +53,15 @@ def configured_bounds(configs: list[Path]) -> dict[str, int]:
 
 
 class FormalEvidenceTests(unittest.TestCase):
+    def test_sqlite_transition_model_mappings_have_actions(self) -> None:
+        artifact = json.loads(
+            (ROOT / "formal" / "upgrade" / "sqlite-snapshot-correspondence.json").read_text()
+        )
+        for transition in artifact["transitions"]:
+            model = transition["model"]
+            self.assertIsInstance(model, dict, transition["name"])
+            self.assertIsInstance(model.get("action"), str, transition["name"])
+
     def test_sqlite_transition_names_are_unique(self) -> None:
         artifact = json.loads(
             (ROOT / "formal" / "upgrade" / "sqlite-snapshot-correspondence.json").read_text()
