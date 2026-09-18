@@ -6,9 +6,9 @@ from typing import Any
 
 from tools.decision_batch_policy import ARDecision
 from tools.tui_bridge import (
+    TuiBridgeError,
     TuiSession,
     TuiSessionState,
-    TuiBridgeError,
     apply_tui_response,
     build_tui_request,
     plan_tui_escalation,
@@ -51,12 +51,12 @@ class TuiBridgeTests(unittest.TestCase):
             project_id="p",
             ar=ar,
             guidance_request={
-                **{
+                
                     "human_interaction": {
                         **request["interaction"],
                         "decision_request_ref": "AWG-X",
                     }
-                },
+                ,
                 "request_id": "AWG-X",
             },
             session_id="AWTUI-SESSION-1",
