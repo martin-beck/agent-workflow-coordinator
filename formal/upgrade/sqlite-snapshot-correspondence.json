@@ -21,7 +21,13 @@
     {"name": "ambiguous-fence", "implementation": ["SQLiteCompatibilitySession.safe_mode", "SQLiteCompatibilitySession.assert_current", "SQLiteCompatibilitySession.operation_lock"], "model": {"journal": "safe_mode", "barrier": "ambiguous", "action": "no-op", "result": "reject"}, "postcondition": "later operations and outcome publication remain rejected without changing safe_mode/ambiguous state"}
   ],
   "evidence": {
-    "tests": ["tests/test_durable_binding.py::DurableBindingTests.test_replacement_and_symlink_are_rejected", "tests/test_durable_binding.py::DurableBindingTests.test_snapshot_read_failure_is_ambiguous_and_outcome_stays_disabled", "tests/test_durable_binding.py::DurableBindingTests.test_sqlite_snapshot_rejects_journal_replacement_as_ambiguous", "tests/test_durable_binding.py::DurableBindingTests.test_snapshot_process_death_does_not_authorize_outcome"],
+    "tests": ["tests/test_durable_binding.py::DurableBindingTests.test_snapshot_read_binds_to_formal_model_action", "tests/test_durable_binding.py::DurableBindingTests.test_replacement_and_symlink_are_rejected", "tests/test_durable_binding.py::DurableBindingTests.test_snapshot_read_failure_is_ambiguous_and_outcome_stays_disabled", "tests/test_durable_binding.py::DurableBindingTests.test_sqlite_snapshot_rejects_journal_replacement_as_ambiguous", "tests/test_durable_binding.py::DurableBindingTests.test_snapshot_process_death_does_not_authorize_outcome"],
+    "by_transition": {
+      "snapshot-read": ["tests/test_durable_binding.py::DurableBindingTests.test_snapshot_read_binds_to_formal_model_action"],
+      "identity-reread": ["tests/test_durable_binding.py::DurableBindingTests.test_replacement_and_symlink_are_rejected", "tests/test_durable_binding.py::DurableBindingTests.test_sqlite_snapshot_rejects_journal_replacement_as_ambiguous"],
+      "read-or-close-uncertainty": ["tests/test_durable_binding.py::DurableBindingTests.test_snapshot_read_failure_is_ambiguous_and_outcome_stays_disabled"],
+      "ambiguous-fence": ["tests/test_durable_binding.py::DurableBindingTests.test_snapshot_read_failure_is_ambiguous_and_outcome_stays_disabled"]
+    },
     "status": "bounded-trace-map-only",
     "correspondence_claim": "not-proven",
     "nonclaims": ["This map does not prove implementation refinement.", "It does not authorize SQLite writes, outcome publication, Git dispatch, apply, or rollback.", "The abstract Crash action does not model power loss or SQLite VFS behavior."]

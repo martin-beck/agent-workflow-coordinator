@@ -67,6 +67,17 @@ class FormalEvidenceTests(unittest.TestCase):
         )
         self.assertTrue(all("::" in reference for reference in references))
 
+    def test_sqlite_correspondence_covers_every_transition(self) -> None:
+        artifact = json.loads(
+            (ROOT / "formal" / "upgrade" / "sqlite-snapshot-correspondence.json").read_text()
+        )
+        names = {transition["name"] for transition in artifact["transitions"]}
+        coverage = artifact["evidence"]["by_transition"]
+        self.assertEqual(names, set(coverage))
+        self.assertTrue(all(coverage[name] for name in names))
+        covered = {reference for values in coverage.values() for reference in values}
+        self.assertTrue(covered.issubset(set(artifact["evidence"]["tests"])))
+
     def test_sqlite_correspondence_artifact_schema_is_explicit(self) -> None:
         artifact = json.loads(
             (ROOT / "formal" / "upgrade" / "sqlite-snapshot-correspondence.json").read_text()
