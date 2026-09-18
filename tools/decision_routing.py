@@ -18,6 +18,9 @@ class DecisionRoutingError(ValueError):
     """Raised when an important decision bypasses the AR--TUI bridge."""
 
 
+UI_CHANNEL = "workflow-ui"
+
+
 @dataclass(frozen=True, slots=True)
 class DecisionAssessment:
     """Public-safe facts used to decide whether human authority is required."""
@@ -88,8 +91,10 @@ def require_tui_route(
 
     if not assessment.requires_tui:
         return
-    if host_direct_question or channel != "workflow-tui":
-        raise DecisionRoutingError("important decisions must use workflow-tui")
+    if host_direct_question or channel != UI_CHANNEL:
+        raise DecisionRoutingError(
+            "important decisions must use workflow-ui (GUI preferred, TUI fallback)"
+        )
     if not request_ref or not isinstance(request_ref, str) or not request_ref.startswith("AWG-"):
         raise DecisionRoutingError("important decisions require an AWG request reference")
     if not isinstance(trigger, dict) or trigger.get("interaction_required") is not True:
@@ -108,5 +113,5 @@ def require_all_tui_routes(
             assessment,
             trigger=trigger,
             request_ref=request_ref,
-            channel="workflow-tui",
+            channel=UI_CHANNEL,
         )
