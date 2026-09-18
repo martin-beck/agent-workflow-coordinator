@@ -53,6 +53,15 @@ def configured_bounds(configs: list[Path]) -> dict[str, int]:
 
 
 class FormalEvidenceTests(unittest.TestCase):
+    def test_sqlite_transition_postconditions_are_nonempty(self) -> None:
+        artifact = json.loads(
+            (ROOT / "formal" / "upgrade" / "sqlite-snapshot-correspondence.json").read_text()
+        )
+        for transition in artifact["transitions"]:
+            postcondition = transition["postcondition"]
+            self.assertIsInstance(postcondition, str)
+            self.assertTrue(postcondition.strip(), transition["name"])
+
     def test_sqlite_model_actions_are_in_next(self) -> None:
         artifact = json.loads(
             (ROOT / "formal" / "upgrade" / "sqlite-snapshot-correspondence.json").read_text()
