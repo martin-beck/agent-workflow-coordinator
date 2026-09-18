@@ -187,6 +187,11 @@ class DurableBindingTests(unittest.TestCase):
         self.assertEqual("Crash", transition["model"]["action"])
         self.assertEqual("safe_mode", transition["model"]["journal_after"])
         self.assertEqual("ambiguous", transition["model"]["barrier_after"])
+        fence = next(
+            item for item in correspondence["transitions"] if item["name"] == "ambiguous-fence"
+        )
+        self.assertEqual("Acquire", fence["model"]["action"])
+        self.assertEqual("reject", fence["model"]["result"])
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             authority = root / "authority.sqlite"
@@ -221,6 +226,8 @@ class DurableBindingTests(unittest.TestCase):
                 session.snapshot()
             with self.assertRaisesRegex(DurableBindingError, "safe mode"):
                 session.assert_current()
+            with self.assertRaisesRegex(DurableBindingError, "safe mode"):
+                session.operation_lock()
             with self.assertRaisesRegex(DurableBindingError, "outcome publication"):
                 session.record_outcome("operation", {"status": "success"})
 
