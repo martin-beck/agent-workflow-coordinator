@@ -158,7 +158,11 @@ class FormalEvidenceTests(unittest.TestCase):
         artifact = json.loads(
             (ROOT / "formal" / "upgrade" / "sqlite-snapshot-correspondence.json").read_text()
         )
-        names = [transition["name"] for transition in artifact["transitions"]]
+        transitions = artifact["transitions"]
+        self.assertIsInstance(transitions, list)
+        self.assertTrue(transitions)
+        self.assertTrue(all(isinstance(transition, dict) for transition in transitions))
+        names = [transition["name"] for transition in transitions]
         self.assertTrue(names)
         self.assertEqual(len(names), len(set(names)))
 
