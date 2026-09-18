@@ -1744,8 +1744,11 @@ class SQLiteAuthorityAdapterTests(unittest.TestCase):
         execute.assert_not_called()
         self.assertEqual(durable_before_bound_reject, self._durable_state())
         self.assertFalse(self.session.operation_owned_by_current_thread)
-        with self.assertRaisesRegex(SQLiteAuthorityError, "not implemented"):
-            self.adapter.execute("commit", CONTEXT)
+        durable_before_execute_rejects = self._durable_state()
+        for phase in ("commit", "apply", "rollback"):
+            with self.assertRaisesRegex(SQLiteAuthorityError, "not implemented"):
+                self.adapter.execute(phase, CONTEXT)
+        self.assertEqual(durable_before_execute_rejects, self._durable_state())
         self.assertFalse(
             self.adapter.verify_rollback_context({**CONTEXT, "target": "rollback"})[
                 "rollback_context_verified"

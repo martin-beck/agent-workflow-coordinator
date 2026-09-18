@@ -9,6 +9,7 @@ from typing import Any, cast
 
 from tools.decision_batch_policy import ARDecision
 from tools.tui_bridge import (
+    MAX_TUI_EVENT_JOURNAL_BYTES,
     TuiBridgeError,
     TuiSession,
     TuiSessionState,
@@ -105,6 +106,8 @@ class TuiBridgeTests(unittest.TestCase):
         with self.assertRaises(TuiBridgeError):
             session.await_response()
         with self.assertRaises(TuiBridgeError):
+            session.resolved(1)
+        with self.assertRaises(TuiBridgeError):
             session.attach("../host")
         with self.assertRaises(TuiBridgeError):
             session.attach("")
@@ -115,6 +118,60 @@ class TuiBridgeTests(unittest.TestCase):
             attached.detach().detach()
         with self.assertRaises(TuiBridgeError):
             attached.resolved(0)
+
+    def test_event_journal_reader_rejects_unavailable_unsafe_and_malformed_input(self) -> None:
+        _ar, request = _request()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            missing = root / "missing.jsonl"
+            with self.assertRaisesRegex(TuiBridgeError, "unavailable"):
+                read_tui_event_journal(missing, request=request)
+
+            oversized = root / "oversized.jsonl"
+            oversized.write_bytes(b"x" * (MAX_TUI_EVENT_JOURNAL_BYTES + 1))
+            oversized.chmod(0o600)
+            with self.assertRaisesRegex(TuiBridgeError, "bounded size"):
+                read_tui_event_journal(oversized, request=request)
+
+            journal_dir = root / "journal-dir"
+            journal_dir.mkdir()
+            with self.assertRaisesRegex(TuiBridgeError, "unavailable"):
+                read_tui_event_journal(journal_dir, request=request)
+
+            private = root / "private.jsonl"
+            private.write_text("{}\n")
+            private.chmod(0o644)
+            with self.assertRaisesRegex(TuiBridgeError, "private"):
+                read_tui_event_journal(private, request=request)
+
+            malformed = root / "malformed.jsonl"
+            malformed.write_text("not-json\n")
+            malformed.chmod(0o600)
+            with self.assertRaisesRegex(TuiBridgeError, "invalid JSON"):
+                read_tui_event_journal(malformed, request=request)
+
+            non_object = root / "non-object.jsonl"
+            non_object.write_text("[]\n")
+            non_object.chmod(0o600)
+            with self.assertRaisesRegex(TuiBridgeError, "not an object"):
+                read_tui_event_journal(non_object, request=request)
+
+            foreign = root / "foreign.jsonl"
+            foreign.write_text(
+                json.dumps(
+                    {
+                        "project_id": "other",
+                        "ar_id": "AR-0001",
+                        "task_revision": 2,
+                        "session_id": "s",
+                        "sequence": 1,
+                    }
+                )
+                + "\n"
+            )
+            foreign.chmod(0o600)
+            with self.assertRaisesRegex(TuiBridgeError, "does not match"):
+                read_tui_event_journal(foreign, request=request)
 
     def test_session_rejects_invalid_identity(self) -> None:
         for values in (
