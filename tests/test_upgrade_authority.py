@@ -603,6 +603,19 @@ class RuntimeSelectorTests(unittest.TestCase):
             with self.assertRaises(AuthorityError):
                 commit_runtime_selector(path, "new", "old")
 
+    def test_selector_rejects_duplicate_active_and_previous_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "selector.json"
+            with self.assertRaisesRegex(AuthorityError, "selector identity"):
+                commit_runtime_selector(path, "new", "new")
+            path.write_text(
+                '{"schema_version":1,"active_release":"new","previous_release":"new"}\n',
+                encoding="utf-8",
+            )
+            path.chmod(0o600)
+            with self.assertRaisesRegex(AuthorityError, "selector identity"):
+                read_runtime_selector(path)
+
     def test_selector_rejects_control_characters_and_unbounded_release_ids(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "selector.json"
