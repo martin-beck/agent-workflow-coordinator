@@ -53,6 +53,18 @@ def configured_bounds(configs: list[Path]) -> dict[str, int]:
 
 
 class FormalEvidenceTests(unittest.TestCase):
+    def test_upgrade_model_vars_tuple_matches_variables(self) -> None:
+        model = (ROOT / "formal" / "upgrade" / "UpgradeRecovery.tla").read_text()
+        declaration = re.search(r"^VARIABLES\s+(.+)$", model, re.MULTILINE)
+        tuple_match = re.search(r"^vars\s*==\s*<<(.+)>>$", model, re.MULTILINE)
+        self.assertIsNotNone(declaration)
+        self.assertIsNotNone(tuple_match)
+        assert declaration is not None
+        assert tuple_match is not None
+        variables = [name.strip() for name in declaration.group(1).split(",")]
+        state_tuple = [name.strip() for name in tuple_match.group(1).split(",")]
+        self.assertEqual(state_tuple, variables)
+
     def test_upgrade_model_variables_are_unique(self) -> None:
         model = (ROOT / "formal" / "upgrade" / "UpgradeRecovery.tla").read_text()
         declaration = re.search(r"^VARIABLES\s+(.+)$", model, re.MULTILINE)
