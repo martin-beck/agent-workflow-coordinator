@@ -5,10 +5,12 @@
 
 from __future__ import annotations
 
+import json
 import re
 from copy import deepcopy
 from dataclasses import dataclass, replace
 from enum import StrEnum
+from pathlib import Path
 from typing import Any
 
 from tools.decision_batch_policy import ARDecision, ProgressPlan, plan_progress
@@ -16,6 +18,66 @@ from tools.decision_batch_policy import ARDecision, ProgressPlan, plan_progress
 
 class TuiBridgeError(ValueError):
     """Reject malformed, stale, or cross-task TUI traffic."""
+
+
+MAX_TUI_EVENT_JOURNAL_BYTES = 2 * 1024 * 1024
+
+
+def _validate_journal_event(
+    event: object, *, expected: tuple[object, ...], sequence: int
+) -> dict[str, Any]:
+    if not isinstance(event, dict):
+        raise TuiBridgeError("TUI event journal entry is not an object")
+    identity = (
+        event.get("project_id"),
+        event.get("ar_id"),
+        event.get("task_revision"),
+        event.get("session_id"),
+    )
+    if identity != expected:
+        raise TuiBridgeError("TUI event journal identity does not match request")
+    if not isinstance(event.get("sequence"), int) or event["sequence"] != sequence + 1:
+        raise TuiBridgeError("TUI event journal sequence is not contiguous")
+    return event
+
+
+def read_tui_event_journal(
+    path: str | Path, *, request: dict[str, Any]
+) -> tuple[dict[str, Any], ...]:
+    """Read and validate a private TUI event journal without mutating AR state.
+
+    The Coordinator caller may then apply an explicitly selected event through
+    ``apply_tui_response``. This separation prevents a disconnected or replayed
+    journal from silently authorizing multiple AR revisions.
+    """
+    candidate = Path(path)
+    try:
+        raw = candidate.read_bytes()
+    except OSError as error:
+        raise TuiBridgeError("TUI event journal is unavailable") from error
+    if len(raw) > MAX_TUI_EVENT_JOURNAL_BYTES:
+        raise TuiBridgeError("TUI event journal exceeds bounded size")
+    if not candidate.is_file():
+        raise TuiBridgeError("TUI event journal is not a regular file")
+    if candidate.stat().st_mode & 0o077:
+        raise TuiBridgeError("TUI event journal must be private")
+    expected = (
+        request.get("project_id"),
+        request.get("ar", {}).get("ar_id"),
+        request.get("ar", {}).get("task_revision"),
+        request.get("session_id"),
+    )
+    events: list[dict[str, Any]] = []
+    sequence = 0
+    for line in raw.splitlines():
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError as error:
+            raise TuiBridgeError("TUI event journal contains invalid JSON") from error
+        event = _validate_journal_event(event, expected=expected, sequence=sequence)
+        sequence = event["sequence"]
+        events.append(event)
+    return tuple(events)
 
 
 class TuiSessionState(StrEnum):
