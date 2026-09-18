@@ -7,7 +7,7 @@
     "barriers": ["held", "ambiguous"]
   },
   "implementation": {
-    "revision": "5c8d4388c0568d561e5773d4540ea8c9f3d3f1fc",
+    "revision": "bbf7fa66ecd97bab15dc67fc85d2d6fa08fb73a3",
     "module": "tools/durable_binding.py",
     "mutation_gate": "rejection-only"
   },
