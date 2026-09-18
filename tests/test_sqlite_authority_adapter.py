@@ -800,6 +800,58 @@ class SQLiteAuthorityAdapterTests(unittest.TestCase):
         self.assertFalse(list(journal.parent.glob(".upgrade-journal-*.json")))
         self.assertFalse(self.session.operation_owned_by_current_thread)
 
+    def test_generated_backup_directory_fsync_failure_retains_published_outcome(self) -> None:
+        journal = self.root / "generated-directory-fsync-failure-journal.json"
+        journal.write_text(
+            '{"status":"running","phase":"backup","records":[{"operation_id":"campaign",'
+            '"step_id":"campaign:backup","phase":"backup","outcome":"started",'
+            '"context":{"selector_ref":"runtime-selector.json","state_revision":1,'
+            '"durable_barrier_id":"barrier","fencing_token":"fence"}}]}\n',
+            encoding="utf-8",
+        )
+        operation = {
+            "operation_id": "campaign:backup",
+            "opcode": "backend.backup",
+            "inputs": {
+                "backend": "sqlite",
+                "selector_ref": "runtime-selector.json",
+                "expected_state_revision": 1,
+                "barrier_id": "barrier",
+                "fencing_token": "fence",
+                "backup_operation_id": "campaign:backup",
+            },
+            "timeout_seconds": 300,
+            "resources": ["maintenance-barrier", "durable-operation-record"],
+            "preconditions": ["previous-phase-complete"],
+            "postconditions": ["backup-contract-satisfied"],
+            "evidence": ["durable-operation-record"],
+            "durable_record": "operation-id-and-outcome",
+        }
+        executor = self.adapter.bind_lifecycle_executor(self.session, journal)
+        calls = 0
+        original_fsync = os.fsync
+
+        def fail_directory_fsync(descriptor: int) -> None:
+            nonlocal calls
+            calls += 1
+            if calls == 2:
+                raise OSError("injected directory fsync failure")
+            original_fsync(descriptor)
+
+        with (
+            patch.object(self.adapter, "backup_bound", return_value={"backup_verified": True}),
+            patch("tools.sqlite_authority_adapter.os.fsync", side_effect=fail_directory_fsync),
+            self.assertRaisesRegex(SQLiteAuthorityError, "publication failed"),
+        ):
+            executor.execute_generated_operation(
+                operation, self.root / "generated-directory-fsync-failure.sqlite", {}
+            )
+        record = json.loads(journal.read_text(encoding="utf-8"))["records"][-1]
+        self.assertEqual("success", record["outcome"])
+        self.assertEqual({"backup_verified": True}, record["result"])
+        self.assertFalse(list(journal.parent.glob(".upgrade-journal-*.json")))
+        self.assertFalse(self.session.operation_owned_by_current_thread)
+
     def test_generated_backup_rejects_journal_replacement_before_publication(self) -> None:
         journal = self.root / "replacement-journal.json"
         journal.write_text(
