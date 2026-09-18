@@ -109,6 +109,7 @@ class FormalEvidenceTests(unittest.TestCase):
         assert specification is not None
         self.assertRegex(specification.group("body"), r"\bInit\b")
         self.assertRegex(specification.group("body"), r"\[\]\[Next\]_vars")
+        self.assertEqual(specification.group("body").count("[][Next]_vars"), 1)
 
     def test_upgrade_config_constants_exist_in_model(self) -> None:
         config = (ROOT / "formal" / "upgrade" / "UpgradeRecovery.cfg").read_text()
