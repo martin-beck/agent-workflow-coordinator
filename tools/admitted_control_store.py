@@ -174,6 +174,23 @@ def admitted_cas(  # noqa: C901
                 raise AdmissionLeaseError("admitted control store result is invalid")
             try:
                 result_revision = result.get("revision")
+                # A backend may return a legacy snapshot without identity
+                # fields, but any identity it does return must remain bound
+                # to the admission lease.  Never let a successful CAS be
+                # reported for another owner/barrier.
+                for name, expected in (
+                    ("project_id", lease.project_id),
+                    ("authority_revision", lease.authority_revision),
+                    ("fencing_token", lease.fencing_token),
+                    ("fencing_owner", lease.fencing_owner),
+                    ("durable_barrier_id", lease.durable_barrier_id),
+                ):
+                    if name in result:
+                        actual = result.get(name)
+                        if actual != expected or type(actual) is not type(expected):
+                            raise AdmissionLeaseError("admitted control store identity is invalid")
+            except AdmissionLeaseError:
+                raise
             except Exception as error:
                 raise AdmissionLeaseError("admitted control store result is invalid") from error
             if "revision" in result and (

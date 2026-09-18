@@ -435,6 +435,35 @@ class AdmittedControlStoreTests(unittest.TestCase):
             admitted_cas(Store(), 1, self.record, self.lease, self.recheck, Scope())
         self.assertEqual(["order", "hold", "write", "release"], events)
 
+    def test_backend_result_identity_mismatch_fails_closed_after_scope_release(self) -> None:
+        events: list[str] = []
+
+        class Scope:
+            def assert_ordered(self) -> None:
+                events.append("order")
+
+            @contextmanager
+            def hold(self) -> Any:
+                events.append("hold")
+                try:
+                    yield None
+                finally:
+                    events.append("release")
+
+        class Store:
+            def cas(self, *_args: object, **_kwargs: object) -> dict[str, object]:
+                events.append("write")
+                return {
+                    **self_record,
+                    "revision": 2,
+                    "fencing_token": "different-fence",
+                }
+
+        self_record = dict(self.record)
+        with self.assertRaisesRegex(AdmissionLeaseError, "identity is invalid"):
+            admitted_cas(Store(), 1, self.record, self.lease, self.recheck, Scope())
+        self.assertEqual(["order", "hold", "write", "release"], events)
+
     def test_hostile_backend_result_access_fails_closed_after_scope_release(self) -> None:
         events: list[str] = []
 
