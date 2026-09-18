@@ -271,7 +271,11 @@ class ResolvedRuntime:
 
     def admit_for_dispatch(self) -> DispatchAdmission:
         """Return admission evidence only after the complete identity gate."""
-        self.revalidate_for_dispatch()
+        try:
+            self.revalidate_for_dispatch()
+        except AuthorityError:
+            self.close()
+            raise
         return DispatchAdmission(self, self.identity)
 
     def close(self) -> None:

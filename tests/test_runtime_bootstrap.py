@@ -112,9 +112,7 @@ class RuntimeBootstrapTests(unittest.TestCase):
                 replacement.rename(manifest)
                 with self.assertRaisesRegex(AuthorityError, "manifest identity changed"):
                     resolved.admit_for_dispatch()
-                with self.assertRaisesRegex(AuthorityError, "manifest identity changed"):
-                    admission.revalidate()
-                self.assertEqual(-1, admission.runtime.descriptor)
+                self.assertEqual(-1, resolved.descriptor)
                 with self.assertRaisesRegex(AuthorityError, "resolved runtime is unavailable"):
                     admission.revalidate()
 
