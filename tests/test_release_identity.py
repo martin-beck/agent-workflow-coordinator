@@ -201,6 +201,16 @@ class ReleaseIdentityTests(unittest.TestCase):
             with self.assertRaisesRegex(ReleaseIdentityError, "tag object"):
                 verify_transition(Path(directory), transition)
 
+    def test_transition_rejects_repository_tag_retargeting(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            transition = self._transition_fixture(root)
+            old_commit = transition["from"]["source_commit"]
+            self._run_git(root, "tag", "-d", "v0.3.8")
+            self._run_git(root, "tag", "v0.3.8", old_commit)
+            with self.assertRaisesRegex(ReleaseIdentityError, "tag object"):
+                verify_transition(root, transition)
+
     def test_transition_rejects_forged_signature(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             transition = self._transition_fixture(Path(directory))
