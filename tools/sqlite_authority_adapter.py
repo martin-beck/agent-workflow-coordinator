@@ -611,7 +611,12 @@ class SQLiteLifecycleExecutor:
             except OSError as error:
                 raise SQLiteAuthorityError("generated backup outcome publication failed") from error
             finally:
-                temporary_path.unlink(missing_ok=True)
+                try:
+                    temporary_path.unlink(missing_ok=True)
+                except OSError as error:
+                    raise SQLiteAuthorityError(
+                        "generated backup temporary cleanup failed"
+                    ) from error
 
     def restore(
         self, backup: Path, destination: Path, manifest: dict[str, Any], binding: dict[str, Any]
