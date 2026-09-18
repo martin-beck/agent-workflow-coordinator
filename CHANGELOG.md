@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.19
+
+- Generate TUI Markdown in deterministic dependency-first order and reject AR dependency cycles.
+
 ## 0.3.18
 
 - Fail closed when important agent decisions bypass the workflow TUI.
