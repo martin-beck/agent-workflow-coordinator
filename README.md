@@ -52,9 +52,9 @@ NFS locking, arbitrary command correctness, kernel/storage failure, or power los
 
 Prerequisites for normal local SQLite coordination are Python 3.12+, Git, and a local filesystem
 supporting SQLite WAL locking/shared memory. No database daemon, separate `sqlite3` executable,
-Python package, GitHub account, GitHub CLI, or network access is required. GitHub CLI and configured
-Git signing are needed only when live GitHub views or Git publication are enabled. The Git backend
-also requires a local filesystem with POSIX `flock(2)` semantics.
+Python package, GitHub account, GitHub CLI, or network access is required. GitHub CLI is needed only
+for live GitHub views or publication; release publication uses protected, exact-source tags and does
+not require a signing key. The Git backend also requires a local filesystem with POSIX `flock(2)` semantics.
 
 1. Check out an exact release tag.
 2. Vendor it into the state repository:
