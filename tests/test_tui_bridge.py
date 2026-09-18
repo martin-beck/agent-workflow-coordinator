@@ -79,6 +79,15 @@ class TuiBridgeTests(unittest.TestCase):
         with self.assertRaisesRegex(TuiBridgeError, "unknown dependency"):
             generate_tui_documents(({"id": "AR-0001", "depends_on": ["AR-9999"]},))
 
+    def test_document_generation_rejects_dependency_cycles(self) -> None:
+        with self.assertRaisesRegex(TuiBridgeError, "dependency cycle"):
+            generate_tui_documents(
+                (
+                    {"id": "AR-0001", "depends_on": ["AR-0002"]},
+                    {"id": "AR-0002", "depends_on": ["AR-0001"]},
+                )
+            )
+
     def test_batch_session_contains_all_requests_in_one_launch(self) -> None:
         first_ar, first_wrapper = _request()
         first = first_wrapper["guidance_request"]
