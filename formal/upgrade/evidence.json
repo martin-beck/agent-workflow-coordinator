@@ -94,7 +94,7 @@
   },
   "implementation_snapshot": {
     "files": {
-      "schema/upgrade-contract.schema.json": "2f16e6990b59651656d89973237ca522e5ed8ff1a4b3d46d98e22108f8e689d5",
+      "schema/upgrade-contract.schema.json": "88c8aeab53b897129948bb5551e0b19ea1cb241a9f6521267c4a1042d01b838d",
       "tests/test_mutation_fence.py": "e2bcea7b96bddd2509b79ff9c5eefd57001d1502949aba30cbbd50a9169e1cbb",
       "tests/test_rollback_control_store.py": "213b2ed4ee7ecff4c3d7c471bf02669c5dd05ae7e2d866e02af92e89369ae394",
       "tests/test_sqlite_mutation_barrier.py": "6949425557176bebb3341677d1fed90c0217055bd1d1dcb56bbdf91f60d31fb8",
