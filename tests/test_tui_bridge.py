@@ -71,6 +71,44 @@ class TuiBridgeTests(unittest.TestCase):
             session.await_response()
         with self.assertRaises(TuiBridgeError):
             session.attach("../host")
+        with self.assertRaises(TuiBridgeError):
+            session.attach("")
+        attached = session.attach("host").await_response()
+        with self.assertRaises(TuiBridgeError):
+            attached.await_response()
+        with self.assertRaises(TuiBridgeError):
+            attached.resolved(1)
+        with self.assertRaises(TuiBridgeError):
+            attached.detach().detach()
+        with self.assertRaises(TuiBridgeError):
+            attached.resolved(0)
+
+    def test_session_rejects_invalid_identity(self) -> None:
+        for values in (
+            {
+                "project_id": "",
+                "ar_id": "AR-0001",
+                "request_ref": "AWG-X",
+                "session_id": "AWTUI-S-1",
+            },
+            {"project_id": "p", "ar_id": "bad", "request_ref": "AWG-X", "session_id": "AWTUI-S-1"},
+            {
+                "project_id": "p",
+                "ar_id": "AR-0001",
+                "request_ref": "bad",
+                "session_id": "AWTUI-S-1",
+            },
+            {"project_id": "p", "ar_id": "AR-0001", "request_ref": "AWG-X", "session_id": "bad"},
+            {
+                "project_id": "p",
+                "ar_id": "AR-0001",
+                "request_ref": "AWG-X",
+                "session_id": "AWTUI-S-1",
+                "sequence": -1,
+            },
+        ):
+            with self.subTest(values=values), self.assertRaises(TuiBridgeError):
+                TuiSession(task_revision=1, **values)
 
     def test_escalation_plan_finishes_ready_work_first(self) -> None:
         plan = plan_tui_escalation(
