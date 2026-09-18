@@ -63,6 +63,8 @@ class FormalEvidenceTests(unittest.TestCase):
             self.assertTrue(relative)
             self.assertFalse(path.is_absolute())
             self.assertNotIn("..", path.parts)
+            expected_suffix = ".cfg" if relative == artifact["model"]["config"] else ".tla"
+            self.assertEqual(path.suffix, expected_suffix)
             self.assertTrue((ROOT / path).is_file())
             self.assertFalse((ROOT / path).is_symlink())
 
