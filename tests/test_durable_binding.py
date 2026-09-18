@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import sqlite3
 import tempfile
@@ -22,6 +23,42 @@ from tools.durable_binding import (
 
 
 class DurableBindingTests(unittest.TestCase):
+    def test_snapshot_read_binds_to_formal_model_action(self) -> None:
+        map_path = (
+            Path(__file__).parents[1] / "formal" / "upgrade" / "sqlite-snapshot-correspondence.json"
+        )
+        correspondence = json.loads(map_path.read_text(encoding="utf-8"))
+        action = next(
+            item for item in correspondence["transitions"] if item["name"] == "snapshot-read"
+        )
+        self.assertEqual("no-op", action["model"]["action"])
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            authority = root / "authority.sqlite"
+            with sqlite3.connect(authority) as connection:
+                connection.execute("CREATE TABLE records (id INTEGER PRIMARY KEY)")
+            authority.chmod(0o600)
+            control = root / "control.sqlite"
+            lock = root / "control.lock"
+            control.touch(mode=0o600)
+            lock.touch(mode=0o600)
+            journal = root / "journal.json"
+            journal.write_bytes(b'{"status":"running"}\n')
+            binding = FilesystemAuthorityBinding.bind(authority, "sqlite")
+
+            class Store:
+                authority_path = authority
+                control_store_path = control
+                control_lock_path = lock
+
+                @staticmethod
+                def operation_lock() -> _Lock:
+                    return _Lock()
+
+            snapshot = SQLiteCompatibilitySession(binding, Store(), journal).snapshot()
+            self.assertEqual(b'{"status":"running"}\n', snapshot.journal_bytes)
+            self.assertEqual("running", action["model"]["journal_before"])
+
     def test_git_and_sqlite_bindings_capture_distinct_authority_kinds(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
