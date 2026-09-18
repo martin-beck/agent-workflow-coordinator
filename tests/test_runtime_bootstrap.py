@@ -1148,6 +1148,26 @@ class RuntimeBootstrapTests(unittest.TestCase):
             with patch("tools.runtime_bootstrap.os.read", side_effect=short_read):
                 self.assertTrue(verify_runtime_manifest(runtime, digest))
 
+    def test_manifest_verifier_rejects_replaced_file_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            runtime = Path(directory)
+            manifest = runtime / "runtime-manifest.json"
+            manifest.write_text('{"release":"v1.2.3"}\n')
+            manifest.chmod(0o600)
+            digest = sha256(manifest.read_bytes()).hexdigest()
+            original = manifest.stat()
+            replacement = runtime / "replacement.json"
+            replacement.write_bytes(manifest.read_bytes())
+            replacement.chmod(0o600)
+            manifest.unlink()
+            replacement.rename(manifest)
+            with self.assertRaisesRegex(AuthorityError, "identity changed"):
+                verify_runtime_manifest(
+                    runtime,
+                    digest,
+                    expected_file_identity=(original.st_dev, original.st_ino),
+                )
+
     def test_rejects_symlinked_release_root_ancestor(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

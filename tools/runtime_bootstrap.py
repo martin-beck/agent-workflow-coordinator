@@ -251,7 +251,11 @@ class ResolvedRuntime:
         )
         if manifest["release"] != self.identity.release or identity != self.identity.identity:
             raise AuthorityError("resolved runtime manifest identity changed")
-        verify_runtime_manifest(self.path, self.identity.digest)
+        verify_runtime_manifest(
+            self.path,
+            self.identity.digest,
+            expected_file_identity=self._manifest_file_identity,
+        )
 
     def revalidate_selector(self) -> None:
         """Reject selector replacement after resolution and before admission."""
@@ -429,7 +433,20 @@ def read_runtime_manifest(runtime_root: Path) -> dict[str, str]:
     return result
 
 
-def verify_runtime_manifest(runtime_root: Path, expected_digest: str) -> bool:
+def _require_expected_manifest_identity(
+    value: os.stat_result, expected: tuple[int, int] | None
+) -> None:
+    """Bind a verifier open to the identity captured at admission."""
+    if expected is not None and (value.st_dev, value.st_ino) != expected:
+        raise AuthorityError("runtime manifest identity changed")
+
+
+def verify_runtime_manifest(
+    runtime_root: Path,
+    expected_digest: str,
+    *,
+    expected_file_identity: tuple[int, int] | None = None,
+) -> bool:
     """Verify the owner-only manifest digest for one staged runtime."""
     if not isinstance(expected_digest, str) or _DIGEST.fullmatch(expected_digest) is None:
         raise AuthorityError("runtime manifest digest is invalid")
@@ -444,6 +461,7 @@ def verify_runtime_manifest(runtime_root: Path, expected_digest: str) -> bool:
             or stat.S_IMODE(value.st_mode) != 0o600
         ):
             raise AuthorityError("runtime manifest is unsafe")
+        _require_expected_manifest_identity(value, expected_file_identity)
         descriptor = os.open(manifest, os.O_RDONLY | os.O_NOFOLLOW)
         try:
             opened = os.fstat(descriptor)
@@ -544,7 +562,9 @@ def resolve_selected_runtime(
     ):
         raise AuthorityError("runtime authenticity evidence is not bound to selected release")
     _require_manifest_unchanged(release_path, manifest, manifest_file_identity)
-    verify_runtime_manifest(release_path, verified.digest)
+    verify_runtime_manifest(
+        release_path, verified.digest, expected_file_identity=manifest_file_identity
+    )
     _require_selector_unchanged(selector, selector_identity, selected)
     return release_path
 
@@ -606,7 +626,9 @@ def resolve_selected_runtime_bound(  # noqa: C901
         ):
             raise AuthorityError("runtime authenticity evidence is not bound to selected release")
         _require_manifest_unchanged(release_path, manifest, manifest_file_identity)
-        verify_runtime_manifest(release_path, verified.digest)
+        verify_runtime_manifest(
+            release_path, verified.digest, expected_file_identity=manifest_file_identity
+        )
         result = ResolvedRuntime(
             release_path,
             descriptor,
