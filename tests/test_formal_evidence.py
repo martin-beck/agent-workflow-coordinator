@@ -53,6 +53,17 @@ def configured_bounds(configs: list[Path]) -> dict[str, int]:
 
 
 class FormalEvidenceTests(unittest.TestCase):
+    def test_sqlite_correspondence_module_path_is_safe(self) -> None:
+        artifact = json.loads(
+            (ROOT / "formal" / "upgrade" / "sqlite-snapshot-correspondence.json").read_text()
+        )
+        module = artifact["implementation"]["module"]
+        self.assertIsInstance(module, str)
+        self.assertTrue(module)
+        module_path = Path(module)
+        self.assertFalse(module_path.is_absolute())
+        self.assertNotIn("..", module_path.parts)
+
     def test_sqlite_transition_model_mappings_have_actions(self) -> None:
         artifact = json.loads(
             (ROOT / "formal" / "upgrade" / "sqlite-snapshot-correspondence.json").read_text()
