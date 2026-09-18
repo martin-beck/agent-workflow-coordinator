@@ -137,6 +137,7 @@ class ResolvedRuntime:
     selector: Path
     _selector_file_identity: tuple[tuple[int, int], tuple[int, int]]
     _selector_value: dict[str, object]
+    _manifest_file_identity: tuple[int, int]
 
     def revalidate(self) -> None:
         """Fail closed if the retained directory or its pathname was replaced."""
@@ -228,6 +229,17 @@ class ResolvedRuntime:
             or any(character not in "0123456789abcdef" for character in self.identity.digest)
         ):
             raise AuthorityError("resolved runtime digest is unavailable")
+        if (
+            not isinstance(self._manifest_file_identity, tuple)
+            or len(self._manifest_file_identity) != 2
+            or any(
+                not isinstance(value, int) or isinstance(value, bool)
+                for value in self._manifest_file_identity
+            )
+        ):
+            raise AuthorityError("resolved runtime manifest identity is unavailable")
+        if _manifest_file_identity(self.path) != self._manifest_file_identity:
+            raise AuthorityError("resolved runtime manifest identity changed")
         manifest = read_runtime_manifest(self.path)
         identity = ExpectedRuntimeIdentity(
             manifest["source_commit"],
@@ -603,6 +615,7 @@ def resolve_selected_runtime_bound(  # noqa: C901
             selector,
             selector_identity,
             dict(selected),
+            manifest_file_identity,
         )
         result.revalidate()
         _require_selector_unchanged(selector, selector_identity, selected)
