@@ -124,6 +124,13 @@ class UpgradeCommandTests(unittest.TestCase):
         self.path.write_bytes(b"x" * (MAX_CONTRACT_BYTES + 1))
         with self.assertRaisesRegex(UpgradeCommandError, "size limit"):
             execute_upgrade_command("check", self.path, "sqlite")
+
+    def test_contract_hardlink_alias_is_rejected_before_dispatch(self) -> None:
+        target = self.root / "contract-target.json"
+        target.write_text(json.dumps(contract()), encoding="utf-8")
+        self.path.hardlink_to(target)
+        with self.assertRaisesRegex(UpgradeCommandError, "single-link regular file"):
+            execute_upgrade_command("check", self.path, "sqlite")
         self.path.unlink()
         target = self.root / "target.json"
         target.write_text("{}", encoding="utf-8")
