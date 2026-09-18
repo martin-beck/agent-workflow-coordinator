@@ -1048,6 +1048,11 @@ class SQLiteRollbackControlStore:
             int, candidate["state_revision"]
         ) <= cast(int, previous["state_revision"]):
             raise ControlStoreError("ambiguous reconciliation requires a newer project fence")
+        if (
+            candidate["durable_barrier_id"] == previous["durable_barrier_id"]
+            or candidate["fencing_token"] == previous["fencing_token"]
+        ):
+            raise ControlStoreError("ambiguous reconciliation requires a distinct project fence")
         return self.cas(0, candidate)
 
     def _cas_connection(  # noqa: C901

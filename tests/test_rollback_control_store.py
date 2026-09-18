@@ -2589,6 +2589,7 @@ class RollbackControlStoreTests(unittest.TestCase):
                 **RECORD,
                 "operation_id": "op-2",
                 "state_revision": 2,
+                "durable_barrier_id": "barrier-2",
                 "fencing_token": "fence-2",
             }
             replacement["barrier_identity_digest"] = canonical_barrier_digest(replacement)
@@ -3019,6 +3020,15 @@ class RollbackControlStoreTests(unittest.TestCase):
             reopened = SQLiteRollbackControlStore(root / "control.sqlite", PROJECT)
             with self.assertRaisesRegex(ControlStoreError, "newer project fence"):
                 reopened.reconcile_ambiguous("op-1", old_replacement)
+            reused_token = {
+                **old_replacement,
+                "state_revision": 3,
+                "durable_barrier_id": "barrier-new",
+            }
+            reused_token["barrier_identity_digest"] = canonical_barrier_digest(reused_token)
+            reused_token["envelope_digest"] = canonical_envelope_digest(reused_token)
+            with self.assertRaisesRegex(ControlStoreError, "distinct project fence"):
+                reopened.reconcile_ambiguous("op-1", reused_token)
             unchanged = reopened.snapshot("op-1")
             self.assertEqual(("ambiguous", 2), (unchanged["status"], unchanged["revision"]))
 
