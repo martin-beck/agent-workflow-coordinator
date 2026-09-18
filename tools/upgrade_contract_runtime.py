@@ -44,10 +44,10 @@ _RELEASE_FIELDS = {
     "source_commit",
     "tag_ref",
     "tag_object",
-    "signature_sha256",
     "trust_policy_sha256",
     "vendor_manifest_sha256",
 }
+_OPTIONAL_RELEASE_FIELDS = {"signature_sha256"}
 _OPERATION_FIELDS = {
     "operation_id",
     "opcode",
@@ -107,14 +107,21 @@ def _unique_objects(value: list[object], label: str) -> None:
 
 
 def _release(value: object, label: str) -> dict[str, Any]:
-    release = _mapping(value, _RELEASE_FIELDS, label)
+    if not isinstance(value, dict) or set(value) not in (
+        _RELEASE_FIELDS,
+        _RELEASE_FIELDS | _OPTIONAL_RELEASE_FIELDS,
+    ):
+        raise RuntimeContractError(f"{label} fields are invalid")
+    release = value
     version = _matches(release["version"], _VERSION, f"{label} version")
     _matches(release["source_commit"], _COMMIT, f"{label} source commit")
     _matches(release["tag_object"], _COMMIT, f"{label} tag object")
     if release["tag_ref"] != f"refs/tags/{version}":
         raise RuntimeContractError(f"{label} tag reference is invalid")
-    for field in ("signature_sha256", "trust_policy_sha256", "vendor_manifest_sha256"):
+    for field in ("trust_policy_sha256", "vendor_manifest_sha256"):
         _matches(release[field], _DIGEST, f"{label} {field}")
+    if "signature_sha256" in release:
+        _matches(release["signature_sha256"], _DIGEST, f"{label} signature digest")
     return release
 
 

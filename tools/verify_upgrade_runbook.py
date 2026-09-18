@@ -38,7 +38,7 @@ def _private_values(document: dict[str, Any]) -> set[str]:
         )
     for release in (document["from"], document["to"]):
         values.update(
-            str(release[field])
+            str(release.get(field, ""))
             for field in (
                 "source_commit",
                 "tag_object",
