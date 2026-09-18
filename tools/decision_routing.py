@@ -10,8 +10,8 @@ for Codex, OpenCode, and other hosts can share the same gate.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Iterable
 
 
 class DecisionRoutingError(ValueError):
@@ -32,7 +32,7 @@ class DecisionAssessment:
     project_direction: bool = False
 
     @property
-    def reason_codes(self) -> tuple[str, ...]:
+    def reason_codes(self) -> tuple[str, ...]:  # noqa: C901
         reasons: list[str] = []
         if self.user_requested:
             reasons.append("user-request")
@@ -106,7 +106,9 @@ def require_tui_route(
         raise DecisionRoutingError("trigger and TUI request references must match")
 
 
-def require_all_tui_routes(assessments: Iterable[tuple[DecisionAssessment, dict[str, object] | None, str | None]]) -> None:
+def require_all_tui_routes(
+    assessments: Iterable[tuple[DecisionAssessment, dict[str, object] | None, str | None]],
+) -> None:
     """Validate a batch without allowing one item to bypass the bridge."""
 
     for assessment, trigger, request_ref in assessments:
