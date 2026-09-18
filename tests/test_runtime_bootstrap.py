@@ -975,6 +975,16 @@ class RuntimeBootstrapTests(unittest.TestCase):
             with self.assertRaisesRegex(AuthorityError, "duplicate"):
                 read_runtime_manifest(runtime)
 
+    def test_manifest_reader_rejects_noncanonical_json_bytes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            runtime = Path(directory)
+            self._write_manifest(runtime)
+            manifest = runtime / "runtime-manifest.json"
+            manifest.write_text(json.dumps(json.loads(manifest.read_text()), indent=2))
+            manifest.chmod(0o600)
+            with self.assertRaisesRegex(AuthorityError, "not canonical"):
+                read_runtime_manifest(runtime)
+
     def test_manifest_reader_rejects_invalid_json_and_schema(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             runtime = Path(directory)
