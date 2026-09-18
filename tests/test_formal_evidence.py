@@ -89,6 +89,7 @@ class FormalEvidenceTests(unittest.TestCase):
         self.assertIsNotNone(declaration)
         assert declaration is not None
         declared = {name.strip() for name in declaration.group(1).split(",")}
+        self.assertEqual(len(declaration.group(1).split(",")), len(declared))
         self.assertTrue(set(constants) <= declared)
 
     def test_upgrade_config_specification_exists_in_model(self) -> None:
