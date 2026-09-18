@@ -80,3 +80,46 @@ class TuiBridgeTests(unittest.TestCase):
         req["ar"]["task_revision"] = 9
         with self.assertRaises(TuiBridgeError):
             apply_tui_response(ar=ar, request=req, response={"kind": "coordinator-tui-response"})
+
+    def test_request_rejects_missing_or_stale_guidance_trigger(self) -> None:
+        ar, _req = _request()
+        for guidance in (
+            {},
+            {"human_interaction": {"interaction_required": False}},
+            {
+                "human_interaction": {
+                    "interaction_required": True,
+                    "task_ref": "AR-9999",
+                    "task_revision": 2,
+                }
+            },
+        ):
+            with self.subTest(guidance=guidance), self.assertRaises(TuiBridgeError):
+                build_tui_request(project_id="p", ar=ar, guidance_request=guidance, session_id="s")
+
+    def test_response_rejects_each_binding_mismatch(self) -> None:
+        ar, req = _request()
+        base = {
+            "kind": "coordinator-tui-response",
+            "project_id": "p",
+            "ar_id": "AR-0001",
+            "task_revision": 2,
+            "decision_request_ref": "AWG-X",
+            "event": {"session_id": "s"},
+            "ar_update": {},
+        }
+        cases = (
+            ("kind", "wrong", "Coordinator request"),
+            ("project_id", "other", "Coordinator request"),
+            ("ar_id", "AR-0002", "AR revision"),
+            ("task_revision", 3, "AR revision"),
+            ("decision_request_ref", "AWG-Y", "request reference"),
+            ("event", {"session_id": "other"}, "session"),
+            ("event", {}, "session"),
+            ("ar_update", None, "persistence update"),
+        )
+        for key, value, message in cases:
+            with self.subTest(key=key, value=value):
+                response = {**base, key: value}
+                with self.assertRaisesRegex(TuiBridgeError, message):
+                    apply_tui_response(ar=ar, request=req, response=response)
