@@ -394,6 +394,40 @@ class UpgradeEngineTests(unittest.TestCase):
                 engine.rollback(fail)
             self.assertEqual(engine._load()["status"], "safe-mode")
 
+    def test_apply_abort_after_phase_start_preserves_recovery_marker(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            journal = Path(directory) / "journal.json"
+
+            class AbortAdapter(FakeAdapter):
+                def execute(self, phase: str, context: object) -> dict[str, object]:
+                    if phase == "discover":
+                        raise SystemExit("process aborted during discover")
+                    return super().execute(phase, context)
+
+            operation_id = "op-apply-abort"
+            engine = UpgradeEngine(
+                operation_id,
+                journal,
+                make_context(operation_id),
+                backend_adapter=AbortAdapter(),
+            )
+            engine.plan()
+            handlers: dict[str, Handler] = {
+                phase: (lambda _operation, _state: {}) for phase in PHASES
+            }
+
+            with self.assertRaises(SystemExit):
+                engine.apply(handlers)
+
+            persisted = json.loads(journal.read_text(encoding="utf-8"))
+            self.assertEqual("running", persisted["status"])
+            self.assertEqual("discover", persisted["phase"])
+            self.assertEqual("started", persisted["records"][-1]["outcome"])
+            self.assertEqual(
+                operation_id,
+                persisted["records"][-1]["operation_id"],
+            )
+
     def test_commit_validate_and_reopen_require_safety_evidence(self) -> None:  # noqa: C901
         with tempfile.TemporaryDirectory() as directory:
             engine = UpgradeEngine(
