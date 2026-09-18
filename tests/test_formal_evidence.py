@@ -100,15 +100,12 @@ class FormalEvidenceTests(unittest.TestCase):
         invariants = re.findall(r"^INVARIANT\s+(\w+)$", config, re.MULTILINE)
         self.assertTrue(invariants)
         self.assertEqual(len(invariants), len(set(invariants)))
+        spec_start = model.index("Spec ==")
         for invariant in invariants:
-            self.assertIsNotNone(
-                re.search(
-                    rf"^THEOREM\s+Spec\s+=>\s+\[\]{invariant}$",
-                    model,
-                    re.MULTILINE,
-                ),
-                invariant,
-            )
+            theorem = re.search(rf"^THEOREM\s+Spec\s+=>\s+\[\]{invariant}$", model, re.MULTILINE)
+            self.assertIsNotNone(theorem, invariant)
+            assert theorem is not None
+            self.assertGreater(theorem.start(), spec_start, invariant)
 
     def test_upgrade_spec_composes_init_and_next(self) -> None:
         model = (ROOT / "formal" / "upgrade" / "UpgradeRecovery.tla").read_text()
