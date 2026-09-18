@@ -340,6 +340,13 @@ def _require_canonical_manifest(data: bytearray, parsed: object) -> None:
         raise AuthorityError("runtime manifest is not canonical")
 
 
+def _require_manifest_unchanged(runtime_root: Path, initial: dict[str, str]) -> None:
+    """Reject identity changes made while authenticity evidence was produced."""
+    current = read_runtime_manifest(runtime_root)
+    if current != initial:
+        raise AuthorityError("runtime manifest identity does not match selected release")
+
+
 def read_runtime_manifest(runtime_root: Path) -> dict[str, str]:
     """Read and strictly validate a runtime manifest through one descriptor."""
     manifest = runtime_root / "runtime-manifest.json"
@@ -500,6 +507,7 @@ def resolve_selected_runtime(
         or _DIGEST.fullmatch(verified.digest) is None
     ):
         raise AuthorityError("runtime authenticity evidence is not bound to selected release")
+    _require_manifest_unchanged(release_path, manifest)
     verify_runtime_manifest(release_path, verified.digest)
     _require_selector_unchanged(selector, selector_identity, selected)
     return release_path
@@ -560,6 +568,7 @@ def resolve_selected_runtime_bound(  # noqa: C901
             or _DIGEST.fullmatch(verified.digest) is None
         ):
             raise AuthorityError("runtime authenticity evidence is not bound to selected release")
+        _require_manifest_unchanged(release_path, manifest)
         verify_runtime_manifest(release_path, verified.digest)
         result = ResolvedRuntime(
             release_path,
