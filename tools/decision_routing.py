@@ -10,8 +10,8 @@ for Codex, OpenCode, and other hosts can share the same gate.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Iterable
 
 
 class DecisionRoutingError(ValueError):
@@ -33,26 +33,18 @@ class DecisionAssessment:
 
     @property
     def reason_codes(self) -> tuple[str, ...]:
-        reasons: list[str] = []
-        if self.user_requested:
-            reasons.append("user-request")
-        if self.proposal_review:
-            reasons.append("proposal-review")
-        if self.uncertainty:
-            reasons.append("agent-uncertainty")
-        if self.policy_required:
-            reasons.append("policy-required")
-        if self.decision_class == "design":
-            reasons.append("design-choice")
-        if self.decision_class == "conceptual":
-            reasons.append("conceptual-choice")
-        if self.impact in {"high", "critical"}:
-            reasons.append("high-impact")
-        if self.reversibility in {"difficult", "irreversible"}:
-            reasons.append("irreversible")
-        if self.project_direction:
-            reasons.append("project-direction")
-        return tuple(dict.fromkeys(reasons))
+        candidates = (
+            ("user-request", self.user_requested),
+            ("proposal-review", self.proposal_review),
+            ("agent-uncertainty", self.uncertainty),
+            ("policy-required", self.policy_required),
+            ("design-choice", self.decision_class == "design"),
+            ("conceptual-choice", self.decision_class == "conceptual"),
+            ("high-impact", self.impact in {"high", "critical"}),
+            ("irreversible", self.reversibility in {"difficult", "irreversible"}),
+            ("project-direction", self.project_direction),
+        )
+        return tuple(code for code, enabled in candidates if enabled)
 
     @property
     def requires_tui(self) -> bool:
@@ -106,7 +98,9 @@ def require_tui_route(
         raise DecisionRoutingError("trigger and TUI request references must match")
 
 
-def require_all_tui_routes(assessments: Iterable[tuple[DecisionAssessment, dict[str, object] | None, str | None]]) -> None:
+def require_all_tui_routes(
+    assessments: Iterable[tuple[DecisionAssessment, dict[str, object] | None, str | None]],
+) -> None:
     """Validate a batch without allowing one item to bypass the bridge."""
 
     for assessment, trigger, request_ref in assessments:
