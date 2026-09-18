@@ -52,6 +52,21 @@ def configured_bounds(configs: list[Path]) -> dict[str, int]:
 
 
 class FormalEvidenceTests(unittest.TestCase):
+    def test_sqlite_correspondence_names_and_evidence_are_unique(self) -> None:
+        artifact = json.loads(
+            (ROOT / "formal" / "upgrade" / "sqlite-snapshot-correspondence.json").read_text()
+        )
+        transitions = artifact["transitions"]
+        names = [transition["name"] for transition in transitions]
+        references = artifact["evidence"]["tests"]
+        self.assertEqual(len(names), len(set(names)))
+        self.assertEqual(len(references), len(set(references)))
+        self.assertEqual(
+            {"snapshot-read", "identity-reread", "read-or-close-uncertainty", "ambiguous-fence"},
+            set(names),
+        )
+        self.assertTrue(all("::" in reference for reference in references))
+
     def test_sqlite_correspondence_artifact_schema_is_explicit(self) -> None:
         artifact = json.loads(
             (ROOT / "formal" / "upgrade" / "sqlite-snapshot-correspondence.json").read_text()
