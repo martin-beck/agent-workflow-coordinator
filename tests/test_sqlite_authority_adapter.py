@@ -1095,18 +1095,36 @@ class SQLiteAuthorityAdapterTests(unittest.TestCase):
         }
         executor = self.adapter.bind_lifecycle_executor(self.session, journal)
         before_journal = journal.read_bytes()
+        original_close = os.close
+        original_mkstemp = tempfile.mkstemp
+        allocated: list[int] = []
+        closed: list[int] = []
+
+        def record_mkstemp(*args: Any, **kwargs: Any) -> tuple[int, str]:
+            result = original_mkstemp(*args, **kwargs)
+            allocated.append(result[0])
+            return result
+
+        def record_close(descriptor: int) -> None:
+            closed.append(descriptor)
+            original_close(descriptor)
+
         with (
             patch.object(self.adapter, "backup_bound", return_value={"backup_verified": True}),
             patch(
                 "tools.sqlite_authority_adapter.os.fdopen",
                 side_effect=OSError("injected temporary journal fdopen failure"),
             ),
+            patch("tools.sqlite_authority_adapter.tempfile.mkstemp", side_effect=record_mkstemp),
+            patch("tools.sqlite_authority_adapter.os.close", side_effect=record_close),
             self.assertRaisesRegex(SQLiteAuthorityError, "publication failed"),
         ):
             executor.execute_generated_operation(
                 operation, self.root / "generated-fdopen-failure.sqlite", {}
             )
         self.assertEqual(before_journal, journal.read_bytes())
+        self.assertEqual(1, len(allocated))
+        self.assertIn(allocated[0], closed)
         self.assertFalse(list(journal.parent.glob(".upgrade-journal-*.json")))
         self.assertFalse(self.session.operation_owned_by_current_thread)
 

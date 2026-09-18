@@ -11,7 +11,7 @@ import sqlite3
 import stat
 import tempfile
 from collections.abc import Callable, Iterator, Mapping
-from contextlib import contextmanager, nullcontext
+from contextlib import contextmanager, nullcontext, suppress
 from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path
@@ -598,7 +598,13 @@ class SQLiteLifecycleExecutor:
             )
             temporary_path = Path(temporary)
             try:
-                with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+                try:
+                    stream = os.fdopen(descriptor, "w", encoding="utf-8")
+                except OSError:
+                    with suppress(OSError):
+                        os.close(descriptor)
+                    raise
+                with stream:
                     stream.write(json.dumps(document, sort_keys=True) + "\n")
                     stream.flush()
                     os.fsync(stream.fileno())
