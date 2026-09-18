@@ -122,6 +122,7 @@ class FormalEvidenceTests(unittest.TestCase):
         artifact = json.loads(
             (ROOT / "formal" / "upgrade" / "sqlite-snapshot-correspondence.json").read_text()
         )
+        self.assertIsInstance(artifact["model"], dict)
         for relative in (artifact["model"]["path"], artifact["model"]["config"]):
             self.assertIsInstance(relative, str)
             path = Path(relative)
