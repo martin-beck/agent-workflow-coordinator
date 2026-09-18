@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.3.17 - 2026-09-18
+
+- Publish the TUI event-journal reader for durable, revision-aware inspection of
+  Coordinator session handoffs without enabling mutation.
+
 ## v0.3.16 - 2026-09-18
 
 - Publish Markdown documents through the Coordinator/TUI handoff while preserving
