@@ -133,6 +133,60 @@ class DurableBindingTests(unittest.TestCase):
             with self.assertRaisesRegex(DurableBindingError, "ambiguous"):
                 session.assert_snapshot_current(expected)
 
+    def test_sqlite_snapshot_lock_close_failure_is_ambiguous(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            authority = root / "authority.sqlite"
+            authority.touch(mode=0o600)
+            control = root / "control.sqlite"
+            lock = root / "control.lock"
+            journal = root / "journal.json"
+            control.touch(mode=0o600)
+            lock.touch(mode=0o600)
+            journal.write_bytes(b'{"status":"running"}\n')
+            binding = FilesystemAuthorityBinding.bind(authority, "sqlite")
+
+            class BrokenStore:
+                authority_path = authority
+                control_store_path = control
+                control_lock_path = lock
+
+                @staticmethod
+                def operation_lock() -> _Lock:
+                    raise OSError("simulated close uncertainty")
+
+            session = SQLiteCompatibilitySession(binding, BrokenStore(), journal)
+            with self.assertRaisesRegex(DurableBindingError, "ambiguous"):
+                session.snapshot()
+
+    def test_sqlite_snapshot_rejects_journal_content_drift(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            authority = root / "authority.sqlite"
+            authority.touch(mode=0o600)
+            control = root / "control.sqlite"
+            lock = root / "control.lock"
+            journal = root / "journal.json"
+            control.touch(mode=0o600)
+            lock.touch(mode=0o600)
+            journal.write_bytes(b'{"status":"running"}\n')
+            binding = FilesystemAuthorityBinding.bind(authority, "sqlite")
+
+            class Store:
+                authority_path = authority
+                control_store_path = control
+                control_lock_path = lock
+
+                @staticmethod
+                def operation_lock() -> _Lock:
+                    return _Lock()
+
+            session = SQLiteCompatibilitySession(binding, Store(), journal)
+            expected = session.snapshot()
+            journal.write_bytes(b'{"status":"ambiguous"}\n')
+            with self.assertRaisesRegex(DurableBindingError, "ambiguous"):
+                session.assert_snapshot_current(expected)
+
 
 class _Lock(AbstractContextManager[None]):
     def __enter__(self) -> None:
