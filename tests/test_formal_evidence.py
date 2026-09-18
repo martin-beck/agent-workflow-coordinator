@@ -53,6 +53,21 @@ def configured_bounds(configs: list[Path]) -> dict[str, int]:
 
 
 class FormalEvidenceTests(unittest.TestCase):
+    def test_upgrade_config_invariants_are_theorems(self) -> None:
+        config = (ROOT / "formal" / "upgrade" / "UpgradeRecovery.cfg").read_text()
+        model = (ROOT / "formal" / "upgrade" / "UpgradeRecovery.tla").read_text()
+        invariants = re.findall(r"^INVARIANT\s+(\w+)$", config, re.MULTILINE)
+        self.assertTrue(invariants)
+        for invariant in invariants:
+            self.assertIsNotNone(
+                re.search(
+                    rf"^THEOREM\s+Spec\s+=>\s+\[\]{invariant}$",
+                    model,
+                    re.MULTILINE,
+                ),
+                invariant,
+            )
+
     def test_upgrade_spec_composes_init_and_next(self) -> None:
         model = (ROOT / "formal" / "upgrade" / "UpgradeRecovery.tla").read_text()
         specification = re.search(
