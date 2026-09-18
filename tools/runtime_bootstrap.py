@@ -125,6 +125,9 @@ class ResolvedRuntime:
     descriptor: int
     identity: VerifiedManifest
     _directory_identity: tuple[int, int, int, int, int]
+    selector: Path
+    _selector_file_identity: tuple[tuple[int, int], tuple[int, int]]
+    _selector_value: dict[str, object]
 
     def revalidate(self) -> None:
         """Fail closed if the retained directory or its pathname was replaced."""
@@ -228,9 +231,16 @@ class ResolvedRuntime:
             raise AuthorityError("resolved runtime manifest identity changed")
         verify_runtime_manifest(self.path, self.identity.digest)
 
+    def revalidate_selector(self) -> None:
+        """Reject selector replacement after resolution and before admission."""
+        _require_selector_unchanged(
+            self.selector, self._selector_file_identity, self._selector_value
+        )
+
     def revalidate_for_dispatch(self) -> None:
         """Run the complete retained identity gate before future dispatch."""
         self.revalidate()
+        self.revalidate_selector()
         self.revalidate_manifest()
 
     def admit_for_dispatch(self) -> DispatchAdmission:
@@ -519,7 +529,15 @@ def resolve_selected_runtime_bound(  # noqa: C901
         ):
             raise AuthorityError("runtime authenticity evidence is not bound to selected release")
         verify_runtime_manifest(release_path, verified.digest)
-        result = ResolvedRuntime(release_path, descriptor, verified, directory_identity)
+        result = ResolvedRuntime(
+            release_path,
+            descriptor,
+            verified,
+            directory_identity,
+            selector,
+            selector_identity,
+            dict(selected),
+        )
         result.revalidate()
         _require_selector_unchanged(selector, selector_identity, selected)
         return result

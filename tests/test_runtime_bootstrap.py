@@ -199,6 +199,23 @@ class RuntimeBootstrapTests(unittest.TestCase):
                     admission.validate_identity(wrong)
                 self.assertEqual(-1, resolved.descriptor)
 
+    def test_dispatch_admission_rejects_selector_replacement_after_resolution(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            releases = root / "releases"
+            releases.mkdir(mode=0o700)
+            selected = releases / "v1.2.3"
+            selected.mkdir(mode=0o700)
+            self._write_manifest(selected)
+            selector = root / "runtime-selector.json"
+            commit_runtime_selector(selector, "v1.2.3", "v1.2.2")
+            with resolve_selected_runtime_bound(
+                selector, releases, self._identity_for_release(), self._verifier
+            ) as resolved:
+                commit_runtime_selector(selector, "v1.2.3", "v1.2.4")
+                with self.assertRaisesRegex(AuthorityError, "selector changed"):
+                    resolved.admit_for_dispatch()
+
     def test_dispatch_admission_rejects_forged_constructor_pair(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
