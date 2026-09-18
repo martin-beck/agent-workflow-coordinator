@@ -147,6 +147,18 @@ def verify_transition(
     }
 
 
+def _validate_transition_file(candidate: Path) -> None:
+    _require_owner_controlled(candidate, label="transition path")
+    try:
+        status = candidate.stat()
+        if status.st_nlink != 1:
+            raise ReleaseIdentityError("transition path must not be hard-linked")
+        if status.st_size > _MAX_TRANSITION_BYTES:
+            raise ReleaseIdentityError("transition path exceeds size limit")
+    except OSError as error:
+        raise ReleaseIdentityError("transition path metadata is unavailable") from error
+
+
 def _transition_path(value: Path, workspace: Path) -> Path:
     """Resolve a transition only from a non-aliased file under workspace."""
     root = workspace.resolve()
@@ -174,12 +186,7 @@ def _transition_path(value: Path, workspace: Path) -> Path:
         raise ReleaseIdentityError("transition path escapes workspace") from error
     if original.is_symlink() or not candidate.is_file():
         raise ReleaseIdentityError("transition path must be a regular workspace file")
-    _require_owner_controlled(candidate, label="transition path")
-    try:
-        if candidate.stat().st_size > _MAX_TRANSITION_BYTES:
-            raise ReleaseIdentityError("transition path exceeds size limit")
-    except OSError as error:
-        raise ReleaseIdentityError("transition path metadata is unavailable") from error
+    _validate_transition_file(candidate)
     return candidate
 
 

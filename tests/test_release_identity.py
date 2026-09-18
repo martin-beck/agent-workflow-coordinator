@@ -256,6 +256,10 @@ class ReleaseIdentityTests(unittest.TestCase):
             (root / "alias.json").symlink_to(outside)
             with self.assertRaisesRegex(ReleaseIdentityError, "regular workspace file"):
                 _transition_path(Path("alias.json"), root)
+            outside.chmod(0o644)
+            (root / "hardlink.json").hardlink_to(outside)
+            with self.assertRaisesRegex(ReleaseIdentityError, "hard-linked"):
+                _transition_path(Path("hardlink.json"), root)
             (root / "linkdir").symlink_to(Path(directory))
             with self.assertRaisesRegex(ReleaseIdentityError, "regular workspace file"):
                 _transition_path(Path("linkdir/outside.json"), root)
