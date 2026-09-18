@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.22
+
+- Carry validated SSH/client capability metadata through UI request envelopes.
+
 ## 0.3.21
 
 - Make workflow-ui the mandatory human-decision channel and require GUI-first/TUI-fallback routing.
