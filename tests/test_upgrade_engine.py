@@ -1150,6 +1150,23 @@ class UpgradeEngineTests(unittest.TestCase):
             self.assertEqual("started", persisted["records"][-1]["outcome"])
             self.assertEqual(operation_id, persisted["records"][-1]["operation_id"])
 
+    def test_rollback_handler_abort_preserves_started_marker_after_restore(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            operation_id = "op-rollback-handler-abort"
+            journal, engine = self._prepare_failed_journal(directory, operation_id, FakeAdapter())
+
+            def abort(_step: str, _state: object) -> dict[str, object]:
+                raise SystemExit("process aborted in rollback handler")
+
+            with self.assertRaises(SystemExit):
+                engine.rollback(abort)
+
+            persisted = json.loads(journal.read_text(encoding="utf-8"))
+            self.assertEqual("failed", persisted["status"])
+            self.assertEqual("rollback", persisted["records"][-1]["phase"])
+            self.assertEqual("started", persisted["records"][-1]["outcome"])
+            self.assertEqual(operation_id, persisted["records"][-1]["operation_id"])
+
     def test_sigkill_after_durable_releasing_recovers_without_second_restore(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             operation_id = "op-sigkill"
