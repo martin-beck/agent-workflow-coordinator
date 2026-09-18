@@ -155,6 +155,7 @@ class SQLiteAuthorityBinding:
     __slots__ = ("_control", "_identity", "_parent_identity", "_path")
     _control: SQLiteBackendBinding
     _identity: tuple[int, int]
+    _parent_identity: tuple[int, int]
     _path: Path
 
     def __init__(
