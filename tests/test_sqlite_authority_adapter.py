@@ -578,6 +578,26 @@ class SQLiteAuthorityAdapterTests(unittest.TestCase):
         ):
             journal.write_text('{"status":"running","phase":"preflight","records":[]}\n')
 
+    def test_selector_visibility_scope_releases_lock_on_process_abort(self) -> None:
+        journal = self.root / "selector-abort-journal.json"
+        journal.write_text('{"status":"running","phase":"backup","records":[]}\n')
+        executor = self.adapter.bind_lifecycle_executor(self.session, journal)
+        selector_root = self.root / "selector-abort-runtime"
+        selector_root.mkdir(mode=0o700)
+        selector = selector_root / "runtime-selector.json"
+        selector.write_text("{}\n", encoding="utf-8")
+        selector.chmod(0o600)
+
+        with (
+            self.assertRaises(KeyboardInterrupt),
+            executor.selector_visibility_scope(
+                "runtime-selector.json", 1, "barrier", "fence", selector_root=selector_root
+            ),
+        ):
+            raise KeyboardInterrupt
+
+        self.assertFalse(self.session.operation_owned_by_current_thread)
+
     def test_selector_descriptor_digest_failures_are_fail_closed(self) -> None:
         root = self.root / "digest-runtime"
         root.mkdir(mode=0o700)
