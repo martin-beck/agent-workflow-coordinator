@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.21
+
+- Make workflow-ui the mandatory human-decision channel and require GUI-first/TUI-fallback routing.
+
 ## 0.3.20
 
 - Make `workflow-ui` the mandatory human-decision channel with GUI-first/TUI-fallback routing.
