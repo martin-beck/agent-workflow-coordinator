@@ -103,7 +103,7 @@
       "tests/test_upgrade_contract.py": "0630ea0c35ad100367a9df0d0682a90b2b0b120057768029fc82fe06a106989c",
       "tests/test_upgrade_identity.py": "0206aef1794ed73ffcdefb4f965f657514f11858d9beb0b2fa92f7dceaaaf905",
       "tools/generate_upgrade_contract.py": "aa9a2ed072df3937b7799b33559d03b1744d3b9049891180d1a4852531df3ada",
-      "tools/handoffctl.py": "022242711eda7e169e3695f9a9ea74ca3cac1e38bb2f5407dac740e30e978e95",
+      "tools/handoffctl.py": "34fd052e080b8836228586f7681d8aa313ce6eb5ba62a8bdf6fa46f740b73089",
       "tools/mutation_fence.py": "2d314f5a5cc46d0f625135b39ada2d1a464cd35c9d378728c141708df8c0c630",
       "tools/rollback_control_store.py": "c87dc9b00867de1406d67a226cc04a383d4c4df8116dc32643b9af178048434a",
       "tools/sqlite_storage.py": "96f4fcb45bb7ccc4936185dfc70192d27075232dca91029fe23295ef1e31e58b",

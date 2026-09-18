@@ -66,6 +66,19 @@ class DecisionBatchPolicyTests(unittest.TestCase):
         with self.assertRaisesRegex(DecisionBatchError, "unique"):
             plan_progress((decision("AR-0001"), decision("AR-0001")))
 
+    def test_snapshot_validation_is_fail_closed(self) -> None:
+        invalid = (
+            (("BAD", 1, "ready"), "ar_id"),
+            (("AR-0001", 0, "ready"), "task_revision"),
+            (("AR-0001", 1, "unknown"), "state"),
+            (("AR-0001", 1, "ready", "yes"), "boolean"),
+            (("AR-0001", 1, "ready", False, "../batch"), "public-safe"),
+            (("AR-0001", 1, "ready", False, None, "../request"), "public-safe"),
+        )
+        for args, message in invalid:
+            with self.subTest(message=message), self.assertRaisesRegex(DecisionBatchError, message):
+                ARDecision(*args)
+
 
 if __name__ == "__main__":
     unittest.main()
