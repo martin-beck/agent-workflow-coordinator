@@ -53,6 +53,16 @@ def configured_bounds(configs: list[Path]) -> dict[str, int]:
 
 
 class FormalEvidenceTests(unittest.TestCase):
+    def test_upgrade_next_declared_before_spec(self) -> None:
+        model = (ROOT / "formal" / "upgrade" / "UpgradeRecovery.tla").read_text()
+        next_match = re.search(r"^Next\s*==", model, re.MULTILINE)
+        spec_match = re.search(r"^Spec\s*==", model, re.MULTILINE)
+        self.assertIsNotNone(next_match)
+        self.assertIsNotNone(spec_match)
+        assert next_match is not None
+        assert spec_match is not None
+        self.assertLess(next_match.start(), spec_match.start())
+
     def test_upgrade_vars_declared_before_spec(self) -> None:
         model = (ROOT / "formal" / "upgrade" / "UpgradeRecovery.tla").read_text()
         vars_match = re.search(r"^vars\s*==", model, re.MULTILINE)
