@@ -10,6 +10,7 @@ import io
 import json
 import re
 import runpy
+import subprocess
 import sys
 import unittest
 from pathlib import Path
@@ -52,6 +53,21 @@ def configured_bounds(configs: list[Path]) -> dict[str, int]:
 
 
 class FormalEvidenceTests(unittest.TestCase):
+    def test_sqlite_correspondence_revision_binds_module_digest(self) -> None:
+        artifact = json.loads(
+            (ROOT / "formal" / "upgrade" / "sqlite-snapshot-correspondence.json").read_text()
+        )
+        revision = artifact["implementation"]["revision"]
+        module = artifact["implementation"]["module"]
+        recorded = subprocess.check_output(  # noqa: S603 - fixed Git provenance query
+            ["git", "show", f"{revision}:{module}"],  # noqa: S607 - fixed Git query
+            cwd=ROOT,
+        )
+        self.assertEqual(
+            artifact["implementation"]["module_sha256"],
+            hashlib.sha256(recorded).hexdigest(),
+        )
+
     def test_sqlite_correspondence_referenced_paths_exist(self) -> None:
         artifact = json.loads(
             (ROOT / "formal" / "upgrade" / "sqlite-snapshot-correspondence.json").read_text()
