@@ -148,6 +148,7 @@ class ResolvedRuntime:
             raise AuthorityError("resolved runtime is unavailable")
         if not self.path.is_absolute():
             raise AuthorityError("resolved runtime path is unavailable")
+        _require_no_symlink_ancestors(self.path.parent)
         directory_identity = self._directory_identity
         if (
             not isinstance(directory_identity, tuple)
@@ -292,6 +293,20 @@ def _selector_identity(selector: Path) -> tuple[tuple[int, int], tuple[int, int]
     return (parent.st_dev, parent.st_ino), (value.st_dev, value.st_ino)
 
 
+def _require_no_symlink_ancestors(
+    root: Path, *, error_message: str = "resolved runtime ancestor changed"
+) -> None:
+    """Reject symlinked path ancestors before using a retained runtime path."""
+    try:
+        component = Path(root.anchor)
+        for part in root.parts[1:]:
+            component /= part
+            if stat.S_ISLNK(component.lstat().st_mode):
+                raise AuthorityError(error_message)
+    except OSError as error:
+        raise AuthorityError("resolved runtime ancestor is unavailable") from error
+
+
 def _require_selector_unchanged(
     selector: Path,
     initial_identity: tuple[tuple[int, int], tuple[int, int]],
@@ -422,11 +437,7 @@ def verify_runtime_manifest(runtime_root: Path, expected_digest: str) -> bool:
 
 def _release_path(root: Path, release: str) -> Path:
     try:
-        component = Path(root.anchor)
-        for part in root.parts[1:]:
-            component /= part
-            if stat.S_ISLNK(component.lstat().st_mode):
-                raise AuthorityError("runtime release root contains a symlink")
+        _require_no_symlink_ancestors(root, error_message="runtime release root contains a symlink")
         root_stat = root.stat()
         release_path = root / release
         value = release_path.lstat()
