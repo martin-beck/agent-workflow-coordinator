@@ -32,27 +32,19 @@ class DecisionAssessment:
     project_direction: bool = False
 
     @property
-    def reason_codes(self) -> tuple[str, ...]:  # noqa: C901
-        reasons: list[str] = []
-        if self.user_requested:
-            reasons.append("user-request")
-        if self.proposal_review:
-            reasons.append("proposal-review")
-        if self.uncertainty:
-            reasons.append("agent-uncertainty")
-        if self.policy_required:
-            reasons.append("policy-required")
-        if self.decision_class == "design":
-            reasons.append("design-choice")
-        if self.decision_class == "conceptual":
-            reasons.append("conceptual-choice")
-        if self.impact in {"high", "critical"}:
-            reasons.append("high-impact")
-        if self.reversibility in {"difficult", "irreversible"}:
-            reasons.append("irreversible")
-        if self.project_direction:
-            reasons.append("project-direction")
-        return tuple(dict.fromkeys(reasons))
+    def reason_codes(self) -> tuple[str, ...]:
+        candidates = (
+            ("user-request", self.user_requested),
+            ("proposal-review", self.proposal_review),
+            ("agent-uncertainty", self.uncertainty),
+            ("policy-required", self.policy_required),
+            ("design-choice", self.decision_class == "design"),
+            ("conceptual-choice", self.decision_class == "conceptual"),
+            ("high-impact", self.impact in {"high", "critical"}),
+            ("irreversible", self.reversibility in {"difficult", "irreversible"}),
+            ("project-direction", self.project_direction),
+        )
+        return tuple(code for code, enabled in candidates if enabled)
 
     @property
     def requires_tui(self) -> bool:
