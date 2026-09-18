@@ -163,7 +163,7 @@ class DurableBindingTests(unittest.TestCase):
 
             session = SQLiteCompatibilitySession(binding, Store(), journal)
             with (
-                patch.object(Path, "read_bytes", side_effect=OSError("close/fsync uncertain")),
+                patch.object(os, "close", side_effect=OSError("close/fsync uncertain")),
                 self.assertRaisesRegex(DurableBindingError, "ambiguous"),
             ):
                 session.snapshot()

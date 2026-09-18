@@ -9,6 +9,7 @@ executable.
 
 from __future__ import annotations
 
+import os
 import stat
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
@@ -175,6 +176,26 @@ class SQLiteCompatibilitySession:
             raise DurableBindingError("ambiguous durable session state")
         return parent.st_dev, parent.st_ino, value.st_dev, value.st_ino
 
+    @staticmethod
+    def _read_journal(path: Path) -> bytes:
+        """Read the journal through one no-follow descriptor and close it explicitly."""
+        try:
+            descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        except OSError as error:
+            raise DurableBindingError("ambiguous durable session state") from error
+        try:
+            chunks: list[bytes] = []
+            while chunk := os.read(descriptor, 64 * 1024):
+                chunks.append(chunk)
+            return b"".join(chunks)
+        except OSError as error:
+            raise DurableBindingError("ambiguous durable session state") from error
+        finally:
+            try:
+                os.close(descriptor)
+            except OSError as error:
+                raise DurableBindingError("ambiguous durable session state") from error
+
     def snapshot(self) -> SQLiteDurableSnapshot:
         """Capture control, lock, journal, and authority state under the lock."""
         if self._ambiguous:
@@ -184,7 +205,7 @@ class SQLiteCompatibilitySession:
                 control = self._path_identity(self._session_store.control_store_path)
                 lock = self._path_identity(self._session_store.control_lock_path)
                 journal = self._path_identity(self._journal)
-                journal_bytes = self._journal.read_bytes()
+                journal_bytes = self._read_journal(self._journal)
                 authority = self.binding.assert_current()
                 if self._path_identity(self._journal) != journal:
                     raise DurableBindingError("ambiguous durable session state")
