@@ -24,7 +24,7 @@ from tools.runtime_bootstrap import (
     resolve_selected_runtime_bound,
     verify_runtime_manifest,
 )
-from tools.upgrade_authority import AuthorityError, commit_runtime_selector
+from tools.upgrade_authority import AuthorityError, commit_runtime_selector, read_runtime_selector
 
 
 class RuntimeBootstrapTests(unittest.TestCase):
@@ -63,6 +63,15 @@ class RuntimeBootstrapTests(unittest.TestCase):
                 selected,
                 resolve_selected_runtime(selector, releases, expected, self._verifier),
             )
+
+    def test_rejects_selector_hard_link_alias(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            selector = Path(directory) / "runtime-selector.json"
+            commit_runtime_selector(selector, "v1.2.3", "v1.2.2")
+            alias = Path(directory) / "selector-alias.json"
+            os.link(selector, alias)
+            with self.assertRaisesRegex(AuthorityError, "private regular file"):
+                read_runtime_selector(selector)
 
     def test_bound_runtime_rejects_release_directory_replacement(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
