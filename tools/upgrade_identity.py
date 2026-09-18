@@ -54,11 +54,13 @@ ENVELOPE_FIELDS = (
     "source",
     "destination",
     "manifest",
+    "selector_ref",
     "barrier_identity_digest",
     "target",
     "envelope_digest",
 )
 _TOKEN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
+_SELECTOR_REF = re.compile(r"(?!/)(?!.*(?:^|/)\.\.(?:/|$))[A-Za-z0-9._/-]{1,255}")
 _DIGEST = re.compile(r"[0-9a-f]{64}")
 
 
@@ -282,6 +284,13 @@ def validate_envelope(record: Mapping[str, object]) -> dict[str, object]:  # noq
     source = _canonical_path("source", record["source"])
     destination = _canonical_path("destination", record["destination"])
     manifest = _canonical_path("manifest", record["manifest"])
+    selector_ref = record["selector_ref"]
+    if (
+        not isinstance(selector_ref, str)
+        or _SELECTOR_REF.fullmatch(selector_ref) is None
+        or posixpath.normpath(selector_ref) != selector_ref
+    ):
+        raise UpgradeIdentityError("upgrade selector reference is invalid")
     if not _contains(root, destination) or not _contains(root, manifest):
         raise UpgradeIdentityError("upgrade outputs escape artifact root")
     if destination == root or manifest == root:

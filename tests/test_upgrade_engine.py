@@ -62,6 +62,7 @@ def make_context(operation_id: str = "op-1", target: str = "new") -> dict[str, o
         "source": "/authority.sqlite",
         "destination": "/artifacts/backup.sqlite",
         "manifest": "/artifacts/manifest.json",
+        "selector_ref": ".runtime/runtime-selector.json",
         "barrier_identity_digest": "0" * 64,
         "target": target,
         "envelope_digest": "0" * 64,

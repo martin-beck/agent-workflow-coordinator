@@ -188,6 +188,7 @@ class RollbackEvidenceTests(unittest.TestCase):
                 "source": str(authority),
                 "destination": str(root / "backup.bin"),
                 "manifest": str(root / "manifest.json"),
+                "selector_ref": ".runtime/runtime-selector.json",
                 "barrier_identity_digest": "0" * 64,
                 "target": "rollback",
                 "envelope_digest": "0" * 64,

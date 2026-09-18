@@ -78,6 +78,7 @@ CONTEXT = {
     "source": "/source",
     "destination": "/destination",
     "manifest": "/manifest",
+    "selector_ref": ".runtime/runtime-selector.json",
     "barrier_identity_digest": "0" * 64,
     "target": "new",
     "envelope_digest": "0" * 64,
@@ -1128,6 +1129,7 @@ class GitAuthorityAdapterTests(unittest.TestCase):
             "artifact_root": str(artifact_root),
             "git_backup_root": str(backup),
             "manifest": str(backup / "manifest.json"),
+            "selector_ref": ".runtime/runtime-selector.json",
         }
         before = (self.root / "state").read_bytes()
         durable_before = self.session.snapshot()
@@ -1157,6 +1159,7 @@ class GitAuthorityAdapterTests(unittest.TestCase):
             "artifact_root": str(artifact_root),
             "git_backup_root": str(backup),
             "manifest": str(backup / "manifest.json"),
+            "selector_ref": ".runtime/runtime-selector.json",
         }
         cases = (
             ({"git_backup_root": str(artifact_root / "missing")}, "manifest is not bound"),
@@ -1207,6 +1210,7 @@ class GitAuthorityAdapterTests(unittest.TestCase):
             "target": "rollback",
             "artifact_root": str(artifact_root),
             "manifest": str(backup / "manifest.json"),
+            "selector_ref": ".runtime/runtime-selector.json",
         }
         (backup / "refs.txt").write_text("tampered\n", encoding="utf-8")
         before = self.session.snapshot()
@@ -1233,6 +1237,7 @@ class GitAuthorityAdapterTests(unittest.TestCase):
             "target": "rollback",
             "artifact_root": str(artifact_root),
             "manifest": str(backup / "manifest.json"),
+            "selector_ref": ".runtime/runtime-selector.json",
         }
         phase_context = PhaseContext(**cast(dict[str, Any], context))
         bound = BoundRollbackCapability.bind(

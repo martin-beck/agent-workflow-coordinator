@@ -59,6 +59,7 @@ CONTEXT = {
     "source": "/source",
     "destination": "/destination",
     "manifest": "/manifest",
+    "selector_ref": ".runtime/runtime-selector.json",
     "barrier_identity_digest": "0" * 64,
     "target": "new",
     "envelope_digest": "0" * 64,
@@ -1657,6 +1658,7 @@ class SQLiteAuthorityAdapterTests(unittest.TestCase):
                 "artifact_root": str(artifact_root),
                 "destination": str(artifact_root / "destination"),
                 "manifest": str(artifact_root / "manifest.json"),
+                "selector_ref": ".runtime/runtime-selector.json",
             }
         )
         context["barrier_identity_digest"] = canonical_barrier_digest(context)

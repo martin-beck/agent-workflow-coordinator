@@ -52,21 +52,22 @@ STATUS_TRANSITIONS = {
 _COLUMNS = (*IDENTITY_FIELDS, "status", "revision")
 _SELECT_COLUMNS = (
     "schema_version,backend,project_id,operation_id,state_revision,authority_revision,"
-    "fencing_token,fencing_owner,durable_barrier_id,artifact_root,source,destination,manifest,"
+    "fencing_token,fencing_owner,durable_barrier_id,artifact_root,source,destination,manifest,selector_ref,"
     "barrier_identity_digest,target,envelope_digest,status,revision"
 )
 _SELECT_SQL = f"SELECT {_SELECT_COLUMNS} FROM barrier WHERE operation_id=?"  # noqa: S608
 _INSERT_SQL = (
     "INSERT INTO barrier (schema_version,backend,project_id,operation_id,state_revision,"
     "authority_revision,fencing_token,fencing_owner,durable_barrier_id,artifact_root,source,"
-    "destination,manifest,barrier_identity_digest,target,envelope_digest,status,revision) "
-    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
+    "destination,manifest,selector_ref,barrier_identity_digest,target,envelope_digest,status,"
+    "revision) "
+    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
 )
 _UPDATE_FIELDS = tuple(field for field in _COLUMNS if field != "operation_id")
 _UPDATE_SQL = (
     "UPDATE barrier SET schema_version=?,backend=?,project_id=?,state_revision=?,"
     "authority_revision=?,fencing_token=?,fencing_owner=?,durable_barrier_id=?,artifact_root=?,"
-    "source=?,destination=?,manifest=?,barrier_identity_digest=?,target=?,envelope_digest=?,"
+    "source=?,destination=?,manifest=?,selector_ref=?,barrier_identity_digest=?,target=?,envelope_digest=?,"
     "status=?,revision=? "
     "WHERE operation_id=? AND revision=?"
 )
@@ -734,6 +735,7 @@ class SQLiteRollbackControlStore:
                     source TEXT NOT NULL,
                     destination TEXT NOT NULL,
                     manifest TEXT NOT NULL,
+                    selector_ref TEXT NOT NULL,
                     barrier_identity_digest TEXT NOT NULL,
                     target TEXT NOT NULL,
                     envelope_digest TEXT NOT NULL,
@@ -741,6 +743,14 @@ class SQLiteRollbackControlStore:
                     revision INTEGER NOT NULL
                 )"""
             )
+            columns = {
+                row[1] for row in connection.execute("PRAGMA table_info(barrier)").fetchall()
+            }
+            if "selector_ref" not in columns:
+                connection.execute(
+                    "ALTER TABLE barrier ADD COLUMN selector_ref TEXT NOT NULL "
+                    "DEFAULT '.runtime/runtime-selector.json'"
+                )
             connection.execute(
                 "CREATE UNIQUE INDEX IF NOT EXISTS one_active_barrier_per_project "
                 "ON barrier(project_id) WHERE status IN ('held','releasing')"

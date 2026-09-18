@@ -790,6 +790,7 @@ class SQLiteAuthorityAdapter:
             "source",
             "destination",
             "manifest",
+            "selector_ref",
             "barrier_identity_digest",
             "target",
             "envelope_digest",
