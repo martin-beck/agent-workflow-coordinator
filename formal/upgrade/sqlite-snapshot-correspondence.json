@@ -3,6 +3,7 @@
   "kind": "bounded-sqlite-snapshot-correspondence",
   "model": {
     "path": "formal/upgrade/UpgradeRecovery.tla",
+    "sha256": "616d53832ac5ec18bf3242d47b2412195eb64adb2b1035235514e06cc3edf2ba",
     "states": ["running", "safe_mode"],
     "barriers": ["held", "ambiguous"]
   },
