@@ -149,14 +149,12 @@ class FormalEvidenceTests(unittest.TestCase):
 
     def test_workflow_separates_fork_pr_publication_and_weekly_tiers(self) -> None:
         workflow = (ROOT / ".github" / "workflows" / "verify.yml").read_text()
+        formal = (ROOT / ".github" / "workflows" / "formal.yml").read_text()
         self.assertIn(
             "github.event.pull_request.head.repo.full_name != github.repository", workflow
         )
-        self.assertIn("&& 'portable-smoke'", workflow)
-        self.assertIn("|| 'pr-fast'", workflow)
-        self.assertIn("&& 'full-exhaustive'", workflow)
-        self.assertIn("timeout-minutes: ${{", workflow)
-        self.assertIn("continue-on-error: ${{ github.event_name == 'schedule' }}", workflow)
+        self.assertIn("TLC_TIER: portable-smoke", workflow)
+        self.assertIn("TLC_CGROUP_MODE: portable", workflow)
         self.assertIn("release_sensitive", workflow)
         for release_path in (
             "pyproject.toml",
@@ -166,35 +164,13 @@ class FormalEvidenceTests(unittest.TestCase):
         ):
             self.assertIn(release_path, workflow)
         self.assertIn("tools/lifecycle_trace.py", workflow)
-        tier_expression = workflow[
-            workflow.index("      TLC_TIER:") : workflow.index(
-                "    steps:", workflow.index("  verify:")
-            )
-        ]
-        fork_guard = "github.event.pull_request.head.repo.full_name != github.repository"
-        self.assertLess(
-            tier_expression.index(fork_guard), tier_expression.index("'full-exhaustive'")
-        )
-        self.assertNotIn("needs.scope.outputs.release_sensitive", tier_expression)
-        self.assertIn(
-            "|| github.event_name == 'schedule' && 'full-exhaustive' || 'pr-fast'",
-            tier_expression,
-        )
-        self.assertNotIn("github.event_name == 'workflow_dispatch'", tier_expression)
-        steps_start = workflow.index("    steps:\n", workflow.index("  verify:\n"))
-        job_environment = workflow[
-            workflow.index("    env:\n", workflow.index("  verify:\n")) : steps_start
-        ]
-        for resource_setting in (
-            "TLC_CGROUP_MODE",
-            "TLC_HEAP",
-            "TLC_MEMORY_MAX",
-            "TLC_SWAP_MAX",
-            "TLC_TIMEOUT_SECONDS",
-        ):
-            self.assertNotIn(resource_setting, job_environment)
-        formal_step = workflow[
-            workflow.index("      - name: Run event-appropriate formal tier\n") : workflow.index(
+        self.assertIn("push:", formal)
+        self.assertIn("workflow_dispatch:", formal)
+        self.assertIn("schedule:", formal)
+        self.assertIn("if: github.ref == 'refs/heads/main'", formal)
+        self.assertIn("runs-on: [self-hosted, Linux, X64, agent-workflow-coordinator-ci]", formal)
+        formal_step = formal[
+            formal.index("      - name: Run required formal tier\n") : formal.index(
                 "      - name: Publish exact-head tier attestation\n"
             )
         ]
@@ -206,28 +182,23 @@ class FormalEvidenceTests(unittest.TestCase):
             "TLC_TIMEOUT_SECONDS",
         ):
             self.assertIn(resource_setting, formal_step)
-        self.assertIn("MemoryMax=6G", workflow)
-        self.assertIn("MemorySwapMax=6G", workflow)
-        self.assertIn("MemTotal", workflow)
-        self.assertIn("/proc/self/cgroup", workflow)
-        self.assertIn("/proc/self/mountinfo", workflow)
-        self.assertIn('cgroup_dir="${cgroup_mount%/}${cgroup_relative:-/}"', workflow)
-        self.assertIn('"${cgroup_dir}/memory.max"', workflow)
-        self.assertIn('"${cgroup_dir}/memory.swap.max"', workflow)
+        self.assertIn("MemoryMax=6G", formal)
+        self.assertIn("MemorySwapMax=6G", formal)
+        self.assertIn("MemTotal", formal)
+        self.assertIn("/proc/self/cgroup", formal)
+        self.assertIn("/proc/self/mountinfo", formal)
+        self.assertIn('cgroup_dir="${cgroup_mount%/}${cgroup_relative:-/}"', formal)
+        self.assertIn('"${cgroup_dir}/memory.max"', formal)
+        self.assertIn('"${cgroup_dir}/memory.swap.max"', formal)
         self.assertNotIn("needs.scope.outputs.release_sensitive", formal_step)
-        self.assertIn("github.event_name == 'schedule' && 360", workflow)
-        self.assertNotIn("github.event_name == 'workflow_dispatch'", workflow)
-        timeout_expression = workflow[
-            workflow.index("TLC_TIMEOUT_SECONDS:") : workflow.index(
-                "\n", workflow.index("TLC_TIMEOUT_SECONDS:")
+        self.assertIn("github.event_name == 'schedule' && 360", formal)
+        timeout_expression = formal[
+            formal.index("TLC_TIMEOUT_SECONDS:") : formal.index(
+                "\n", formal.index("TLC_TIMEOUT_SECONDS:")
             )
         ]
-        self.assertLess(
-            timeout_expression.index(
-                "github.event.pull_request.head.repo.full_name != github.repository"
-            ),
-            timeout_expression.index("'6000'"),
-        )
+        self.assertIn("'6000'", timeout_expression)
+        self.assertIn("'1200'", timeout_expression)
 
     def test_attestation_rejects_failed_formal_outcomes(self) -> None:
         script = ROOT / "formal" / "handoffctl" / "attest.py"

@@ -21,7 +21,7 @@ quality = [
 package = false
 
 [tool.uv.sources]
-agent-workflow-quality = { git = "https://github.com/martin-beck/agent-workflow-quality.git", rev = "f1c40859e9d10cacbc79100ed136c38bce48cd39" }
+agent-workflow-quality = { git = "https://github.com/martin-beck/agent-workflow-quality.git", rev = "d3d46a5f540fb03f65f30dd4c2af325f6f018a6e" }
 
 [tool.ruff]
 line-length = 100

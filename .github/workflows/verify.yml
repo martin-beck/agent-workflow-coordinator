@@ -26,27 +26,21 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha }}
       - name: Require the reviewed AWQ source pin
         env:
-          AWQ_COMMIT: f1c40859e9d10cacbc79100ed136c38bce48cd39
+          AWQ_COMMIT: d3d46a5f540fb03f65f30dd4c2af325f6f018a6e
         run: python3 -c 'import os,re; raise SystemExit(0 if re.fullmatch(r"[0-9a-f]{40}", os.environ["AWQ_COMMIT"]) else 1)'
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          repository: martin-beck/agent-workflow-quality
-          ref: f1c40859e9d10cacbc79100ed136c38bce48cd39
-          path: quality-runtime
-          persist-credentials: false
-          fetch-depth: 1
       - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d
         with:
           version: "0.12.8"
           enable-cache: false
       - name: Install the pinned AWQ source environment
-        run: uv sync --directory quality-runtime --locked --python 3.12.14
+        run: uv sync --locked --only-group quality --python 3.12.14
       - name: Run AWQ portable PR gates
         run: |
-          uv run --directory quality-runtime --frozen python -m awq --root .. onboarding --format json
-          uv run --directory quality-runtime --frozen python -m awq --root .. check --tier pr --format json
+          uv run --frozen python -m awq --root . onboarding --format json
+          uv run --frozen python -m awq --root . check --tier pr --format json
 
   scope:
     runs-on: ubuntu-24.04
@@ -58,6 +52,7 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha }}
       - id: scope
         shell: bash
         env:
@@ -65,12 +60,12 @@ jobs:
           BASE: ${{ github.event.pull_request.base.sha }}
           HEAD: ${{ github.event.pull_request.head.sha }}
         run: |
-          if [[ "$EVENT" != "pull_request" ]] || git diff --name-only "$BASE...$HEAD" | grep -Eq "^(formal/|tools/lifecycle_trace.py|tools/runtime_bootstrap.py|tools/sqlite_storage.py|tools/tlc_runner.py|tools/vendor.py|tools/handoffctl.py|pyproject.toml|uv.lock|CHANGELOG.md|coordinator.vendor.json|\\.github/workflows/verify\\.yml)"; then
+          if [[ "$EVENT" != "pull_request" ]] || git diff --name-only "$BASE...$HEAD" | grep -Eq "^(formal/|tools/lifecycle_trace.py|tools/runtime_bootstrap.py|tools/sqlite_storage.py|tools/tlc_runner.py|tools/vendor.py|tools/handoffctl.py|pyproject.toml|uv.lock|CHANGELOG.md|coordinator.vendor.json|\\.github/workflows/(verify|formal)\\.yml)"; then
             echo "formal_changed=true" >> "$GITHUB_OUTPUT"
           else
             echo "formal_changed=false" >> "$GITHUB_OUTPUT"
           fi
-          if [[ "$EVENT" != "pull_request" ]] || git diff --name-only "$BASE...$HEAD" | grep -Eq "^(formal/|tools/tlc_runner.py|tools/vendor.py|tools/handoffctl.py|pyproject.toml|uv.lock|CHANGELOG.md|coordinator.vendor.json)"; then
+          if [[ "$EVENT" != "pull_request" ]] || git diff --name-only "$BASE...$HEAD" | grep -Eq "^(formal/|tools/tlc_runner.py|tools/vendor.py|tools/handoffctl.py|pyproject.toml|uv.lock|CHANGELOG.md|coordinator.vendor.json|\\.github/workflows/(verify|formal)\\.yml)"; then
             echo "release_sensitive=true" >> "$GITHUB_OUTPUT"
           else
             echo "release_sensitive=false" >> "$GITHUB_OUTPUT"
@@ -79,7 +74,7 @@ jobs:
   verify:
     needs: [awq, scope]
     if: ${{ github.event_name != 'pull_request' || needs.scope.outputs.formal_changed == 'true' || needs.scope.outputs.release_sensitive == 'true' }}
-    runs-on: ${{ fromJSON((github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && '["self-hosted","Linux","X64","agent-workflow-coordinator-ci"]' || '["ubuntu-24.04"]') }}
+    runs-on: ubuntu-24.04
     # Weekly scheduled verification is the only exhaustive tier. Pushes,
     # manual dispatches, and same-repository PRs stay bounded for publication.
     timeout-minutes: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && 30 || github.event_name == 'schedule' && 360 || 30 }}
@@ -91,6 +86,7 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha }}
       - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961
         with:
           distribution: temurin
@@ -134,54 +130,6 @@ jobs:
               backend_schema, format_checker=jsonschema.FormatChecker()
           ).validate(backend)
           PY
-      - name: Establish existing runner user bus and cgroup prerequisite
-        if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
-        shell: bash
-        run: |
-          runner_uid=$(id -u)
-          runtime_dir="/run/user/${runner_uid}"
-          bus_address="unix:path=${runtime_dir}/bus"
-          echo "XDG_RUNTIME_DIR=${runtime_dir}" >> "$GITHUB_ENV"
-          echo "DBUS_SESSION_BUS_ADDRESS=${bus_address}" >> "$GITHUB_ENV"
-          test -S "${runtime_dir}/bus"
-          test "$(stat -fc %T /sys/fs/cgroup)" = cgroup2fs
-          required_bytes=$((6 * 1024 * 1024 * 1024))
-          host_bytes=$(awk '/^MemTotal:/ {print $2 * 1024}' /proc/meminfo)
-          test "${host_bytes}" -ge "${required_bytes}"
-          cgroup_relative=$(awk -F: '$1 == "0" {print $3; exit}' /proc/self/cgroup)
-          cgroup_mount=$(awk '$0 ~ / - cgroup2 / {print $5; exit}' /proc/self/mountinfo)
-          test -n "${cgroup_relative}"
-          test -n "${cgroup_mount}"
-          cgroup_dir="${cgroup_mount%/}${cgroup_relative:-/}"
-          test -r "${cgroup_dir}/memory.max"
-          test -r "${cgroup_dir}/memory.swap.max"
-          parent_memory=$(cat "${cgroup_dir}/memory.max")
-          if [[ "${parent_memory}" != max ]]; then
-            test "${parent_memory}" -ge "${required_bytes}"
-          fi
-          parent_swap=$(cat "${cgroup_dir}/memory.swap.max")
-          if [[ "${parent_swap}" != max ]]; then
-            test "${parent_swap}" -ge "${required_bytes}"
-          fi
-          XDG_RUNTIME_DIR="${runtime_dir}" DBUS_SESSION_BUS_ADDRESS="${bus_address}" \
-            systemd-run --user --wait --pipe --quiet --service-type=exec \
-              --property=MemoryMax=6G --property=MemorySwapMax=6G \
-              --property=TasksMax=64 true
-      - name: Run event-appropriate formal tier
-        env:
-          TLC_CGROUP_MODE: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && 'portable' || 'required' }}
-          TLC_HEAP: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && '512m' || github.event_name == 'schedule' && '4096m' || '2048m' }}
-          TLC_MEMORY_MAX: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && '3G' || github.event_name == 'schedule' && '6G' || '3G' }}
-          TLC_SWAP_MAX: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && '3G' || github.event_name == 'schedule' && '6G' || '3G' }}
-          TLC_TIMEOUT_SECONDS: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && '600' || github.event_name == 'schedule' && '6000' || '1200' }}
-          TLC_ATTESTATION_PATH: ${{ runner.temp }}/formal-attestation.json
-        run: formal/handoffctl/verify.sh --tier "$TLC_TIER"
-      - name: Publish exact-head tier attestation
-        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08
-        with:
-          name: handoffctl-${{ env.TLC_TIER }}-${{ github.sha }}
-          path: ${{ runner.temp }}/formal-attestation.json
-          if-no-files-found: error
       - name: DCO certification
         if: github.event_name == 'pull_request'
         env:
@@ -193,6 +141,39 @@ jobs:
             git show -s --format=%B "$revision" | grep -Fx -- "$expected"
           done < <(git rev-list "$BASE..$HEAD")
 
+  formal-portable:
+    needs: [awq, scope]
+    if: ${{ github.event_name == 'pull_request' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      TLC_TIER: portable-smoke
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961
+        with:
+          distribution: temurin
+          java-version: "17"
+      - name: Run portable formal tier
+        env:
+          TLC_CGROUP_MODE: portable
+          TLC_HEAP: 512m
+          TLC_MEMORY_MAX: 3G
+          TLC_SWAP_MAX: 3G
+          TLC_TIMEOUT_SECONDS: 600
+          TLC_ATTESTATION_PATH: ${{ runner.temp }}/formal-attestation.json
+        run: formal/handoffctl/verify.sh --tier "$TLC_TIER"
+      - name: Publish exact-head tier attestation
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08
+        with:
+          name: handoffctl-${{ env.TLC_TIER }}-${{ github.sha }}
+          path: ${{ runner.temp }}/formal-attestation.json
+          if-no-files-found: error
+
   smoke:
     needs: [awq, scope]
     if: ${{ github.event_name == 'pull_request' && needs.scope.outputs.formal_changed == 'false' }}
@@ -202,6 +183,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha }}
       - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961
         with:
           distribution: temurin

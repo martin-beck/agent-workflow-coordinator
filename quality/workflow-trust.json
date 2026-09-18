@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "events": {
+    "untrusted": ["pull_request"],
+    "environmental": ["schedule"],
+    "trusted": ["push", "workflow_call", "workflow_dispatch"],
+    "prohibited": ["pull_request_target"]
+  },
+  "runners": {
+    "disposable": ["ubuntu-24.04"],
+    "trusted": ["self-hosted", "Linux", "X64", "agent-workflow-coordinator-ci"],
+    "persistent": ["persistent-linux"]
+  },
+  "protected_branches": ["main"],
+  "publication_events": ["workflow_dispatch"],
+  "required_gate_workflows": [".github/workflows/verify.yml"],
+  "publication_workflows": [".github/workflows/release.yml"]
+}
