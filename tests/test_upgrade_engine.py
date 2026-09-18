@@ -1930,6 +1930,49 @@ class UpgradeEngineTests(unittest.TestCase):
             with self.assertRaises(UpgradeError):
                 engine.apply({})
 
+    def test_apply_handler_abort_preserves_started_marker_after_backend_effect(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+
+            class EvidenceAdapter(FakeAdapter):
+                def execute(self, phase: str, context: object) -> dict[str, object]:
+                    result = super().execute(phase, context)
+                    if phase == "discover":
+                        result.update(
+                            backend="sqlite",
+                            fencing_token=cast(str, CONTEXT["fencing_token"]),
+                            backend_identity_verified=True,
+                            release_authentic=True,
+                            runtime_supported=True,
+                            mutates_authority=False,
+                        )
+                    return result
+
+            operation_id = "op-handler-abort"
+            journal = Path(directory) / "journal.json"
+            engine = UpgradeEngine(
+                operation_id,
+                journal,
+                make_context(operation_id),
+                backend_adapter=EvidenceAdapter(),
+            )
+            engine.plan()
+
+            def abort(_operation: str, _state: object) -> dict[str, object]:
+                raise SystemExit("process aborted in handler")
+
+            handlers: dict[str, Handler] = {
+                phase: (abort if phase == "discover" else lambda _operation, _state: {})
+                for phase in PHASES
+            }
+            with self.assertRaises(SystemExit):
+                engine.apply(handlers)
+
+            persisted = json.loads(journal.read_text(encoding="utf-8"))
+            self.assertEqual("running", persisted["status"])
+            self.assertEqual("discover", persisted["phase"])
+            self.assertEqual("started", persisted["records"][-1]["outcome"])
+            self.assertEqual(operation_id, persisted["records"][-1]["operation_id"])
+
     def test_authority_probe_failure_precedes_handler(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             engine = UpgradeEngine(
