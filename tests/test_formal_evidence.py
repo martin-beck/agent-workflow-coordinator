@@ -51,6 +51,19 @@ def configured_bounds(configs: list[Path]) -> dict[str, int]:
 
 
 class FormalEvidenceTests(unittest.TestCase):
+    def test_sqlite_correspondence_evidence_references_resolve_to_tests(self) -> None:
+        artifact = json.loads(
+            (ROOT / "formal" / "upgrade" / "sqlite-snapshot-correspondence.json").read_text()
+        )
+        for reference in artifact["evidence"]["tests"]:
+            relative, qualified = reference.split("::", 1)
+            _class_name, method_name = qualified.split(".", 1)
+            source = (ROOT / relative).read_text(encoding="utf-8")
+            self.assertIsNotNone(
+                re.search(rf"^    def {re.escape(method_name)}\(", source, re.MULTILINE),
+                reference,
+            )
+
     def test_sqlite_snapshot_correspondence_map_is_bounded_and_fail_closed(self) -> None:
         value = json.loads(
             (ROOT / "formal" / "upgrade" / "sqlite-snapshot-correspondence.json").read_text()
