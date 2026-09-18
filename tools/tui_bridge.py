@@ -349,11 +349,19 @@ def build_tui_request(
     if host_handoff is not None:
         required = {"ssh_host", "remote_session_file", "remote_event_file", "client_capabilities"}
         if set(host_handoff) != required:
-            raise TuiBridgeError("host_handoff must contain exactly the SSH paths and client capabilities")
-        if not isinstance(host_handoff["ssh_host"], str) or not re.fullmatch(r"[A-Za-z0-9._-]+", host_handoff["ssh_host"]):
+            raise TuiBridgeError(
+                "host_handoff must contain exactly the SSH paths and client capabilities"
+            )
+        if not isinstance(host_handoff["ssh_host"], str) or not re.fullmatch(
+            r"[A-Za-z0-9._-]+", host_handoff["ssh_host"]
+        ):
             raise TuiBridgeError("host_handoff ssh_host is invalid")
         capabilities = host_handoff["client_capabilities"]
-        if not isinstance(capabilities, dict) or capabilities.get("platform") not in {"windows", "linux", "macos", "freebsd"} or capabilities.get("shell") not in {"powershell", "cmd", "bash", "zsh", "sh"}:
+        if (
+            not isinstance(capabilities, dict)
+            or capabilities.get("platform") not in {"windows", "linux", "macos", "freebsd"}
+            or capabilities.get("shell") not in {"powershell", "cmd", "bash", "zsh", "sh"}
+        ):
             raise TuiBridgeError("host_handoff client capabilities are invalid")
         request["host_handoff"] = deepcopy(host_handoff)
     return request

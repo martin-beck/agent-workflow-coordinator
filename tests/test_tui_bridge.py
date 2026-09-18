@@ -344,8 +344,11 @@ class TuiBridgeTests(unittest.TestCase):
             "client_capabilities": {"platform": "windows", "shell": "powershell"},
         }
         _session, request = prepare_tui_session(
-            project_id="p", ar=ar, guidance_request=guidance,
-            session_id="AWTUI-S-1", host_handoff=handoff,
+            project_id="p",
+            ar=ar,
+            guidance_request=guidance,
+            session_id="AWTUI-S-1",
+            host_handoff=handoff,
         )
         self.assertEqual(handoff, request["host_handoff"])
 
