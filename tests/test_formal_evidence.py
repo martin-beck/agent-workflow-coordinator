@@ -105,6 +105,7 @@ class FormalEvidenceTests(unittest.TestCase):
         artifact = json.loads(
             (ROOT / "formal" / "upgrade" / "sqlite-snapshot-correspondence.json").read_text()
         )
+        self.assertIsInstance(artifact["implementation"], dict)
         digest = artifact["implementation"]["module_sha256"]
         self.assertIsInstance(digest, str)
         self.assertRegex(digest, r"^[0-9a-f]{64}$")
