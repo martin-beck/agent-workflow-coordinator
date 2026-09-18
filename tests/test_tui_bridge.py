@@ -6,10 +6,13 @@ from typing import Any
 
 from tools.decision_batch_policy import ARDecision
 from tools.tui_bridge import (
+    TuiSession,
+    TuiSessionState,
     TuiBridgeError,
     apply_tui_response,
     build_tui_request,
     plan_tui_escalation,
+    prepare_tui_session,
 )
 
 
@@ -41,6 +44,32 @@ def _request() -> tuple[dict[str, Any], dict[str, Any]]:
 
 
 class TuiBridgeTests(unittest.TestCase):
+    def test_session_launch_attach_await_detach_and_resume(self) -> None:
+        ar, request = _request()
+        request["session_id"] = "AWTUI-SESSION-1"
+        session, _ = prepare_tui_session(
+            project_id="p", ar=ar, guidance_request={
+                **{
+                    "human_interaction": {
+                        **request["interaction"],
+                        "decision_request_ref": "AWG-X",
+                    }
+                },
+                "request_id": "AWG-X",
+            }, session_id="AWTUI-SESSION-1"
+        )
+        self.assertEqual(TuiSessionState.LAUNCH_PENDING, session.state)
+        session = session.attach("host-1").await_response()
+        self.assertEqual(TuiSessionState.AWAITING_RESPONSE, session.state)
+        self.assertEqual(TuiSessionState.ATTACHED, session.detach().attach("host-2").state)
+        self.assertEqual(TuiSessionState.RESOLVED, session.resolved(1).state)
+
+    def test_session_rejects_invalid_transition_or_stale_response(self) -> None:
+        session = TuiSession("p", "AR-0001", 2, "AWG-X", "AWTUI-S-1")
+        with self.assertRaises(TuiBridgeError):
+            session.await_response()
+        with self.assertRaises(TuiBridgeError):
+            session.attach("../host")
     def test_escalation_plan_finishes_ready_work_first(self) -> None:
         plan = plan_tui_escalation(
             (
