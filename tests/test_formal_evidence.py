@@ -53,6 +53,16 @@ def configured_bounds(configs: list[Path]) -> dict[str, int]:
 
 
 class FormalEvidenceTests(unittest.TestCase):
+    def test_sqlite_correspondence_nonclaims_are_nonempty(self) -> None:
+        artifact = json.loads(
+            (ROOT / "formal" / "upgrade" / "sqlite-snapshot-correspondence.json").read_text()
+        )
+        nonclaims = artifact["evidence"]["nonclaims"]
+        self.assertTrue(nonclaims)
+        self.assertTrue(
+            all(isinstance(nonclaim, str) and nonclaim.strip() for nonclaim in nonclaims)
+        )
+
     def test_sqlite_correspondence_claim_stays_unproven(self) -> None:
         artifact = json.loads(
             (ROOT / "formal" / "upgrade" / "sqlite-snapshot-correspondence.json").read_text()
