@@ -108,7 +108,7 @@ class TuiBridgeTests(unittest.TestCase):
             "event": {"session_id": "s"},
             "ar_update": {},
         }
-        cases = (
+        cases: tuple[tuple[str, object, str], ...] = (
             ("kind", "wrong", "Coordinator request"),
             ("project_id", "other", "Coordinator request"),
             ("ar_id", "AR-0002", "AR revision"),
