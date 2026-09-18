@@ -24,6 +24,28 @@ def decision(
 
 
 class DecisionBatchPolicyTests(unittest.TestCase):
+    def test_invalid_decision_fields_fail_closed(self) -> None:
+        invalid = (
+            ("bad", 1, "ready", False, None, None, "ar_id is invalid"),
+            ("AR-0001", 0, "ready", False, None, None, "task_revision must be positive"),
+            ("AR-0001", True, "ready", False, None, None, "task_revision must be positive"),
+            ("AR-0001", 1, "unknown", False, None, None, "state is invalid"),
+            ("AR-0001", 1, "ready", 1, None, None, "requires_human must be boolean"),
+            ("AR-0001", 1, "ready", False, "bad key!", None, "batch_key is not public-safe"),
+            (
+                "AR-0001",
+                1,
+                "ready",
+                False,
+                None,
+                "bad ref!",
+                "decision_request_ref is not public-safe",
+            ),
+        )
+        for args in invalid:
+            with self.subTest(args=args), self.assertRaisesRegex(DecisionBatchError, args[-1]):
+                ARDecision(*args[:-1])
+
     def test_safe_independent_work_continues_before_tui(self) -> None:
         plan = plan_progress(
             (
