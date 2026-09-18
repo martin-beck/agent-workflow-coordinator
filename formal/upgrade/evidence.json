@@ -96,7 +96,7 @@
     "files": {
       "schema/upgrade-contract.schema.json": "2f16e6990b59651656d89973237ca522e5ed8ff1a4b3d46d98e22108f8e689d5",
       "tests/test_mutation_fence.py": "e2bcea7b96bddd2509b79ff9c5eefd57001d1502949aba30cbbd50a9169e1cbb",
-      "tests/test_rollback_control_store.py": "0f5d44c568e5e946e2b29184b5dd4a59e4303e63b084c4834ca3734e8bdb9f48",
+      "tests/test_rollback_control_store.py": "2ec2f206f125355417aae015845f8a7d07445621bf47edbaa1cf1150d69961cc",
       "tests/test_sqlite_mutation_barrier.py": "6949425557176bebb3341677d1fed90c0217055bd1d1dcb56bbdf91f60d31fb8",
       "tests/test_sqlite_storage.py": "153e538c57740beb3b1bb83002e09c69fe6a213a9e67b3429b3e08480c950575",
       "tests/test_upgrade_commands.py": "4eaa65ac1730c9149156ba76e345dcb1f8e2c44a51042e27f2d4a4b4e7634f32",
@@ -105,7 +105,7 @@
       "tools/generate_upgrade_contract.py": "aa9a2ed072df3937b7799b33559d03b1744d3b9049891180d1a4852531df3ada",
       "tools/handoffctl.py": "393ba34a0055c00879bd91c814327a9a3570fce490dce5f09978cbbfbbc3583c",
       "tools/mutation_fence.py": "2d314f5a5cc46d0f625135b39ada2d1a464cd35c9d378728c141708df8c0c630",
-      "tools/rollback_control_store.py": "1a929c6ec04ae11a27a2ff0d75701fa18be9de795997e3de22348d03e227e92c",
+      "tools/rollback_control_store.py": "abdbd7bba9faa915bd6812e35cd6b82f0e7af4aef93c3a7b16f41604770ca80e",
       "tools/sqlite_storage.py": "b5888b2207364372fbc3c6a75039875f98286d2893dd2fafaacdc96c0ebca9d1",
       "tools/upgrade_commands.py": "5b6360c39fa10979a77a0c6180968598593f56b9ea0c59de60b59c8017e37071",
       "tools/upgrade_contract_runtime.py": "caeb45260b790e7fdf8118ce370558bd26b04035407679df8e9845775e197119",

@@ -1672,6 +1672,37 @@ class SQLiteBarrierSessionStore:
                     raise ControlStoreError("barrier session authority revision changed")
             return self._cas_locked(expected_revision, state)
 
+    def cas_locked(
+        self,
+        common_guard: CoordinatorLockGuard,
+        expected_identity: BarrierSessionIdentity,
+        expected_revision: int,
+        state: BarrierSessionState,
+    ) -> BarrierSessionState:
+        """CAS one held session under caller-owned common/control locks.
+
+        This is an uncalled adapter seam: it never acquires a lock or enables
+        an authority mutation route.  The caller remains responsible for
+        holding the authority lock around the eventual mutation.
+        """
+        if not isinstance(common_guard, CoordinatorLockGuard):
+            raise LockOwnershipError("caller-owned coordinator lock guard is required")
+        common_guard.assert_owned()
+        if common_guard.path != coordinator_lock_path().resolve():
+            raise ControlStoreError("coordinator lock guard path mismatch")
+        if not isinstance(expected_identity, BarrierSessionIdentity):
+            raise ControlStoreError("barrier session identity is required")
+        if type(expected_revision) is not int or expected_revision < 1:
+            raise ControlStoreError("barrier session expected revision is invalid")
+        if state.identity != expected_identity or state.status not in {"held", "releasing"}:
+            raise ControlStoreError("barrier session write identity is invalid")
+        self._control._require_operation_lock()
+        current = self.recheck_held_locked(common_guard, expected_identity, expected_revision)
+        if current.revision != expected_revision:
+            raise ControlStoreError("barrier session CAS conflict")
+        common_guard.assert_owned()
+        return self._cas_locked(expected_revision, state)
+
     def _cas_locked(  # noqa: C901
         self, expected_revision: int, supplied: BarrierSessionState
     ) -> BarrierSessionState:
