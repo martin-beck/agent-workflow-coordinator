@@ -394,7 +394,7 @@ class FormalEvidenceTests(unittest.TestCase):
                 name,
             )
         covered = {reference for values in coverage.values() for reference in values}
-        self.assertTrue(covered.issubset(set(artifact["evidence"]["tests"])))
+        self.assertEqual(covered, set(artifact["evidence"]["tests"]))
         for name, references in coverage.items():
             self.assertEqual(len(references), len(set(references)), name)
 
