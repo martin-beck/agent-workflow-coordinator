@@ -53,6 +53,15 @@ def configured_bounds(configs: list[Path]) -> dict[str, int]:
 
 
 class FormalEvidenceTests(unittest.TestCase):
+    def test_upgrade_model_variables_are_unique(self) -> None:
+        model = (ROOT / "formal" / "upgrade" / "UpgradeRecovery.tla").read_text()
+        declaration = re.search(r"^VARIABLES\s+(.+)$", model, re.MULTILINE)
+        self.assertIsNotNone(declaration)
+        assert declaration is not None
+        variables = [name.strip() for name in declaration.group(1).split(",")]
+        self.assertTrue(variables)
+        self.assertEqual(len(variables), len(set(variables)))
+
     def test_upgrade_config_invariants_are_theorems(self) -> None:
         config = (ROOT / "formal" / "upgrade" / "UpgradeRecovery.cfg").read_text()
         model = (ROOT / "formal" / "upgrade" / "UpgradeRecovery.tla").read_text()
