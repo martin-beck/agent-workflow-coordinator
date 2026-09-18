@@ -28,7 +28,7 @@ from tools.git_authority_adapter import (
     GitRollbackArtifactBinding,
     GitRollbackSessionState,
 )
-from tools.git_backup import create_backup
+from tools.git_backup import BackupError, create_backup
 from tools.handoffctl import locked
 from tools.lock_domain import LockDomainContract
 from tools.lock_domain_scope import LockDomainScope
@@ -212,6 +212,21 @@ class GitAuthorityAdapterTests(unittest.TestCase):
             restored = artifact_root / "restored"
             self.adapter.restore_backup_bound(backup, restored)
             self.assertEqual((self.root / "state").read_text(), (restored / "state").read_text())
+
+    def test_adapter_owned_backup_failure_removes_partial_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            artifact_root = Path(directory)
+            destination = artifact_root / "backup"
+            with (
+                patch(
+                    "tools.git_backup._run",
+                    side_effect=BackupError("injected Git backup failure"),
+                ),
+                self.assertRaisesRegex(BackupError, "injected Git backup failure"),
+            ):
+                self.adapter.create_backup_bound(destination, quiesced=True)
+            self.assertFalse(destination.exists())
+            self.assertEqual([], list(artifact_root.iterdir()))
 
     def test_git_backup_observation_requires_verified_typed_result(self) -> None:
         session = GitRollbackSessionState(
