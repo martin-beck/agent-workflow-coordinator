@@ -97,6 +97,7 @@ class FormalEvidenceTests(unittest.TestCase):
         specification = re.search(r"^SPECIFICATION\s+(\w+)$", config, re.MULTILINE)
         self.assertIsNotNone(specification)
         assert specification is not None
+        self.assertEqual(len(re.findall(r"^SPECIFICATION\s+\w+$", config, re.MULTILINE)), 1)
         self.assertIsNotNone(
             re.search(
                 rf"^\s*{re.escape(specification.group(1))}\s*==",
