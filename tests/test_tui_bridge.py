@@ -74,6 +74,10 @@ class TuiBridgeTests(unittest.TestCase):
         self.assertIn("Choose boundary", docs["workplan"])
         self.assertTrue(docs["design"].startswith("# Design\n"))
         self.assertTrue(docs["workplan"].startswith("# Work plan\n"))
+        with self.assertRaisesRegex(TuiBridgeError, "without ARs"):
+            generate_tui_documents(())
+        with self.assertRaisesRegex(TuiBridgeError, "unknown dependency"):
+            generate_tui_documents(({"id": "AR-0001", "depends_on": ["AR-9999"]},))
 
     def test_batch_session_contains_all_requests_in_one_launch(self) -> None:
         first_ar, first_wrapper = _request()

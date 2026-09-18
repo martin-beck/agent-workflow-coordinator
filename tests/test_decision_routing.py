@@ -47,6 +47,29 @@ class DecisionRoutingTests(unittest.TestCase):
                 assessment, trigger=trigger(), request_ref="AWG-OTHER", channel="workflow-tui"
             )
 
+    def test_invalid_assessment_values_fail_closed(self) -> None:
+        for kwargs, message in (
+            ({"decision_class": "other"}, "decision_class"),
+            ({"decision_class": "operational", "impact": "extreme"}, "impact"),
+            ({"decision_class": "operational", "reversibility": "unknown"}, "reversibility"),
+        ):
+            with self.assertRaisesRegex(DecisionRoutingError, message):
+                assess_decision(**kwargs)
+
+    def test_missing_reference_and_trigger_are_rejected(self) -> None:
+        assessment = assess_decision(decision_class="design")
+        for trigger_value, request_ref, message in (
+            (trigger(), None, "request reference"),
+            ({"interaction_required": False}, "AWG-X", "active human trigger"),
+        ):
+            with self.assertRaisesRegex(DecisionRoutingError, message):
+                require_tui_route(
+                    assessment,
+                    trigger=trigger_value,
+                    request_ref=request_ref,
+                    channel="workflow-tui",
+                )
+
 
 if __name__ == "__main__":
     unittest.main()
