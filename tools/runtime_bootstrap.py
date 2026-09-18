@@ -340,9 +340,32 @@ def _require_canonical_manifest(data: bytearray, parsed: object) -> None:
         raise AuthorityError("runtime manifest is not canonical")
 
 
-def _require_manifest_unchanged(runtime_root: Path, initial: dict[str, str]) -> None:
+def _manifest_file_identity(runtime_root: Path) -> tuple[int, int]:
+    """Capture the private manifest inode identity without following aliases."""
+    manifest = runtime_root / "runtime-manifest.json"
+    try:
+        value = manifest.lstat()
+    except OSError as error:
+        raise AuthorityError("runtime manifest is unavailable") from error
+    if (
+        not stat.S_ISREG(value.st_mode)
+        or value.st_uid != os.geteuid()
+        or value.st_nlink != 1
+        or stat.S_IMODE(value.st_mode) != 0o600
+    ):
+        raise AuthorityError("runtime manifest is unsafe")
+    return value.st_dev, value.st_ino
+
+
+def _require_manifest_unchanged(
+    runtime_root: Path, initial: dict[str, str], initial_file_identity: tuple[int, int]
+) -> None:
     """Reject identity changes made while authenticity evidence was produced."""
+    before = _manifest_file_identity(runtime_root)
     current = read_runtime_manifest(runtime_root)
+    after = _manifest_file_identity(runtime_root)
+    if before != initial_file_identity or after != initial_file_identity:
+        raise AuthorityError("runtime manifest identity changed during verification")
     if current != initial:
         raise AuthorityError("runtime manifest identity does not match selected release")
 
@@ -484,6 +507,7 @@ def resolve_selected_runtime(
     root = releases_root.absolute()
     release_path = _release_path(root, release)
     manifest = read_runtime_manifest(release_path)
+    manifest_file_identity = _manifest_file_identity(release_path)
     if manifest["release"] != release:
         raise AuthorityError("runtime manifest release does not match selector")
     manifest_identity = ExpectedRuntimeIdentity(
@@ -507,7 +531,7 @@ def resolve_selected_runtime(
         or _DIGEST.fullmatch(verified.digest) is None
     ):
         raise AuthorityError("runtime authenticity evidence is not bound to selected release")
-    _require_manifest_unchanged(release_path, manifest)
+    _require_manifest_unchanged(release_path, manifest, manifest_file_identity)
     verify_runtime_manifest(release_path, verified.digest)
     _require_selector_unchanged(selector, selector_identity, selected)
     return release_path
@@ -543,6 +567,7 @@ def resolve_selected_runtime_bound(  # noqa: C901
         ):
             raise AuthorityError("selected runtime release is unsafe")
         manifest = read_runtime_manifest(release_path)
+        manifest_file_identity = _manifest_file_identity(release_path)
         if manifest["release"] != release:
             raise AuthorityError("runtime manifest release does not match selector")
         manifest_identity = ExpectedRuntimeIdentity(
@@ -568,7 +593,7 @@ def resolve_selected_runtime_bound(  # noqa: C901
             or _DIGEST.fullmatch(verified.digest) is None
         ):
             raise AuthorityError("runtime authenticity evidence is not bound to selected release")
-        _require_manifest_unchanged(release_path, manifest)
+        _require_manifest_unchanged(release_path, manifest, manifest_file_identity)
         verify_runtime_manifest(release_path, verified.digest)
         result = ResolvedRuntime(
             release_path,
