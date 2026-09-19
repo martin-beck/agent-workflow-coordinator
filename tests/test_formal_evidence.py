@@ -447,6 +447,13 @@ class FormalEvidenceTests(unittest.TestCase):
             self.assertTrue((ROOT / path).is_file(), reference)
             self.assertTrue(class_name and method_name, reference)
 
+    def test_sqlite_evidence_references_are_unique_per_transition(self) -> None:
+        artifact = json.loads(
+            (ROOT / "formal" / "upgrade" / "sqlite-snapshot-correspondence.json").read_text()
+        )
+        for name, references in artifact["evidence"]["by_transition"].items():
+            self.assertEqual(len(references), len(set(references)), name)
+
     def test_sqlite_correspondence_paths_are_safe_repository_paths(self) -> None:
         artifact = json.loads(
             (ROOT / "formal" / "upgrade" / "sqlite-snapshot-correspondence.json").read_text()
