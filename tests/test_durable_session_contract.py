@@ -21,6 +21,7 @@ from tools.durable_session_contract import (
     serialize_journal_record,
     validate_contract,
     validate_journal_record,
+    validate_journal_transaction,
     validate_outcome,
     validate_snapshot,
 )
@@ -148,6 +149,40 @@ class DurableSessionContractTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(DurableSessionContractError, "safe mode"):
             reconcile_journal_envelopes((payload, ambiguous), expected)
+
+    def test_transaction_requires_contiguous_states_and_terminal_finality(self) -> None:
+        expected = snapshot()
+
+        def state(sequence: int, value: str = "captured") -> dict[str, object]:
+            return {
+                "operation_id": "op-1",
+                "sequence": sequence,
+                "intent": "append" if sequence == 0 else "replay",
+                "state": value,
+                "state_revision": 3,
+                "journal_identity": "journal:1",
+                "fsync": "durable",
+            }
+
+        valid = (state(0), state(1), state(2, "terminal"))
+        self.assertEqual(valid, validate_journal_transaction(valid, expected))
+        cases = (
+            ((state(1),), "sequence"),
+            ((state(0), {**state(1), "state": "terminal"}, state(2)), "continues"),
+            (({**state(0), "intent": "unknown"},), "intent"),
+            (({**state(0), "state": "unknown"},), "state is invalid"),
+            (({key: value for key, value in state(0).items() if key != "fsync"},), "fields"),
+            (({**state(0), "state_revision": 4},), "revision"),
+            (({**state(0), "journal_identity": "foreign"},), "identity"),
+            (({**state(0), "state": "ambiguous", "fsync": "uncertain"},), "safe mode"),
+            (({**state(0), "fsync": "uncertain"},), "safe mode"),
+            (({**state(0), "fsync": "lost"},), "fsync is invalid"),
+        )
+        for records, message in cases:
+            with self.assertRaisesRegex(DurableSessionContractError, message):
+                validate_journal_transaction(records, expected)
+        with self.assertRaisesRegex(DurableSessionContractError, "missing"):
+            validate_journal_transaction((), expected)
 
     def test_reconcile_accepts_idempotent_reads_and_rejects_uncertainty(self) -> None:
         expected = snapshot()
