@@ -429,6 +429,18 @@ class FormalEvidenceTests(unittest.TestCase):
         )
         self.assertIsInstance(artifact, dict)
         self.assertIsInstance(artifact["evidence"], dict)
+        self.assertEqual(
+            {"path", "sha256", "config", "config_sha256", "states", "barriers"},
+            set(artifact["model"]),
+        )
+        self.assertEqual(
+            {"revision", "module", "module_sha256", "mutation_gate"},
+            set(artifact["implementation"]),
+        )
+        self.assertEqual(
+            {"tests", "by_transition", "status", "correspondence_claim", "nonclaims"},
+            set(artifact["evidence"]),
+        )
         self.assertIsInstance(artifact["kind"], str)
         self.assertTrue(artifact["kind"])
         self.assertEqual(
