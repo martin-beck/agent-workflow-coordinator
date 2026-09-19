@@ -352,7 +352,10 @@ class FormalEvidenceTests(unittest.TestCase):
         self.assertIsInstance(status, str)
         self.assertTrue(status)
         self.assertEqual("bounded-trace-map-only", status)
-        self.assertEqual("not-proven", artifact["evidence"]["correspondence_claim"])
+        claim = artifact["evidence"]["correspondence_claim"]
+        self.assertIsInstance(claim, str)
+        self.assertTrue(claim)
+        self.assertEqual("not-proven", claim)
         self.assertEqual("rejection-only", artifact["implementation"]["mutation_gate"])
 
     def test_sqlite_correspondence_nonclaims_cover_limits(self) -> None:
