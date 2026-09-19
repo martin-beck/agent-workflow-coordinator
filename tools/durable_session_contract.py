@@ -327,6 +327,32 @@ def validate_recovery_decision(
     _validate_decision_progression(previous, choice, fields)
 
 
+def validate_recovery_outcome(
+    outcome: Mapping[str, Any],
+    decision: Mapping[str, Any],
+    expected: Mapping[str, Any],
+) -> None:
+    """Validate an external terminal outcome without publishing or replaying it."""
+    fields = {"operation_id", "state_revision", "journal_identity", "outcome", "decision"}
+    if set(outcome) != fields:
+        raise DurableSessionContractError("recovery outcome fields are incomplete")
+    validate_recovery_decision(decision, expected)
+    if outcome["operation_id"] != decision["operation_id"]:
+        raise DurableSessionContractError("recovery outcome operation is foreign")
+    if outcome["state_revision"] != decision["state_revision"]:
+        raise DurableSessionContractError("recovery outcome revision is stale")
+    if outcome["journal_identity"] != decision["journal_identity"]:
+        raise DurableSessionContractError("recovery outcome identity is foreign")
+    if outcome["outcome"] not in {"success", "rejected", "ambiguous"}:
+        raise DurableSessionContractError("recovery outcome is invalid")
+    if outcome["decision"] != decision["decision"]:
+        raise DurableSessionContractError("recovery outcome decision is inconsistent")
+    if outcome["outcome"] == "success" and decision["decision"] != "terminal":
+        raise DurableSessionContractError("successful outcome requires terminal decision")
+    if outcome["outcome"] == "ambiguous" and decision["decision"] != "rollback_required":
+        raise DurableSessionContractError("ambiguous outcome requires rollback decision")
+
+
 def reconcile_journal_records(
     observations: Sequence[Mapping[str, Any]], expected: Mapping[str, Any]
 ) -> dict[str, Any]:
