@@ -491,6 +491,8 @@ class FormalEvidenceTests(unittest.TestCase):
                     self.assertIn(value, states, f"{transition['name']}: {field}")
                 if field.startswith("barrier"):
                     self.assertIn(value, barriers, f"{transition['name']}: {field}")
+                if field in {"failure_outcome", "result"}:
+                    self.assertEqual("reject", value, f"{transition['name']}: {field}")
 
     def test_sqlite_correspondence_model_digest_matches_exact_source(self) -> None:
         artifact = json.loads(
