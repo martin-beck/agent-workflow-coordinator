@@ -453,6 +453,9 @@ class FormalEvidenceTests(unittest.TestCase):
         for reference in references:
             path, selector = reference.split("::", 1)
             class_name, method_name = selector.split(".", 1)
+            relative_path = Path(path)
+            self.assertFalse(relative_path.is_absolute(), reference)
+            self.assertNotIn("..", relative_path.parts, reference)
             self.assertTrue((ROOT / path).is_file(), reference)
             self.assertFalse((ROOT / path).is_symlink(), reference)
             self.assertTrue(class_name and method_name, reference)
