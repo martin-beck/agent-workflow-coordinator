@@ -432,6 +432,21 @@ class FormalEvidenceTests(unittest.TestCase):
         self.assertTrue(references)
         self.assertTrue(all(pattern.fullmatch(reference) for reference in references))
 
+    def test_sqlite_evidence_references_target_repository_tests(self) -> None:
+        artifact = json.loads(
+            (ROOT / "formal" / "upgrade" / "sqlite-snapshot-correspondence.json").read_text()
+        )
+        references = [
+            reference
+            for tests in artifact["evidence"]["by_transition"].values()
+            for reference in tests
+        ]
+        for reference in references:
+            path, selector = reference.split("::", 1)
+            class_name, method_name = selector.split(".", 1)
+            self.assertTrue((ROOT / path).is_file(), reference)
+            self.assertTrue(class_name and method_name, reference)
+
     def test_sqlite_correspondence_paths_are_safe_repository_paths(self) -> None:
         artifact = json.loads(
             (ROOT / "formal" / "upgrade" / "sqlite-snapshot-correspondence.json").read_text()
