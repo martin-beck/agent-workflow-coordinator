@@ -58,6 +58,7 @@ class FormalEvidenceTests(unittest.TestCase):
             (ROOT / "formal" / "upgrade" / "sqlite-snapshot-correspondence.json").read_text()
         )
         nonclaims = artifact["evidence"]["nonclaims"]
+        self.assertIsInstance(nonclaims, list)
         self.assertTrue(nonclaims)
         self.assertEqual(len(nonclaims), len(set(nonclaims)))
         self.assertTrue(
