@@ -37,6 +37,11 @@ _JOURNAL_FIELDS = frozenset(
 _JOURNAL_STATUSES = frozenset({"captured", "ambiguous"})
 _JOURNAL_FSYNC = frozenset({"durable", "uncertain"})
 _JOURNAL_ENVELOPE_FIELDS = frozenset({"schema_version", "kind", "record"})
+_TRANSACTION_FIELDS = frozenset(
+    {"operation_id", "sequence", "intent", "state", "state_revision", "journal_identity", "fsync"}
+)
+_TRANSACTION_INTENTS = frozenset({"append", "replay"})
+_TRANSACTION_STATES = frozenset({"captured", "terminal", "ambiguous"})
 
 
 class DurableSessionContractError(ValueError):
@@ -196,6 +201,45 @@ def reconcile_journal_envelopes(
         raise DurableSessionContractError("journal envelopes are missing")
     records = tuple(deserialize_journal_record(payload, expected) for payload in payloads)
     return reconcile_journal_records(records, expected)
+
+
+def _validate_transaction_record(
+    record: Mapping[str, Any], expected: Mapping[str, Any], sequence: int
+) -> dict[str, Any]:
+    if set(record) != _TRANSACTION_FIELDS:
+        raise DurableSessionContractError("journal transaction fields are incomplete")
+    if type(record["sequence"]) is not int or record["sequence"] != sequence:
+        raise DurableSessionContractError("journal transaction sequence is discontinuous")
+    if record["intent"] not in _TRANSACTION_INTENTS:
+        raise DurableSessionContractError("journal transaction intent is invalid")
+    if record["state"] not in _TRANSACTION_STATES:
+        raise DurableSessionContractError("journal transaction state is invalid")
+    if record["state_revision"] != expected["state_revision"]:
+        raise DurableSessionContractError("journal transaction revision is stale")
+    if record["journal_identity"] != expected["journal_identity"]:
+        raise DurableSessionContractError("journal transaction identity is foreign")
+    if record["state"] == "ambiguous" or record["fsync"] == "uncertain":
+        raise DurableSessionContractError("ambiguous journal transaction requires safe mode")
+    if record["fsync"] != "durable":
+        raise DurableSessionContractError("journal transaction fsync is invalid")
+    return dict(record)
+
+
+def validate_journal_transaction(
+    records: Sequence[Mapping[str, Any]], expected: Mapping[str, Any]
+) -> tuple[dict[str, Any], ...]:
+    """Validate contiguous append/replay state without persisting or executing it."""
+    if not records:
+        raise DurableSessionContractError("journal transaction is missing")
+    normalized: list[dict[str, Any]] = []
+    terminal_seen = False
+    for sequence, record in enumerate(records):
+        current = _validate_transaction_record(record, expected, sequence)
+        if terminal_seen:
+            raise DurableSessionContractError("journal transaction continues after terminal state")
+        terminal_seen = current["state"] == "terminal"
+        normalized.append(current)
+    return tuple(normalized)
 
 
 def reconcile_journal_records(
