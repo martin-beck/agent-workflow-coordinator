@@ -19,6 +19,7 @@ from tools.durable_session_contract import (
     load_contract,
     reconcile_journal_envelopes,
     reconcile_journal_records,
+    reconcile_recovery_outcomes,
     recovery_decision,
     serialize_journal_record,
     validate_contract,
@@ -323,6 +324,37 @@ class DurableSessionContractTests(unittest.TestCase):
         for forged, decision, message in cases:
             with self.assertRaisesRegex(DurableSessionContractError, message):
                 validate_recovery_outcome(forged, decision, expected)
+
+    def test_recovery_outcome_sequence_accepts_idempotence_and_rejects_conflicts(self) -> None:
+        expected = snapshot()
+        decision = {
+            "operation_id": "op-1",
+            "state_revision": 3,
+            "journal_identity": "journal:1",
+            "decision": "terminal",
+            "safe_mode": False,
+            "rollback_required": False,
+        }
+        outcome = {
+            "operation_id": "op-1",
+            "state_revision": 3,
+            "journal_identity": "journal:1",
+            "outcome": "success",
+            "decision": "terminal",
+        }
+        self.assertEqual(
+            outcome, reconcile_recovery_outcomes((outcome, dict(outcome)), decision, expected)
+        )
+        with self.assertRaisesRegex(DurableSessionContractError, "missing"):
+            reconcile_recovery_outcomes((), decision, expected)
+        with self.assertRaisesRegex(DurableSessionContractError, "changed"):
+            reconcile_recovery_outcomes(
+                (outcome, {**outcome, "outcome": "rejected"}), decision, expected
+            )
+        with self.assertRaisesRegex(DurableSessionContractError, "ambiguous"):
+            reconcile_recovery_outcomes(
+                (outcome, {**outcome, "outcome": "ambiguous"}), decision, expected
+            )
 
     def test_reconcile_accepts_idempotent_reads_and_rejects_uncertainty(self) -> None:
         expected = snapshot()
