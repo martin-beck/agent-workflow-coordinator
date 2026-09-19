@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import ast
 import hashlib
 import io
 import json
@@ -454,6 +455,28 @@ class FormalEvidenceTests(unittest.TestCase):
             class_name, method_name = selector.split(".", 1)
             self.assertTrue((ROOT / path).is_file(), reference)
             self.assertTrue(class_name and method_name, reference)
+
+    def test_sqlite_evidence_references_resolve_to_definitions(self) -> None:
+        artifact = json.loads(
+            (ROOT / "formal" / "upgrade" / "sqlite-snapshot-correspondence.json").read_text()
+        )
+        references = [
+            reference
+            for tests in artifact["evidence"]["by_transition"].values()
+            for reference in tests
+        ]
+        for reference in references:
+            path, selector = reference.split("::", 1)
+            class_name, method_name = selector.split(".", 1)
+            tree = ast.parse((ROOT / path).read_text(encoding="utf-8"))
+            classes = [node for node in ast.walk(tree) if isinstance(node, ast.ClassDef)]
+            target = next(node for node in classes if node.name == class_name)
+            methods = [
+                node.name
+                for node in target.body
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            ]
+            self.assertIn(method_name, methods, reference)
 
     def test_sqlite_evidence_references_are_unique_per_transition(self) -> None:
         artifact = json.loads(
