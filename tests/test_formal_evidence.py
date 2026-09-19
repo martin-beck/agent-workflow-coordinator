@@ -162,6 +162,23 @@ class FormalEvidenceTests(unittest.TestCase):
             self.assertIsInstance(model, dict, transition["name"])
             self.assertIsInstance(model.get("action"), str, transition["name"])
 
+    def test_sqlite_transition_implementation_mappings_are_qualified(self) -> None:
+        artifact = json.loads(
+            (ROOT / "formal" / "upgrade" / "sqlite-snapshot-correspondence.json").read_text()
+        )
+        for transition in artifact["transitions"]:
+            implementations = transition["implementation"]
+            self.assertIsInstance(implementations, list, transition["name"])
+            self.assertTrue(implementations, transition["name"])
+            for qualified_path in implementations:
+                self.assertIsInstance(qualified_path, str, transition["name"])
+                parts = qualified_path.split(".")
+                self.assertTrue(all(part.strip() for part in parts), transition["name"])
+                self.assertTrue(
+                    len(parts) >= 2 or qualified_path.startswith("_"),
+                    transition["name"],
+                )
+
     def test_sqlite_transition_names_are_unique(self) -> None:
         artifact = json.loads(
             (ROOT / "formal" / "upgrade" / "sqlite-snapshot-correspondence.json").read_text()
