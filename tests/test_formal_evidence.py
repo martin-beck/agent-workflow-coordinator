@@ -408,6 +408,7 @@ class FormalEvidenceTests(unittest.TestCase):
         )
         names = {transition["name"] for transition in artifact["transitions"]}
         coverage = artifact["evidence"]["by_transition"]
+        self.assertIsInstance(coverage, dict)
         self.assertEqual(names, set(coverage))
         for name in names:
             references = coverage[name]
