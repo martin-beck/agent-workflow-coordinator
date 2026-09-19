@@ -199,6 +199,21 @@ class UpgradeContractTests(unittest.TestCase):
             set(artifact["required_admission"]),
         )
 
+    def test_durable_session_contract_is_read_only_and_fail_closed(self) -> None:
+        artifact = json.loads(
+            (ROOT / "formal/upgrade/durable-upgrade-session-contract.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.assertEqual("durable-upgrade-session-contract", artifact["kind"])
+        self.assertFalse(artifact["mutation_enabled"])
+        self.assertFalse(artifact["dispatch_enabled"])
+        self.assertEqual("disabled", artifact["outcome_publication"])
+        self.assertEqual("safe_mode_and_reject", artifact["ambiguous_observation"])
+        self.assertEqual(artifact["capture"], artifact["assert_current"])
+        self.assertIn("journal_bytes", artifact["capture"])
+        self.assertIn("fencing_token", artifact["capture"])
+
     def test_schema_and_protocol_graph(self) -> None:
         schema = json.loads((ROOT / "schema/upgrade-contract.schema.json").read_text())
         document = contract()

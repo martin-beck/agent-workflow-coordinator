@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "kind": "durable-upgrade-session-contract",
+  "capture": [
+    "authority_identity",
+    "control_store_identity",
+    "control_lock_identity",
+    "journal_identity",
+    "journal_bytes",
+    "barrier_id",
+    "fencing_owner",
+    "fencing_token",
+    "state_revision"
+  ],
+  "assert_current": [
+    "authority_identity",
+    "control_store_identity",
+    "control_lock_identity",
+    "journal_identity",
+    "journal_bytes",
+    "barrier_id",
+    "fencing_owner",
+    "fencing_token",
+    "state_revision"
+  ],
+  "outcome_publication": "disabled",
+  "ambiguous_observation": "safe_mode_and_reject",
+  "mutation_enabled": false,
+  "dispatch_enabled": false
+}
