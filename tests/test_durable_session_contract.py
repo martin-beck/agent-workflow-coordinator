@@ -25,6 +25,7 @@ from tools.durable_session_contract import (
     validate_journal_record,
     validate_journal_transaction,
     validate_outcome,
+    validate_recovery_decision,
     validate_snapshot,
 )
 
@@ -234,6 +235,47 @@ class DurableSessionContractTests(unittest.TestCase):
         self.assertEqual("rollback_required", rollback["decision"])
         self.assertTrue(rollback["safe_mode"])
         self.assertTrue(rollback["rollback_required"])
+
+    def test_recovery_decision_provenance_and_monotonicity_are_fail_closed(self) -> None:
+        expected = snapshot()
+
+        def decision(value: str) -> dict[str, object]:
+            rollback = value == "rollback_required"
+            return {
+                "operation_id": "op-1",
+                "state_revision": 3,
+                "journal_identity": "journal:1",
+                "decision": value,
+                "safe_mode": rollback,
+                "rollback_required": rollback,
+            }
+
+        validate_recovery_decision(decision("resume"), expected)
+        expected_with_operation = {**expected, "operation_id": "op-1"}
+        with self.assertRaisesRegex(DurableSessionContractError, "operation"):
+            validate_recovery_decision(
+                {**decision("resume"), "operation_id": "foreign"}, expected_with_operation
+            )
+        validate_recovery_decision(decision("terminal"), expected, decision("resume"))
+        validate_recovery_decision(decision("rollback_required"), expected, decision("resume"))
+        validate_recovery_decision(decision("terminal"), expected, decision("terminal"))
+        for forged, message in (
+            (
+                {key: value for key, value in decision("resume").items() if key != "decision"},
+                "fields",
+            ),
+            ({**decision("resume"), "journal_identity": "foreign"}, "identity"),
+            ({**decision("resume"), "decision": "other"}, "invalid"),
+            ({**decision("resume"), "safe_mode": True}, "safe-mode"),
+            ({**decision("resume"), "rollback_required": True}, "rollback"),
+            ({**decision("resume"), "state_revision": 4}, "revision"),
+        ):
+            with self.assertRaisesRegex(DurableSessionContractError, message):
+                validate_recovery_decision(forged, expected)
+        with self.assertRaisesRegex(DurableSessionContractError, "monotonic"):
+            validate_recovery_decision(decision("resume"), expected, decision("terminal"))
+        with self.assertRaisesRegex(DurableSessionContractError, "previous"):
+            validate_recovery_decision(decision("resume"), expected, {"decision": "resume"})
 
     def test_reconcile_accepts_idempotent_reads_and_rejects_uncertainty(self) -> None:
         expected = snapshot()
