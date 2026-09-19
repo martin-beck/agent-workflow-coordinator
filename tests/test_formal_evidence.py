@@ -193,6 +193,8 @@ class FormalEvidenceTests(unittest.TestCase):
                     "state-preserving" in postcondition or "without changing" in postcondition,
                     transition["name"],
                 )
+                self.assertNotIn("write-closed", postcondition)
+                self.assertNotIn("permanently", postcondition)
 
     def test_sqlite_model_actions_are_in_next(self) -> None:
         artifact = json.loads(
