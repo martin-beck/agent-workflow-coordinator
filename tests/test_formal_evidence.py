@@ -167,6 +167,7 @@ class FormalEvidenceTests(unittest.TestCase):
         self.assertTrue(transitions)
         self.assertTrue(all(isinstance(transition, dict) for transition in transitions))
         names = [transition["name"] for transition in transitions]
+        self.assertTrue(all(isinstance(name, str) and name.strip() for name in names))
         self.assertTrue(names)
         self.assertEqual(len(names), len(set(names)))
 
