@@ -555,6 +555,7 @@ class FormalEvidenceTests(unittest.TestCase):
             action = transition["model"]["action"]
             self.assertIsInstance(action, str)
             self.assertTrue(action.strip(), transition["name"])
+            self.assertIn(action, {"no-op", "Crash"}, transition["name"])
             if action == "no-op":
                 self.assertIn("state", transition["postcondition"])
             else:
