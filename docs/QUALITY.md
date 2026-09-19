@@ -1,7 +1,7 @@
 # Quality gates
 
 The coordinator retains its native verification gates as authoritative. Agent
-Workflow Quality (AWQ) v0.35.0 adds a pinned, portable PR layer; it does not
+Workflow Quality (AWQ) v0.32.0 adds a pinned, portable PR layer; it does not
 replace Python tests, branch coverage, Ruff, mypy, Lizard, JSON Schema checks,
 source-header checks, DCO validation, or the TLA+ models.
 
@@ -11,14 +11,9 @@ The tracked AWQ policy and lock select these matching profiles:
   `supply-chain`, and `formal-evidence`.
 
 The lock pins AWQ commit
-`d3d46a5f540fb03f65f30dd4c2af325f6f018a6e` (release `v0.35.0`). CI installs
-that exact source revision from the locked quality group, runs onboarding, and
-executes the AWQ PR tier before the native verification job. The repository
-owned `quality/workflow-trust.json` supplies the workflow event and runner
-trust declarations required by AWQ-GHA-002. Trusted push, dispatch, and weekly
-formal execution is isolated in `.github/workflows/formal.yml` on the approved
-self-hosted runner; pull requests use the disposable portable formal tier in
-`verify.yml`.
+`f1c40859e9d10cacbc79100ed136c38bce48cd39` (release `v0.32.0`). CI checks out
+that exact source revision, installs its locked environment, runs onboarding,
+and executes the AWQ PR tier before the native verification job.
 
 The native-to-shared boundary is intentional:
 
@@ -32,5 +27,7 @@ The native-to-shared boundary is intentional:
 | Supply-chain policy | coordinator vendor manifest and locked quality policy |
 
 AWQ adapter execution remains opt-in and does not acquire tools at runtime.
-The coordinator-specific `terminology` profile is deferred until a reviewed
-terminology registry and negative fixtures are added.
+The coordinator-owned `quality/terminology.json` registry supplies the terms;
+AWQ performs bounded offline lexical checking in the declared documentation and
+example scopes. This is a terminology-contract gate, not semantic or policy
+proof. Native coordinator gates remain authoritative.

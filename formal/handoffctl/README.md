@@ -26,7 +26,7 @@ Every accepted lifecycle command increments `task_revision` exactly once and val
 For Git authority, the task and generated projections update under the same repository lock and a
 detected pre-commit failure restores them. For SQLite authority, one database transaction commits
 the task first and generated projections are recoverable output. A rejected command leaves
-authoritative revision, task state and owner unchanged.
+authoritative revision, task status and owner unchanged.
 
 | Command | Required source | Required actor/revision | Result |
 | --- | --- | --- | --- |
