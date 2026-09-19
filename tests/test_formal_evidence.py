@@ -502,6 +502,9 @@ class FormalEvidenceTests(unittest.TestCase):
         self.assertIn("ambiguous", artifact["model"]["barriers"])
         states = set(artifact["model"]["states"])
         barriers = set(artifact["model"]["barriers"])
+        actions = [transition["model"]["action"] for transition in artifact["transitions"]]
+        self.assertEqual(1, actions.count("Crash"))
+        self.assertGreaterEqual(actions.count("no-op"), 1)
         for transition in artifact["transitions"]:
             for field, value in transition["model"].items():
                 if field.startswith("journal"):
