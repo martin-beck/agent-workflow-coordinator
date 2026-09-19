@@ -477,6 +477,7 @@ class FormalEvidenceTests(unittest.TestCase):
                 if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
             ]
             self.assertIn(method_name, methods, reference)
+            self.assertTrue(method_name.startswith("test_"), reference)
 
     def test_sqlite_evidence_references_are_unique_per_transition(self) -> None:
         artifact = json.loads(
