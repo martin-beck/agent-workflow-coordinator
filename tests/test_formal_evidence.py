@@ -438,6 +438,10 @@ class FormalEvidenceTests(unittest.TestCase):
         )
         model = (ROOT / artifact["model"]["path"]).read_text(encoding="utf-8")
         config = (ROOT / artifact["model"]["config"]).read_text(encoding="utf-8")
+        for field in ("states", "barriers"):
+            values = artifact["model"][field]
+            self.assertIsInstance(values, list, field)
+            self.assertTrue(values, field)
         self.assertRegex(model, r"Journals == .*\"running\".*\"safe_mode\"")
         self.assertRegex(model, r"Barriers == .*\"held\".*\"ambiguous\"")
         self.assertIn('CONSTANT Backends = {"git", "sqlite"}', config)
