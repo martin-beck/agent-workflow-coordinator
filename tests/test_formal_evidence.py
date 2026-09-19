@@ -503,6 +503,13 @@ class FormalEvidenceTests(unittest.TestCase):
         self.assertTrue(indexed)
         self.assertTrue(indexed <= inventory)
 
+    def test_sqlite_evidence_inventory_is_unique(self) -> None:
+        artifact = json.loads(
+            (ROOT / "formal" / "upgrade" / "sqlite-snapshot-correspondence.json").read_text()
+        )
+        inventory = artifact["evidence"]["tests"]
+        self.assertEqual(len(inventory), len(set(inventory)))
+
     def test_sqlite_correspondence_paths_are_safe_repository_paths(self) -> None:
         artifact = json.loads(
             (ROOT / "formal" / "upgrade" / "sqlite-snapshot-correspondence.json").read_text()
