@@ -31,6 +31,6 @@
     },
     "status": "bounded-trace-map-only",
     "correspondence_claim": "not-proven",
-    "nonclaims": ["This map does not prove implementation refinement.", "It does not authorize SQLite writes, outcome publication, Git dispatch, apply, or rollback.", "The abstract Crash action does not model power loss or SQLite VFS behavior."]
+    "nonclaims": ["This map does not prove implementation refinement.", "It does not authorize SQLite mutation or writes, outcome publication, Git dispatch, apply, or rollback.", "The abstract Crash action does not model power loss or SQLite VFS behavior."]
   }
 }
