@@ -483,6 +483,14 @@ class FormalEvidenceTests(unittest.TestCase):
         self.assertIn("safe_mode", artifact["model"]["states"])
         self.assertIn("held", artifact["model"]["barriers"])
         self.assertIn("ambiguous", artifact["model"]["barriers"])
+        states = set(artifact["model"]["states"])
+        barriers = set(artifact["model"]["barriers"])
+        for transition in artifact["transitions"]:
+            for field, value in transition["model"].items():
+                if field.startswith("journal"):
+                    self.assertIn(value, states, f"{transition['name']}: {field}")
+                if field.startswith("barrier"):
+                    self.assertIn(value, barriers, f"{transition['name']}: {field}")
 
     def test_sqlite_correspondence_model_digest_matches_exact_source(self) -> None:
         artifact = json.loads(
