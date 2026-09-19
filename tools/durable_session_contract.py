@@ -353,6 +353,24 @@ def validate_recovery_outcome(
         raise DurableSessionContractError("ambiguous outcome requires rollback decision")
 
 
+def reconcile_recovery_outcomes(
+    outcomes: Sequence[Mapping[str, Any]],
+    decision: Mapping[str, Any],
+    expected: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Accept exact idempotent outcome rereads, rejecting conflicting history."""
+    if not outcomes:
+        raise DurableSessionContractError("recovery outcomes are missing")
+    normalized: list[dict[str, Any]] = []
+    for outcome in outcomes:
+        validate_recovery_outcome(outcome, decision, expected)
+        normalized.append(dict(outcome))
+    first = normalized[0]
+    if any(outcome != first for outcome in normalized[1:]):
+        raise DurableSessionContractError("recovery outcome changed")
+    return first
+
+
 def reconcile_journal_records(
     observations: Sequence[Mapping[str, Any]], expected: Mapping[str, Any]
 ) -> dict[str, Any]:
