@@ -14,6 +14,7 @@ from tools.durable_session_contract import (
     DurableSessionContractError,
     load_contract,
     validate_contract,
+    validate_journal_record,
     validate_outcome,
     validate_snapshot,
 )
@@ -67,6 +68,32 @@ class DurableSessionContractTests(unittest.TestCase):
         with self.assertRaisesRegex(DurableSessionContractError, "outcome value"):
             validate_outcome(dict(record, outcome="replayed"), expected)
 
+    def test_journal_record_requires_atomic_durable_or_ambiguous_pair(self) -> None:
+        expected = snapshot()
+        record = {
+            "operation_id": "op-1",
+            "state_revision": 3,
+            "journal_identity": "journal:1",
+            "status": "captured",
+            "fsync": "durable",
+        }
+        validate_journal_record(record, expected)
+        validate_journal_record({**record, "status": "ambiguous", "fsync": "uncertain"}, expected)
+        for malformed in (
+            {**record, "status": "ambiguous"},
+            {**record, "fsync": "uncertain"},
+            {**record, "fsync": "lost"},
+            {**record, "status": "lost"},
+            {**record, "journal_identity": "foreign"},
+            {**record, "state_revision": 2},
+            {key: value for key, value in record.items() if key != "operation_id"},
+            {**record, "operation_id": ""},
+        ):
+            with self.assertRaises(DurableSessionContractError):
+                validate_journal_record(malformed, expected)
+        with self.assertRaisesRegex(DurableSessionContractError, "expected session"):
+            validate_journal_record(record, {"journal_identity": "journal:1"})
+
     def test_contract_drift_cannot_enable_mutation_or_dispatch(self) -> None:
         contract = load_contract()
         for field in ("mutation_enabled", "dispatch_enabled"):
@@ -115,6 +142,22 @@ class DurableSessionContractTests(unittest.TestCase):
                     },
                 },
                 "outcomes",
+            ),
+            ("journal-atomic", {**valid, "journal_record": {"atomic": False}}, "journal"),
+            (
+                "journal-fields",
+                {**valid, "journal_record": {"atomic": True, "required": []}},
+                "journal",
+            ),
+            (
+                "journal-status",
+                {**valid, "journal_record": {**valid["journal_record"], "allowed_status": []}},
+                "statuses",
+            ),
+            (
+                "journal-fsync",
+                {**valid, "journal_record": {**valid["journal_record"], "allowed_fsync": []}},
+                "fsync",
             ),
         ]
         for name, value, message in cases:

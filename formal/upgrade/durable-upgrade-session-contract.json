@@ -29,6 +29,12 @@
     "required": ["operation_id", "opcode", "outcome", "state_revision", "identity_digest"],
     "allowed": ["success", "rejected", "ambiguous"]
   },
+  "journal_record": {
+    "atomic": true,
+    "required": ["operation_id", "state_revision", "journal_identity", "status", "fsync"],
+    "allowed_status": ["captured", "ambiguous"],
+    "allowed_fsync": ["durable", "uncertain"]
+  },
   "ambiguous_observation": "safe_mode_and_reject",
   "mutation_enabled": false,
   "dispatch_enabled": false
