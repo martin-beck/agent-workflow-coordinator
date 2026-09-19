@@ -183,6 +183,13 @@ class FormalEvidenceTests(unittest.TestCase):
             postcondition = transition["postcondition"]
             self.assertIsInstance(postcondition, str)
             self.assertTrue(postcondition.strip(), transition["name"])
+            if transition["model"]["action"] == "Crash":
+                self.assertIn("write-closed", postcondition)
+            else:
+                self.assertTrue(
+                    "state-preserving" in postcondition or "without changing" in postcondition,
+                    transition["name"],
+                )
 
     def test_sqlite_model_actions_are_in_next(self) -> None:
         artifact = json.loads(
