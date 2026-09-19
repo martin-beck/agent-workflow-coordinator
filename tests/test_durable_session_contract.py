@@ -16,12 +16,14 @@ from tools.durable_session_contract import (
     InMemoryJournalRecordStore,
     classify_journal_recovery,
     deserialize_journal_record,
+    deserialize_recovery_outcome,
     load_contract,
     reconcile_journal_envelopes,
     reconcile_journal_records,
     reconcile_recovery_outcomes,
     recovery_decision,
     serialize_journal_record,
+    serialize_recovery_outcome,
     validate_contract,
     validate_journal_record,
     validate_journal_transaction,
@@ -355,6 +357,41 @@ class DurableSessionContractTests(unittest.TestCase):
             reconcile_recovery_outcomes(
                 (outcome, {**outcome, "outcome": "ambiguous"}), decision, expected
             )
+
+    def test_recovery_outcome_envelope_is_canonical_and_provenance_bound(self) -> None:
+        expected = snapshot()
+        decision = {
+            "operation_id": "op-1",
+            "state_revision": 3,
+            "journal_identity": "journal:1",
+            "decision": "terminal",
+            "safe_mode": False,
+            "rollback_required": False,
+        }
+        outcome = {
+            "operation_id": "op-1",
+            "state_revision": 3,
+            "journal_identity": "journal:1",
+            "outcome": "success",
+            "decision": "terminal",
+        }
+        payload = serialize_recovery_outcome(outcome, decision, expected)
+        self.assertEqual(
+            payload, serialize_recovery_outcome(dict(outcome), dict(decision), expected)
+        )
+        self.assertEqual((outcome, decision), deserialize_recovery_outcome(payload, expected))
+        with self.assertRaisesRegex(DurableSessionContractError, "malformed"):
+            deserialize_recovery_outcome(payload[:-1], expected)
+        for forged in (
+            {**json.loads(payload), "kind": "foreign"},
+            {**json.loads(payload), "schema_version": 2},
+            {**json.loads(payload), "extra": True},
+            {**json.loads(payload), "outcome": []},
+        ):
+            with self.assertRaises(DurableSessionContractError):
+                deserialize_recovery_outcome(json.dumps(forged).encode(), expected)
+        with self.assertRaisesRegex(DurableSessionContractError, "bytes"):
+            deserialize_recovery_outcome(bytearray(payload), expected)  # type: ignore[arg-type]
 
     def test_reconcile_accepts_idempotent_reads_and_rejects_uncertainty(self) -> None:
         expected = snapshot()

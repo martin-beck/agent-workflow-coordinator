@@ -371,6 +371,45 @@ def reconcile_recovery_outcomes(
     return first
 
 
+def serialize_recovery_outcome(
+    outcome: Mapping[str, Any], decision: Mapping[str, Any], expected: Mapping[str, Any]
+) -> bytes:
+    """Encode a validated recovery outcome as deterministic provenance bytes."""
+    validate_recovery_outcome(outcome, decision, expected)
+    envelope = {
+        "decision": dict(decision),
+        "kind": "durable-recovery-outcome",
+        "outcome": dict(outcome),
+        "schema_version": 1,
+    }
+    return json.dumps(envelope, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode(
+        "utf-8"
+    )
+
+
+def deserialize_recovery_outcome(
+    payload: bytes, expected: Mapping[str, Any]
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Decode and validate a recovery outcome provenance envelope."""
+    if not isinstance(payload, bytes):
+        raise DurableSessionContractError("recovery envelope must be bytes")
+    try:
+        envelope = json.loads(payload.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise DurableSessionContractError("recovery envelope is malformed") from error
+    fields = {"schema_version", "kind", "decision", "outcome"}
+    if not isinstance(envelope, dict) or set(envelope) != fields:
+        raise DurableSessionContractError("recovery envelope fields are invalid")
+    if envelope["schema_version"] != 1 or envelope["kind"] != "durable-recovery-outcome":
+        raise DurableSessionContractError("recovery envelope schema is invalid")
+    decision = envelope["decision"]
+    outcome = envelope["outcome"]
+    if not isinstance(decision, dict) or not isinstance(outcome, dict):
+        raise DurableSessionContractError("recovery envelope records are invalid")
+    validate_recovery_outcome(outcome, decision, expected)
+    return dict(outcome), dict(decision)
+
+
 def reconcile_journal_records(
     observations: Sequence[Mapping[str, Any]], expected: Mapping[str, Any]
 ) -> dict[str, Any]:
