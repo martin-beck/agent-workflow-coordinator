@@ -278,6 +278,55 @@ def recovery_decision(
     }
 
 
+def _validate_decision_progression(
+    previous: Mapping[str, Any], choice: str, fields: set[str]
+) -> None:
+    if set(previous) != fields:
+        raise DurableSessionContractError("previous recovery decision is incomplete")
+    prior = previous["decision"]
+    allowed = {
+        "resume": {"resume", "terminal", "rollback_required"},
+        "terminal": {"terminal"},
+        "rollback_required": {"rollback_required"},
+    }
+    if prior not in allowed or choice not in allowed[prior]:
+        raise DurableSessionContractError("recovery decision is not monotonic")
+
+
+def validate_recovery_decision(
+    decision: Mapping[str, Any],
+    expected: Mapping[str, Any],
+    previous: Mapping[str, Any] | None = None,
+) -> None:
+    """Validate decision provenance and monotonic forward-only transitions."""
+    fields = {
+        "operation_id",
+        "state_revision",
+        "journal_identity",
+        "decision",
+        "safe_mode",
+        "rollback_required",
+    }
+    if set(decision) != fields:
+        raise DurableSessionContractError("recovery decision fields are incomplete")
+    if decision["operation_id"] != expected.get("operation_id", decision["operation_id"]):
+        raise DurableSessionContractError("recovery decision operation is foreign")
+    if decision["state_revision"] != expected["state_revision"]:
+        raise DurableSessionContractError("recovery decision revision is stale")
+    if decision["journal_identity"] != expected["journal_identity"]:
+        raise DurableSessionContractError("recovery decision identity is foreign")
+    choice = decision["decision"]
+    if choice not in {"resume", "terminal", "rollback_required"}:
+        raise DurableSessionContractError("recovery decision is invalid")
+    if decision["safe_mode"] is not (choice == "rollback_required"):
+        raise DurableSessionContractError("recovery decision safe-mode flag is inconsistent")
+    if decision["rollback_required"] is not (choice == "rollback_required"):
+        raise DurableSessionContractError("recovery decision rollback flag is inconsistent")
+    if previous is None:
+        return
+    _validate_decision_progression(previous, choice, fields)
+
+
 def reconcile_journal_records(
     observations: Sequence[Mapping[str, Any]], expected: Mapping[str, Any]
 ) -> dict[str, Any]:
