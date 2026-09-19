@@ -500,11 +500,39 @@ class FormalEvidenceTests(unittest.TestCase):
         self.assertIn("safe_mode", artifact["model"]["states"])
         self.assertIn("held", artifact["model"]["barriers"])
         self.assertIn("ambiguous", artifact["model"]["barriers"])
-        states = set(artifact["model"]["states"])
-        barriers = set(artifact["model"]["barriers"])
         actions = [transition["model"]["action"] for transition in artifact["transitions"]]
         self.assertEqual(1, actions.count("Crash"))
         self.assertGreaterEqual(actions.count("no-op"), 1)
+
+    def test_sqlite_transition_domains_are_declared(self) -> None:
+        artifact = json.loads(
+            (ROOT / "formal" / "upgrade" / "sqlite-snapshot-correspondence.json").read_text()
+        )
+        states = set(artifact["model"]["states"])
+        barriers = set(artifact["model"]["barriers"])
+        allowed_actions = {"Crash", "no-op"}
+        for transition in artifact["transitions"]:
+            model = transition["model"]
+            self.assertIn(model["action"], allowed_actions, transition["name"])
+            for field, domain in (("journal_before", states), ("journal_after", states)):
+                if field in model:
+                    self.assertIn(model[field], domain, transition["name"])
+            for field, domain in (("barrier_before", barriers), ("barrier_after", barriers)):
+                if field in model:
+                    self.assertIn(model[field], domain, transition["name"])
+
+    def test_sqlite_identity_reread_rejection_is_explicit(self) -> None:
+        artifact = json.loads(
+            (ROOT / "formal" / "upgrade" / "sqlite-snapshot-correspondence.json").read_text()
+        )
+        states = set(artifact["model"]["states"])
+        barriers = set(artifact["model"]["barriers"])
+        reread = next(
+            transition
+            for transition in artifact["transitions"]
+            if transition["name"] == "identity-reread"
+        )
+        self.assertEqual("reject", reread["model"]["failure_outcome"])
         for transition in artifact["transitions"]:
             for field, value in transition["model"].items():
                 if field.startswith("journal"):
