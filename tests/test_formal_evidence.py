@@ -80,7 +80,10 @@ class FormalEvidenceTests(unittest.TestCase):
         artifact = json.loads(
             (ROOT / "formal" / "upgrade" / "sqlite-snapshot-correspondence.json").read_text()
         )
-        self.assertEqual(artifact["implementation"]["mutation_gate"], "rejection-only")
+        gate = artifact["implementation"]["mutation_gate"]
+        self.assertIsInstance(gate, str)
+        self.assertTrue(gate)
+        self.assertEqual(gate, "rejection-only")
 
     def test_sqlite_correspondence_revision_shape(self) -> None:
         artifact = json.loads(
