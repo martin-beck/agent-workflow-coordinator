@@ -417,6 +417,21 @@ class FormalEvidenceTests(unittest.TestCase):
             self.assertTrue(tests, name)
             self.assertTrue(all(isinstance(test, str) and test.strip() for test in tests), name)
 
+    def test_sqlite_evidence_references_have_test_shape(self) -> None:
+        artifact = json.loads(
+            (ROOT / "formal" / "upgrade" / "sqlite-snapshot-correspondence.json").read_text()
+        )
+        references = [
+            reference
+            for tests in artifact["evidence"]["by_transition"].values()
+            for reference in tests
+        ]
+        pattern = re.compile(
+            r"^tests/[A-Za-z0-9_/]+\.py::[A-Za-z_][A-Za-z0-9_]*\.test_[A-Za-z0-9_]+$"
+        )
+        self.assertTrue(references)
+        self.assertTrue(all(pattern.fullmatch(reference) for reference in references))
+
     def test_sqlite_correspondence_paths_are_safe_repository_paths(self) -> None:
         artifact = json.loads(
             (ROOT / "formal" / "upgrade" / "sqlite-snapshot-correspondence.json").read_text()
