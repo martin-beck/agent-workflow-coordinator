@@ -180,3 +180,53 @@ def reconcile_journal_records(
     if any(observation != first for observation in normalized[1:]):
         raise DurableSessionContractError("journal observation changed")
     return first
+
+
+class InMemoryJournalRecordStore:
+    """Append-idempotent, non-persistent journal adapter for contract tests.
+
+    The store intentionally has no filesystem, SQLite, backend, or dispatch
+    dependency.  Ambiguous observations permanently fence this instance.
+    """
+
+    def __init__(self, expected: Mapping[str, Any]) -> None:
+        if set(expected) != _IDENTITY_FIELDS:
+            raise DurableSessionContractError("expected session fields are incomplete")
+        self._expected = dict(expected)
+        self._records: dict[tuple[str, int, str], dict[str, Any]] = {}
+        self._safe_mode = False
+
+    @property
+    def safe_mode(self) -> bool:
+        return self._safe_mode
+
+    def append(self, record: Mapping[str, Any]) -> dict[str, Any]:
+        """Append a durable record, accepting only exact idempotent retries."""
+        if self._safe_mode:
+            raise DurableSessionContractError("journal store is in safe mode")
+        validate_journal_record(record, self._expected)
+        if record["status"] != "captured" or record["fsync"] != "durable":
+            self._safe_mode = True
+            raise DurableSessionContractError("journal append requires durable capture")
+        key = (record["operation_id"], record["state_revision"], record["journal_identity"])
+        existing = self._records.get(key)
+        if existing is not None and existing != dict(record):
+            self._safe_mode = True
+            raise DurableSessionContractError("journal replay conflicts with existing record")
+        stored = dict(record)
+        self._records[key] = stored
+        return dict(stored)
+
+    def observe(self, record: Mapping[str, Any]) -> dict[str, Any]:
+        """Classify a reread; uncertainty fences before any append is attempted."""
+        if self._safe_mode:
+            raise DurableSessionContractError("journal store is in safe mode")
+        validate_journal_record(record, self._expected)
+        if record["status"] == "ambiguous" or record["fsync"] == "uncertain":
+            self._safe_mode = True
+            raise DurableSessionContractError("ambiguous journal observation requires safe mode")
+        return self.append(record)
+
+    def records(self) -> tuple[dict[str, Any], ...]:
+        """Return a detached, deterministic view for read-only assertions."""
+        return tuple(dict(record) for record in self._records.values())

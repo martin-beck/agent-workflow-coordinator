@@ -12,6 +12,7 @@ from pathlib import Path
 
 from tools.durable_session_contract import (
     DurableSessionContractError,
+    InMemoryJournalRecordStore,
     load_contract,
     reconcile_journal_records,
     validate_contract,
@@ -113,6 +114,55 @@ class DurableSessionContractTests(unittest.TestCase):
             reconcile_journal_records(
                 (stable, {**stable, "status": "ambiguous", "fsync": "uncertain"}), expected
             )
+
+    def test_in_memory_store_is_idempotent_and_fences_replay_or_ambiguity(self) -> None:
+        expected = snapshot()
+        record = {
+            "operation_id": "op-1",
+            "state_revision": 3,
+            "journal_identity": "journal:1",
+            "status": "captured",
+            "fsync": "durable",
+        }
+        store = InMemoryJournalRecordStore(expected)
+        self.assertEqual(record, store.append(record))
+        self.assertEqual(record, store.append(dict(record)))
+        self.assertEqual((record,), store.records())
+        observed = InMemoryJournalRecordStore(expected)
+        self.assertEqual(record, observed.observe(record))
+        key = ("op-1", 3, "journal:1")
+        observed._records[key] = {**record, "operation_id": "tampered"}
+        with self.assertRaisesRegex(DurableSessionContractError, "replay"):
+            observed.append(record)
+        self.assertTrue(observed.safe_mode)
+        with self.assertRaisesRegex(DurableSessionContractError, "durable capture"):
+            store.append({**record, "status": "ambiguous", "fsync": "uncertain"})
+        self.assertTrue(store.safe_mode)
+        with self.assertRaisesRegex(DurableSessionContractError, "safe mode"):
+            store.observe(record)
+        with self.assertRaisesRegex(DurableSessionContractError, "safe mode"):
+            store.append(record)
+
+    def test_in_memory_store_rejects_incomplete_expected_identity(self) -> None:
+        with self.assertRaisesRegex(DurableSessionContractError, "expected session"):
+            InMemoryJournalRecordStore({"journal_identity": "journal:1"})
+
+    def test_in_memory_store_fences_uncertain_observation_and_foreign_identity(self) -> None:
+        expected = snapshot()
+        record = {
+            "operation_id": "op-1",
+            "state_revision": 3,
+            "journal_identity": "journal:1",
+            "status": "captured",
+            "fsync": "durable",
+        }
+        store = InMemoryJournalRecordStore(expected)
+        with self.assertRaisesRegex(DurableSessionContractError, "foreign"):
+            store.observe({**record, "journal_identity": "journal:replacement"})
+        self.assertFalse(store.safe_mode)
+        with self.assertRaisesRegex(DurableSessionContractError, "safe mode"):
+            store.observe({**record, "status": "ambiguous", "fsync": "uncertain"})
+        self.assertTrue(store.safe_mode)
 
     def test_contract_drift_cannot_enable_mutation_or_dispatch(self) -> None:
         contract = load_contract()
