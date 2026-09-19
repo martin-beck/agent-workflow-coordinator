@@ -16,6 +16,7 @@ from tools.durable_session_contract import (
     InMemoryJournalRecordStore,
     deserialize_journal_record,
     load_contract,
+    reconcile_journal_envelopes,
     reconcile_journal_records,
     serialize_journal_record,
     validate_contract,
@@ -126,6 +127,27 @@ class DurableSessionContractTests(unittest.TestCase):
         for invalid in (bytearray(payload), "text"):
             with self.assertRaisesRegex(DurableSessionContractError, "bytes"):
                 deserialize_journal_record(invalid, expected)  # type: ignore[arg-type]
+
+    def test_envelope_sequence_reconciles_idempotent_history_and_fences_drift(self) -> None:
+        expected = snapshot()
+        record = {
+            "operation_id": "op-1",
+            "state_revision": 3,
+            "journal_identity": "journal:1",
+            "status": "captured",
+            "fsync": "durable",
+        }
+        payload = serialize_journal_record(record, expected)
+        self.assertEqual(record, reconcile_journal_envelopes((payload, payload), expected))
+        with self.assertRaisesRegex(DurableSessionContractError, "missing"):
+            reconcile_journal_envelopes((), expected)
+        with self.assertRaisesRegex(DurableSessionContractError, "malformed"):
+            reconcile_journal_envelopes((payload, payload[:-1]), expected)
+        ambiguous = serialize_journal_record(
+            {**record, "status": "ambiguous", "fsync": "uncertain"}, expected
+        )
+        with self.assertRaisesRegex(DurableSessionContractError, "safe mode"):
+            reconcile_journal_envelopes((payload, ambiguous), expected)
 
     def test_reconcile_accepts_idempotent_reads_and_rejects_uncertainty(self) -> None:
         expected = snapshot()

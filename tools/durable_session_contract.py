@@ -188,6 +188,16 @@ def deserialize_journal_record(payload: bytes, expected: Mapping[str, Any]) -> d
     return dict(record)
 
 
+def reconcile_journal_envelopes(
+    payloads: Sequence[bytes], expected: Mapping[str, Any]
+) -> dict[str, Any]:
+    """Reconcile canonical envelope rereads without writing or replaying them."""
+    if not payloads:
+        raise DurableSessionContractError("journal envelopes are missing")
+    records = tuple(deserialize_journal_record(payload, expected) for payload in payloads)
+    return reconcile_journal_records(records, expected)
+
+
 def reconcile_journal_records(
     observations: Sequence[Mapping[str, Any]], expected: Mapping[str, Any]
 ) -> dict[str, Any]:
