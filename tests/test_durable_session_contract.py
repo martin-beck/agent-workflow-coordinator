@@ -14,6 +14,7 @@ from pathlib import Path
 from tools.durable_session_contract import (
     DurableSessionContractError,
     InMemoryJournalRecordStore,
+    classify_journal_recovery,
     deserialize_journal_record,
     load_contract,
     reconcile_journal_envelopes,
@@ -183,6 +184,27 @@ class DurableSessionContractTests(unittest.TestCase):
                 validate_journal_transaction(records, expected)
         with self.assertRaisesRegex(DurableSessionContractError, "missing"):
             validate_journal_transaction((), expected)
+
+    def test_recovery_classification_is_idempotent_and_fail_closed(self) -> None:
+        expected = snapshot()
+
+        def state(sequence: int, value: str = "captured") -> dict[str, object]:
+            return {
+                "operation_id": "op-1",
+                "sequence": sequence,
+                "intent": "append" if sequence == 0 else "replay",
+                "state": value,
+                "state_revision": 3,
+                "journal_identity": "journal:1",
+                "fsync": "durable",
+            }
+
+        self.assertEqual("resume", classify_journal_recovery((state(0),), expected))
+        self.assertEqual(
+            "terminal", classify_journal_recovery((state(0), state(1, "terminal")), expected)
+        )
+        with self.assertRaisesRegex(DurableSessionContractError, "safe mode"):
+            classify_journal_recovery((state(0), state(1, "rollback_required")), expected)
 
     def test_reconcile_accepts_idempotent_reads_and_rejects_uncertainty(self) -> None:
         expected = snapshot()
