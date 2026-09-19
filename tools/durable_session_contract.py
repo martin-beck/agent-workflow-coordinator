@@ -255,6 +255,29 @@ def classify_journal_recovery(
     return "resume"
 
 
+def recovery_decision(
+    records: Sequence[Mapping[str, Any]], expected: Mapping[str, Any]
+) -> dict[str, Any]:
+    """Build an idempotent recovery decision record without applying it."""
+    validated = validate_journal_transaction(records, expected)
+    last = validated[-1]
+    state = last["state"]
+    if state == "terminal":
+        decision, safe_mode, rollback_required = "terminal", False, False
+    elif state == "rollback_required":
+        decision, safe_mode, rollback_required = "rollback_required", True, True
+    else:
+        decision, safe_mode, rollback_required = "resume", False, False
+    return {
+        "operation_id": last["operation_id"],
+        "state_revision": last["state_revision"],
+        "journal_identity": last["journal_identity"],
+        "decision": decision,
+        "safe_mode": safe_mode,
+        "rollback_required": rollback_required,
+    }
+
+
 def reconcile_journal_records(
     observations: Sequence[Mapping[str, Any]], expected: Mapping[str, Any]
 ) -> dict[str, Any]:

@@ -19,6 +19,7 @@ from tools.durable_session_contract import (
     load_contract,
     reconcile_journal_envelopes,
     reconcile_journal_records,
+    recovery_decision,
     serialize_journal_record,
     validate_contract,
     validate_journal_record,
@@ -205,6 +206,34 @@ class DurableSessionContractTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(DurableSessionContractError, "safe mode"):
             classify_journal_recovery((state(0), state(1, "rollback_required")), expected)
+
+    def test_recovery_decision_is_idempotent_and_explicitly_fences_rollback(self) -> None:
+        expected = snapshot()
+
+        def state(sequence: int, value: str = "captured") -> dict[str, object]:
+            return {
+                "operation_id": "op-1",
+                "sequence": sequence,
+                "intent": "append" if sequence == 0 else "replay",
+                "state": value,
+                "state_revision": 3,
+                "journal_identity": "journal:1",
+                "fsync": "durable",
+            }
+
+        resumed = recovery_decision((state(0),), expected)
+        self.assertEqual("resume", resumed["decision"])
+        self.assertFalse(resumed["safe_mode"])
+        self.assertEqual(resumed, recovery_decision((state(0),), expected))
+        terminal = recovery_decision((state(0), state(1, "terminal")), expected)
+        self.assertEqual(
+            {"decision": "terminal", "safe_mode": False, "rollback_required": False},
+            {key: terminal[key] for key in ("decision", "safe_mode", "rollback_required")},
+        )
+        rollback = recovery_decision((state(0), state(1, "rollback_required")), expected)
+        self.assertEqual("rollback_required", rollback["decision"])
+        self.assertTrue(rollback["safe_mode"])
+        self.assertTrue(rollback["rollback_required"])
 
     def test_reconcile_accepts_idempotent_reads_and_rejects_uncertainty(self) -> None:
         expected = snapshot()
