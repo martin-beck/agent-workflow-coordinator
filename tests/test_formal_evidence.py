@@ -509,6 +509,10 @@ class FormalEvidenceTests(unittest.TestCase):
             (ROOT / "formal" / "upgrade" / "sqlite-snapshot-correspondence.json").read_text()
         )
         inventory = artifact["evidence"]["tests"]
+        self.assertTrue(inventory)
+        self.assertTrue(
+            all(isinstance(reference, str) and reference.strip() for reference in inventory)
+        )
         self.assertEqual(len(inventory), len(set(inventory)))
 
     def test_sqlite_correspondence_paths_are_safe_repository_paths(self) -> None:
