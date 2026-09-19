@@ -185,6 +185,7 @@ class FormalEvidenceTests(unittest.TestCase):
             self.assertTrue(postcondition.strip(), transition["name"])
             if transition["model"]["action"] == "Crash":
                 self.assertIn("write-closed", postcondition)
+                self.assertIn("permanently", postcondition)
             else:
                 self.assertTrue(
                     "state-preserving" in postcondition or "without changing" in postcondition,
