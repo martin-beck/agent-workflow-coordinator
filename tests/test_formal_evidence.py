@@ -405,6 +405,18 @@ class FormalEvidenceTests(unittest.TestCase):
         self.assertIn("outcome publication", joined)
         self.assertIn("apply", joined)
 
+    def test_sqlite_evidence_indexes_each_transition_once(self) -> None:
+        artifact = json.loads(
+            (ROOT / "formal" / "upgrade" / "sqlite-snapshot-correspondence.json").read_text()
+        )
+        transition_names = {transition["name"] for transition in artifact["transitions"]}
+        indexed = artifact["evidence"]["by_transition"]
+        self.assertEqual(transition_names, set(indexed))
+        for name, tests in indexed.items():
+            self.assertIsInstance(tests, list, name)
+            self.assertTrue(tests, name)
+            self.assertTrue(all(isinstance(test, str) and test.strip() for test in tests), name)
+
     def test_sqlite_correspondence_paths_are_safe_repository_paths(self) -> None:
         artifact = json.loads(
             (ROOT / "formal" / "upgrade" / "sqlite-snapshot-correspondence.json").read_text()
