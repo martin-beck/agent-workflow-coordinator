@@ -447,6 +447,7 @@ class FormalEvidenceTests(unittest.TestCase):
                 field,
             )
             self.assertEqual(len(values), len(set(values)), field)
+        self.assertTrue(set(artifact["model"]["states"]).isdisjoint(artifact["model"]["barriers"]))
         self.assertRegex(model, r"Journals == .*\"running\".*\"safe_mode\"")
         self.assertRegex(model, r"Barriers == .*\"held\".*\"ambiguous\"")
         self.assertIn('CONSTANT Backends = {"git", "sqlite"}', config)
