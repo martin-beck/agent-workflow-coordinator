@@ -446,6 +446,7 @@ class FormalEvidenceTests(unittest.TestCase):
                 all(isinstance(value, str) and value.strip() for value in values),
                 field,
             )
+            self.assertEqual(len(values), len(set(values)), field)
         self.assertRegex(model, r"Journals == .*\"running\".*\"safe_mode\"")
         self.assertRegex(model, r"Barriers == .*\"held\".*\"ambiguous\"")
         self.assertIn('CONSTANT Backends = {"git", "sqlite"}', config)
