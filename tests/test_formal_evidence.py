@@ -490,6 +490,19 @@ class FormalEvidenceTests(unittest.TestCase):
         for name, references in artifact["evidence"]["by_transition"].items():
             self.assertEqual(len(references), len(set(references)), name)
 
+    def test_sqlite_evidence_references_are_in_inventory(self) -> None:
+        artifact = json.loads(
+            (ROOT / "formal" / "upgrade" / "sqlite-snapshot-correspondence.json").read_text()
+        )
+        inventory = set(artifact["evidence"]["tests"])
+        indexed = {
+            reference
+            for references in artifact["evidence"]["by_transition"].values()
+            for reference in references
+        }
+        self.assertTrue(indexed)
+        self.assertTrue(indexed <= inventory)
+
     def test_sqlite_correspondence_paths_are_safe_repository_paths(self) -> None:
         artifact = json.loads(
             (ROOT / "formal" / "upgrade" / "sqlite-snapshot-correspondence.json").read_text()
