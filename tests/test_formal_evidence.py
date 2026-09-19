@@ -179,6 +179,14 @@ class FormalEvidenceTests(unittest.TestCase):
                     transition["name"],
                 )
 
+    def test_sqlite_transition_implementation_mappings_are_unique(self) -> None:
+        artifact = json.loads(
+            (ROOT / "formal" / "upgrade" / "sqlite-snapshot-correspondence.json").read_text()
+        )
+        for transition in artifact["transitions"]:
+            implementations = transition["implementation"]
+            self.assertEqual(len(implementations), len(set(implementations)), transition["name"])
+
     def test_sqlite_transition_names_are_unique(self) -> None:
         artifact = json.loads(
             (ROOT / "formal" / "upgrade" / "sqlite-snapshot-correspondence.json").read_text()
