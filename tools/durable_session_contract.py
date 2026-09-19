@@ -36,6 +36,7 @@ _JOURNAL_FIELDS = frozenset(
 )
 _JOURNAL_STATUSES = frozenset({"captured", "ambiguous"})
 _JOURNAL_FSYNC = frozenset({"durable", "uncertain"})
+_JOURNAL_ENVELOPE_FIELDS = frozenset({"schema_version", "kind", "record"})
 
 
 class DurableSessionContractError(ValueError):
@@ -157,6 +158,34 @@ def validate_journal_record(record: Mapping[str, Any], expected: Mapping[str, An
         raise DurableSessionContractError("journal fsync value is invalid")
     if (status, fsync) not in {("captured", "durable"), ("ambiguous", "uncertain")}:
         raise DurableSessionContractError("journal durability is ambiguous")
+
+
+def serialize_journal_record(record: Mapping[str, Any], expected: Mapping[str, Any]) -> bytes:
+    """Encode one validated journal record without writing it anywhere."""
+    validate_journal_record(record, expected)
+    envelope = {"kind": "durable-journal-record", "record": dict(record), "schema_version": 1}
+    return json.dumps(envelope, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode(
+        "utf-8"
+    )
+
+
+def deserialize_journal_record(payload: bytes, expected: Mapping[str, Any]) -> dict[str, Any]:
+    """Decode and validate a canonical journal envelope, rejecting truncation/drift."""
+    if not isinstance(payload, bytes):
+        raise DurableSessionContractError("journal envelope must be bytes")
+    try:
+        envelope = json.loads(payload.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise DurableSessionContractError("journal envelope is malformed") from error
+    if not isinstance(envelope, dict) or set(envelope) != _JOURNAL_ENVELOPE_FIELDS:
+        raise DurableSessionContractError("journal envelope fields are invalid")
+    if envelope["schema_version"] != 1 or envelope["kind"] != "durable-journal-record":
+        raise DurableSessionContractError("journal envelope schema is invalid")
+    record = envelope["record"]
+    if not isinstance(record, dict):
+        raise DurableSessionContractError("journal envelope record is invalid")
+    validate_journal_record(record, expected)
+    return dict(record)
 
 
 def reconcile_journal_records(

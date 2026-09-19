@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import copy
+import json
 import os
 import tempfile
 import unittest
@@ -13,8 +14,10 @@ from pathlib import Path
 from tools.durable_session_contract import (
     DurableSessionContractError,
     InMemoryJournalRecordStore,
+    deserialize_journal_record,
     load_contract,
     reconcile_journal_records,
+    serialize_journal_record,
     validate_contract,
     validate_journal_record,
     validate_outcome,
@@ -95,6 +98,34 @@ class DurableSessionContractTests(unittest.TestCase):
                 validate_journal_record(malformed, expected)
         with self.assertRaisesRegex(DurableSessionContractError, "expected session"):
             validate_journal_record(record, {"journal_identity": "journal:1"})
+
+    def test_journal_envelope_is_canonical_and_identity_bound(self) -> None:
+        expected = snapshot()
+        record = {
+            "operation_id": "op-1",
+            "state_revision": 3,
+            "journal_identity": "journal:1",
+            "status": "captured",
+            "fsync": "durable",
+        }
+        payload = serialize_journal_record(record, expected)
+        self.assertEqual(payload, serialize_journal_record(dict(record), expected))
+        self.assertEqual(record, deserialize_journal_record(payload, expected))
+        with self.assertRaisesRegex(DurableSessionContractError, "malformed"):
+            deserialize_journal_record(payload[:-1], expected)
+        with self.assertRaisesRegex(DurableSessionContractError, "identity"):
+            deserialize_journal_record(payload, {**expected, "journal_identity": "foreign"})
+        for forged in (
+            {**json.loads(payload), "kind": "foreign"},
+            {**json.loads(payload), "schema_version": 2},
+            {**json.loads(payload), "extra": True},
+            {**json.loads(payload), "record": []},
+        ):
+            with self.assertRaises(DurableSessionContractError):
+                deserialize_journal_record(json.dumps(forged, sort_keys=True).encode(), expected)
+        for invalid in (bytearray(payload), "text"):
+            with self.assertRaisesRegex(DurableSessionContractError, "bytes"):
+                deserialize_journal_record(invalid, expected)  # type: ignore[arg-type]
 
     def test_reconcile_accepts_idempotent_reads_and_rejects_uncertainty(self) -> None:
         expected = snapshot()
