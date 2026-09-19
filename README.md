@@ -48,13 +48,17 @@ Read [the formal proof boundary](formal/handoffctl/README.md): these guarantees 
 processes on a local filesystem and do not cover malicious source edits, direct writers, unreliable
 NFS locking, arbitrary command correctness, kernel/storage failure, or power loss.
 
+The canonical vocabulary for these guarantees is defined in
+[Coordinator terminology](docs/TERMINOLOGY.md) and enforced by the reviewed
+AWQ terminology profile.
+
 ## Adopt it in a project
 
 Prerequisites for normal local SQLite coordination are Python 3.12+, Git, and a local filesystem
 supporting SQLite WAL locking/shared memory. No database daemon, separate `sqlite3` executable,
-Python package, GitHub account, GitHub CLI, or network access is required. GitHub CLI is needed only
-for live GitHub views or publication; release publication uses protected, exact-source tags and does
-not require a signing key. The Git backend also requires a local filesystem with POSIX `flock(2)` semantics.
+Python package, GitHub account, GitHub CLI, or network access is required. GitHub CLI and configured
+Git signing are needed only when live GitHub views or Git publication are enabled. The Git backend
+also requires a local filesystem with POSIX `flock(2)` semantics.
 
 1. Check out an exact release tag.
 2. Vendor it into the state repository:
