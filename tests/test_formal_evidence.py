@@ -383,6 +383,8 @@ class FormalEvidenceTests(unittest.TestCase):
         self.assertIn("mutation", joined)
         self.assertIn("rollback", joined)
         self.assertIn("git dispatch", joined)
+        self.assertIn("outcome publication", joined)
+        self.assertIn("apply", joined)
 
     def test_sqlite_correspondence_paths_are_safe_repository_paths(self) -> None:
         artifact = json.loads(
