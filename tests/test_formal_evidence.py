@@ -348,7 +348,10 @@ class FormalEvidenceTests(unittest.TestCase):
             (ROOT / "formal" / "upgrade" / "sqlite-snapshot-correspondence.json").read_text()
         )
         self.assertRegex(artifact["implementation"]["revision"], r"^[0-9a-f]{40}$")
-        self.assertEqual("bounded-trace-map-only", artifact["evidence"]["status"])
+        status = artifact["evidence"]["status"]
+        self.assertIsInstance(status, str)
+        self.assertTrue(status)
+        self.assertEqual("bounded-trace-map-only", status)
         self.assertEqual("not-proven", artifact["evidence"]["correspondence_claim"])
         self.assertEqual("rejection-only", artifact["implementation"]["mutation_gate"])
 
