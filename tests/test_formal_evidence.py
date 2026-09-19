@@ -417,6 +417,8 @@ class FormalEvidenceTests(unittest.TestCase):
         )
         self.assertIsInstance(artifact, dict)
         self.assertIsInstance(artifact["evidence"], dict)
+        self.assertIsInstance(artifact["kind"], str)
+        self.assertTrue(artifact["kind"])
         self.assertEqual(
             {"schema_version", "kind", "model", "implementation", "transitions", "evidence"},
             set(artifact),
