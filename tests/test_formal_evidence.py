@@ -496,6 +496,8 @@ class FormalEvidenceTests(unittest.TestCase):
             if transition["model"]["action"] == "Crash":
                 self.assertEqual("safe_mode", transition["model"].get("journal_after"))
                 self.assertEqual("ambiguous", transition["model"].get("barrier_after"))
+                self.assertNotIn("result", transition["model"])
+                self.assertNotIn("failure_outcome", transition["model"])
             else:
                 self.assertNotIn("journal_after", transition["model"])
                 self.assertNotIn("barrier_after", transition["model"])
