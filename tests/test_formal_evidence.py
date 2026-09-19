@@ -502,6 +502,7 @@ class FormalEvidenceTests(unittest.TestCase):
         }
         self.assertTrue(indexed)
         self.assertTrue(indexed <= inventory)
+        self.assertTrue(inventory <= indexed)
 
     def test_sqlite_evidence_inventory_is_unique(self) -> None:
         artifact = json.loads(
