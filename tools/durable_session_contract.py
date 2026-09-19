@@ -31,6 +31,11 @@ _OUTCOME_FIELDS = frozenset(
     {"operation_id", "opcode", "outcome", "state_revision", "identity_digest"}
 )
 _OUTCOMES = frozenset({"success", "rejected", "ambiguous"})
+_JOURNAL_FIELDS = frozenset(
+    {"operation_id", "state_revision", "journal_identity", "status", "fsync"}
+)
+_JOURNAL_STATUSES = frozenset({"captured", "ambiguous"})
+_JOURNAL_FSYNC = frozenset({"durable", "uncertain"})
 
 
 class DurableSessionContractError(ValueError):
@@ -58,6 +63,7 @@ def validate_contract(value: Mapping[str, Any]) -> None:
     _validate_safety(value)
     _validate_identity_fields(value)
     _validate_outcome_schema(value)
+    _validate_journal_schema(value)
 
 
 def _validate_safety(value: Mapping[str, Any]) -> None:
@@ -84,6 +90,18 @@ def _validate_outcome_schema(value: Mapping[str, Any]) -> None:
         raise DurableSessionContractError("outcome record fields are incomplete")
     if set(outcome.get("allowed", ())) != _OUTCOMES:
         raise DurableSessionContractError("outcome record outcomes are invalid")
+
+
+def _validate_journal_schema(value: Mapping[str, Any]) -> None:
+    journal = value.get("journal_record")
+    if not isinstance(journal, dict) or journal.get("atomic") is not True:
+        raise DurableSessionContractError("journal record must be atomic")
+    if set(journal.get("required", ())) != _JOURNAL_FIELDS:
+        raise DurableSessionContractError("journal record fields are incomplete")
+    if set(journal.get("allowed_status", ())) != _JOURNAL_STATUSES:
+        raise DurableSessionContractError("journal record statuses are invalid")
+    if set(journal.get("allowed_fsync", ())) != _JOURNAL_FSYNC:
+        raise DurableSessionContractError("journal record fsync values are invalid")
 
 
 def validate_snapshot(snapshot: Mapping[str, Any], expected: Mapping[str, Any]) -> None:
@@ -117,3 +135,25 @@ def validate_outcome(record: Mapping[str, Any], expected: Mapping[str, Any]) -> 
         raise DurableSessionContractError("outcome revision is stale")
     if record["identity_digest"] != expected["journal_identity"]:
         raise DurableSessionContractError("outcome identity is foreign")
+
+
+def validate_journal_record(record: Mapping[str, Any], expected: Mapping[str, Any]) -> None:
+    """Validate an atomic journal observation without persisting or replaying it."""
+    if set(record) != _JOURNAL_FIELDS:
+        raise DurableSessionContractError("journal record fields are incomplete")
+    if set(expected) != _IDENTITY_FIELDS:
+        raise DurableSessionContractError("expected session fields are incomplete")
+    if not isinstance(record["operation_id"], str) or not record["operation_id"]:
+        raise DurableSessionContractError("journal operation is invalid")
+    if record["state_revision"] != expected["state_revision"]:
+        raise DurableSessionContractError("journal revision is stale")
+    if record["journal_identity"] != expected["journal_identity"]:
+        raise DurableSessionContractError("journal identity is foreign")
+    status = record["status"]
+    fsync = record["fsync"]
+    if status not in _JOURNAL_STATUSES:
+        raise DurableSessionContractError("journal status is invalid")
+    if fsync not in _JOURNAL_FSYNC:
+        raise DurableSessionContractError("journal fsync value is invalid")
+    if (status, fsync) not in {("captured", "durable"), ("ambiguous", "uncertain")}:
+        raise DurableSessionContractError("journal durability is ambiguous")
