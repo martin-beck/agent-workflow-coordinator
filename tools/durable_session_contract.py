@@ -425,6 +425,19 @@ def reconcile_recovery_envelopes(
     return reconcile_recovery_outcomes(outcomes, decision, expected), decision
 
 
+def validate_recovery_provenance_chain(
+    journal: Mapping[str, Any],
+    decision: Mapping[str, Any],
+    outcome: Mapping[str, Any],
+    expected: Mapping[str, Any],
+) -> None:
+    """Validate journal, decision, and outcome linkage without publishing it."""
+    validate_journal_record(journal, expected)
+    validate_recovery_outcome(outcome, decision, expected)
+    if journal["operation_id"] != outcome["operation_id"]:
+        raise DurableSessionContractError("provenance operation linkage is foreign")
+
+
 def reconcile_journal_records(
     observations: Sequence[Mapping[str, Any]], expected: Mapping[str, Any]
 ) -> dict[str, Any]:
