@@ -13,6 +13,7 @@ from pathlib import Path
 from tools.durable_session_contract import (
     DurableSessionContractError,
     load_contract,
+    reconcile_journal_records,
     validate_contract,
     validate_journal_record,
     validate_outcome,
@@ -93,6 +94,25 @@ class DurableSessionContractTests(unittest.TestCase):
                 validate_journal_record(malformed, expected)
         with self.assertRaisesRegex(DurableSessionContractError, "expected session"):
             validate_journal_record(record, {"journal_identity": "journal:1"})
+
+    def test_reconcile_accepts_idempotent_reads_and_rejects_uncertainty(self) -> None:
+        expected = snapshot()
+        stable = {
+            "operation_id": "op-1",
+            "state_revision": 3,
+            "journal_identity": "journal:1",
+            "status": "captured",
+            "fsync": "durable",
+        }
+        self.assertEqual(stable, reconcile_journal_records((stable, dict(stable)), expected))
+        with self.assertRaisesRegex(DurableSessionContractError, "missing"):
+            reconcile_journal_records((), expected)
+        with self.assertRaisesRegex(DurableSessionContractError, "changed"):
+            reconcile_journal_records((stable, {**stable, "operation_id": "replayed"}), expected)
+        with self.assertRaisesRegex(DurableSessionContractError, "safe mode"):
+            reconcile_journal_records(
+                (stable, {**stable, "status": "ambiguous", "fsync": "uncertain"}), expected
+            )
 
     def test_contract_drift_cannot_enable_mutation_or_dispatch(self) -> None:
         contract = load_contract()

@@ -9,7 +9,7 @@ open stores, publish outcomes, or authorize any mutation or dispatch.
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -157,3 +157,26 @@ def validate_journal_record(record: Mapping[str, Any], expected: Mapping[str, An
         raise DurableSessionContractError("journal fsync value is invalid")
     if (status, fsync) not in {("captured", "durable"), ("ambiguous", "uncertain")}:
         raise DurableSessionContractError("journal durability is ambiguous")
+
+
+def reconcile_journal_records(
+    observations: Sequence[Mapping[str, Any]], expected: Mapping[str, Any]
+) -> dict[str, Any]:
+    """Return one stable observation, or reject uncertain/replaced journal state.
+
+    This is intentionally an in-memory checker. It performs no journal writes,
+    outcome publication, recovery, or mutation; an ambiguous observation is a
+    permanent safe-mode rejection for the caller.
+    """
+    if not observations:
+        raise DurableSessionContractError("journal observations are missing")
+    normalized: list[dict[str, Any]] = []
+    for observation in observations:
+        validate_journal_record(observation, expected)
+        normalized.append(dict(observation))
+    if any(observation["status"] == "ambiguous" for observation in normalized):
+        raise DurableSessionContractError("ambiguous journal state requires safe mode")
+    first = normalized[0]
+    if any(observation != first for observation in normalized[1:]):
+        raise DurableSessionContractError("journal observation changed")
+    return first
