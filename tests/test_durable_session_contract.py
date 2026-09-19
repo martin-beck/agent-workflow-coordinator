@@ -1,0 +1,179 @@
+# Copyright (C) Huawei Technologies Co., Ltd. 2026. All rights reserved.
+# SPDX-License-Identifier: MIT
+"""Hostile validation tests for the disabled durable session contract."""
+
+from __future__ import annotations
+
+import copy
+import os
+import tempfile
+import unittest
+from pathlib import Path
+
+from tools.durable_session_contract import (
+    DurableSessionContractError,
+    load_contract,
+    validate_contract,
+    validate_outcome,
+    validate_snapshot,
+)
+
+
+def snapshot() -> dict[str, object]:
+    return {
+        "authority_identity": "authority:1",
+        "control_store_identity": "control:1",
+        "control_lock_identity": "lock:1",
+        "journal_identity": "journal:1",
+        "journal_bytes": "digest:1",
+        "barrier_id": "barrier-1",
+        "fencing_owner": "owner-1",
+        "fencing_token": "token-1",
+        "state_revision": 3,
+    }
+
+
+class DurableSessionContractTests(unittest.TestCase):
+    def test_checked_in_contract_is_disabled_and_valid(self) -> None:
+        contract = load_contract()
+        self.assertFalse(contract["mutation_enabled"])
+        self.assertFalse(contract["dispatch_enabled"])
+
+    def test_snapshot_requires_exact_identity_and_revision(self) -> None:
+        current = snapshot()
+        validate_snapshot(current, dict(current))
+        foreign = dict(current, authority_identity="authority:foreign")
+        with self.assertRaisesRegex(DurableSessionContractError, "authority_identity"):
+            validate_snapshot(current, foreign)
+        with self.assertRaises(DurableSessionContractError):
+            validate_snapshot(
+                {key: value for key, value in current.items() if key != "journal_bytes"}, current
+            )
+
+    def test_outcome_rejects_replay_foreign_and_unknown_records(self) -> None:
+        expected = snapshot()
+        record = {
+            "operation_id": "op-1",
+            "opcode": "backend.backup",
+            "outcome": "success",
+            "state_revision": 3,
+            "identity_digest": "journal:1",
+        }
+        validate_outcome(record, expected)
+        with self.assertRaisesRegex(DurableSessionContractError, "stale"):
+            validate_outcome(dict(record, state_revision=2), expected)
+        with self.assertRaisesRegex(DurableSessionContractError, "foreign"):
+            validate_outcome(dict(record, identity_digest="journal:foreign"), expected)
+        with self.assertRaisesRegex(DurableSessionContractError, "outcome value"):
+            validate_outcome(dict(record, outcome="replayed"), expected)
+
+    def test_contract_drift_cannot_enable_mutation_or_dispatch(self) -> None:
+        contract = load_contract()
+        for field in ("mutation_enabled", "dispatch_enabled"):
+            forged = copy.deepcopy(contract)
+            forged[field] = True
+            with self.assertRaisesRegex(DurableSessionContractError, "disabled"):
+                validate_contract(forged)
+
+    def test_contract_rejects_malformed_artifacts_and_schema_drift(self) -> None:
+        valid = load_contract()
+        cases = [
+            ("kind", {**valid, "kind": "foreign"}, "kind"),
+            ("outcome", {**valid, "outcome_publication": "enabled"}, "publication"),
+            ("ambiguous", {**valid, "ambiguous_observation": "continue"}, "ambiguous"),
+            ("capture", {**valid, "capture": None}, "missing"),
+            ("fields", {**valid, "capture": ["only"]}, "incomplete"),
+            ("atomic", {**valid, "outcome_record": {"atomic": False}}, "atomic"),
+            (
+                "required",
+                {
+                    **valid,
+                    "outcome_record": {
+                        "atomic": True,
+                        "required": [],
+                        "allowed": list({"success", "rejected", "ambiguous"}),
+                    },
+                },
+                "fields",
+            ),
+            (
+                "allowed",
+                {
+                    **valid,
+                    "outcome_record": {
+                        "atomic": True,
+                        "required": list(
+                            {
+                                "operation_id",
+                                "opcode",
+                                "outcome",
+                                "state_revision",
+                                "identity_digest",
+                            }
+                        ),
+                        "allowed": [],
+                    },
+                },
+                "outcomes",
+            ),
+        ]
+        for name, value, message in cases:
+            with (
+                self.subTest(name=name),
+                self.assertRaisesRegex(DurableSessionContractError, message),
+            ):
+                validate_contract(value)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "contract.json"
+            path.write_text("[]", encoding="utf-8")
+            with self.assertRaisesRegex(DurableSessionContractError, "object"):
+                load_contract(path)
+            path.write_text("{", encoding="utf-8")
+            with self.assertRaisesRegex(DurableSessionContractError, "unavailable"):
+                load_contract(path)
+            with self.assertRaisesRegex(DurableSessionContractError, "unavailable"):
+                load_contract(Path(directory) / "missing.json")
+
+    def test_snapshot_and_outcome_reject_invalid_types_and_shapes(self) -> None:
+        current = snapshot()
+        for field, value in (("state_revision", -1), ("state_revision", True), ("barrier_id", "")):
+            with (
+                self.subTest(field=field, value=value),
+                self.assertRaises(DurableSessionContractError),
+            ):
+                validate_snapshot(dict(current, **{field: value}), current)
+        with self.assertRaises(DurableSessionContractError):
+            validate_snapshot(current, {**current, "state_revision": "3"})
+        record = {
+            "operation_id": "op-1",
+            "opcode": "backend.backup",
+            "outcome": "success",
+            "state_revision": 3,
+            "identity_digest": "journal:1",
+        }
+        for malformed in (
+            {key: value for key, value in record.items() if key != "opcode"},
+            {**record, "operation_id": ""},
+            {**record, "opcode": ""},
+        ):
+            with self.assertRaises(DurableSessionContractError):
+                validate_outcome(malformed, current)
+        with self.assertRaises(DurableSessionContractError):
+            validate_outcome(record, {**current, "state_revision": 4})
+        with self.assertRaises(DurableSessionContractError):
+            validate_outcome(
+                record, {key: value for key, value in current.items() if key != "journal_identity"}
+            )
+
+    def test_process_death_cannot_authorize_outcome_publication(self) -> None:
+        child = os.fork()
+        if child == 0:  # pragma: no cover - executed in the forked process
+            load_contract()
+            os._exit(23)
+        _, status = os.waitpid(child, 0)
+        self.assertEqual(23, os.waitstatus_to_exitcode(status))
+        self.assertEqual("disabled", load_contract()["outcome_publication"])
+
+
+if __name__ == "__main__":
+    unittest.main()
