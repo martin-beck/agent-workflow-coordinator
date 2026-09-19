@@ -31,6 +31,7 @@ from tools.durable_session_contract import (
     validate_outcome,
     validate_recovery_decision,
     validate_recovery_outcome,
+    validate_recovery_provenance_chain,
     validate_snapshot,
 )
 
@@ -426,6 +427,35 @@ class DurableSessionContractTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(DurableSessionContractError, "provenance"):
             reconcile_recovery_envelopes((payload, foreign), expected)
+
+    def test_provenance_chain_links_journal_decision_and_outcome(self) -> None:
+        expected = snapshot()
+        journal = {
+            "operation_id": "op-1",
+            "state_revision": 3,
+            "journal_identity": "journal:1",
+            "status": "captured",
+            "fsync": "durable",
+        }
+        decision = {
+            "operation_id": "op-1",
+            "state_revision": 3,
+            "journal_identity": "journal:1",
+            "decision": "terminal",
+            "safe_mode": False,
+            "rollback_required": False,
+        }
+        outcome = {
+            "operation_id": "op-1",
+            "state_revision": 3,
+            "journal_identity": "journal:1",
+            "outcome": "success",
+            "decision": "terminal",
+        }
+        validate_recovery_provenance_chain(journal, decision, outcome, expected)
+        for forged, message in (({**journal, "operation_id": "foreign"}, "operation"),):
+            with self.assertRaisesRegex(DurableSessionContractError, message):
+                validate_recovery_provenance_chain(forged, decision, outcome, expected)
 
     def test_reconcile_accepts_idempotent_reads_and_rejects_uncertainty(self) -> None:
         expected = snapshot()
