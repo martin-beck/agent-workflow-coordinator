@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "kind": "bounded-backup-campaign-contract",
+  "operation": "backup",
+  "mutation_enabled": false,
+  "dispatch_enabled": false,
+  "supported_phases": ["backup"],
+  "unsupported_phases": ["discover", "preflight", "quiesce", "stage", "commit", "validate", "reopen", "rollback"],
+  "required_admission": [
+    "operation_id",
+    "state_revision",
+    "barrier_id",
+    "fencing_owner",
+    "fencing_token",
+    "authority_identity_digest",
+    "journal_identity_digest"
+  ],
+  "session_obligations": [
+    "capture_before_effect",
+    "assert_current_before_effect",
+    "reread_after_effect",
+    "record_outcome_after_durable_fsync"
+  ],
+  "ambiguous_outcome": "safe_mode_and_reject"
+}

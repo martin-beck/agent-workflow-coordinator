@@ -172,6 +172,33 @@ def contract() -> dict[str, Any]:
 
 
 class UpgradeContractTests(unittest.TestCase):
+    def test_bounded_backup_campaign_contract_is_disabled_by_default(self) -> None:
+        artifact = json.loads(
+            (ROOT / "formal/upgrade/bounded-backup-campaign-contract.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.assertEqual("bounded-backup-campaign-contract", artifact["kind"])
+        self.assertEqual(1, artifact["schema_version"])
+        self.assertFalse(artifact["mutation_enabled"])
+        self.assertFalse(artifact["dispatch_enabled"])
+        self.assertEqual(["backup"], artifact["supported_phases"])
+        self.assertIn("commit", artifact["unsupported_phases"])
+        self.assertIn("rollback", artifact["unsupported_phases"])
+        self.assertEqual("safe_mode_and_reject", artifact["ambiguous_outcome"])
+        self.assertEqual(
+            {
+                "operation_id",
+                "state_revision",
+                "barrier_id",
+                "fencing_owner",
+                "fencing_token",
+                "authority_identity_digest",
+                "journal_identity_digest",
+            },
+            set(artifact["required_admission"]),
+        )
+
     def test_schema_and_protocol_graph(self) -> None:
         schema = json.loads((ROOT / "schema/upgrade-contract.schema.json").read_text())
         document = contract()
