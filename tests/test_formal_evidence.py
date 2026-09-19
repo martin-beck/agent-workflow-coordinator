@@ -496,6 +496,9 @@ class FormalEvidenceTests(unittest.TestCase):
             if transition["model"]["action"] == "Crash":
                 self.assertEqual("safe_mode", transition["model"].get("journal_after"))
                 self.assertEqual("ambiguous", transition["model"].get("barrier_after"))
+            else:
+                self.assertNotIn("journal_after", transition["model"])
+                self.assertNotIn("barrier_after", transition["model"])
 
     def test_sqlite_correspondence_model_digest_matches_exact_source(self) -> None:
         artifact = json.loads(
