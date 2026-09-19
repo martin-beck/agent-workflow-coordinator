@@ -41,7 +41,7 @@ _TRANSACTION_FIELDS = frozenset(
     {"operation_id", "sequence", "intent", "state", "state_revision", "journal_identity", "fsync"}
 )
 _TRANSACTION_INTENTS = frozenset({"append", "replay"})
-_TRANSACTION_STATES = frozenset({"captured", "terminal", "ambiguous"})
+_TRANSACTION_STATES = frozenset({"captured", "terminal", "rollback_required", "ambiguous"})
 
 
 class DurableSessionContractError(ValueError):
@@ -240,6 +240,19 @@ def validate_journal_transaction(
         terminal_seen = current["state"] == "terminal"
         normalized.append(current)
     return tuple(normalized)
+
+
+def classify_journal_recovery(
+    records: Sequence[Mapping[str, Any]], expected: Mapping[str, Any]
+) -> str:
+    """Classify a validated transaction without resuming or rolling anything back."""
+    validated = validate_journal_transaction(records, expected)
+    terminal = validated[-1]["state"]
+    if terminal == "terminal":
+        return "terminal"
+    if terminal == "rollback_required":
+        raise DurableSessionContractError("rollback-required state requires safe mode")
+    return "resume"
 
 
 def reconcile_journal_records(
