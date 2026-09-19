@@ -20,6 +20,7 @@ from tools.durable_session_contract import (
     load_contract,
     reconcile_journal_envelopes,
     reconcile_journal_records,
+    reconcile_recovery_envelopes,
     reconcile_recovery_outcomes,
     recovery_decision,
     serialize_journal_record,
@@ -392,6 +393,39 @@ class DurableSessionContractTests(unittest.TestCase):
                 deserialize_recovery_outcome(json.dumps(forged).encode(), expected)
         with self.assertRaisesRegex(DurableSessionContractError, "bytes"):
             deserialize_recovery_outcome(bytearray(payload), expected)  # type: ignore[arg-type]
+
+    def test_recovery_envelope_sequence_is_idempotent_and_provenance_bound(self) -> None:
+        expected = snapshot()
+        decision = {
+            "operation_id": "op-1",
+            "state_revision": 3,
+            "journal_identity": "journal:1",
+            "decision": "terminal",
+            "safe_mode": False,
+            "rollback_required": False,
+        }
+        outcome = {
+            "operation_id": "op-1",
+            "state_revision": 3,
+            "journal_identity": "journal:1",
+            "outcome": "success",
+            "decision": "terminal",
+        }
+        payload = serialize_recovery_outcome(outcome, decision, expected)
+        self.assertEqual(
+            (outcome, decision), reconcile_recovery_envelopes((payload, payload), expected)
+        )
+        with self.assertRaisesRegex(DurableSessionContractError, "missing"):
+            reconcile_recovery_envelopes((), expected)
+        with self.assertRaisesRegex(DurableSessionContractError, "malformed"):
+            reconcile_recovery_envelopes((payload, payload[:-1]), expected)
+        foreign = serialize_recovery_outcome(
+            {**outcome, "outcome": "rejected", "decision": "resume"},
+            {**decision, "decision": "resume"},
+            expected,
+        )
+        with self.assertRaisesRegex(DurableSessionContractError, "provenance"):
+            reconcile_recovery_envelopes((payload, foreign), expected)
 
     def test_reconcile_accepts_idempotent_reads_and_rejects_uncertainty(self) -> None:
         expected = snapshot()

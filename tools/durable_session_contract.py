@@ -410,6 +410,21 @@ def deserialize_recovery_outcome(
     return dict(outcome), dict(decision)
 
 
+def reconcile_recovery_envelopes(
+    payloads: Sequence[bytes], expected: Mapping[str, Any]
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Reconcile canonical recovery envelopes without writing or replaying them."""
+    if not payloads:
+        raise DurableSessionContractError("recovery envelopes are missing")
+    decoded = tuple(deserialize_recovery_outcome(payload, expected) for payload in payloads)
+    outcomes = tuple(item[0] for item in decoded)
+    decision = decoded[0][1]
+    for _, candidate in decoded[1:]:
+        if candidate != decision:
+            raise DurableSessionContractError("recovery decision provenance changed")
+    return reconcile_recovery_outcomes(outcomes, decision, expected), decision
+
+
 def reconcile_journal_records(
     observations: Sequence[Mapping[str, Any]], expected: Mapping[str, Any]
 ) -> dict[str, Any]:
