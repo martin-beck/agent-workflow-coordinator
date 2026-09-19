@@ -454,6 +454,7 @@ class FormalEvidenceTests(unittest.TestCase):
             path, selector = reference.split("::", 1)
             class_name, method_name = selector.split(".", 1)
             self.assertTrue((ROOT / path).is_file(), reference)
+            self.assertFalse((ROOT / path).is_symlink(), reference)
             self.assertTrue(class_name and method_name, reference)
 
     def test_sqlite_evidence_references_resolve_to_definitions(self) -> None:
