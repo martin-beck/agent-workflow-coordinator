@@ -125,6 +125,7 @@ class FormalEvidenceTests(unittest.TestCase):
         self.assertIsInstance(artifact["model"], dict)
         for relative in (artifact["model"]["path"], artifact["model"]["config"]):
             self.assertIsInstance(relative, str)
+            self.assertTrue(relative)
             path = Path(relative)
             self.assertTrue(relative)
             self.assertFalse(path.is_absolute())
@@ -140,6 +141,7 @@ class FormalEvidenceTests(unittest.TestCase):
         )
         module = artifact["implementation"]["module"]
         self.assertIsInstance(module, str)
+        self.assertTrue(module)
         self.assertTrue(module)
         module_path = Path(module)
         self.assertFalse(module_path.is_absolute())
