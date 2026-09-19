@@ -115,7 +115,7 @@ class FormalEvidenceTests(unittest.TestCase):
             (ROOT / "formal" / "upgrade" / "sqlite-snapshot-correspondence.json").read_text()
         )
         version = artifact["schema_version"]
-        self.assertIsInstance(version, int)
+        self.assertIs(type(version), int)
         self.assertGreater(version, 0)
 
     def test_sqlite_correspondence_model_paths_are_safe_files(self) -> None:
