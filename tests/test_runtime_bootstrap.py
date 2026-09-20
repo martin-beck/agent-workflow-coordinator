@@ -15,10 +15,12 @@ from typing import cast
 from unittest.mock import patch
 
 from tools.runtime_bootstrap import (
+    AdmittedRuntimeCommand,
     DispatchAdmission,
     ExpectedRuntimeIdentity,
     ResolvedRuntime,
     VerifiedManifest,
+    prepare_runtime_dispatch,
     read_runtime_manifest,
     resolve_selected_runtime,
     resolve_selected_runtime_bound,
@@ -45,6 +47,15 @@ class RuntimeBootstrapTests(unittest.TestCase):
             )
         )
         runtime.joinpath("runtime-manifest.json").chmod(0o600)
+
+    @staticmethod
+    def _write_entrypoint(runtime: Path) -> None:
+        tools = runtime / "tools"
+        tools.mkdir(mode=0o755)
+        tools.chmod(0o755)
+        entrypoint = tools / "handoffctl.py"
+        entrypoint.write_text("#!/usr/bin/env python3\n")
+        entrypoint.chmod(0o755)
 
     def test_resolves_owner_only_versioned_release(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -221,6 +232,93 @@ class RuntimeBootstrapTests(unittest.TestCase):
                 with admission:
                     admission.validate_identity(resolved.identity)
                 self.assertEqual(-1, resolved.descriptor)
+
+    def test_prepare_dispatch_binds_fixed_entrypoint_and_arguments(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            releases = root / "releases"
+            releases.mkdir(mode=0o700)
+            selected = releases / "v1.2.3"
+            selected.mkdir(mode=0o700)
+            self._write_manifest(selected)
+            self._write_entrypoint(selected)
+            selector = root / "runtime-selector.json"
+            commit_runtime_selector(selector, "v1.2.3", "v1.2.2")
+            with resolve_selected_runtime_bound(
+                selector, releases, self._identity_for_release(), self._verifier
+            ) as resolved:
+                admission = resolved.admit_for_dispatch()
+                with prepare_runtime_dispatch(admission, ("doctor", "--live")) as command:
+                    self.assertIsInstance(command, AdmittedRuntimeCommand)
+                    self.assertEqual(("doctor", "--live"), command.argv[2:])
+                    self.assertEqual((command._entrypoint_descriptor,), command.pass_fds)
+                    self.assertTrue(command.argv[1].startswith("/proc/self/fd/"))
+                    self.assertNotIn(str(selected), command.argv[1])
+
+    def test_prepare_dispatch_rejects_caller_selected_entrypoint(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            releases = root / "releases"
+            releases.mkdir(mode=0o700)
+            selected = releases / "v1.2.3"
+            selected.mkdir(mode=0o700)
+            self._write_manifest(selected)
+            self._write_entrypoint(selected)
+            selector = root / "runtime-selector.json"
+            commit_runtime_selector(selector, "v1.2.3", "v1.2.2")
+            with resolve_selected_runtime_bound(
+                selector, releases, self._identity_for_release(), self._verifier
+            ) as resolved:
+                admission = resolved.admit_for_dispatch()
+                with self.assertRaisesRegex(AuthorityError, "dispatch arguments are invalid"):
+                    prepare_runtime_dispatch(admission, "other-runtime.py")
+                admission.close()
+
+    def test_prepare_dispatch_rejects_entrypoint_symlink(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            releases = root / "releases"
+            releases.mkdir(mode=0o700)
+            selected = releases / "v1.2.3"
+            selected.mkdir(mode=0o700)
+            self._write_manifest(selected)
+            tools = selected / "tools"
+            tools.mkdir(mode=0o755)
+            tools.chmod(0o755)
+            (tools / "handoffctl.py").symlink_to(root / "outside.py")
+            (root / "outside.py").write_text("unsafe")
+            selector = root / "runtime-selector.json"
+            commit_runtime_selector(selector, "v1.2.3", "v1.2.2")
+            with resolve_selected_runtime_bound(
+                selector, releases, self._identity_for_release(), self._verifier
+            ) as resolved:
+                admission = resolved.admit_for_dispatch()
+                with self.assertRaisesRegex(AuthorityError, "entrypoint is unavailable"):
+                    prepare_runtime_dispatch(admission)
+                admission.close()
+
+    def test_prepare_dispatch_rejects_runtime_tools_swap_before_open(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            releases = root / "releases"
+            releases.mkdir(mode=0o700)
+            selected = releases / "v1.2.3"
+            selected.mkdir(mode=0o700)
+            self._write_manifest(selected)
+            self._write_entrypoint(selected)
+            selector = root / "runtime-selector.json"
+            commit_runtime_selector(selector, "v1.2.3", "v1.2.2")
+            with resolve_selected_runtime_bound(
+                selector, releases, self._identity_for_release(), self._verifier
+            ) as resolved:
+                admission = resolved.admit_for_dispatch()
+                tools = selected / "tools"
+                moved = selected / "tools-original"
+                tools.rename(moved)
+                tools.symlink_to(moved, target_is_directory=True)
+                with self.assertRaisesRegex(AuthorityError, "runtime entrypoint"):
+                    prepare_runtime_dispatch(admission)
+                admission.close()
 
     def test_dispatch_admission_context_closes_on_consumer_failure(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
