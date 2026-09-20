@@ -4,6 +4,7 @@ import unittest
 
 from tools.durable_session_chain import (
     FIELDS,
+    DurableSessionChain,
     SessionChainError,
     canonical_record_digest,
     reconcile_replay,
@@ -83,6 +84,79 @@ class DurableSessionChainTests(unittest.TestCase):
             validate_record(record(fsync_state="uncertain"))
         with self.assertRaises(SessionChainError):
             validate_record({field: record()[field] for field in FIELDS[:-1]})
+
+    def test_rejects_all_record_validation_boundaries(self) -> None:
+        with self.assertRaises(SessionChainError):
+            canonical_record_digest({})
+        malformed_json = record()
+        malformed_json["payload"] = {"bad": object()}
+        with self.assertRaises(SessionChainError):
+            canonical_record_digest(malformed_json)
+        with self.assertRaises(SessionChainError):
+            validate_record([])  # type: ignore[arg-type]
+        for field, value in (
+            ("schema_version", 2),
+            ("session_id", "bad value"),
+            ("operation_id", "bad value"),
+            ("parent_operation_id", "bad value"),
+            ("journal_identity", "bad value"),
+            ("authority_identity", "bad value"),
+            ("barrier_id", "bad value"),
+            ("fencing_owner", "bad value"),
+            ("fencing_token", "bad value"),
+            ("journal_sequence", 0),
+            ("state_revision", True),
+            ("previous_record_digest", "not-a-digest"),
+            ("status", "unknown"),
+            ("fsync_state", "unknown"),
+            ("payload", []),
+            ("record_digest", "not-a-digest"),
+        ):
+            candidate = record()
+            candidate[field] = value
+            if field not in {"record_digest", "payload"}:
+                candidate["record_digest"] = canonical_record_digest(candidate)
+            with self.subTest(field=field), self.assertRaises(SessionChainError):
+                validate_record(candidate)
+
+    def test_rejects_genesis_identity_and_replay_conflicts(self) -> None:
+        first = record(previous_record_digest="0" * 64)
+        with self.assertRaises(SessionChainError):
+            validate_chain([first])
+        first = record()
+        second = record(
+            journal_sequence=2,
+            previous_record_digest=first["record_digest"],
+            state_revision=2,
+        )
+        for field in (
+            "session_id",
+            "journal_identity",
+            "authority_identity",
+            "barrier_id",
+            "fencing_owner",
+            "fencing_token",
+        ):
+            changed = dict(second)
+            changed[field] = "replacement"
+            changed["record_digest"] = canonical_record_digest(changed)
+            with self.subTest(field=field), self.assertRaises(SessionChainError):
+                validate_chain([first, changed])
+        with self.assertRaises(SessionChainError):
+            reconcile_replay(first, record(journal_sequence=2))
+
+    def test_chain_wrapper_exposes_terminal_and_append_without_persistence(self) -> None:
+        empty = DurableSessionChain.load([])
+        self.assertIsNone(empty.terminal)
+        first = record()
+        chain = DurableSessionChain.load([first])
+        self.assertEqual(first, chain.terminal)
+        second = record(
+            journal_sequence=2,
+            previous_record_digest=first["record_digest"],
+            state_revision=2,
+        )
+        self.assertEqual(second, chain.append(second).terminal)
 
 
 if __name__ == "__main__":
