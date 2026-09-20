@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import subprocess
+import tempfile
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -183,6 +184,126 @@ class GitAuthorityAdapter:
         from tools.git_backup import verify_backup
 
         return verify_backup(backup)
+
+    def execute_generated_backup(  # noqa: C901
+        self, operation: Mapping[str, object], context: Mapping[str, object]
+    ) -> dict[str, object]:
+        """Execute only the generated Git backup operation.
+
+        This creates and verifies an artifact without replacing the repository,
+        selector, branch, or runtime. All other generated opcodes remain
+        rejected by this adapter and by the upgrade engine.
+        """
+        operation_id, inputs = self._validate_generated_backup_operation(operation)
+        validated = self._context(context)
+        if validated.get("target") != "new":
+            raise GitAuthorityError("generated Git backup requires the forward target")
+        for field, expected in (
+            ("selector_ref", inputs["selector_ref"]),
+            ("state_revision", inputs["expected_state_revision"]),
+            ("durable_barrier_id", inputs["barrier_id"]),
+            ("fencing_token", inputs["fencing_token"]),
+        ):
+            if validated.get(field) != expected:
+                raise GitAuthorityError("generated Git backup identity is stale or foreign")
+        destination = validated.get("destination")
+        artifact_root = validated.get("artifact_root")
+        if not isinstance(destination, str) or not isinstance(artifact_root, str):
+            raise GitAuthorityError("generated Git backup artifact binding is invalid")
+        destination_path = Path(destination).resolve()
+        root_path = Path(artifact_root).resolve()
+        try:
+            destination_path.relative_to(root_path)
+        except ValueError as error:
+            raise GitAuthorityError(
+                "generated Git backup destination escapes artifact root"
+            ) from error
+        before = self.snapshot("backup", validated)
+        if before.get("git_clean") is not True:
+            raise GitAuthorityError("Git authority is not clean before backup")
+        try:
+            self.create_backup_bound(destination_path, quiesced=True)
+            verification = self.verify_backup_artifact(destination_path)
+            if verification.get("verified") is not True or verification.get("commit") != before.get(
+                "git_head"
+            ):
+                raise GitAuthorityError("Git backup verification is incomplete")
+            with tempfile.TemporaryDirectory(dir=root_path) as restore_root:
+                self.restore_backup_bound(destination_path, Path(restore_root) / "roundtrip")
+            after = self.snapshot("backup", validated)
+        except GitAuthorityError:
+            raise
+        except Exception as error:
+            raise GitAuthorityError("generated Git backup failed") from error
+        for field in ("git_head", "git_branch", "git_clean"):
+            if after.get(field) != before.get(field):
+                raise GitAuthorityError("Git authority identity changed during backup")
+        return {
+            "operation_id": operation_id,
+            "opcode": "backend.backup",
+            "outcome": "completed",
+            "backend": "git",
+            "backup_verified": True,
+            "restore_roundtrip_verified": True,
+            "backend_identity_verified": True,
+            "mutates_authority": False,
+            "git_head": before["git_head"],
+            "git_branch": before["git_branch"],
+            "git_clean": True,
+            "fencing_token": validated["fencing_token"],
+        }
+
+    @staticmethod
+    def _validate_generated_backup_operation(  # noqa: C901
+        operation: Mapping[str, object],
+    ) -> tuple[str, Mapping[str, object]]:
+        required = {
+            "operation_id",
+            "opcode",
+            "inputs",
+            "timeout_seconds",
+            "resources",
+            "preconditions",
+            "postconditions",
+            "evidence",
+            "durable_record",
+        }
+        if not isinstance(operation, Mapping) or set(operation) != required:
+            raise GitAuthorityError("generated operation fields are incomplete or unknown")
+        if operation.get("opcode") != "backend.backup" or operation.get("timeout_seconds") != 300:
+            raise GitAuthorityError("generated Git operation is unsupported or invalid")
+        if operation.get("resources") != ["maintenance-barrier", "durable-operation-record"]:
+            raise GitAuthorityError("generated operation resources are invalid")
+        if operation.get("preconditions") != ["previous-phase-complete"]:
+            raise GitAuthorityError("generated operation preconditions are invalid")
+        if operation.get("postconditions") != ["backup-contract-satisfied"]:
+            raise GitAuthorityError("generated operation postconditions are invalid")
+        if operation.get("evidence") != ["durable-operation-record"]:
+            raise GitAuthorityError("generated operation evidence is invalid")
+        if operation.get("durable_record") != "operation-id-and-outcome":
+            raise GitAuthorityError("generated operation durability contract is invalid")
+        operation_id = operation.get("operation_id")
+        inputs = operation.get("inputs")
+        if not isinstance(operation_id, str) or not operation_id:
+            raise GitAuthorityError("generated operation identity is invalid")
+        expected_inputs = {
+            "backend",
+            "selector_ref",
+            "expected_state_revision",
+            "barrier_id",
+            "fencing_token",
+            "backup_operation_id",
+        }
+        if not isinstance(inputs, Mapping) or set(inputs) != expected_inputs:
+            raise GitAuthorityError("generated Git operation binding is invalid")
+        if inputs.get("backend") != "git" or inputs.get("backup_operation_id") != operation_id:
+            raise GitAuthorityError("generated Git operation identity is invalid")
+        if (
+            type(inputs.get("expected_state_revision")) is not int
+            or inputs["expected_state_revision"] < 1
+        ):
+            raise GitAuthorityError("generated Git operation revision is invalid")
+        return operation_id, inputs
 
     def _git(self, *arguments: str) -> str:
         try:
