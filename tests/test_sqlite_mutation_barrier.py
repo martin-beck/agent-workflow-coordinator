@@ -12,7 +12,9 @@ import unittest
 from multiprocessing.process import BaseProcess
 from pathlib import Path
 from typing import Any, cast
+from unittest.mock import patch
 
+import tools.handoffctl as handoffctl
 from tools.admission_lease import AdmissionLease, validate_recheck
 from tools.handoffctl import locked
 from tools.lock_domain_scope import LockDomainScope
@@ -22,7 +24,7 @@ from tools.rollback_control_store import (
     SQLiteBarrierSessionStore,
     SQLiteRollbackControlStore,
 )
-from tools.sqlite_storage import SQLiteBackend, create_database
+from tools.sqlite_storage import SQLiteBackend, bind_released_sqlite_backend, create_database
 from tools.upgrade_identity import (
     BarrierChildIdentity,
     BarrierSessionIdentity,
@@ -351,6 +353,78 @@ class SQLiteMutationBarrierProcessTests(unittest.TestCase):
         bound = self.session.bind_child(held.revision, child)
         releasing = self.session.begin_reopen(bound.revision, "new")
         return self.session.complete_reopen(releasing.revision, True)
+
+    def test_released_writer_factory_cannot_bypass_held_barrier(self) -> None:
+        self._create_held()
+        fence = _fence(self.root, self.control)
+        backend = bind_released_sqlite_backend(
+            self.authority,
+            BINDING,
+            self.tasks,
+            fence,
+            locked,
+        )
+
+        def update_summary(
+            meta: dict[str, Any], _tasks: list[tuple[Path, dict[str, Any], str]]
+        ) -> tuple[str, str]:
+            meta["summary"] = "must not commit while held"
+            return "rejected", "# Must not persist\n"
+
+        with self.assertRaisesRegex(
+            RuntimeError, "authority mutation rejected while barrier is held"
+        ):
+            backend.mutate(
+                "AR-0001",
+                1,
+                "update",
+                "2026-09-21T00:00:00+00:00",
+                update_summary,
+            )
+        self.assertEqual(1, self._authority_revision()[0])
+
+    def test_handoffctl_factory_uses_bound_route_when_provisioned(self) -> None:
+        self._create_held()
+        with (
+            patch.object(handoffctl, "DATABASE", self.authority),
+            patch.object(handoffctl, "CONTROL_DATABASE", self.control.control_store_path),
+            patch.object(handoffctl, "AUTHORITY_MARKER", self.root / "authority-marker.json"),
+            patch.object(handoffctl, "AUTHORITY_LIFECYCLE", self.root / "authority-lifecycle.json"),
+            patch.object(handoffctl, "AUTHORITY_LOCK", self.root / "authority.lock"),
+            patch.object(handoffctl, "CONTROL_BINDING", self.root / "control-binding.json"),
+            patch.object(handoffctl, "CONTROL_LOCK", self.control.control_lock_path),
+            patch.object(handoffctl, "project_binding", return_value=BINDING),
+            patch.object(handoffctl, "TASKS", self.tasks),
+        ):
+            backend = handoffctl.mutating_sqlite_backend()
+        self.assertEqual("sqlite", backend.name)
+        self.assertIsNotNone(backend.backend_binding)
+
+    def test_bound_route_commits_after_independently_verified_release(self) -> None:
+        held = self._create_held()
+        self._release(held)
+        backend = bind_released_sqlite_backend(
+            self.authority,
+            BINDING,
+            self.tasks,
+            _fence(self.root, self.control),
+            locked,
+        )
+
+        def update_summary(
+            meta: dict[str, Any], _tasks: list[tuple[Path, dict[str, Any], str]]
+        ) -> tuple[str, str]:
+            meta["summary"] = "committed after verified release"
+            return "released writer", "# Authority fixture\n\nWriter committed.\n"
+
+        backend.mutate(
+            "AR-0001",
+            1,
+            "update",
+            "2026-09-21T00:01:00+00:00",
+            update_summary,
+        )
+        self.assertEqual(2, self._authority_revision()[0])
 
     def test_independent_writer_rejects_until_verified_release(self) -> None:
         self.assertEqual(
