@@ -127,6 +127,26 @@ class UpgradeFormalEvidenceTests(unittest.TestCase):
         self.assertEqual(expected["runtime_revision"], actual["runtime_revision"])
         self.assertIn("implementation refinement", " ".join(contract["nonclaims"]).lower())
 
+    def test_v10_contract_binds_all_sqlite_routes_without_overclaiming_refinement(self) -> None:
+        contract = json.loads(CONTRACT.read_text(encoding="utf-8"))
+        routes = contract["sqlite_route_inventory"]
+        self.assertEqual(
+            {
+                "task_mutation",
+                "observation_reconciliation",
+                "command_result",
+                "migration_and_retirement",
+                "fresh_install_baseline",
+            },
+            {entry["route"] for entry in routes},
+        )
+        for entry in routes:
+            for field in ("entrypoint", "binding", "evidence"):
+                path, selector = entry[field].split("::", 1)
+                self.assertTrue((ROOT / path).exists(), path)
+                self.assertIn(selector, (ROOT / path).read_text(encoding="utf-8"), selector)
+        self.assertEqual("not-proven", contract["refinement_boundary"]["implementation_refinement"])
+
 
 if __name__ == "__main__":
     unittest.main()

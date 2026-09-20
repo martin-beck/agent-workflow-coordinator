@@ -16,8 +16,9 @@ not authorize writes, outcome publication, Git dispatch, apply, or rollback.
 
 The machine-readable `v10-refinement-contract.json` records the same bounded
 model/config hashes, implementation snapshot, action-to-obligation mapping,
-required executable evidence, and explicit non-claims. It is a publication
-contract for the next implementation slice, not an implementation proof.
+the exact SQLite route inventory, required executable evidence, and explicit
+non-claims. It is a publication contract for the next implementation slice,
+not an implementation proof.
 
 | Model obligation | Intended implementation evidence | Status |
 | --- | --- | --- |
@@ -29,7 +30,7 @@ contract for the next implementation slice, not an implementation proof.
 | `Crash` and ambiguous recovery | `test_sigkill_after_durable_releasing_recovers_without_second_restore`, `test_ambiguous_requires_explicit_newer_reconciliation` | public tests present; refinement pending |
 | `FunctionalAvailability` | `test_loaded_rollback_requires_authority_and_runtime_revalidation`, `test_apply_rejects_failed_state_and_unreconciled_rollback_record` | public tests present; refinement pending |
 | Git backend | production Git adapter and ref/restore tests | model branch exists; production adapter explicitly fail-closed |
-| SQLite backend | `test_wal_cas_and_reload_are_durable`, `test_sidecars_require_private_provisioning_and_stable_regular_identities` | model branch and public tests present; release-specific rereader/refinement pending |
+| SQLite backend | route inventory in `v10-refinement-contract.json`; `test_sqlite_mutation_barrier.py` and `test_sqlite_storage.py` | bounded executable route evidence; mathematical refinement remains not-proven |
 | Concrete SQLite rereader | `test_concrete_release_rereader_derives_and_rechecks_actual_authority`, selector/projection/sidecar swap tests | public hostile tests present; trace refinement and release orchestration pending |
 | Typed bound rollback rejection | `test_rollback_rejects_forged_bound_verifier_before_backend_or_handler`, `test_rollback_rejects_mismatched_capability_before_journal_activity`, `test_bound_rollback_rejects_stale_and_replaced_sessions_before_git`, `test_bound_rollback_rejects_malformed_admission_before_git`, `test_bound_rollback_rejects_stale_and_replaced_sessions_before_sqlite`, `test_bound_rollback_rejects_malformed_admission_before_sqlite` | bounded executable rejection evidence; correspondence and mutation authorization remain not-proven |
 | Typed recovery rejection preservation | `test_v10_session_intent_recovery_fences_and_requires_newer_fence` (PR #289) | bounded executable evidence at `99b65e6`; implementation refinement pending |
