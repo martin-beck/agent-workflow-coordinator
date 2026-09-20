@@ -8,7 +8,8 @@ import json
 import os
 import re
 import stat
-from collections.abc import Callable
+import sys
+from collections.abc import Callable, Sequence
 from contextlib import suppress
 from dataclasses import dataclass
 from hashlib import sha256
@@ -124,6 +125,99 @@ class DispatchAdmission:
 
     def __exit__(self, *_: object) -> None:
         self.close()
+
+
+@dataclass(slots=True)
+class AdmittedRuntimeCommand:
+    """A fixed-entrypoint command retaining its descriptor-backed file handle.
+
+    The command must be executed with ``subprocess`` using ``pass_fds``.  The
+    entrypoint is addressed through its open descriptor, so replacing a path
+    after admission cannot redirect the interpreter to another file.
+    """
+
+    argv: tuple[str, ...]
+    pass_fds: tuple[int, ...]
+    _entrypoint_descriptor: int
+
+    def close(self) -> None:
+        """Release the descriptor retained for the pending dispatch."""
+        descriptor = self._entrypoint_descriptor
+        self._entrypoint_descriptor = -1
+        if descriptor >= 0:
+            with suppress(OSError):
+                os.close(descriptor)
+
+    def __enter__(self) -> AdmittedRuntimeCommand:
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        self.close()
+
+
+def _open_fixed_entrypoint(runtime: ResolvedRuntime) -> int:
+    """Open the release-owned launcher without following path aliases."""
+    tools_descriptor = -1
+    try:
+        tools_descriptor = os.open(
+            "tools", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=runtime.descriptor
+        )
+        tools_status = os.fstat(tools_descriptor)
+        if (
+            not stat.S_ISDIR(tools_status.st_mode)
+            or tools_status.st_uid != os.geteuid()
+            or stat.S_IMODE(tools_status.st_mode) & 0o022
+        ):
+            raise AuthorityError("runtime entrypoint directory is unsafe")
+        entrypoint = os.open("handoffctl.py", os.O_RDONLY | os.O_NOFOLLOW, dir_fd=tools_descriptor)
+        status = os.fstat(entrypoint)
+        if (
+            not stat.S_ISREG(status.st_mode)
+            or status.st_uid != os.geteuid()
+            or status.st_nlink != 1
+            or stat.S_IMODE(status.st_mode) & 0o022
+            or not stat.S_IMODE(status.st_mode) & 0o100
+        ):
+            os.close(entrypoint)
+            raise AuthorityError("runtime entrypoint is unsafe")
+        return entrypoint
+    except OSError as error:
+        raise AuthorityError("runtime entrypoint is unavailable") from error
+    finally:
+        if tools_descriptor >= 0:
+            with suppress(OSError):
+                os.close(tools_descriptor)
+
+
+def prepare_runtime_dispatch(
+    admission: DispatchAdmission, arguments: Sequence[str] = ()
+) -> AdmittedRuntimeCommand:
+    """Bind caller arguments to the one authenticated coordinator entrypoint.
+
+    ``arguments`` are passed after the fixed ``tools/handoffctl.py`` script;
+    callers cannot replace the interpreter, script, release, or runtime path.
+    The returned command retains an entrypoint descriptor and exposes it via
+    ``pass_fds`` for an immediate subprocess invocation.
+    """
+    if not isinstance(admission, DispatchAdmission):
+        raise AuthorityError("dispatch admission is not retained")
+    if isinstance(arguments, (str, bytes, bytearray)) or not isinstance(arguments, Sequence):
+        raise AuthorityError("dispatch arguments are invalid")
+    normalized: list[str] = []
+    for argument in arguments:
+        if not isinstance(argument, str) or "\x00" in argument:
+            raise AuthorityError("dispatch arguments are invalid")
+        normalized.append(argument)
+    admission.revalidate()
+    entrypoint = _open_fixed_entrypoint(admission.runtime)
+    try:
+        admission.revalidate()
+        argv = (sys.executable, f"/proc/self/fd/{entrypoint}", *normalized)
+        return AdmittedRuntimeCommand(argv, (entrypoint,), entrypoint)
+    except BaseException:
+        with suppress(OSError):
+            os.close(entrypoint)
+        raise
 
 
 @dataclass(slots=True)
