@@ -11,6 +11,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from tools.durable_session_chain import canonical_record_digest
 from tools.durable_session_contract import (
     DurableSessionContractError,
     InMemoryJournalRecordStore,
@@ -26,6 +27,7 @@ from tools.durable_session_contract import (
     serialize_journal_record,
     serialize_recovery_outcome,
     validate_contract,
+    validate_durable_session_chain,
     validate_journal_record,
     validate_journal_transaction,
     validate_outcome,
@@ -647,6 +649,37 @@ class DurableSessionContractTests(unittest.TestCase):
         _, status = os.waitpid(child, 0)
         self.assertEqual(23, os.waitstatus_to_exitcode(status))
         self.assertEqual("disabled", load_contract()["outcome_publication"])
+
+    def test_ar0032_chain_is_admitted_read_only(self) -> None:
+        first = {
+            "schema_version": 1,
+            "session_id": "session-1",
+            "operation_id": "upgrade-1",
+            "parent_operation_id": None,
+            "journal_sequence": 1,
+            "previous_record_digest": None,
+            "state_revision": 1,
+            "journal_identity": "journal-generation-1",
+            "authority_identity": "authority-1",
+            "barrier_id": "barrier-1",
+            "fencing_owner": "owner-1",
+            "fencing_token": "fence-1",
+            "status": "open",
+            "fsync_state": "durable",
+            "payload": {"phase": "discover"},
+        }
+        first["record_digest"] = canonical_record_digest({**first, "record_digest": "0" * 64})
+        second = {
+            **first,
+            "journal_sequence": 2,
+            "previous_record_digest": first["record_digest"],
+            "state_revision": 2,
+            "payload": {"phase": "preflight"},
+        }
+        second["record_digest"] = canonical_record_digest({**second, "record_digest": "0" * 64})
+        self.assertEqual((first, second), validate_durable_session_chain((first, second)))
+        with self.assertRaises(DurableSessionContractError):
+            validate_durable_session_chain(({**second, "session_id": "foreign"},))
 
 
 if __name__ == "__main__":

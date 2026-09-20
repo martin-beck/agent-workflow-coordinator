@@ -13,6 +13,13 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
+from tools.durable_session_chain import (
+    SessionChainError,
+)
+from tools.durable_session_chain import (
+    validate_chain as validate_canonical_session_chain,
+)
+
 CONTRACT_PATH = Path(__file__).parents[1] / "formal/upgrade/durable-upgrade-session-contract.json"
 _IDENTITY_FIELDS = frozenset(
     {
@@ -509,3 +516,17 @@ class InMemoryJournalRecordStore:
     def records(self) -> tuple[dict[str, Any], ...]:
         """Return a detached, deterministic view for read-only assertions."""
         return tuple(dict(record) for record in self._records.values())
+
+
+def validate_durable_session_chain(
+    records: Sequence[Mapping[str, Any]],
+) -> tuple[dict[str, object], ...]:
+    """Validate the AR-0032 chain through the durable-contract boundary.
+
+    This is an admission/diagnostic helper only. It does not publish a journal
+    record, change control-store state, or authorize mutation or dispatch.
+    """
+    try:
+        return validate_canonical_session_chain(records)
+    except SessionChainError as error:
+        raise DurableSessionContractError("durable session chain is not admissible") from error
