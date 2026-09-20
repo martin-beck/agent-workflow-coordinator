@@ -213,6 +213,74 @@ class GitAuthorityAdapterTests(unittest.TestCase):
             self.adapter.restore_backup_bound(backup, restored)
             self.assertEqual((self.root / "state").read_text(), (restored / "state").read_text())
 
+    def test_generated_backup_executor_verifies_roundtrip_and_preserves_head(self) -> None:
+        artifact_root = Path(self.coordination.name) / "artifacts"
+        artifact_root.mkdir()
+        context = {
+            **CONTEXT,
+            "operation_id": "campaign",
+            "artifact_root": str(artifact_root),
+            "destination": str(artifact_root / "backup"),
+        }
+        operation = {
+            "operation_id": "campaign:backup",
+            "opcode": "backend.backup",
+            "inputs": {
+                "backend": "git",
+                "selector_ref": context["selector_ref"],
+                "expected_state_revision": 1,
+                "barrier_id": "barrier",
+                "fencing_token": "fence",
+                "backup_operation_id": "campaign:backup",
+            },
+            "timeout_seconds": 300,
+            "resources": ["maintenance-barrier", "durable-operation-record"],
+            "preconditions": ["previous-phase-complete"],
+            "postconditions": ["backup-contract-satisfied"],
+            "evidence": ["durable-operation-record"],
+            "durable_record": "operation-id-and-outcome",
+        }
+        before = self.adapter._git("rev-parse", "HEAD")
+        result = self.adapter.execute_generated_backup(operation, context)
+        self.assertEqual("completed", result["outcome"])
+        self.assertTrue(result["backup_verified"])
+        self.assertTrue(result["restore_roundtrip_verified"])
+        self.assertEqual(before, self.adapter._git("rev-parse", "HEAD"))
+
+    def test_generated_backup_executor_rejects_foreign_destination_and_opcode(self) -> None:
+        artifact_root = Path(self.coordination.name) / "artifacts"
+        artifact_root.mkdir()
+        context = {
+            **CONTEXT,
+            "artifact_root": str(artifact_root),
+            "destination": str(self.root.parent / "outside-backup"),
+        }
+        operation = {
+            "operation_id": "op-1:backup",
+            "opcode": "backend.backup",
+            "inputs": {
+                "backend": "git",
+                "selector_ref": CONTEXT["selector_ref"],
+                "expected_state_revision": 1,
+                "barrier_id": "barrier",
+                "fencing_token": "fence",
+                "backup_operation_id": "op-1:backup",
+            },
+            "timeout_seconds": 300,
+            "resources": ["maintenance-barrier", "durable-operation-record"],
+            "preconditions": ["previous-phase-complete"],
+            "postconditions": ["backup-contract-satisfied"],
+            "evidence": ["durable-operation-record"],
+            "durable_record": "operation-id-and-outcome",
+        }
+        with self.assertRaisesRegex(GitAuthorityError, "escapes"):
+            self.adapter.execute_generated_backup(operation, context)
+        operation["opcode"] = "authority.atomic_replace"
+        with self.assertRaisesRegex(GitAuthorityError, "unsupported"):
+            self.adapter.execute_generated_backup(
+                operation, {**context, "destination": str(artifact_root / "backup")}
+            )
+
     def test_adapter_owned_backup_failure_removes_partial_artifact(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             artifact_root = Path(directory)
