@@ -248,6 +248,12 @@ class SQLiteStorageTest(unittest.TestCase):
         CORE.PROJECT_CONFIG = self.root / ".handoffctl.json"
         CORE.BINDING = self.root / "coordinator.binding.json"
         CORE.BACKEND_CONFIG = self.root / "coordinator.backend.json"
+        CORE.CONTROL_DATABASE = CORE.RUNTIME / "coordinator.control.sqlite3"
+        CORE.AUTHORITY_MARKER = CORE.RUNTIME / "coordinator.authority-marker.json"
+        CORE.AUTHORITY_LIFECYCLE = CORE.RUNTIME / "coordinator.authority-lifecycle.json"
+        CORE.AUTHORITY_LOCK = CORE.RUNTIME / "coordinator.authority.lock"
+        CORE.CONTROL_BINDING = CORE.RUNTIME / "coordinator.control-binding.json"
+        CORE.CONTROL_LOCK = CORE.RUNTIME / ".coordinator.control.sqlite3.lock"
         CORE.DATABASE = self.database
         CORE.PROJECT_CONFIG.write_text(
             json.dumps(

@@ -268,6 +268,49 @@ def mutating_sqlite_backend() -> SQLiteBackend:
     )
 
 
+def provision_sqlite_barrier() -> None:
+    """Provision the authority fence and one released baseline session."""
+    from tools.mutation_fence import provision, provision_control_binding
+    from tools.rollback_control_store import SQLiteBarrierSessionStore, SQLiteRollbackControlStore
+    from tools.upgrade_identity import BarrierSessionIdentity, canonical_barrier_session_digest
+
+    binding = project_binding()
+    project_id = str(binding["project_id"])
+    RUNTIME.mkdir(mode=0o700, parents=True, exist_ok=True)
+    runtime_status = RUNTIME.stat()
+    if runtime_status.st_uid != os.geteuid() or not RUNTIME.is_dir():
+        raise RuntimeError("SQLite barrier runtime directory is not owner-controlled")
+    if (runtime_status.st_mode & 0o777) != 0o700:
+        RUNTIME.chmod(0o700)
+    if (RUNTIME.stat().st_mode & 0o777) != 0o700:
+        raise RuntimeError("SQLite barrier runtime directory must be owner-only")
+    provision(DATABASE, AUTHORITY_MARKER, AUTHORITY_LIFECYCLE, AUTHORITY_LOCK, project_id)
+    control = SQLiteRollbackControlStore(CONTROL_DATABASE, project_id, DATABASE)
+    provision_control_binding(CONTROL_DATABASE, CONTROL_BINDING, CONTROL_LOCK, project_id)
+    authority = DATABASE.stat()
+    authority_revision = (
+        "authority-"
+        + hashlib.sha256(
+            f"{authority.st_dev}:{authority.st_ino}:{authority.st_size}:{authority.st_mtime_ns}".encode()
+        ).hexdigest()
+    )
+    attempt = "baseline-" + uuid.uuid4().hex
+    identity_values: dict[str, object] = {
+        "schema_version": 1,
+        "project_id": project_id,
+        "attempt_id": attempt,
+        "state_revision": 1,
+        "authority_revision_at_acquire": authority_revision,
+        "durable_barrier_id": "baseline-barrier-" + uuid.uuid4().hex,
+        "fencing_token": "baseline-fence-" + uuid.uuid4().hex,
+        "fencing_owner": "coordinator-bootstrap",
+    }
+    identity_values["identity_digest"] = canonical_barrier_session_digest(identity_values)
+    SQLiteBarrierSessionStore(control, lambda: authority_revision).provision_released(
+        BarrierSessionIdentity.from_record(identity_values)
+    )
+
+
 def project_binding() -> Meta:
     """Load the immutable project binding created by `handoffctl init`."""
     try:
@@ -1334,9 +1377,9 @@ def reconcile(*, do_commit: bool, push: bool = False) -> bool:
             raise
 
 
-def write_sqlite_projections(tasks: list[Task]) -> list[Path]:
+def write_sqlite_projections(tasks: list[Task], *, already_locked: bool = False) -> list[Path]:
     """Regenerate byte-stable Markdown projections from one database snapshot."""
-    with locked():
+    with contextlib.nullcontext() if already_locked else locked():
         expected = {path.resolve() for path, _, _ in tasks}
         for path, meta, body in tasks:
             write_task(path, meta, body)
@@ -2070,6 +2113,7 @@ def cmd_init(args: argparse.Namespace) -> None:
                 source_checkpoint="uncommitted-init",
                 command_results=legacy_command_results(),
             )
+            provision_sqlite_barrier()
         atomic(BACKEND_CONFIG, json.dumps(selection, indent=2, sort_keys=True) + "\n")
         backend_selection()
     except Exception:
@@ -2111,6 +2155,7 @@ def cmd_migrate(args: argparse.Namespace) -> None:
                 imported = SQLiteBackend(DATABASE, binding, TASKS).load_tasks()
                 if [(m, b) for _, m, b in tasks] != [(m, b) for _, m, b in imported]:
                     raise RuntimeError("migration equivalence check failed")
+                provision_sqlite_barrier()
                 atomic(BACKEND_CONFIG, json.dumps(selection, indent=2, sort_keys=True) + "\n")
             except Exception:
                 DATABASE.unlink(missing_ok=True)
@@ -2120,7 +2165,7 @@ def cmd_migrate(args: argparse.Namespace) -> None:
         backend = mutating_sqlite_backend()
 
         def project(tasks: list[Task]) -> None:
-            write_sqlite_projections(tasks)
+            write_sqlite_projections(tasks, already_locked=True)
 
         def switch() -> None:
             errors = validate(live=False)

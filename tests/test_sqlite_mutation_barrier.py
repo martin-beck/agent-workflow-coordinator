@@ -426,6 +426,24 @@ class SQLiteMutationBarrierProcessTests(unittest.TestCase):
         )
         self.assertEqual(2, self._authority_revision()[0])
 
+    def test_trusted_provisioning_creates_released_baseline(self) -> None:
+        with (
+            patch.object(handoffctl, "DATABASE", self.authority),
+            patch.object(handoffctl, "CONTROL_DATABASE", self.control.control_store_path),
+            patch.object(handoffctl, "AUTHORITY_MARKER", self.root / "authority-marker.json"),
+            patch.object(handoffctl, "AUTHORITY_LIFECYCLE", self.root / "authority-lifecycle.json"),
+            patch.object(handoffctl, "AUTHORITY_LOCK", self.root / "authority.lock"),
+            patch.object(handoffctl, "CONTROL_BINDING", self.root / "control-binding.json"),
+            patch.object(handoffctl, "CONTROL_LOCK", self.control.control_lock_path),
+            patch.object(handoffctl, "project_binding", return_value=BINDING),
+        ):
+            handoffctl.provision_sqlite_barrier()
+        state = self.session.snapshot()
+        self.assertIsNotNone(state)
+        assert state is not None
+        self.assertEqual("released", state.status)
+        self.assertTrue(state.identity.attempt_id.startswith("baseline-"))
+
     def test_independent_writer_rejects_until_verified_release(self) -> None:
         self.assertEqual(
             (

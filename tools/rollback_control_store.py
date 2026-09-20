@@ -1649,6 +1649,29 @@ class SQLiteBarrierSessionStore:
         common_guard.assert_owned()
         return current
 
+    def provision_released(self, identity: BarrierSessionIdentity) -> BarrierSessionState:
+        """Create one immutable released baseline during trusted provisioning.
+
+        This is deliberately not part of the general CAS API: only an empty
+        control store may receive a baseline, and later attempts must use the
+        normal held-session acquisition path.
+        """
+        if identity.project_id != self.project_id:
+            raise ControlStoreError("barrier session project binding mismatch")
+        if self.operation_owned_by_current_thread:
+            raise ControlStoreError("control store lock is non-reentrant")
+        with self.operation_lock():
+            current = self._snapshot_locked()
+            if current is not None:
+                if current.status == "released" and current.identity == identity:
+                    return current
+                raise ControlStoreError("barrier baseline already exists")
+            return self._cas_locked(
+                0,
+                BarrierSessionState(identity, "released", 1),
+                allow_initial_released=True,
+            )
+
     def cas(self, expected_revision: int, state: BarrierSessionState) -> BarrierSessionState:
         if type(expected_revision) is not int or expected_revision < 0:
             raise ControlStoreError("barrier session expected revision is invalid")
@@ -1704,7 +1727,11 @@ class SQLiteBarrierSessionStore:
         return self._cas_locked(expected_revision, state)
 
     def _cas_locked(  # noqa: C901
-        self, expected_revision: int, supplied: BarrierSessionState
+        self,
+        expected_revision: int,
+        supplied: BarrierSessionState,
+        *,
+        allow_initial_released: bool = False,
     ) -> BarrierSessionState:
         self._control._require_operation_lock()
         with self._control._connection() as connection:
@@ -1717,7 +1744,9 @@ class SQLiteBarrierSessionStore:
                     connection.rollback()
                     raise ControlStoreError("barrier session does not exist")
                 next_revision = 1
-                if supplied.status != "held":
+                if supplied.status != "held" and not (
+                    allow_initial_released and supplied.status == "released"
+                ):
                     connection.rollback()
                     raise ControlStoreError("new barrier session must start held")
             else:
