@@ -36,6 +36,7 @@ if __package__:
     from .sqlite_storage import (
         Backend,
         SQLiteBackend,
+        bind_released_sqlite_backend,
         create_database,
     )
     from .status_renderer import (
@@ -57,6 +58,7 @@ else:  # pragma: no cover - direct script execution
     from sqlite_storage import (  # type: ignore[import-not-found,no-redef]
         Backend,
         SQLiteBackend,
+        bind_released_sqlite_backend,
         create_database,
     )
     from status_renderer import (  # type: ignore[import-not-found,no-redef]
@@ -76,6 +78,12 @@ PROJECT_CONFIG = ROOT / ".handoffctl.json"
 BINDING = ROOT / "coordinator.binding.json"
 BACKEND_CONFIG = ROOT / "coordinator.backend.json"
 DATABASE = RUNTIME / "coordinator.sqlite3"
+CONTROL_DATABASE = RUNTIME / "coordinator.control.sqlite3"
+AUTHORITY_MARKER = RUNTIME / "coordinator.authority-marker.json"
+AUTHORITY_LIFECYCLE = RUNTIME / "coordinator.authority-lifecycle.json"
+AUTHORITY_LOCK = RUNTIME / "coordinator.authority.lock"
+CONTROL_BINDING = RUNTIME / "coordinator.control-binding.json"
+CONTROL_LOCK = RUNTIME / ".coordinator.control.sqlite3.lock"
 BACKENDS = ("sqlite", "git")
 LOCK_TIMEOUT_SECONDS = 10.0
 LOCK_POLL_SECONDS = 0.05
@@ -220,6 +228,44 @@ def storage_backend() -> Backend:
     if selection["backend"] == "git":
         return GitBackend()
     return SQLiteBackend(DATABASE, project_binding(), TASKS)
+
+
+def mutating_sqlite_backend() -> SQLiteBackend:
+    """Return the barrier-aware writer, or an explicit legacy compatibility route.
+
+    Pre-marker installations remain usable as required by the compatibility
+    contract. They cannot start an upgrade; once provisioning exists, every
+    write goes through the durable fence factory below.
+    """
+    if not all(
+        path.exists()
+        for path in (
+            CONTROL_DATABASE,
+            AUTHORITY_MARKER,
+            AUTHORITY_LIFECYCLE,
+            AUTHORITY_LOCK,
+            CONTROL_BINDING,
+        )
+    ):
+        return SQLiteBackend(DATABASE, project_binding(), TASKS)
+    from tools.mutation_fence import MutationFence
+
+    fence = MutationFence(
+        DATABASE,
+        AUTHORITY_MARKER,
+        AUTHORITY_LIFECYCLE,
+        AUTHORITY_LOCK,
+        CONTROL_DATABASE,
+        CONTROL_BINDING,
+        CONTROL_LOCK,
+    )
+    return bind_released_sqlite_backend(
+        DATABASE,
+        project_binding(),
+        TASKS,
+        fence,
+        locked,
+    )
 
 
 def project_binding() -> Meta:
@@ -1320,7 +1366,7 @@ def reconcile_sqlite(*, do_commit: bool, push: bool) -> bool:
     state: State | None = None
     if CONFIG.exists() and config().get("github_repository"):
         state = project_scan()
-        backend = SQLiteBackend(DATABASE, project_binding(), TASKS)
+        backend = mutating_sqlite_backend()
         backend.update_observations({item["key"]: item for item in state["worktrees"]}, now())
     paths = export_sqlite_projections()
     if state is not None:
@@ -1688,7 +1734,7 @@ def _transition_note(body: str, note: str, at: str) -> str:
 
 def mutate_sqlite(args: argparse.Namespace, kind: str) -> None:
     """Linearize a lifecycle mutation at SQLite's committed CAS update."""
-    backend = SQLiteBackend(DATABASE, project_binding(), TASKS)
+    backend = mutating_sqlite_backend()
     initial = backend.load_tasks()
     selected = next((task for task in initial if task[1]["id"] == args.task), None)
     if selected is None:
@@ -1903,7 +1949,12 @@ def append_command_result(
     timed_out: bool,
 ) -> None:
     """Record through the selected backend before any fallible follow-up."""
-    storage_backend().append_command_result(
+    selected_backend = (
+        mutating_sqlite_backend()
+        if backend_selection()["backend"] == "sqlite"
+        else storage_backend()
+    )
+    selected_backend.append_command_result(
         task_id,
         owner,
         command_hash,
@@ -2066,7 +2117,7 @@ def cmd_migrate(args: argparse.Namespace) -> None:
                 raise
         export_sqlite_projections()
     else:
-        backend = SQLiteBackend(DATABASE, binding, TASKS)
+        backend = mutating_sqlite_backend()
 
         def project(tasks: list[Task]) -> None:
             write_sqlite_projections(tasks)

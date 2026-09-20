@@ -373,6 +373,81 @@ class SQLiteAuthorityBinding:
         return self._hold_path_sidecars(self._path, self.assert_current)
 
 
+class SQLiteMutationBinding:
+    """Provisioned authority binding for ordinary released-state writers.
+
+    Upgrade admission uses ``SQLiteAuthorityBinding`` and a held session. Normal
+    coordinator writes run while the durable barrier is released, so they need
+    the same descriptor/sidecar identity protection without manufacturing a
+    held upgrade session.
+    """
+
+    __slots__ = ("_fence", "_identity", "_parent_identity", "_path")
+    _fence: Any
+    _identity: tuple[int, int]
+    _parent_identity: tuple[int, int]
+    _path: Path
+
+    def __init__(
+        self,
+        fence: Any,
+        path: Path,
+        identity: tuple[int, int],
+        parent_identity: tuple[int, int],
+        sentinel: object,
+    ) -> None:
+        if sentinel is not _FACTORY_SENTINEL:
+            raise TypeError("SQLiteMutationBinding must be issued by its factory")
+        object.__setattr__(self, "_fence", fence)
+        object.__setattr__(self, "_path", path)
+        object.__setattr__(self, "_identity", identity)
+        object.__setattr__(self, "_parent_identity", parent_identity)
+
+    def __setattr__(self, name: str, value: object) -> None:
+        raise AttributeError("SQLiteMutationBinding is immutable")
+
+    @classmethod
+    def bind(cls, fence: Any, authority: Path) -> SQLiteMutationBinding:
+        from tools.mutation_fence import MutationFence
+
+        if not isinstance(fence, MutationFence):
+            raise TypeError("concrete mutation fence is required")
+        path = authority.absolute()
+        if fence.authority.absolute() != path:
+            raise ValueError("mutation fence authority does not match database")
+        fence.verify_binding()
+        if path.is_symlink() or not path.is_file():
+            raise ValueError("authority must be a regular non-symlink file")
+        parent_status = path.parent.stat()
+        status = path.stat()
+        return cls(
+            fence,
+            path,
+            (status.st_dev, status.st_ino),
+            (parent_status.st_dev, parent_status.st_ino),
+            _FACTORY_SENTINEL,
+        )
+
+    def assert_current(self) -> None:
+        self._fence.verify_binding()
+        try:
+            parent = self._path.parent.stat()
+            status = self._path.stat()
+        except OSError as error:
+            raise RuntimeError("SQLite authority descriptor reread failed") from error
+        if (parent.st_dev, parent.st_ino) != self._parent_identity:
+            raise RuntimeError("SQLite authority parent identity changed")
+        if (status.st_dev, status.st_ino) != self._identity:
+            raise RuntimeError("SQLite authority descriptor identity changed")
+
+    @property
+    def path(self) -> Path:
+        return self._path
+
+    def hold_sidecars(self) -> AbstractContextManager[Callable[[], None]]:
+        return SQLiteAuthorityBinding._hold_path_sidecars(self._path, self.assert_current)
+
+
 class Backend(Protocol):
     """Contract shared by authoritative storage implementations."""
 
@@ -464,7 +539,10 @@ class SQLiteBackend:
         binding: Meta,
         tasks_root: Path,
         mutation_scope: Callable[[], AbstractContextManager[object]] | None = None,
-        backend_binding: SQLiteBackendBinding | SQLiteAuthorityBinding | None = None,
+        backend_binding: SQLiteBackendBinding
+        | SQLiteAuthorityBinding
+        | SQLiteMutationBinding
+        | None = None,
         _admission_capability: object | None = None,
     ) -> None:
         self.path = path
@@ -474,7 +552,10 @@ class SQLiteBackend:
         if backend_binding is not None:
             if _admission_capability is not _FACTORY_SENTINEL:
                 raise ValueError("bound SQLite backend must be created by its adapter factory")
-            if not isinstance(backend_binding, (SQLiteBackendBinding, SQLiteAuthorityBinding)):
+            if not isinstance(
+                backend_binding,
+                (SQLiteBackendBinding, SQLiteAuthorityBinding, SQLiteMutationBinding),
+            ):
                 raise TypeError("backend_binding must be an SQLite binding capability")
             if backend_binding.path != path:
                 raise ValueError("backend binding targets a different database")
@@ -542,7 +623,7 @@ class SQLiteBackend:
     @contextmanager
     def _transaction(self) -> Iterator[sqlite3.Connection]:
         if self.backend_binding is not None and not isinstance(
-            self.backend_binding, SQLiteAuthorityBinding
+            self.backend_binding, (SQLiteAuthorityBinding, SQLiteMutationBinding)
         ):
             raise RuntimeError("mutating SQLite backend requires dual authority binding")
         connection = self._connect()
@@ -881,7 +962,7 @@ def bind_sqlite_backend(
     path: Path,
     binding: Meta,
     tasks_root: Path,
-    backend_binding: SQLiteBackendBinding | SQLiteAuthorityBinding,
+    backend_binding: SQLiteBackendBinding | SQLiteAuthorityBinding | SQLiteMutationBinding,
     scope: object,
 ) -> SQLiteBackend:
     """Build a bound backend from the concrete ordered admission scope.
@@ -915,5 +996,34 @@ def bind_sqlite_backend(
         tasks_root,
         mutation_scope=scope.hold,
         backend_binding=backend_binding,
+        _admission_capability=_FACTORY_SENTINEL,
+    )
+
+
+def bind_released_sqlite_backend(
+    path: Path,
+    binding: Meta,
+    tasks_root: Path,
+    fence: object,
+    common_lock: Callable[[], AbstractContextManager[object]],
+) -> SQLiteBackend:
+    """Build the public writer backend for a provisioned released barrier.
+
+    This factory is intentionally separate from the held upgrade scope: normal
+    coordination must continue while no upgrade is active, while the fence
+    still rejects held, releasing, ambiguous, missing, or replaced control
+    state before SQLite opens a write transaction.
+    """
+    from tools.mutation_fence import MutationFence
+
+    if not isinstance(fence, MutationFence):
+        raise TypeError("released SQLite backend requires a concrete mutation fence")
+    authority_binding = SQLiteMutationBinding.bind(fence, path)
+    return SQLiteBackend(
+        path,
+        binding,
+        tasks_root,
+        mutation_scope=lambda: fence.mutation_scope(common_lock),
+        backend_binding=authority_binding,
         _admission_capability=_FACTORY_SENTINEL,
     )
