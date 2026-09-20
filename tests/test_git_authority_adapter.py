@@ -281,6 +281,124 @@ class GitAuthorityAdapterTests(unittest.TestCase):
                 operation, {**context, "destination": str(artifact_root / "backup")}
             )
 
+    def test_generated_backup_executor_rejects_all_identity_and_effect_failures(self) -> None:
+        artifact_root = Path(self.coordination.name) / "failure-artifacts"
+        artifact_root.mkdir()
+        context = {
+            **CONTEXT,
+            "operation_id": "campaign",
+            "artifact_root": str(artifact_root),
+            "destination": str(artifact_root / "backup"),
+        }
+        operation = {
+            "operation_id": "campaign:backup",
+            "opcode": "backend.backup",
+            "inputs": {
+                "backend": "git",
+                "selector_ref": context["selector_ref"],
+                "expected_state_revision": 1,
+                "barrier_id": "barrier",
+                "fencing_token": "fence",
+                "backup_operation_id": "campaign:backup",
+            },
+            "timeout_seconds": 300,
+            "resources": ["maintenance-barrier", "durable-operation-record"],
+            "preconditions": ["previous-phase-complete"],
+            "postconditions": ["backup-contract-satisfied"],
+            "evidence": ["durable-operation-record"],
+            "durable_record": "operation-id-and-outcome",
+        }
+        for field, value in (
+            ("resources", ["wrong"]),
+            ("preconditions", []),
+            ("postconditions", ["wrong"]),
+            ("evidence", ["wrong"]),
+            ("durable_record", "wrong"),
+            ("inputs", {}),
+        ):
+            candidate: dict[str, Any] = dict(operation)
+            candidate[field] = value
+            with self.subTest(field=field), self.assertRaises(GitAuthorityError):
+                self.adapter.execute_generated_backup(candidate, context)
+        for identity_field, identity_value in (
+            ("selector_ref", "foreign"),
+            ("expected_state_revision", 2),
+            ("barrier_id", "foreign"),
+            ("fencing_token", "foreign"),
+        ):
+            identity_candidate: dict[str, Any] = dict(operation)
+            identity_candidate["inputs"] = dict(cast(dict[str, Any], operation["inputs"]))
+            identity_candidate["inputs"][identity_field] = identity_value
+            with (
+                self.subTest(field=identity_field),
+                self.assertRaisesRegex(GitAuthorityError, "stale"),
+            ):
+                self.adapter.execute_generated_backup(identity_candidate, context)
+        with self.assertRaisesRegex(GitAuthorityError, "forward target"):
+            self.adapter.execute_generated_backup(operation, {**context, "target": "rollback"})
+        with (
+            patch.object(
+                self.adapter,
+                "_context",
+                return_value={**context, "destination": object()},
+            ),
+            self.assertRaisesRegex(GitAuthorityError, "artifact binding"),
+        ):
+            self.adapter.execute_generated_backup(operation, context)
+        before = {
+            **context,
+            "phase": "backup",
+            "backend_identity_verified": True,
+            "git_head": "a" * 40,
+            "git_branch": "main",
+            "git_clean": True,
+            "mutates_authority": False,
+        }
+        with (
+            patch.object(self.adapter, "snapshot", return_value={**before, "git_clean": False}),
+            self.assertRaisesRegex(GitAuthorityError, "not clean"),
+        ):
+            self.adapter.execute_generated_backup(operation, context)
+        with (
+            patch.object(self.adapter, "snapshot", return_value=before),
+            patch.object(self.adapter, "create_backup_bound"),
+            patch.object(self.adapter, "verify_backup_artifact", return_value={"verified": False}),
+            self.assertRaisesRegex(GitAuthorityError, "verification"),
+        ):
+            self.adapter.execute_generated_backup(operation, context)
+        with (
+            patch.object(
+                self.adapter, "create_backup_bound", side_effect=GitAuthorityError("injected")
+            ),
+            self.assertRaisesRegex(GitAuthorityError, "injected"),
+        ):
+            self.adapter.execute_generated_backup(operation, context)
+        with (
+            patch.object(self.adapter, "create_backup_bound"),
+            patch.object(
+                self.adapter,
+                "verify_backup_artifact",
+                return_value={"verified": True, "commit": "a" * 40},
+            ),
+            patch.object(self.adapter, "restore_backup_bound", side_effect=RuntimeError("restore")),
+            patch.object(self.adapter, "snapshot", return_value=before),
+            self.assertRaisesRegex(GitAuthorityError, "failed"),
+        ):
+            self.adapter.execute_generated_backup(operation, context)
+        after = {**before, "git_head": "b" * 40}
+        with (
+            patch.object(self.adapter, "create_backup_bound"),
+            patch.object(
+                self.adapter,
+                "verify_backup_artifact",
+                return_value={"verified": True, "commit": "a" * 40},
+            ),
+            patch.object(self.adapter, "restore_backup_bound"),
+            patch.object(self.adapter, "snapshot", side_effect=(before, after)),
+            self.assertRaisesRegex(GitAuthorityError, "identity changed"),
+        ):
+            self.adapter.execute_generated_backup(operation, context)
+
     def test_adapter_owned_backup_failure_removes_partial_artifact(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             artifact_root = Path(directory)
