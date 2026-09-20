@@ -49,6 +49,43 @@
       "status": "bounded executable recovery and hostile revision-chain evidence; implementation refinement pending"
     }
   ],
+  "sqlite_route_inventory": [
+    {
+      "route": "task_mutation",
+      "entrypoint": "tools/handoffctl.py::mutate_sqlite",
+      "binding": "tools/handoffctl.py::mutating_sqlite_backend",
+      "evidence": "tests/test_sqlite_mutation_barrier.py::test_handoffctl_factory_uses_bound_route_when_provisioned"
+    },
+    {
+      "route": "observation_reconciliation",
+      "entrypoint": "tools/handoffctl.py::reconcile_sqlite",
+      "binding": "tools/handoffctl.py::mutating_sqlite_backend",
+      "evidence": "tests/test_sqlite_mutation_barrier.py::test_bound_route_commits_after_independently_verified_release"
+    },
+    {
+      "route": "command_result",
+      "entrypoint": "tools/handoffctl.py::append_command_result",
+      "binding": "tools/handoffctl.py::mutating_sqlite_backend",
+      "evidence": "tests/test_sqlite_mutation_barrier.py::test_released_writer_factory_cannot_bypass_held_barrier"
+    },
+    {
+      "route": "migration_and_retirement",
+      "entrypoint": "tools/handoffctl.py::cmd_migrate",
+      "binding": "tools/handoffctl.py::mutating_sqlite_backend",
+      "evidence": "tests/test_sqlite_storage.py::test_explicit_migration_round_trip_preserves_records_and_projections"
+    },
+    {
+      "route": "fresh_install_baseline",
+      "entrypoint": "tools/handoffctl.py::provision_sqlite_barrier",
+      "binding": "tools/rollback_control_store.py::provision_released",
+      "evidence": "tests/test_sqlite_mutation_barrier.py::test_trusted_provisioning_creates_released_baseline"
+    }
+  ],
+  "refinement_boundary": {
+    "class": "bounded-executable-correspondence",
+    "implementation_refinement": "not-proven",
+    "claim": "The route inventory and hostile tests are bound to this contract; they do not establish mathematical Python-to-TLA refinement or authorize upgrade apply/rollback."
+  },
   "tlc_result": {
     "status": "bounded-model-only",
     "states_generated": 12575081,
