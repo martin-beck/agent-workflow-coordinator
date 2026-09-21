@@ -799,6 +799,41 @@ class SQLiteMutationBarrierProcessTests(unittest.TestCase):
             self.assertEqual(expected, self._run_route(route), route)
         self.assertEqual(1, self._authority_revision()[0])
 
+    def test_every_inventoried_route_rejects_replaced_released_owner(self) -> None:
+        self._release(self._create_held())
+        replacement = _identity(
+            attempt="attempt-replaced",
+            state_revision=2,
+            barrier="barrier-replaced",
+            fence="fence-replaced",
+            owner="owner-replaced",
+        )
+        with sqlite3.connect(self.control.control_store_path) as connection:
+            connection.execute(
+                "UPDATE barrier_session SET attempt_id=?,state_revision=?,"
+                "durable_barrier_id=?,fencing_token=?,fencing_owner=?,identity_digest=?,"
+                "forward_child=NULL,rollback_child=NULL "
+                "WHERE project_id=?",
+                (
+                    replacement.attempt_id,
+                    replacement.state_revision,
+                    replacement.durable_barrier_id,
+                    replacement.fencing_token,
+                    replacement.fencing_owner,
+                    replacement.identity_digest,
+                    PROJECT,
+                ),
+            )
+            connection.commit()
+        expected = (
+            "rejected",
+            "MutationFenceError",
+            "durable control barrier state is invalid",
+        )
+        for route in ("mutate", "update_observations", "append_command_result", "retire"):
+            self.assertEqual(expected, self._run_route(route), route)
+        self.assertEqual(1, self._authority_revision()[0])
+
     def test_every_inventoried_route_rejects_authority_replacement(self) -> None:
         self._create_held()
         self._replace_with_copy(self.authority)
