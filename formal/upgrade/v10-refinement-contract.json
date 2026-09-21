@@ -69,6 +69,17 @@
       "status": "bounded executable diagnostic recovery evidence; implementation refinement pending"
     },
     {
+      "model_actions": ["BindForward", "ForwardFailure", "MarkAmbiguous", "FunctionalAvailability"],
+      "implementation_obligation": "The integrated transition rehearsal accepts only the ordered, identity-bound evidence trace and preserves functional, write-closed availability for every failed or ambiguous phase without dispatching mutation.",
+      "evidence_required": [
+        "tests/test_authority_neutral_rehearsal.py::test_complete_trace_is_functional_and_mutation_free",
+        "tests/test_authority_neutral_rehearsal.py::test_rejects_order_identity_and_mutation_drift",
+        "tests/test_authority_neutral_rehearsal.py::test_failure_paths_require_functional_write_closed_recovery",
+        "tests/test_authority_neutral_rehearsal.py::test_bound_rehearsal_rejects_trace_identity_drift"
+      ],
+      "status": "bounded executable integrated rehearsal evidence; implementation refinement pending"
+    },
+    {
       "model_actions": ["BindForward", "ForwardFailure"],
       "implementation_obligation": "The bounded UpgradeEngine stage phase verifies one generated backend.stage artifact through immutable session identity and accepts only verified, non-mutating manifest evidence.",
       "evidence_required": [
