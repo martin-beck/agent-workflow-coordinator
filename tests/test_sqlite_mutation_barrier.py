@@ -121,39 +121,71 @@ def _route_writer(root_text: str, route: str, result: Any) -> None:
     control = _control(root)
     backend = _backend(root, _fence(root, control))
     try:
-        if route == "mutate":
+        _perform_route(backend, route)
+    except Exception as error:
+        result.put(("rejected", type(error).__name__, str(error)))
+    else:
+        result.put(("committed",))
 
-            def update_summary(
-                meta: dict[str, Any], _tasks: list[tuple[Path, dict[str, Any], str]]
-            ) -> tuple[str, str]:
-                meta["summary"] = "route mutation"
-                return "route mutation", "# Route mutation\n"
 
-            backend.mutate(
-                "AR-0001",
-                1,
-                "update",
-                "2026-09-16T15:13:00+00:00",
-                update_summary,
-            )
-        elif route == "update_observations":
-            backend.update_observations(
-                {"worker-1": {"branch": "route", "head": "b" * 40, "dirty": 0}},
-                "2026-09-16T15:13:00+00:00",
-            )
-        elif route == "append_command_result":
-            backend.append_command_result(
-                "AR-0001",
-                "route-worker",
-                "a" * 64,
-                0,
-                "success",
-                "2026-09-16T15:13:00+00:00",
-            )
-        elif route == "retire":
-            backend.retire(lambda _tasks: None, lambda: None)
-        else:
-            raise AssertionError(f"unknown route {route}")
+def _perform_route(backend: SQLiteBackend, route: str) -> None:
+    if route == "mutate":
+
+        def update_summary(
+            meta: dict[str, Any], _tasks: list[tuple[Path, dict[str, Any], str]]
+        ) -> tuple[str, str]:
+            meta["summary"] = "route mutation"
+            return "route mutation", "# Route mutation\n"
+
+        backend.mutate(
+            "AR-0001",
+            1,
+            "update",
+            "2026-09-16T15:13:00+00:00",
+            update_summary,
+        )
+    elif route == "update_observations":
+        backend.update_observations(
+            {"worker-1": {"branch": "route", "head": "b" * 40, "dirty": 0}},
+            "2026-09-16T15:13:00+00:00",
+        )
+    elif route == "append_command_result":
+        backend.append_command_result(
+            "AR-0001",
+            "route-worker",
+            "a" * 64,
+            0,
+            "success",
+            "2026-09-16T15:13:00+00:00",
+        )
+    elif route == "retire":
+        backend.retire(lambda _tasks: None, lambda: None)
+    else:
+        raise AssertionError(f"unknown route {route}")
+
+
+def _route_effect_waiting_for_sidecar_fault_all_routes(
+    root_text: str, route: str, ready: Any, resume: Any, result: Any
+) -> None:
+    """Pause each public route while its authority sidecars are retained."""
+    root = Path(root_text)
+    backend = _backend(root, _fence(root, _control(root)))
+    original_assert = backend._assert_mutation_binding
+    paused = False
+
+    def wait_after_binding_check() -> None:
+        nonlocal paused
+        original_assert()
+        if not paused:
+            paused = True
+            ready.set()
+            if not resume.wait(5):
+                raise RuntimeError("authority sidecar fault injection timed out")
+
+    backend_any: Any = backend
+    backend_any._assert_mutation_binding = wait_after_binding_check
+    try:
+        _perform_route(backend, route)
     except Exception as error:
         result.put(("rejected", type(error).__name__, str(error)))
     else:
@@ -652,6 +684,44 @@ class SQLiteMutationBarrierProcessTests(unittest.TestCase):
             self.assertEqual(("ok",), connection.execute("PRAGMA integrity_check").fetchone())
         self.assertEqual(released, self.session.snapshot())
         self.assertEqual(("committed",), self._run_writer())
+
+    def _assert_route_rejects_authority_sidecar_replacement(self, route: str) -> None:
+        self._release(self._create_held())
+        context = multiprocessing.get_context("fork")
+        ready = context.Event()
+        resume = context.Event()
+        result = context.Queue()
+        writer = context.Process(
+            target=_route_effect_waiting_for_sidecar_fault_all_routes,
+            args=(self.directory.name, route, ready, resume, result),
+        )
+        writer.start()
+        self.assertTrue(ready.wait(5), route)
+        for suffix in ("-wal", "-shm"):
+            sidecar = Path(f"{self.authority}{suffix}")
+            self.assertTrue(sidecar.is_file(), (route, suffix))
+            sidecar.unlink()
+            sidecar.write_bytes(b"hostile authority sidecar replacement")
+            sidecar.chmod(0o600)
+        resume.set()
+        writer.join(5)
+        self.assertEqual(0, writer.exitcode, route)
+        outcome = cast(tuple[str, ...], result.get(timeout=1))
+        self.assertEqual("rejected", outcome[0], (route, outcome))
+        self.assertIn("sidecar identity changed", outcome[2], (route, outcome))
+        self.assertEqual(1, self._authority_revision()[0])
+
+    def test_mutate_rejects_authority_sidecar_replacement(self) -> None:
+        self._assert_route_rejects_authority_sidecar_replacement("mutate")
+
+    def test_update_observations_rejects_authority_sidecar_replacement(self) -> None:
+        self._assert_route_rejects_authority_sidecar_replacement("update_observations")
+
+    def test_append_command_result_rejects_authority_sidecar_replacement(self) -> None:
+        self._assert_route_rejects_authority_sidecar_replacement("append_command_result")
+
+    def test_retire_rejects_authority_sidecar_replacement(self) -> None:
+        self._assert_route_rejects_authority_sidecar_replacement("retire")
 
     def test_forged_released_row_rejects_before_authority_mutation(self) -> None:
         held = self._create_held()
