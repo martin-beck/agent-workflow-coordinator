@@ -115,6 +115,50 @@ def _normal_writer(root_text: str, result: Any, start: Any | None = None) -> Non
         result.put(("committed",))
 
 
+def _route_writer(root_text: str, route: str, result: Any) -> None:
+    """Exercise one inventoried public write route in a fresh process."""
+    root = Path(root_text)
+    control = _control(root)
+    backend = _backend(root, _fence(root, control))
+    try:
+        if route == "mutate":
+            def update_summary(
+                meta: dict[str, Any], _tasks: list[tuple[Path, dict[str, Any], str]]
+            ) -> tuple[str, str]:
+                meta["summary"] = "route mutation"
+                return "route mutation", "# Route mutation\n"
+
+            backend.mutate(
+                "AR-0001",
+                1,
+                "update",
+                "2026-09-16T15:13:00+00:00",
+                update_summary,
+            )
+        elif route == "update_observations":
+            backend.update_observations(
+                {"worker-1": {"branch": "route", "head": "b" * 40, "dirty": 0}},
+                "2026-09-16T15:13:00+00:00",
+            )
+        elif route == "append_command_result":
+            backend.append_command_result(
+                "AR-0001",
+                "route-worker",
+                "a" * 64,
+                0,
+                "success",
+                "2026-09-16T15:13:00+00:00",
+            )
+        elif route == "retire":
+            backend.retire(lambda _tasks: None, lambda: None)
+        else:
+            raise AssertionError(f"unknown route {route}")
+    except Exception as error:
+        result.put(("rejected", type(error).__name__, str(error)))
+    else:
+        result.put(("committed",))
+
+
 def _held_scope_owner(root_text: str, ready: Any) -> None:
     """Hold the real common/control/authority scope until externally killed."""
     root = Path(root_text)
@@ -340,6 +384,15 @@ class SQLiteMutationBarrierProcessTests(unittest.TestCase):
         self.assertEqual(0, worker.exitcode)
         return cast(tuple[str, ...], result.get(timeout=1))
 
+    def _run_route(self, route: str) -> tuple[str, ...]:
+        context = multiprocessing.get_context("fork")
+        result = context.Queue()
+        worker = context.Process(target=_route_writer, args=(self.directory.name, route, result))
+        worker.start()
+        worker.join(5)
+        self.assertEqual(0, worker.exitcode)
+        return cast(tuple[str, ...], result.get(timeout=1))
+
     def _authority_revision(self) -> tuple[int, str]:
         with sqlite3.connect(self.authority) as connection:
             row = connection.execute(
@@ -487,6 +540,17 @@ class SQLiteMutationBarrierProcessTests(unittest.TestCase):
         revision, meta_json = self._authority_revision()
         self.assertEqual(2, revision)
         self.assertIn("mutated after verified release", meta_json)
+
+    def test_every_inventoried_route_rejects_while_barrier_is_held(self) -> None:
+        self._create_held()
+        expected = (
+            "rejected",
+            "MutationFenceError",
+            "authority mutation rejected while barrier is held",
+        )
+        for route in ("mutate", "update_observations", "append_command_result", "retire"):
+            self.assertEqual(expected, self._run_route(route), route)
+        self.assertEqual(1, self._authority_revision()[0])
 
     def test_sigkill_after_route_effects_rolls_back_and_releases_locks(self) -> None:
         released = self._release(self._create_held())
