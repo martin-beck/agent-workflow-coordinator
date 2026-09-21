@@ -122,6 +122,7 @@ def _route_writer(root_text: str, route: str, result: Any) -> None:
     backend = _backend(root, _fence(root, control))
     try:
         if route == "mutate":
+
             def update_summary(
                 meta: dict[str, Any], _tasks: list[tuple[Path, dict[str, Any], str]]
             ) -> tuple[str, str]:
