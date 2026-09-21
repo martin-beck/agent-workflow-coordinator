@@ -22,6 +22,7 @@ not an implementation proof.
 
 | Model obligation | Intended implementation evidence | Status |
 | --- | --- | --- |
+| forward backup binding and failure | `test_engine_binds_verified_backup_capability_to_backup_phase`, `test_bound_phase_adapter_binds_identity_and_dispatches_only_backup`, `test_bound_phase_adapter_rejects_identity_drift_before_dispatch` | bounded executable backup binding evidence; implementation refinement pending |
 | discover/preflight/quiesce | `test_apply_is_ordered_and_idempotent`, `test_commit_validate_and_reopen_require_safety_evidence` | public tests present; refinement pending |
 | backup before commit | `test_apply_adapter_fault_boundaries_are_durable_and_fail_closed`, `test_failure_is_durable_and_rollback_can_enter_safe_mode` | public tests present; refinement pending |
 | validate/reopen release order | `test_commit_validate_and_reopen_require_safety_evidence`, `test_releasing_barrier_cannot_be_completed_without_authority_evidence` | public tests present; refinement pending |

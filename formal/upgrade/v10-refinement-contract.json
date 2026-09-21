@@ -19,6 +19,16 @@
   },
   "correspondence": [
     {
+      "model_actions": ["BindForward", "ForwardFailure"],
+      "implementation_obligation": "The bounded UpgradeEngine backup phase dispatches one generated backend.backup operation through an immutable session identity and accepts only verified, non-mutating backup evidence.",
+      "evidence_required": [
+        "tests/test_upgrade_engine.py::test_engine_binds_verified_backup_capability_to_backup_phase",
+        "tests/test_authority_neutral_backup.py::test_bound_phase_adapter_binds_identity_and_dispatches_only_backup",
+        "tests/test_authority_neutral_backup.py::test_bound_phase_adapter_rejects_identity_drift_before_dispatch"
+      ],
+      "status": "bounded executable backup binding evidence; implementation refinement pending"
+    },
+    {
       "model_actions": ["AcquireCommon", "AcquireControl", "AcquireAuthority", "ReleaseAuthority", "ReleaseControl", "ReleaseCommon"],
       "implementation_obligation": "One non-reentrant operation scope acquires repository-common, control-store, and authority locks in that order and releases them in reverse order.",
       "evidence_required": ["lock-order tests", "re-entry rejection", "descriptor identity checks"],
