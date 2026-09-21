@@ -59,6 +59,16 @@
       "status": "bounded executable commit authorization evidence; implementation refinement pending"
     },
     {
+      "model_actions": ["AcceptWrite", "FinishWrite", "MarkAmbiguous"],
+      "implementation_obligation": "The isolated Git authority effect accepts only an immutable Git admission bundle, requires the exact branch and head with staged-only changes, verifies the post-commit identity, and classifies timeout or postcondition uncertainty as ambiguous without enabling public upgrade dispatch.",
+      "evidence_required": [
+        "tests/test_git_authority_mutation.py::GitCommitCapabilityTests.test_commits_only_pre_staged_change_and_verifies_postconditions",
+        "tests/test_git_authority_mutation.py::GitCommitCapabilityTests.test_rejects_unstaged_or_empty_changes",
+        "tests/test_git_authority_mutation.py::GitCommitCapabilityTests.test_rejects_head_drift_and_ambiguous_runner_outcome"
+      ],
+      "status": "bounded executable Git effect evidence; implementation refinement pending and public dispatch disabled"
+    },
+    {
       "model_actions": ["MarkAmbiguous", "RejectWrite", "FunctionalAvailability"],
       "implementation_obligation": "The authority-neutral recovery seam validates known-good backup, restore, runtime, barrier, and fencing evidence as diagnostic-only and never authorizes rollback mutation.",
       "evidence_required": [
