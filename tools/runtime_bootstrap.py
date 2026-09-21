@@ -8,6 +8,7 @@ import json
 import os
 import re
 import stat
+import subprocess
 import sys
 from collections.abc import Callable, Sequence
 from contextlib import suppress
@@ -218,6 +219,38 @@ def prepare_runtime_dispatch(
         with suppress(OSError):
             os.close(entrypoint)
         raise
+
+
+def run_admitted_runtime(
+    admission: DispatchAdmission,
+    arguments: Sequence[str] = (),
+    *,
+    timeout: float | None = None,
+) -> subprocess.CompletedProcess[str]:
+    """Execute the fixed admitted launcher without accepting a path override.
+
+    This is deliberately a read-only invocation seam: it records no upgrade
+    state and cannot enable mutation.  The descriptor-backed command is kept
+    alive through ``subprocess.run`` and is closed on every outcome.
+    """
+    command = prepare_runtime_dispatch(admission, arguments)
+    try:
+        try:
+            return subprocess.run(  # noqa: S603 - argv and descriptor are fixed by admission
+                command.argv,
+                check=False,
+                stdin=subprocess.DEVNULL,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                pass_fds=command.pass_fds,
+            )
+        except subprocess.TimeoutExpired as error:
+            raise AuthorityError("admitted runtime dispatch timed out") from error
+        except OSError as error:
+            raise AuthorityError("admitted runtime dispatch failed") from error
+    finally:
+        command.close()
 
 
 @dataclass(slots=True)
