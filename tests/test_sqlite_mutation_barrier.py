@@ -683,9 +683,7 @@ class SQLiteMutationBarrierProcessTests(unittest.TestCase):
         with sqlite3.connect(self.authority) as connection:
             self.assertEqual(
                 ("active",),
-                connection.execute(
-                    "SELECT value FROM metadata WHERE key='state'"
-                ).fetchone(),
+                connection.execute("SELECT value FROM metadata WHERE key='state'").fetchone(),
             )
             self.assertEqual(
                 (0,), connection.execute("SELECT COUNT(*) FROM command_results").fetchone()
