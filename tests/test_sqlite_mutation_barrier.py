@@ -15,6 +15,7 @@ from typing import Any, cast
 from unittest.mock import patch
 
 import tools.handoffctl as handoffctl
+import tools.mutation_fence as mutation_fence
 from tools.admission_lease import AdmissionLease, validate_recheck
 from tools.handoffctl import locked
 from tools.lock_domain_scope import LockDomainScope
@@ -113,6 +114,46 @@ def _normal_writer(root_text: str, result: Any, start: Any | None = None) -> Non
             "update",
             "2026-09-16T15:10:00+00:00",
             update_summary,
+        )
+    except Exception as error:
+        result.put(("rejected", type(error).__name__, str(error)))
+    else:
+        result.put(("committed",))
+
+
+def _bound_writer_after_replacement(
+    root_text: str,
+    identity: BarrierSessionIdentity,
+    ready: Any,
+    proceed: Any,
+    result: Any,
+) -> None:
+    """Use a previously admitted identity after the durable session changes."""
+    root = Path(root_text)
+    control = _control(root)
+    fence = _fence(root, control)
+    backend = bind_released_sqlite_backend(
+        root / "authority.sqlite",
+        BINDING,
+        root / "tasks",
+        fence,
+        locked,
+        identity,
+    )
+    ready.set()
+    if not proceed.wait(5):
+        result.put(("rejected", "RuntimeError", "replacement synchronization timed out"))
+        return
+    try:
+        backend.mutate(
+            "AR-0001",
+            1,
+            "update",
+            "2026-09-21T00:16:00+00:00",
+            lambda meta, _tasks: (
+                meta.__setitem__("summary", "stale writer must not commit")
+                or ("stale writer", "# Must not persist\n")
+            ),
         )
     except Exception as error:
         result.put(("rejected", type(error).__name__, str(error)))
@@ -224,6 +265,15 @@ def _held_scope_owner(root_text: str, ready: Any) -> None:
     )
     scope = LockDomainScope.bind(session, _fence(root, control), lease, recheck, locked)
     with scope.hold():
+        ready.set()
+        multiprocessing.Event().wait()
+
+
+def _held_control_owner(root_text: str, ready: Any) -> None:
+    """Hold only the control lock so a writer exercises its bounded wait."""
+    root = Path(root_text)
+    fence = _fence(root, _control(root))
+    with fence.control_locked():
         ready.set()
         multiprocessing.Event().wait()
 
@@ -604,6 +654,71 @@ class SQLiteMutationBarrierProcessTests(unittest.TestCase):
         revision, meta_json = self._authority_revision()
         self.assertEqual(2, revision)
         self.assertIn("mutated after verified release", meta_json)
+
+    def test_writer_times_out_on_control_lock_without_mutating_authority(self) -> None:
+        released = self._release(self._create_held())
+        context = multiprocessing.get_context("fork")
+        ready = context.Event()
+        holder = context.Process(
+            target=_held_control_owner,
+            args=(self.directory.name, ready),
+        )
+        holder.start()
+        self.assertTrue(ready.wait(5))
+
+        result = context.Queue()
+        with patch.object(mutation_fence, "LOCK_TIMEOUT_SECONDS", 0.2):
+            writer = context.Process(
+                target=_normal_writer,
+                args=(self.directory.name, result),
+            )
+            writer.start()
+            writer.join(3)
+        self.assertEqual(0, writer.exitcode)
+        self.assertEqual(
+            (
+                "rejected",
+                "MutationFenceError",
+                "control.lock acquisition timed out after 0.2s",
+            ),
+            result.get(timeout=1),
+        )
+        self._kill(holder)
+        self.assertEqual(released, self.session.snapshot())
+        self.assertEqual(1, self._authority_revision()[0])
+
+    def test_bound_writer_rejects_released_session_replacement(self) -> None:
+        first = self._release(self._create_held())
+        context = multiprocessing.get_context("fork")
+        ready = context.Event()
+        proceed = context.Event()
+        result = context.Queue()
+        writer = context.Process(
+            target=_bound_writer_after_replacement,
+            args=(self.directory.name, first.identity, ready, proceed, result),
+        )
+        writer.start()
+        self.assertTrue(ready.wait(5))
+
+        second = self.session.create(
+            _identity(
+                attempt="attempt-next",
+                state_revision=2,
+                barrier="barrier-next",
+                fence="fence-next",
+                owner="owner-next",
+            )
+        )
+        second_released = self._release(second)
+        proceed.set()
+        writer.join(5)
+        self.assertEqual(0, writer.exitcode)
+        self.assertEqual(
+            ("rejected", "MutationFenceError", "barrier session identity changed"),
+            result.get(timeout=1),
+        )
+        self.assertEqual(second_released, self.session.snapshot())
+        self.assertEqual(1, self._authority_revision()[0])
 
     def test_every_inventoried_route_rejects_while_barrier_is_held(self) -> None:
         self._create_held()

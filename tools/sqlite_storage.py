@@ -1006,6 +1006,7 @@ def bind_released_sqlite_backend(
     tasks_root: Path,
     fence: object,
     common_lock: Callable[[], AbstractContextManager[object]],
+    session_identity: object | None = None,
 ) -> SQLiteBackend:
     """Build the public writer backend for a provisioned released barrier.
 
@@ -1018,6 +1019,8 @@ def bind_released_sqlite_backend(
 
     if not isinstance(fence, MutationFence):
         raise TypeError("released SQLite backend requires a concrete mutation fence")
+    if session_identity is not None:
+        fence.bind_session_identity(session_identity)
     authority_binding = SQLiteMutationBinding.bind(fence, path)
     return SQLiteBackend(
         path,

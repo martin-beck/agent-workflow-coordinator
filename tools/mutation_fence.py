@@ -24,6 +24,7 @@ import secrets
 import sqlite3
 import stat
 import threading
+import time
 from collections.abc import Callable, Iterator
 from contextlib import AbstractContextManager, contextmanager, suppress
 from dataclasses import asdict, dataclass
@@ -36,7 +37,29 @@ class MutationFenceError(RuntimeError):
 
 SCHEMA_VERSION = 1
 LIFECYCLE_STATES = {"absent", "active", "clean_checkpointed"}
+LOCK_TIMEOUT_SECONDS = 10.0
+LOCK_POLL_SECONDS = 0.01
 _PROJECT_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
+
+
+def _acquire_file_lock(descriptor: int, label: str, timeout: float | None = None) -> None:
+    """Acquire a fence lock with a bounded deadline and fail closed."""
+    if timeout is None:
+        timeout = LOCK_TIMEOUT_SECONDS
+    if type(timeout) is not float or timeout <= 0:
+        raise MutationFenceError("fence lock timeout is invalid")
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return
+        except BlockingIOError as error:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise MutationFenceError(
+                    f"{label} acquisition timed out after {timeout:.1f}s"
+                ) from error
+            time.sleep(min(LOCK_POLL_SECONDS, remaining))
 
 
 @dataclass(frozen=True, slots=True)
@@ -406,6 +429,26 @@ class MutationFence:
         """Public read-only binding check for future caller-owned adapters."""
         self._verify()
 
+    def bind_session_identity(self, identity: object) -> None:
+        """Bind this long-lived fence to one trusted admitted session."""
+        from tools.upgrade_identity import BarrierSessionIdentity
+
+        if not isinstance(identity, BarrierSessionIdentity):
+            raise MutationFenceError("barrier session identity is required")
+        bound = (
+            identity.project_id,
+            identity.attempt_id,
+            identity.state_revision,
+            identity.authority_revision_at_acquire,
+            identity.durable_barrier_id,
+            identity.fencing_token,
+            identity.fencing_owner,
+            identity.identity_digest,
+        )
+        if self._bound_session_identity is not None and self._bound_session_identity != bound:
+            raise MutationFenceError("barrier session identity already bound")
+        self._bound_session_identity = bound
+
     def _verify_marker(self, record: dict[str, object]) -> str:
         if record.get("identity_digest") != _digest(
             {key: value for key, value in record.items() if key != "identity_digest"}
@@ -455,7 +498,7 @@ class MutationFence:
                 "control_lock"
             ):
                 raise MutationFenceError("control.lock identity changed")
-            fcntl.flock(descriptor, fcntl.LOCK_EX)
+            _acquire_file_lock(descriptor, "control.lock")
             self._verify()
             yield
         finally:
@@ -583,7 +626,7 @@ class MutationFence:
             marker = _read_json(self.marker, "authority fence marker")
             if asdict(actual) != marker.get("authority_lock"):
                 raise MutationFenceError("authority.lock identity changed")
-            fcntl.flock(descriptor, fcntl.LOCK_EX)
+            _acquire_file_lock(descriptor, "authority.lock")
             self._verify()
             yield
         except OSError as error:
