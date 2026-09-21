@@ -308,6 +308,26 @@ def _route_effect_waiting_for_sigkill(root_text: str, ready: Any) -> None:
     backend.mutate("AR-0001", 1, "update", "2026-09-16T15:11:00+00:00", update_summary)
 
 
+def _route_effect_waiting_for_sigkill_all_routes(root_text: str, route: str, ready: Any) -> None:
+    """Pause every public route after effects and before transaction commit."""
+    root = Path(root_text)
+    backend = _backend(root, _fence(root, _control(root)))
+    original_assert = backend._assert_mutation_binding
+    checks = 0
+
+    def wait_before_commit() -> None:
+        nonlocal checks
+        checks += 1
+        original_assert()
+        if checks == 2:
+            ready.set()
+            multiprocessing.Event().wait()
+
+    backend_any: Any = backend
+    backend_any._assert_mutation_binding = wait_before_commit
+    _perform_route(backend, route)
+
+
 def _route_effect_waiting_for_sidecar_fault(
     root_text: str, ready: Any, resume: Any, result: Any
 ) -> None:
@@ -646,6 +666,39 @@ class SQLiteMutationBarrierProcessTests(unittest.TestCase):
         self.assertEqual(released, self.session.snapshot())
         self.assertEqual(("committed",), self._run_writer())
         self.assertEqual(2, self._authority_revision()[0])
+
+    def _assert_route_sigkill_rolls_back(self, route: str) -> None:
+        released = self._release(self._create_held())
+        context = multiprocessing.get_context("fork")
+        ready = context.Event()
+        crashed = context.Process(
+            target=_route_effect_waiting_for_sigkill_all_routes,
+            args=(self.directory.name, route, ready),
+        )
+        crashed.start()
+        self.assertTrue(ready.wait(5), route)
+        self._kill(crashed)
+        self.assertEqual(released, self.session.snapshot())
+        self.assertEqual(1, self._authority_revision()[0])
+        with sqlite3.connect(self.authority) as connection:
+            self.assertEqual(
+                ("active",),
+                connection.execute(
+                    "SELECT value FROM metadata WHERE key='state'"
+                ).fetchone(),
+            )
+            self.assertEqual(
+                (0,), connection.execute("SELECT COUNT(*) FROM command_results").fetchone()
+            )
+
+    def test_sigkill_after_update_observations_effect_rolls_back(self) -> None:
+        self._assert_route_sigkill_rolls_back("update_observations")
+
+    def test_sigkill_after_append_command_result_effect_rolls_back(self) -> None:
+        self._assert_route_sigkill_rolls_back("append_command_result")
+
+    def test_sigkill_after_retire_effect_rolls_back(self) -> None:
+        self._assert_route_sigkill_rolls_back("retire")
 
     def test_active_authority_wal_replacement_rejects_without_publication(self) -> None:
         released = self._release(self._create_held())
