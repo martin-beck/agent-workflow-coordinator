@@ -22,6 +22,7 @@ not an implementation proof.
 
 | Model obligation | Intended implementation evidence | Status |
 | --- | --- | --- |
+| commit authorization before mutation | `test_prerequisites_are_verified_without_authorizing_commit`, `test_rejects_forged_or_unverified_prerequisites`, `test_bound_adapter_rejects_phase_and_identity_drift` | bounded executable commit authorization evidence; implementation refinement pending |
 | runtime replacement admission before mutation | `test_admission_verifies_runtime_and_selector_without_mutation`, `test_rejects_forged_context_manifest_selector_and_backend_failures`, `test_bound_adapter_rejects_phase_and_identity_drift` | bounded executable runtime admission evidence; implementation refinement pending |
 | selector publication admission before mutation | `test_admission_is_read_only_and_bound_to_visibility_scope`, `test_rejects_invalid_identity_and_backend_failures`, `test_bound_adapter_rejects_phase_and_identity_drift` | bounded executable selector admission evidence; implementation refinement pending |
 | selector/runtime readiness before reopen | `test_engine_binds_selector_readiness_to_validate_phase`, `test_bound_adapter_dispatches_validate_and_rejects_drift`, `test_revalidation_failure_is_write_closed` | bounded executable selector/runtime readiness evidence; implementation refinement pending |
