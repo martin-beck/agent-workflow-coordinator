@@ -722,7 +722,8 @@ class SQLiteMutationBarrierProcessTests(unittest.TestCase):
         )
         self._kill(holder)
         self.assertEqual(released, self.session.snapshot())
-        self.assertEqual(1, self._authority_revision()[0])
+        self.assertEqual(("committed",), self._run_writer())
+        self.assertEqual(2, self._authority_revision()[0])
 
     def test_bound_writer_rejects_released_session_replacement(self) -> None:
         first = self._release(self._create_held())
