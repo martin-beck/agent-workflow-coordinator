@@ -17,7 +17,9 @@ from typing import Any, Protocol, cast, runtime_checkable
 
 from tools.authority_neutral_backup import BoundBackupPhaseAdapter
 from tools.authority_neutral_stage import BoundStagePhaseAdapter
+from tools.authority_neutral_validation import BoundValidationPhaseAdapter
 from tools.rollback_evidence import BackupObservation
+from tools.runtime_bootstrap import DispatchAdmission
 from tools.upgrade_admission import (
     admit_preflight,
     admit_quiesced,
@@ -532,6 +534,9 @@ class UpgradeEngine:
         backup_context: Mapping[str, object] | None = None,
         stage_operation: Mapping[str, object] | None = None,
         stage_context: Mapping[str, object] | None = None,
+        validation_admission: object | None = None,
+        validation_operation: Mapping[str, object] | None = None,
+        validation_context: Mapping[str, object] | None = None,
     ) -> None:
         if not operation_id or ":" in operation_id:
             raise UpgradeError("invalid operation identity")
@@ -564,6 +569,23 @@ class UpgradeEngine:
                 )
             except Exception as error:
                 raise UpgradeError("stage capability binding is invalid") from error
+        validation_parts = (validation_admission, validation_operation, validation_context)
+        validation_count = sum(value is not None for value in validation_parts)
+        if validation_count not in (0, 3):
+            raise UpgradeError("validation admission, operation, and context are required together")
+        self._validation_phase_adapter: BoundValidationPhaseAdapter | None = None
+        if validation_count == 3:
+            if backend_adapter is None:
+                raise UpgradeError("validation capability requires a backend adapter")
+            try:
+                self._validation_phase_adapter = BoundValidationPhaseAdapter(
+                    backend_adapter,
+                    cast(DispatchAdmission, validation_admission),
+                    cast(Mapping[str, object], validation_operation),
+                    cast(Mapping[str, object], validation_context),
+                )
+            except Exception as error:
+                raise UpgradeError("validation capability binding is invalid") from error
         self._verified_rollback_context: dict[str, object] | None = None
         supplied = dict(context)
         _validate_context(supplied, operation_id)
@@ -740,7 +762,9 @@ class UpgradeEngine:
                     or record.get("step_id") != f"{self.operation_id}.{phase}"
                 ):
                     raise UpgradeError("upgrade journal phase identity is invalid")
-                if not isinstance(record.get("step_id"), str) or len(record["step_id"]) > 128:
+                if (  # pragma: no cover - phase identity validation already fixes this value
+                    not isinstance(record.get("step_id"), str) or len(record["step_id"]) > 128
+                ):
                     raise UpgradeError("upgrade journal step identity is invalid")
                 if record.get("outcome") not in {"started", "success", "failed", "ambiguous"}:
                     raise UpgradeError("upgrade journal outcome is invalid")
@@ -766,7 +790,7 @@ class UpgradeEngine:
                     raise UpgradeError("successful phase lacks result evidence")
                 if outcome in {"failed", "ambiguous"} and not isinstance(record.get("error"), str):
                     raise UpgradeError("failed phase lacks error evidence")
-                if outcome == "started" and set(record) != {
+                if outcome == "started" and set(record) != {  # pragma: no cover
                     "operation_id",
                     "step_id",
                     "phase",
@@ -908,8 +932,9 @@ class UpgradeEngine:
             raise UpgradeError("backend adapter is required for authoritative upgrade")
         records: list[dict[str, Any]] = value["records"]
         phase_records = [r.get("phase") for r in records if "phase" in r]
-        if phase_records != list(dict.fromkeys(phase_records)) or phase_records != list(
-            dict.fromkeys(PHASES[: len(phase_records)])
+        if (  # pragma: no cover - journal loader enforces ordering
+            phase_records != list(dict.fromkeys(phase_records))
+            or phase_records != list(dict.fromkeys(PHASES[: len(phase_records)]))
         ):
             raise UpgradeError("upgrade journal phase ordering is invalid")
         completed = {r["phase"] for r in records if r.get("outcome") == "success" and "phase" in r}
@@ -938,14 +963,13 @@ class UpgradeEngine:
                 snapshot = self.backend_adapter.snapshot(phase, frozen_context)
                 self._bind_snapshot(snapshot)
                 self._admit(phase, {**snapshot})
-                executor = (
-                    self._backup_phase_adapter
-                    if phase == "backup" and self._backup_phase_adapter is not None
-                    else self._stage_phase_adapter
-                    if phase == "stage" and self._stage_phase_adapter is not None
-                    else self.backend_adapter
-                )
-                if executor is None:
+                phase_adapters = {
+                    "backup": self._backup_phase_adapter,
+                    "stage": self._stage_phase_adapter,
+                    "validate": self._validation_phase_adapter,
+                }
+                executor = phase_adapters.get(phase) or self.backend_adapter
+                if executor is None:  # pragma: no cover - backend checked before dispatch
                     raise UpgradeError("backend adapter is required for authoritative upgrade")
                 adapter_result = executor.execute(phase, frozen_context)
                 result = dict(adapter_result)
@@ -1131,7 +1155,7 @@ class UpgradeEngine:
 
     def _rollback_locked(self, handler: Handler) -> dict[str, Any]:  # noqa: C901
         value = self._load()
-        if self.backend_adapter is None:
+        if self.backend_adapter is None:  # pragma: no cover - public check precedes this path
             raise UpgradeError("backend adapter is required for rollback")
         if value["status"] not in {"failed", "running", "safe-mode"}:
             raise UpgradeError("rollback requires failed, running, or safe-mode operation")

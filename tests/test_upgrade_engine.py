@@ -19,6 +19,7 @@ from unittest.mock import patch
 from tools import upgrade_engine as upgrade_engine_module
 from tools.authority_neutral_backup import BoundBackupPhaseAdapter
 from tools.authority_neutral_stage import BoundStagePhaseAdapter
+from tools.authority_neutral_validation import BoundValidationPhaseAdapter
 from tools.git_authority_adapter import GitAuthorityAdapter
 from tools.rollback_control_store import (
     SQLiteAuthorityRuntimeState,
@@ -27,6 +28,7 @@ from tools.rollback_control_store import (
     bind_control_store,
 )
 from tools.rollback_evidence import BackupObservation
+from tools.runtime_bootstrap import DispatchAdmission
 from tools.sqlite_authority_adapter import SQLiteAuthorityAdapter
 from tools.upgrade_admission import (
     PREFLIGHT_PREDICATES,
@@ -171,6 +173,110 @@ class FailingAdapter(FakeAdapter):
 
 
 class UpgradeEngineTests(unittest.TestCase):
+    def test_validation_binding_rejects_partial_or_unbound_inputs(self) -> None:
+        admission = object.__new__(DispatchAdmission)
+        with tempfile.TemporaryDirectory() as directory:
+            journal = Path(directory) / "journal.json"
+            with self.assertRaisesRegex(UpgradeError, "required together"):
+                UpgradeEngine(
+                    "op-1",
+                    journal,
+                    make_context(),
+                    validation_admission=admission,
+                )
+            with self.assertRaisesRegex(UpgradeError, "backend adapter"):
+                UpgradeEngine(
+                    "op-1",
+                    journal,
+                    make_context(),
+                    validation_admission=admission,
+                    validation_operation={"opcode": "runtime.validate"},
+                    validation_context={"backend": "sqlite"},
+                )
+            with self.assertRaisesRegex(UpgradeError, "binding is invalid"):
+                UpgradeEngine(
+                    "op-1",
+                    journal,
+                    make_context(),
+                    backend_adapter=FakeAdapter(),
+                    validation_admission=object(),
+                    validation_operation={"opcode": "runtime.validate"},
+                    validation_context={"backend": "sqlite"},
+                )
+
+    def test_backup_and_stage_bindings_reject_partial_or_invalid_authority(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            journal = Path(directory) / "journal.json"
+            with self.assertRaisesRegex(UpgradeError, "supplied together"):
+                UpgradeEngine(
+                    "op-1", journal, make_context(), backup_operation={"opcode": "backend.backup"}
+                )
+            with self.assertRaisesRegex(UpgradeError, "backend adapter"):
+                UpgradeEngine(
+                    "op-1",
+                    journal,
+                    make_context(),
+                    backup_operation={"opcode": "backend.backup"},
+                    backup_context={"backend": "sqlite"},
+                )
+            with self.assertRaisesRegex(UpgradeError, "binding is invalid"):
+                UpgradeEngine(
+                    "op-1",
+                    journal,
+                    make_context(),
+                    backend_adapter=FakeAdapter(),
+                    backup_operation={"opcode": "backend.backup"},
+                    backup_context={"backend": "sqlite"},
+                )
+            with self.assertRaisesRegex(UpgradeError, "supplied together"):
+                UpgradeEngine("op-1", journal, make_context(), stage_context={"backend": "sqlite"})
+            with self.assertRaisesRegex(UpgradeError, "backend adapter"):
+                UpgradeEngine(
+                    "op-1",
+                    journal,
+                    make_context(),
+                    stage_operation={"opcode": "backend.stage"},
+                    stage_context={"backend": "sqlite"},
+                )
+            with self.assertRaisesRegex(UpgradeError, "binding is invalid"):
+                UpgradeEngine(
+                    "op-1",
+                    journal,
+                    make_context(),
+                    backend_adapter=FakeAdapter(),
+                    stage_operation={"opcode": "backend.stage"},
+                    stage_context={"backend": "sqlite"},
+                )
+
+    def test_engine_binds_selector_readiness_to_validate_phase(self) -> None:
+        admission = object.__new__(DispatchAdmission)
+        with tempfile.TemporaryDirectory() as directory:
+            engine = UpgradeEngine(
+                "op-1",
+                Path(directory) / "journal.json",
+                CONTEXT,
+                backend_adapter=FakeAdapter(),
+                validation_admission=admission,
+                validation_operation={
+                    "operation_id": "op-1:validate",
+                    "opcode": "runtime.validate",
+                },
+                validation_context={
+                    "backend": "sqlite",
+                    "target": "new",
+                    "operation_id": "op-1",
+                    "fencing_token": "fence-1",
+                    "binding": {"project_id": CONTEXT["project_id"]},
+                },
+            )
+            capability = engine._validation_phase_adapter
+            self.assertIsInstance(capability, BoundValidationPhaseAdapter)
+            if capability is None:
+                self.fail("validation capability was not bound")
+            with patch.object(DispatchAdmission, "revalidate"):
+                result = capability.execute("validate", CONTEXT)
+            self.assertTrue(result["runtime_validated"])
+
     def test_engine_binds_verified_stage_capability_to_stage_phase(self) -> None:
         class StageAdapter(FakeAdapter):
             def __init__(self) -> None:
@@ -279,6 +385,15 @@ class UpgradeEngineTests(unittest.TestCase):
                 admission_recheck=object(),
                 expected_head=cast(Any, 1),
             )
+        with self.assertRaisesRegex(UpgradeError, "Git rollback identity binding is incomplete"):
+            BoundRollbackCapability.bind(
+                context,
+                Concrete(),
+                object(),
+                lease=object(),
+                admission_recheck=object(),
+                expected_branch="main",
+            ).verify(ROLLBACK_CONTEXT)
 
         class Generic(Concrete):
             bound_rollback_kind = None
@@ -288,6 +403,16 @@ class UpgradeEngineTests(unittest.TestCase):
             capability.verify({})
         with self.assertRaisesRegex(UpgradeError, "identity mismatch"):
             capability.verify({**ROLLBACK_CONTEXT, "operation_id": "foreign"})
+        with self.assertRaisesRegex(UpgradeError, "result is invalid"):
+            capability.verify(ROLLBACK_CONTEXT)
+
+        with self.assertRaisesRegex(UpgradeError, "requires bound evidence"):
+            RollbackAuthorizationCapability.bind(context, cast(Any, object()))
+        with self.assertRaisesRegex(UpgradeError, "identity mismatch"):
+            RollbackAuthorizationCapability.bind(
+                PhaseContext(**cast(dict[str, Any], {**ROLLBACK_CONTEXT, "operation_id": "other"})),
+                capability,
+            )
 
     def test_sqlite_observation_capability_rejects_forged_and_invalid_bindings(self) -> None:
         context = PhaseContext(**cast(dict[str, Any], ROLLBACK_CONTEXT))
@@ -307,6 +432,55 @@ class UpgradeEngineTests(unittest.TestCase):
         object.__setattr__(capability, "identity", ())
         with self.assertRaisesRegex(UpgradeError, "identity mismatch"):
             capability.observe({**ROLLBACK_CONTEXT, "operation_id": "foreign"})
+        invalid_paths = {**ROLLBACK_CONTEXT, "destination": None}
+        object.__setattr__(
+            capability,
+            "identity",
+            tuple(invalid_paths[field] for field in CONTEXT_FIELDS if field != "target"),
+        )
+        with self.assertRaisesRegex(UpgradeError, "artifact paths"):
+            capability.observe(invalid_paths)
+
+    def test_git_observation_capability_rejects_invalid_bindings_and_results(self) -> None:
+        context = PhaseContext(**cast(dict[str, Any], ROLLBACK_CONTEXT))
+        with tempfile.TemporaryDirectory() as directory:
+            adapter = GitAuthorityAdapter(Path(directory))
+            with self.assertRaisesRegex(TypeError, "must be bound"):
+                GitRollbackObservationCapability()
+            with self.assertRaisesRegex(UpgradeError, "branch binding is invalid"):
+                GitRollbackObservationCapability.bind(
+                    context,
+                    adapter,
+                    object(),
+                    lease=object(),
+                    admission_recheck=object(),
+                    expected_branch="",
+                    expected_head="head",
+                )
+            with self.assertRaisesRegex(UpgradeError, "head binding is invalid"):
+                GitRollbackObservationCapability.bind(
+                    context,
+                    adapter,
+                    object(),
+                    lease=object(),
+                    admission_recheck=object(),
+                    expected_branch="main",
+                    expected_head="",
+                )
+            capability = GitRollbackObservationCapability.bind(
+                context,
+                adapter,
+                object(),
+                lease=object(),
+                admission_recheck=object(),
+                expected_branch="main",
+                expected_head="head",
+            )
+            with (
+                patch.object(adapter, "preflight_git", return_value=None),
+                self.assertRaisesRegex(UpgradeError, "result is invalid"),
+            ):
+                capability.observe(ROLLBACK_CONTEXT)
 
     def test_journal_process_death_reopens_bound_control_and_rejects_revision_drift(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -572,6 +746,53 @@ class UpgradeEngineTests(unittest.TestCase):
             engine.plan()
             with self.assertRaises(UpgradeError):
                 engine.plan()
+
+    def test_rollback_without_backend_is_rejected_before_recovery(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            engine = UpgradeEngine(
+                "op-no-rollback-backend",
+                Path(directory) / "journal.json",
+                make_context("op-no-rollback-backend"),
+            )
+            engine.plan()
+            with self.assertRaisesRegex(UpgradeError, "backend adapter is required for rollback"):
+                engine.rollback(lambda _step, _state: {})
+
+    def test_bound_rollback_verification_failure_is_write_closed(self) -> None:
+        class RaisingAdapter(FakeAdapter):
+            requires_bound_rollback = True
+
+            def verify_rollback_context_bound(
+                self, _context: Mapping[str, object]
+            ) -> Mapping[str, object]:
+                raise RuntimeError("verification unavailable")
+
+        with tempfile.TemporaryDirectory() as directory:
+            operation_id = "op-bound-verification-failure"
+            adapter = RaisingAdapter()
+            engine = UpgradeEngine(
+                operation_id,
+                Path(directory) / "journal.json",
+                make_context(operation_id),
+                backend_adapter=adapter,
+                rollback_bound_verifier=BoundRollbackCapability.bind(
+                    PhaseContext(**cast(dict[str, Any], make_context(operation_id))), adapter
+                ),
+            )
+            engine.plan()
+            with self.assertRaisesRegex(UpgradeError, "trusted bound rollback verification failed"):
+                engine.rollback(lambda _step, _state: {})
+
+    def test_finish_verified_rollback_requires_bound_context(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            engine = UpgradeEngine(
+                "op-no-recovery-context",
+                Path(directory) / "journal.json",
+                make_context("op-no-recovery-context"),
+                backend_adapter=FakeAdapter(),
+            )
+            with self.assertRaisesRegex(UpgradeError, "recovery context is unavailable"):
+                engine._finish_verified_rollback({}, {"result": {}})
 
     def test_context_digest_and_target_shapes_are_strict(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -2452,6 +2673,67 @@ class UpgradeEngineTests(unittest.TestCase):
                     return BackupObservation("bytes", "manifest", "store:1", 4)
 
             capability.preflight(ROLLBACK_CONTEXT, cast(Any, ForgedProvider()))
+
+        class ObservingAdapter(EvidenceAdapter):
+            def observe_backup_identity(
+                self, _backup: Path, _manifest: Path, _context: Mapping[str, object]
+            ) -> BackupObservation:
+                return observation
+
+        observing = ObservingAdapter()
+        observing_evidence = BoundRollbackCapability.bind(context, observing)
+        observing_capability = RollbackAuthorizationCapability.bind(context, observing_evidence)
+        provider = object.__new__(SQLiteRollbackObservationCapability)
+        object.__setattr__(provider, "adapter", observing)
+        object.__setattr__(
+            provider,
+            "identity",
+            tuple(ROLLBACK_CONTEXT[field] for field in CONTEXT_FIELDS if field != "target"),
+        )
+        with self.assertRaisesRegex(UpgradeError, "not enabled"):
+            observing_capability.preflight(ROLLBACK_CONTEXT, provider)
+
+        class UnprovenAdapter(ObservingAdapter):
+            def observe_backup_identity(
+                self, _backup: Path, _manifest: Path, _context: Mapping[str, object]
+            ) -> BackupObservation:
+                return BackupObservation("bytes", "manifest", "store:1", 4)
+
+        unproven_adapter = UnprovenAdapter()
+        unproven_evidence = BoundRollbackCapability.bind(context, unproven_adapter)
+        unproven_capability = RollbackAuthorizationCapability.bind(context, unproven_evidence)
+        unproven_provider = object.__new__(SQLiteRollbackObservationCapability)
+        object.__setattr__(unproven_provider, "adapter", unproven_adapter)
+        object.__setattr__(unproven_provider, "identity", provider.identity)
+        with self.assertRaisesRegex(UpgradeError, "provenance"):
+            unproven_capability.preflight(ROLLBACK_CONTEXT, unproven_provider)
+        foreign_provider = object.__new__(SQLiteRollbackObservationCapability)
+        object.__setattr__(foreign_provider, "adapter", object())
+        object.__setattr__(foreign_provider, "identity", provider.identity)
+        with self.assertRaisesRegex(UpgradeError, "foreign adapter"):
+            observing_capability.preflight(ROLLBACK_CONTEXT, foreign_provider)
+        with self.assertRaisesRegex(UpgradeError, "context is invalid"):
+            observing_capability.preflight({**ROLLBACK_CONTEXT, "target": "new"}, provider)
+        with self.assertRaisesRegex(UpgradeError, "identity mismatch"):
+            observing_capability.preflight(
+                {**ROLLBACK_CONTEXT, "operation_id": "foreign"}, provider
+            )
+
+        class FailingAdapter(ObservingAdapter):
+            def observe_backup_identity(
+                self, _backup: Path, _manifest: Path, _context: Mapping[str, object]
+            ) -> BackupObservation:
+                raise RuntimeError("uncertain")
+
+        failing_provider = object.__new__(SQLiteRollbackObservationCapability)
+        object.__setattr__(failing_provider, "adapter", FailingAdapter())
+        object.__setattr__(failing_provider, "identity", provider.identity)
+        with self.assertRaisesRegex(UpgradeError, "foreign adapter"):
+            observing_capability.preflight(ROLLBACK_CONTEXT, failing_provider)
+        failing_evidence = BoundRollbackCapability.bind(context, failing_provider.adapter)
+        failing_capability = RollbackAuthorizationCapability.bind(context, failing_evidence)
+        with self.assertRaisesRegex(UpgradeError, "observation failed"):
+            failing_capability.preflight(ROLLBACK_CONTEXT, failing_provider)
 
     def test_git_observation_capability_is_concrete_and_identity_bound(self) -> None:
         context = PhaseContext(**cast(dict[str, Any], ROLLBACK_CONTEXT))

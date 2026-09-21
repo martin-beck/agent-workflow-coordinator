@@ -19,6 +19,16 @@
   },
   "correspondence": [
     {
+      "model_actions": ["FreshRuntimeRead", "CompleteReopen"],
+      "implementation_obligation": "The bounded UpgradeEngine validate phase revalidates one retained authenticated selector/runtime admission and accepts only verified, non-mutating readiness evidence.",
+      "evidence_required": [
+        "tests/test_upgrade_engine.py::test_engine_binds_selector_readiness_to_validate_phase",
+        "tests/test_authority_neutral_validation.py::test_bound_adapter_dispatches_validate_and_rejects_drift",
+        "tests/test_authority_neutral_validation.py::test_revalidation_failure_is_write_closed"
+      ],
+      "status": "bounded executable selector/runtime readiness evidence; implementation refinement pending"
+    },
+    {
       "model_actions": ["BindForward", "ForwardFailure"],
       "implementation_obligation": "The bounded UpgradeEngine stage phase verifies one generated backend.stage artifact through immutable session identity and accepts only verified, non-mutating manifest evidence.",
       "evidence_required": [
