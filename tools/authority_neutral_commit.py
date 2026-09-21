@@ -38,8 +38,15 @@ _REQUIRED_EVIDENCE = frozenset(
 )
 
 _MUTATION_BINDING_FIELDS = (
-    "backend", "target", "operation_id", "fencing_token", "state_revision",
-    "barrier_id", "artifact_identity", "manifest_identity", "selector_identity",
+    "backend",
+    "target",
+    "operation_id",
+    "fencing_token",
+    "state_revision",
+    "barrier_id",
+    "artifact_identity",
+    "manifest_identity",
+    "selector_identity",
     "runtime_identity",
 )
 
@@ -65,9 +72,7 @@ class CommitAdmissionBundle:
         for field in _MUTATION_BINDING_FIELDS[6:]:
             value = evidence.get(field)
             if not isinstance(value, str) or not value:
-                raise CommitAuthorizationExecutionError(
-                    f"commit authorization {field} is invalid"
-                )
+                raise CommitAuthorizationExecutionError(f"commit authorization {field} is invalid")
         return cls(
             backend=cast(str, evidence["backend"]),
             target=cast(str, evidence["target"]),
