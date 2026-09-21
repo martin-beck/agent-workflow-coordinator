@@ -114,7 +114,12 @@
     {
       "model_actions": ["RequestWrite", "AcceptWrite", "RejectWrite", "FinishWrite"],
       "implementation_obligation": "Every authoritative SQLite mutation route, including tasks, observations, results, migrations, and reconciliation, uses the same fence and cannot bypass it through a separate connection.",
-      "evidence_required": ["route inventory", "multiprocess writer rejection", "post-release admission"],
+      "evidence_required": [
+        "formal/upgrade/sqlite-route-inventory.json",
+        "tests/test_sqlite_route_inventory.py::test_inventory_is_explicit_and_every_route_uses_shared_transaction_gate",
+        "tests/test_sqlite_mutation_barrier.py::test_independent_writer_rejects_until_verified_release",
+        "tests/test_sqlite_mutation_barrier.py::test_concurrent_released_writers_serialize_one_exact_revision"
+      ],
       "status": "bounded executable concurrency and DB/WAL/SHM replacement evidence in tests/test_sqlite_mutation_barrier.py; implementation refinement pending"
     },
     {
