@@ -18,7 +18,12 @@ import tools.handoffctl as handoffctl
 from tools.admission_lease import AdmissionLease, validate_recheck
 from tools.handoffctl import locked
 from tools.lock_domain_scope import LockDomainScope
-from tools.mutation_fence import MutationFence, provision, provision_control_binding
+from tools.mutation_fence import (
+    MutationFence,
+    MutationFenceError,
+    provision,
+    provision_control_binding,
+)
 from tools.rollback_control_store import (
     BarrierSessionState,
     SQLiteBarrierSessionStore,
@@ -833,6 +838,74 @@ class SQLiteMutationBarrierProcessTests(unittest.TestCase):
         for route in ("mutate", "update_observations", "append_command_result", "retire"):
             self.assertEqual(expected, self._run_route(route), route)
         self.assertEqual(1, self._authority_revision()[0])
+
+    def test_bound_fence_rejects_identity_change_after_admission(self) -> None:
+        self._release(self._create_held())
+        backend = _backend(self.root, _fence(self.root, self.control))
+
+        def update_summary(
+            meta: dict[str, Any], _tasks: list[tuple[Path, dict[str, Any], str]]
+        ) -> tuple[str, str]:
+            meta["summary"] = "first bound mutation"
+            return "first bound mutation", "# First bound mutation\n"
+
+        backend.mutate(
+            "AR-0001",
+            1,
+            "update",
+            "2026-09-21T00:14:00+00:00",
+            update_summary,
+        )
+        replacement = _identity(
+            attempt="attempt-bound-replaced",
+            state_revision=2,
+            barrier="barrier-bound-replaced",
+            fence="fence-bound-replaced",
+            owner="owner-bound-replaced",
+        )
+        with sqlite3.connect(self.control.control_store_path) as connection:
+            current_revision = int(
+                connection.execute(
+                    "SELECT revision FROM barrier_session WHERE project_id=?", (PROJECT,)
+                ).fetchone()[0]
+            )
+            connection.execute(
+                "UPDATE barrier_session SET attempt_id=?,state_revision=?,"
+                "durable_barrier_id=?,fencing_token=?,fencing_owner=?,identity_digest=?,"
+                "forward_child=NULL,rollback_child=NULL WHERE project_id=?",
+                (
+                    replacement.attempt_id,
+                    replacement.state_revision,
+                    replacement.durable_barrier_id,
+                    replacement.fencing_token,
+                    replacement.fencing_owner,
+                    replacement.identity_digest,
+                    PROJECT,
+                ),
+            )
+            connection.execute(
+                "INSERT INTO barrier_session_intent "
+                "(project_id,intent_id,attempt_id,expected_revision,proposed_revision,"
+                "proposed_status,identity_digest,outcome,cause_code) VALUES (?,?,?,?,?,?,?,?,?)",
+                (
+                    PROJECT,
+                    "bound-replacement-intent",
+                    replacement.attempt_id,
+                    current_revision - 1,
+                    current_revision,
+                    "released",
+                    replacement.identity_digest,
+                    "committed",
+                    None,
+                ),
+            )
+            connection.commit()
+        with self.assertRaisesRegex(MutationFenceError, "barrier session identity changed"):
+            backend.update_observations(
+                {"worker-1": {"branch": "stale", "head": "c" * 40, "dirty": 0}},
+                "2026-09-21T00:14:01+00:00",
+            )
+        self.assertEqual(2, self._authority_revision()[0])
 
     def test_every_inventoried_route_rejects_authority_replacement(self) -> None:
         self._create_held()

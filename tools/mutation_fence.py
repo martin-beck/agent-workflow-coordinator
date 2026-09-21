@@ -380,6 +380,7 @@ class MutationFence:
         self.control_lock = control_lock
         self._scope_owner: int | None = None
         self._process_lock = threading.Lock()
+        self._bound_session_identity: tuple[object, ...] | None = None
 
     def _verify(self) -> dict[str, object]:
         record = _read_json(self.marker, "authority fence marker")
@@ -486,7 +487,7 @@ class MutationFence:
             self._scope_owner = None
             self._process_lock.release()
 
-    def _read_barrier_status(self) -> str:
+    def _read_barrier_status(self) -> str:  # noqa: C901
         if self.control_store is None or self.control_binding is None:
             raise MutationFenceError("control binding prerequisites are incomplete")
         project_id = self._verify_marker(_read_json(self.marker, "authority fence marker"))
@@ -525,6 +526,22 @@ class MutationFence:
                 observed = SQLiteBarrierSessionStore.observe_connection(connection, project_id)
             except ControlStoreError as error:
                 raise MutationFenceError("durable control barrier state is invalid") from error
+            identity = observed.identity if observed is not None else None
+            if identity is not None:
+                current_identity = (
+                    identity.project_id,
+                    identity.attempt_id,
+                    identity.state_revision,
+                    identity.authority_revision_at_acquire,
+                    identity.durable_barrier_id,
+                    identity.fencing_token,
+                    identity.fencing_owner,
+                    identity.identity_digest,
+                )
+                if self._bound_session_identity is None:
+                    self._bound_session_identity = current_identity
+                elif self._bound_session_identity != current_identity:
+                    raise MutationFenceError("barrier session identity changed")
             current = os.fstat(descriptor)
             if _identity(current, os.fstat(parent_fd)) != _identity(status, parent):
                 raise MutationFenceError("control store identity changed")
