@@ -24,6 +24,7 @@ from tools.runtime_bootstrap import (
     read_runtime_manifest,
     resolve_selected_runtime,
     resolve_selected_runtime_bound,
+    run_admitted_runtime,
     verify_runtime_manifest,
 )
 from tools.upgrade_authority import AuthorityError, commit_runtime_selector, read_runtime_selector
@@ -54,7 +55,7 @@ class RuntimeBootstrapTests(unittest.TestCase):
         tools.mkdir(mode=0o755)
         tools.chmod(0o755)
         entrypoint = tools / "handoffctl.py"
-        entrypoint.write_text("#!/usr/bin/env python3\n")
+        entrypoint.write_text("#!/usr/bin/env python3\nprint('selected-runtime')\n")
         entrypoint.chmod(0o755)
 
     def test_resolves_owner_only_versioned_release(self) -> None:
@@ -319,6 +320,54 @@ class RuntimeBootstrapTests(unittest.TestCase):
                 with self.assertRaisesRegex(AuthorityError, "runtime entrypoint"):
                     prepare_runtime_dispatch(admission)
                 admission.close()
+
+    def test_run_admitted_runtime_executes_selected_fixed_entrypoint(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            releases = root / "releases"
+            releases.mkdir(mode=0o700)
+            selected = releases / "v1.2.3"
+            selected.mkdir(mode=0o700)
+            self._write_manifest(selected)
+            self._write_entrypoint(selected)
+            selector = root / "runtime-selector.json"
+            commit_runtime_selector(selector, "v1.2.3", "v1.2.2")
+            with resolve_selected_runtime_bound(
+                selector, releases, self._identity_for_release(), self._verifier
+            ) as resolved:
+                admission = resolved.admit_for_dispatch()
+                result = run_admitted_runtime(admission, ("doctor",))
+                self.assertEqual(0, result.returncode)
+                self.assertEqual("selected-runtime\n", result.stdout)
+                self.assertEqual("", result.stderr)
+                admission.close()
+                self.assertEqual(-1, resolved.descriptor)
+
+    def test_run_admitted_runtime_closes_entrypoint_on_spawn_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            releases = root / "releases"
+            releases.mkdir(mode=0o700)
+            selected = releases / "v1.2.3"
+            selected.mkdir(mode=0o700)
+            self._write_manifest(selected)
+            self._write_entrypoint(selected)
+            selector = root / "runtime-selector.json"
+            commit_runtime_selector(selector, "v1.2.3", "v1.2.2")
+            with resolve_selected_runtime_bound(
+                selector, releases, self._identity_for_release(), self._verifier
+            ) as resolved:
+                admission = resolved.admit_for_dispatch()
+                with (
+                    patch(
+                        "tools.runtime_bootstrap.subprocess.run",
+                        side_effect=OSError("injected spawn failure"),
+                    ),
+                    self.assertRaisesRegex(AuthorityError, "dispatch failed"),
+                ):
+                    run_admitted_runtime(admission)
+                admission.close()
+                self.assertEqual(-1, resolved.descriptor)
 
     def test_dispatch_admission_context_closes_on_consumer_failure(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
