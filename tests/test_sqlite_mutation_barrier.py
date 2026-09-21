@@ -571,6 +571,39 @@ class SQLiteMutationBarrierProcessTests(unittest.TestCase):
         self.assertEqual("sqlite", backend.name)
         self.assertIsNotNone(backend.backend_binding)
 
+    def test_handoffctl_factory_binds_the_admitted_session_identity(self) -> None:
+        self._release(self._create_held())
+        with (
+            patch.object(handoffctl, "DATABASE", self.authority),
+            patch.object(handoffctl, "CONTROL_DATABASE", self.control.control_store_path),
+            patch.object(handoffctl, "AUTHORITY_MARKER", self.root / "authority-marker.json"),
+            patch.object(handoffctl, "AUTHORITY_LIFECYCLE", self.root / "authority-lifecycle.json"),
+            patch.object(handoffctl, "AUTHORITY_LOCK", self.root / "authority.lock"),
+            patch.object(handoffctl, "CONTROL_BINDING", self.root / "control-binding.json"),
+            patch.object(handoffctl, "CONTROL_LOCK", self.control.control_lock_path),
+            patch.object(handoffctl, "project_binding", return_value=BINDING),
+            patch.object(handoffctl, "TASKS", self.tasks),
+        ):
+            backend = handoffctl.mutating_sqlite_backend()
+
+        second = self.session.create(
+            _identity(
+                attempt="attempt-factory-next",
+                state_revision=2,
+                barrier="barrier-factory-next",
+                fence="fence-factory-next",
+                owner="owner-factory-next",
+            )
+        )
+        second_released = self._release(second)
+        with self.assertRaisesRegex(MutationFenceError, "barrier session identity changed"):
+            backend.update_observations(
+                {"worker-1": {"branch": "stale", "head": "d" * 40, "dirty": 0}},
+                "2026-09-21T00:17:00+00:00",
+            )
+        self.assertEqual(second_released, self.session.snapshot())
+        self.assertEqual(1, self._authority_revision()[0])
+
     def test_bound_route_commits_after_independently_verified_release(self) -> None:
         held = self._create_held()
         self._release(held)
