@@ -249,7 +249,15 @@ def mutating_sqlite_backend() -> SQLiteBackend:
     ):
         return SQLiteBackend(DATABASE, project_binding(), TASKS)
     from tools.mutation_fence import MutationFence
+    from tools.rollback_control_store import SQLiteBarrierSessionStore, SQLiteRollbackControlStore
 
+    binding = project_binding()
+    project_id = str(binding["project_id"])
+    control = SQLiteRollbackControlStore(CONTROL_DATABASE, project_id, DATABASE)
+    session = SQLiteBarrierSessionStore(control)
+    admitted = session.snapshot()
+    if admitted is None:
+        raise RuntimeError("durable barrier session is missing")
     fence = MutationFence(
         DATABASE,
         AUTHORITY_MARKER,
@@ -261,10 +269,11 @@ def mutating_sqlite_backend() -> SQLiteBackend:
     )
     return bind_released_sqlite_backend(
         DATABASE,
-        project_binding(),
+        binding,
         TASKS,
         fence,
         locked,
+        admitted.identity,
     )
 
 
