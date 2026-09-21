@@ -29,6 +29,16 @@
       "status": "bounded executable selector/runtime readiness evidence; implementation refinement pending"
     },
     {
+      "model_actions": ["ObserveAuthority", "RecheckHeld", "RejectStaleCAS"],
+      "implementation_obligation": "The authority-neutral selector admission seam holds the concrete visibility scope, rereads the bound selector and durable barrier identity, and returns only non-mutating admission evidence.",
+      "evidence_required": [
+        "tests/test_authority_neutral_selector.py::test_admission_is_read_only_and_bound_to_visibility_scope",
+        "tests/test_authority_neutral_selector.py::test_rejects_invalid_identity_and_backend_failures",
+        "tests/test_authority_neutral_selector.py::test_bound_adapter_rejects_phase_and_identity_drift"
+      ],
+      "status": "bounded executable selector admission evidence; implementation refinement pending"
+    },
+    {
       "model_actions": ["BindForward", "ForwardFailure"],
       "implementation_obligation": "The bounded UpgradeEngine stage phase verifies one generated backend.stage artifact through immutable session identity and accepts only verified, non-mutating manifest evidence.",
       "evidence_required": [
