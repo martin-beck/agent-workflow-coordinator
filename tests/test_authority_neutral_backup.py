@@ -100,6 +100,57 @@ class AuthorityNeutralBackupTests(unittest.TestCase):
         with self.assertRaisesRegex(BackupExecutionError, "identity"):
             execute_verified_backup(_GitAdapter(), OPERATION, invalid)
 
+    def test_rejects_incomplete_and_malformed_context(self) -> None:
+        with self.assertRaisesRegex(BackupExecutionError, "context is incomplete"):
+            execute_verified_backup(_GitAdapter(), OPERATION, {})
+        context = _context()
+        context.pop("destination")
+        with self.assertRaisesRegex(BackupExecutionError, "context is incomplete"):
+            execute_verified_backup(_GitAdapter(), OPERATION, context)
+        context = _context()
+        context["destination"] = object()
+        with self.assertRaisesRegex(BackupExecutionError, "artifact binding"):
+            execute_verified_backup(_GitAdapter(), OPERATION, context)
+        context = _context()
+        context["binding"] = []
+        with self.assertRaisesRegex(BackupExecutionError, "authority binding"):
+            execute_verified_backup(_GitAdapter(), OPERATION, context)
+
+    def test_rejects_incomplete_or_malformed_backend_results(self) -> None:
+        class Incomplete:
+            def execute_generated_backup(
+                self, _operation: object, _context: object
+            ) -> dict[str, object]:
+                return {"outcome": "completed"}
+
+        class NonMapping:
+            def execute_generated_backup(self, _operation: object, _context: object) -> str:
+                return "invalid"
+
+        with self.assertRaisesRegex(BackupExecutionError, "result is incomplete"):
+            execute_verified_backup(Incomplete(), OPERATION, _context())
+        with self.assertRaisesRegex(BackupExecutionError, "result is invalid"):
+            execute_verified_backup(NonMapping(), OPERATION, _context())
+
+    def test_wraps_backend_failures_as_backup_errors(self) -> None:
+        class Failing:
+            def execute_generated_backup(
+                self, _operation: object, _context: object
+            ) -> dict[str, object]:
+                raise RuntimeError("injected failure")
+
+        with self.assertRaisesRegex(BackupExecutionError, "execution failed"):
+            execute_verified_backup(Failing(), OPERATION, _context())
+
+        class AlreadyClassified:
+            def execute_generated_backup(
+                self, _operation: object, _context: object
+            ) -> dict[str, object]:
+                raise BackupExecutionError("already classified")
+
+        with self.assertRaisesRegex(BackupExecutionError, "already classified"):
+            execute_verified_backup(AlreadyClassified(), OPERATION, _context())
+
 
 if __name__ == "__main__":
     unittest.main()
