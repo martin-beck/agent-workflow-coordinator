@@ -1550,7 +1550,26 @@ class SQLiteBarrierSessionStore:
             return None
         if len(rows) != 1:
             raise ControlStoreError("durable barrier session observation is ambiguous")
-        return cls._decode_observation(project_id, tuple(rows[0]))
+        current = cls._decode_observation(project_id, tuple(rows[0]))
+        # Once a session has advanced beyond its initial row, its immutable
+        # identity and revision must also be present in the intent journal.
+        # This rejects a forged/replaced released row that has a
+        # self-consistent digest but was never produced by the CAS path.
+        if current.status == "released" and current.revision > 1:
+            intent = connection.execute(
+                "SELECT 1 FROM barrier_session_intent "
+                "WHERE project_id=? AND attempt_id=? AND identity_digest=? "
+                "AND proposed_revision=? LIMIT 1",
+                (
+                    project_id,
+                    current.identity.attempt_id,
+                    current.identity.identity_digest,
+                    current.revision,
+                ),
+            ).fetchone()
+            if intent is None:
+                raise ControlStoreError("durable barrier session intent is missing")
+        return current
 
     def _snapshot_locked(self) -> BarrierSessionState | None:
         self._control._require_operation_lock()
