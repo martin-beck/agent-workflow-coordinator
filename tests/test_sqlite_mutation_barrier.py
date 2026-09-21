@@ -677,6 +677,40 @@ class SQLiteMutationBarrierProcessTests(unittest.TestCase):
         self.assertEqual([(1, "import")], events)
         self.assertEqual((0,), results)
 
+    def test_every_inventoried_route_rejects_forged_released_row(self) -> None:
+        """A stale/forged release must fence every SQLite mutation route."""
+        held = self._create_held()
+        with sqlite3.connect(self.control.control_store_path) as connection:
+            connection.execute(
+                "UPDATE barrier_session SET status='released',revision=?,identity_digest=? "
+                "WHERE project_id=?",
+                (held.revision + 1, "0" * 64, PROJECT),
+            )
+            connection.commit()
+
+        expected = (
+            "rejected",
+            "MutationFenceError",
+            "durable control barrier state is invalid",
+        )
+        for route in ("mutate", "update_observations", "append_command_result", "retire"):
+            self.assertEqual(expected, self._run_route(route), route)
+
+        revision, meta_json = self._authority_revision()
+        self.assertEqual(1, revision)
+        self.assertIn('"summary": "Ready."', meta_json)
+        with sqlite3.connect(self.authority) as connection:
+            self.assertEqual(
+                [(1, "import")],
+                connection.execute(
+                    "SELECT revision, kind FROM events WHERE task_id='AR-0001' ORDER BY revision"
+                ).fetchall(),
+            )
+            self.assertEqual(
+                (0,),
+                connection.execute("SELECT COUNT(*) FROM command_results").fetchone(),
+            )
+
     def test_sigkill_session_commit_recovers_ambiguous_then_verified_release(self) -> None:
         context = multiprocessing.get_context("fork")
         ready = context.Event()
