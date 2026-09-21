@@ -6,8 +6,9 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from copy import deepcopy
+from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Any
+from typing import Any, cast
 
 
 class CommitAuthorizationExecutionError(RuntimeError):
@@ -35,6 +36,55 @@ _REQUIRED_EVIDENCE = frozenset(
         "mutates_authority",
     }
 )
+
+_MUTATION_BINDING_FIELDS = (
+    "backend", "target", "operation_id", "fencing_token", "state_revision",
+    "barrier_id", "artifact_identity", "manifest_identity", "selector_identity",
+    "runtime_identity",
+)
+
+
+@dataclass(frozen=True)
+class CommitAdmissionBundle:
+    """Immutable identity bundle for a future authority effect."""
+
+    backend: str
+    target: str
+    operation_id: str
+    fencing_token: str
+    state_revision: int
+    barrier_id: str
+    artifact_identity: str
+    manifest_identity: str
+    selector_identity: str
+    runtime_identity: str
+
+    @classmethod
+    def from_evidence(cls, evidence: Mapping[str, object]) -> CommitAdmissionBundle:
+        _validate_evidence(evidence)
+        for field in _MUTATION_BINDING_FIELDS[6:]:
+            value = evidence.get(field)
+            if not isinstance(value, str) or not value:
+                raise CommitAuthorizationExecutionError(
+                    f"commit authorization {field} is invalid"
+                )
+        return cls(
+            backend=cast(str, evidence["backend"]),
+            target=cast(str, evidence["target"]),
+            operation_id=cast(str, evidence["operation_id"]),
+            fencing_token=cast(str, evidence["fencing_token"]),
+            state_revision=cast(int, evidence["state_revision"]),
+            barrier_id=cast(str, evidence["barrier_id"]),
+            artifact_identity=cast(str, evidence["artifact_identity"]),
+            manifest_identity=cast(str, evidence["manifest_identity"]),
+            selector_identity=cast(str, evidence["selector_identity"]),
+            runtime_identity=cast(str, evidence["runtime_identity"]),
+        )
+
+    def matches(self, evidence: Mapping[str, object]) -> bool:
+        return all(
+            evidence.get(field) == getattr(self, field) for field in _MUTATION_BINDING_FIELDS
+        )
 
 
 def _validate_evidence(evidence: Mapping[str, object]) -> None:
@@ -89,6 +139,7 @@ class BoundCommitAuthorizationAdapter:
         ):
             raise CommitAuthorizationExecutionError("commit authorization operation is unsupported")
         _validate_evidence(evidence)
+        self._bundle = CommitAdmissionBundle.from_evidence(evidence)
         self._operation = MappingProxyType(deepcopy(dict(operation)))
         self._evidence = MappingProxyType(deepcopy(dict(evidence)))
         self._identity = {field: self._evidence[field] for field in _IDENTITY_FIELDS}
@@ -96,6 +147,6 @@ class BoundCommitAuthorizationAdapter:
     def execute(self, phase: str, evidence: Mapping[str, object]) -> dict[str, Any]:
         if phase != "commit_admission":
             raise CommitAuthorizationExecutionError("commit authorization phase is unsupported")
-        if any(evidence.get(field) != value for field, value in self._identity.items()):
+        if not self._bundle.matches(evidence):
             raise CommitAuthorizationExecutionError("commit authorization identity mismatch")
         return execute_verified_commit_authorization(self._operation, self._evidence)
