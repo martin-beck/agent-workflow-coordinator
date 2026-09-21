@@ -59,6 +59,16 @@
       "status": "bounded executable commit authorization evidence; implementation refinement pending"
     },
     {
+      "model_actions": ["MarkAmbiguous", "RejectWrite", "FunctionalAvailability"],
+      "implementation_obligation": "The authority-neutral recovery seam validates known-good backup, restore, runtime, barrier, and fencing evidence as diagnostic-only and never authorizes rollback mutation.",
+      "evidence_required": [
+        "tests/test_authority_neutral_recovery.py::test_diagnostic_recovery_evidence_never_authorizes_rollback",
+        "tests/test_authority_neutral_recovery.py::test_rejects_forged_or_unverified_recovery",
+        "tests/test_authority_neutral_recovery.py::test_bound_adapter_rejects_phase_and_identity_drift"
+      ],
+      "status": "bounded executable diagnostic recovery evidence; implementation refinement pending"
+    },
+    {
       "model_actions": ["BindForward", "ForwardFailure"],
       "implementation_obligation": "The bounded UpgradeEngine stage phase verifies one generated backend.stage artifact through immutable session identity and accepts only verified, non-mutating manifest evidence.",
       "evidence_required": [

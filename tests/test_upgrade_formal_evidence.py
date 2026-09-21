@@ -248,6 +248,25 @@ class UpgradeFormalEvidenceTests(unittest.TestCase):
             self.assertTrue((ROOT / path).exists(), path)
             self.assertIn(selector, (ROOT / path).read_text(encoding="utf-8"), selector)
 
+    def test_recovery_evidence_is_mapped_without_authorization_overclaim(self) -> None:
+        contract = json.loads(CONTRACT.read_text(encoding="utf-8"))
+        entry = next(
+            value
+            for value in contract["correspondence"]
+            if value["implementation_obligation"].startswith("The authority-neutral recovery seam")
+        )
+        self.assertEqual(
+            ["MarkAmbiguous", "RejectWrite", "FunctionalAvailability"], entry["model_actions"]
+        )
+        self.assertEqual(
+            "bounded executable diagnostic recovery evidence; implementation refinement pending",
+            entry["status"],
+        )
+        for reference in entry["evidence_required"]:
+            path, selector = reference.split("::", 1)
+            self.assertTrue((ROOT / path).exists(), path)
+            self.assertIn(selector, (ROOT / path).read_text(encoding="utf-8"), selector)
+
     def test_v10_contract_binds_all_sqlite_routes_without_overclaiming_refinement(self) -> None:
         contract = json.loads(CONTRACT.read_text(encoding="utf-8"))
         routes = contract["sqlite_route_inventory"]
