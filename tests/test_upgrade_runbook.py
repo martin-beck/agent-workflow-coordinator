@@ -10,7 +10,9 @@ import tempfile
 import unittest
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 
+from tools import verify_upgrade_runbook as verify_module
 from tools.generate_upgrade_contract import generate
 from tools.generate_upgrade_runbook import RunbookError, generate_runbooks, main, write_runbooks
 from tools.verify_upgrade_runbook import (
@@ -195,6 +197,57 @@ class UpgradeRunbookTests(unittest.TestCase):
             self.assertEqual(1, main([str(contract), str(output)]))
             contract.write_text(json.dumps(_contract()), encoding="utf-8")
             self.assertEqual(1, verify_main([str(contract), str(output)]))
+
+    def test_checker_cli_success_and_unreadable_paths_fail_closed(self) -> None:
+        document = _contract()
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "runbooks"
+            write_runbooks(document, output)
+            contract = Path(directory) / "contract.json"
+            contract.write_text(json.dumps(document), encoding="utf-8")
+            self.assertEqual(0, verify_main([str(contract), str(output)]))
+            with (
+                patch.object(Path, "iterdir", side_effect=OSError("unreadable")),
+                self.assertRaisesRegex(RunbookVerificationError, "unreadable"),
+            ):
+                verify_runbooks(document, output)
+
+    def test_checker_rejects_unreadable_generated_file(self) -> None:
+        document = _contract()
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "runbooks"
+            write_runbooks(document, output)
+            original = Path.read_text
+
+            def unreadable(path: Path, *args: Any, **kwargs: Any) -> str:
+                if path.name == "agent.md":
+                    raise OSError("unreadable")
+                return original(path, *args, **kwargs)
+
+            with (
+                patch.object(Path, "read_text", unreadable),
+                self.assertRaisesRegex(RunbookVerificationError, "unreadable"),
+            ):
+                verify_runbooks(document, output)
+
+    def test_checker_rejects_invalid_contract_and_private_output(self) -> None:
+        invalid = _contract()
+        invalid["phases"][0]["operation"].pop("opcode")
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            self.assertRaisesRegex(RunbookVerificationError, "cannot generate"),
+        ):
+            verify_runbooks(invalid, Path(directory) / "runbooks")
+
+        document = _contract()
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "runbooks"
+            write_runbooks(document, output)
+            with (
+                patch.object(verify_module, "_private_values", return_value={"health"}),
+                self.assertRaisesRegex(RunbookVerificationError, "private contract"),
+            ):
+                verify_runbooks(document, output)
 
     def test_git_release_runbook_uses_git_backup_instructions(self) -> None:
         document = _contract()

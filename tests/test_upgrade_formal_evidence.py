@@ -167,6 +167,26 @@ class UpgradeFormalEvidenceTests(unittest.TestCase):
             self.assertTrue((ROOT / path).exists(), path)
             self.assertIn(selector, (ROOT / path).read_text(encoding="utf-8"), selector)
 
+    def test_selector_readiness_is_mapped_without_refinement_overclaim(self) -> None:
+        contract = json.loads(CONTRACT.read_text(encoding="utf-8"))
+        entry = next(
+            value
+            for value in contract["correspondence"]
+            if value["implementation_obligation"].startswith(
+                "The bounded UpgradeEngine validate phase"
+            )
+        )
+        self.assertEqual(["FreshRuntimeRead", "CompleteReopen"], entry["model_actions"])
+        self.assertEqual(
+            "bounded executable selector/runtime readiness evidence; "
+            "implementation refinement pending",
+            entry["status"],
+        )
+        for reference in entry["evidence_required"]:
+            path, selector = reference.split("::", 1)
+            self.assertTrue((ROOT / path).exists(), path)
+            self.assertIn(selector, (ROOT / path).read_text(encoding="utf-8"), selector)
+
     def test_v10_contract_binds_all_sqlite_routes_without_overclaiming_refinement(self) -> None:
         contract = json.loads(CONTRACT.read_text(encoding="utf-8"))
         routes = contract["sqlite_route_inventory"]
