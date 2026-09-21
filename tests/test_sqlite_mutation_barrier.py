@@ -402,6 +402,12 @@ class SQLiteMutationBarrierProcessTests(unittest.TestCase):
         assert row is not None
         return int(row[0]), str(row[1])
 
+    def _replace_with_copy(self, path: Path) -> None:
+        replacement = path.with_name(f".{path.name}.replacement")
+        replacement.write_bytes(path.read_bytes())
+        replacement.chmod(0o600)
+        replacement.replace(path)
+
     def _release(self, held: BarrierSessionState) -> BarrierSessionState:
         child = BarrierChildIdentity("forward-1", "new", held.identity.identity_digest)
         bound = self.session.bind_child(held.revision, child)
@@ -710,6 +716,30 @@ class SQLiteMutationBarrierProcessTests(unittest.TestCase):
                 (0,),
                 connection.execute("SELECT COUNT(*) FROM command_results").fetchone(),
             )
+
+    def test_every_inventoried_route_rejects_control_store_replacement(self) -> None:
+        self._create_held()
+        self._replace_with_copy(self.control.control_store_path)
+        expected = (
+            "rejected",
+            "MutationFenceError",
+            "control store identity changed",
+        )
+        for route in ("mutate", "update_observations", "append_command_result", "retire"):
+            self.assertEqual(expected, self._run_route(route), route)
+        self.assertEqual(1, self._authority_revision()[0])
+
+    def test_every_inventoried_route_rejects_authority_replacement(self) -> None:
+        self._create_held()
+        self._replace_with_copy(self.authority)
+        expected = (
+            "rejected",
+            "MutationFenceError",
+            "authority database identity changed",
+        )
+        for route in ("mutate", "update_observations", "append_command_result", "retire"):
+            self.assertEqual(expected, self._run_route(route), route)
+        self.assertEqual(1, self._authority_revision()[0])
 
     def test_sigkill_session_commit_recovers_ambiguous_then_verified_release(self) -> None:
         context = multiprocessing.get_context("fork")
