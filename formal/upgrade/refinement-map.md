@@ -22,6 +22,7 @@ not an implementation proof.
 
 | Model obligation | Intended implementation evidence | Status |
 | --- | --- | --- |
+| forward stage artifact binding | `test_engine_binds_verified_stage_capability_to_stage_phase`, `test_bound_adapter_dispatches_stage_and_rejects_drift`, `test_rejects_artifact_escape_and_bad_digest` | bounded executable stage verification evidence; implementation refinement pending |
 | forward backup binding and failure | `test_engine_binds_verified_backup_capability_to_backup_phase`, `test_bound_phase_adapter_binds_identity_and_dispatches_only_backup`, `test_bound_phase_adapter_rejects_identity_drift_before_dispatch` | bounded executable backup binding evidence; implementation refinement pending |
 | discover/preflight/quiesce | `test_apply_is_ordered_and_idempotent`, `test_commit_validate_and_reopen_require_safety_evidence` | public tests present; refinement pending |
 | backup before commit | `test_apply_adapter_fault_boundaries_are_durable_and_fail_closed`, `test_failure_is_durable_and_rollback_can_enter_safe_mode` | public tests present; refinement pending |

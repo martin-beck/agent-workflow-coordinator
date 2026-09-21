@@ -16,6 +16,7 @@ from types import MappingProxyType
 from typing import Any, Protocol, cast, runtime_checkable
 
 from tools.authority_neutral_backup import BoundBackupPhaseAdapter
+from tools.authority_neutral_stage import BoundStagePhaseAdapter
 from tools.rollback_evidence import BackupObservation
 from tools.upgrade_admission import (
     admit_preflight,
@@ -529,6 +530,8 @@ class UpgradeEngine:
         rollback_bound_verifier: BoundRollbackCapability | None = None,
         backup_operation: Mapping[str, object] | None = None,
         backup_context: Mapping[str, object] | None = None,
+        stage_operation: Mapping[str, object] | None = None,
+        stage_context: Mapping[str, object] | None = None,
     ) -> None:
         if not operation_id or ":" in operation_id:
             raise UpgradeError("invalid operation identity")
@@ -549,6 +552,18 @@ class UpgradeEngine:
                 )
             except Exception as error:
                 raise UpgradeError("backup capability binding is invalid") from error
+        if (stage_operation is None) != (stage_context is None):
+            raise UpgradeError("stage operation and context must be supplied together")
+        self._stage_phase_adapter: BoundStagePhaseAdapter | None = None
+        if stage_operation is not None and stage_context is not None:
+            if backend_adapter is None:
+                raise UpgradeError("stage capability requires a backend adapter")
+            try:
+                self._stage_phase_adapter = BoundStagePhaseAdapter(
+                    backend_adapter, stage_operation, stage_context
+                )
+            except Exception as error:
+                raise UpgradeError("stage capability binding is invalid") from error
         self._verified_rollback_context: dict[str, object] | None = None
         supplied = dict(context)
         _validate_context(supplied, operation_id)
@@ -926,6 +941,8 @@ class UpgradeEngine:
                 executor = (
                     self._backup_phase_adapter
                     if phase == "backup" and self._backup_phase_adapter is not None
+                    else self._stage_phase_adapter
+                    if phase == "stage" and self._stage_phase_adapter is not None
                     else self.backend_adapter
                 )
                 if executor is None:
