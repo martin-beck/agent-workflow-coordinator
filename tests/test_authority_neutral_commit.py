@@ -8,6 +8,7 @@ import unittest
 
 from tools.authority_neutral_commit import (
     BoundCommitAuthorizationAdapter,
+    CommitAdmissionBundle,
     CommitAuthorizationExecutionError,
     execute_verified_commit_authorization,
 )
@@ -28,10 +29,21 @@ EVIDENCE = {
     "runtime_replacement_admission_verified": True,
     "backend_identity_verified": True,
     "mutates_authority": False,
+    "artifact_identity": "artifact-1",
+    "manifest_identity": "manifest-1",
+    "selector_identity": "selector-1",
+    "runtime_identity": "runtime-1",
 }
 
 
 class CommitAuthorizationTests(unittest.TestCase):
+    def test_admission_bundle_binds_all_mutation_identities(self) -> None:
+        bundle = CommitAdmissionBundle.from_evidence(EVIDENCE)
+        self.assertTrue(bundle.matches(EVIDENCE))
+        self.assertFalse(bundle.matches({**EVIDENCE, "runtime_identity": "foreign"}))
+        with self.assertRaisesRegex(CommitAuthorizationExecutionError, "artifact_identity"):
+            CommitAdmissionBundle.from_evidence({**EVIDENCE, "artifact_identity": ""})
+
     def test_prerequisites_are_verified_without_authorizing_commit(self) -> None:
         result = execute_verified_commit_authorization(OPERATION, EVIDENCE)
         self.assertTrue(result["commit_prerequisites_verified"])
