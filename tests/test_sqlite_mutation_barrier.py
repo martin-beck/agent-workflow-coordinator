@@ -121,6 +121,46 @@ def _normal_writer(root_text: str, result: Any, start: Any | None = None) -> Non
         result.put(("committed",))
 
 
+def _bound_writer_after_replacement(
+    root_text: str,
+    identity: BarrierSessionIdentity,
+    ready: Any,
+    proceed: Any,
+    result: Any,
+) -> None:
+    """Use a previously admitted identity after the durable session changes."""
+    root = Path(root_text)
+    control = _control(root)
+    fence = _fence(root, control)
+    backend = bind_released_sqlite_backend(
+        root / "authority.sqlite",
+        BINDING,
+        root / "tasks",
+        fence,
+        locked,
+        identity,
+    )
+    ready.set()
+    if not proceed.wait(5):
+        result.put(("rejected", "RuntimeError", "replacement synchronization timed out"))
+        return
+    try:
+        backend.mutate(
+            "AR-0001",
+            1,
+            "update",
+            "2026-09-21T00:16:00+00:00",
+            lambda meta, _tasks: (
+                meta.__setitem__("summary", "stale writer must not commit")
+                or ("stale writer", "# Must not persist\n")
+            ),
+        )
+    except Exception as error:
+        result.put(("rejected", type(error).__name__, str(error)))
+    else:
+        result.put(("committed",))
+
+
 def _route_writer(root_text: str, route: str, result: Any) -> None:
     """Exercise one inventoried public write route in a fresh process."""
     root = Path(root_text)
@@ -645,6 +685,39 @@ class SQLiteMutationBarrierProcessTests(unittest.TestCase):
         )
         self._kill(holder)
         self.assertEqual(released, self.session.snapshot())
+        self.assertEqual(1, self._authority_revision()[0])
+
+    def test_bound_writer_rejects_released_session_replacement(self) -> None:
+        first = self._release(self._create_held())
+        context = multiprocessing.get_context("fork")
+        ready = context.Event()
+        proceed = context.Event()
+        result = context.Queue()
+        writer = context.Process(
+            target=_bound_writer_after_replacement,
+            args=(self.directory.name, first.identity, ready, proceed, result),
+        )
+        writer.start()
+        self.assertTrue(ready.wait(5))
+
+        second = self.session.create(
+            _identity(
+                attempt="attempt-next",
+                state_revision=2,
+                barrier="barrier-next",
+                fence="fence-next",
+                owner="owner-next",
+            )
+        )
+        second_released = self._release(second)
+        proceed.set()
+        writer.join(5)
+        self.assertEqual(0, writer.exitcode)
+        self.assertEqual(
+            ("rejected", "MutationFenceError", "barrier session identity changed"),
+            result.get(timeout=1),
+        )
+        self.assertEqual(second_released, self.session.snapshot())
         self.assertEqual(1, self._authority_revision()[0])
 
     def test_every_inventoried_route_rejects_while_barrier_is_held(self) -> None:
