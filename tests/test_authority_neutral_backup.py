@@ -7,9 +7,13 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
-from tools.authority_neutral_backup import BackupExecutionError, execute_verified_backup
+from tools.authority_neutral_backup import (
+    BackupExecutionError,
+    BoundBackupPhaseAdapter,
+    execute_verified_backup,
+)
 
 OPERATION = {"opcode": "backend.backup"}
 
@@ -58,6 +62,144 @@ class _SQLiteAdapter:
 
 
 class AuthorityNeutralBackupTests(unittest.TestCase):
+    def test_bound_phase_adapter_validates_constructor_and_delegated_surfaces(self) -> None:
+        context = {
+            "schema_version": 2,
+            "backend": "git",
+            "project_id": "project",
+            "operation_id": "op-1",
+            "state_revision": 1,
+            "authority_revision": "authority",
+            "fencing_token": "fence",
+            "fencing_owner": "owner",
+            "durable_barrier_id": "barrier",
+            "artifact_root": _context()["artifact_root"],
+            "source": "source",
+            "destination": _context()["destination"],
+            "manifest": "manifest",
+            "selector_ref": "selector",
+            "barrier_identity_digest": "digest",
+            "target": "new",
+            "envelope_digest": "envelope",
+        }
+        bound = {**context, "binding": {"project_id": "project"}}
+        with self.assertRaisesRegex(BackupExecutionError, "unsupported"):
+            BoundBackupPhaseAdapter(object(), {"opcode": "selector.commit"}, bound)
+        with self.assertRaisesRegex(BackupExecutionError, "context is incomplete"):
+            BoundBackupPhaseAdapter(object(), OPERATION, cast(Any, None))
+        with self.assertRaisesRegex(BackupExecutionError, "omits engine identity"):
+            BoundBackupPhaseAdapter(object(), OPERATION, {"backend": "git"})
+
+        class Delegating(_GitAdapter):
+            requires_bound_rollback = True
+
+            def snapshot(self, _phase: str, _context: object) -> dict[str, object]:
+                return {"snapshot": True}
+
+            def verify_rollback_context(self, _context: object) -> None:
+                return None
+
+            def execute(self, _phase: str, _context: object) -> dict[str, object]:
+                return {"delegated": True}
+
+        adapter = BoundBackupPhaseAdapter(Delegating(), OPERATION, bound)
+        self.assertTrue(adapter.requires_bound_rollback)
+        self.assertEqual({"snapshot": True}, adapter.snapshot("discover", context))
+        self.assertIsNone(adapter.verify_rollback_context(context))
+        self.assertEqual({"delegated": True}, adapter.execute("stage", context))
+        self.assertTrue(hasattr(adapter.operation_lock(), "__enter__"))
+
+        class InvalidDelegating(_GitAdapter):
+            requires_bound_rollback = True
+
+            def snapshot(self, _phase: str, _context: object) -> str:
+                return "invalid"
+
+            def verify_rollback_context(self, _context: object) -> str:
+                return "invalid"
+
+            def execute(self, _phase: str, _context: object) -> str:
+                return "invalid"
+
+        invalid = BoundBackupPhaseAdapter(InvalidDelegating(), OPERATION, bound)
+        with self.assertRaisesRegex(BackupExecutionError, "snapshot"):
+            invalid.snapshot("discover", context)
+        with self.assertRaisesRegex(BackupExecutionError, "rollback verification"):
+            invalid.verify_rollback_context(context)
+        with self.assertRaisesRegex(BackupExecutionError, "execution result"):
+            invalid.execute("stage", context)
+
+    def test_bound_phase_adapter_binds_identity_and_dispatches_only_backup(self) -> None:
+        class Backend(_GitAdapter):
+            def __init__(self) -> None:
+                self.phases: list[str] = []
+
+            def snapshot(self, phase: str, _context: object) -> dict[str, object]:
+                self.phases.append(f"snapshot:{phase}")
+                return {"phase": phase}
+
+            def execute(self, phase: str, _context: object) -> dict[str, object]:
+                self.phases.append(f"execute:{phase}")
+                return {"mutates_authority": False}
+
+            def verify_rollback_context(self, _context: object) -> dict[str, object]:
+                return {"verified": True}
+
+        engine_context = {
+            "schema_version": 2,
+            "backend": "git",
+            "project_id": "project",
+            "operation_id": "op-1",
+            "state_revision": 1,
+            "authority_revision": "authority",
+            "fencing_token": "fence",
+            "fencing_owner": "owner",
+            "durable_barrier_id": "barrier",
+            "artifact_root": _context()["artifact_root"],
+            "source": "source",
+            "destination": _context()["destination"],
+            "manifest": "manifest",
+            "selector_ref": "selector",
+            "barrier_identity_digest": "digest",
+            "target": "new",
+            "envelope_digest": "envelope",
+        }
+        backup_context = {**engine_context, "binding": {"project_id": "project"}}
+        backend = Backend()
+        adapter = BoundBackupPhaseAdapter(backend, OPERATION, backup_context)
+        result = adapter.execute("backup", engine_context)
+        self.assertEqual("completed", result["outcome"])
+        self.assertEqual([], backend.phases)
+        adapter.execute("reopen", engine_context)
+        self.assertEqual(["execute:reopen"], backend.phases)
+
+    def test_bound_phase_adapter_rejects_identity_drift_before_dispatch(self) -> None:
+        context = {
+            "schema_version": 2,
+            "backend": "git",
+            "project_id": "project",
+            "operation_id": "op-1",
+            "state_revision": 1,
+            "authority_revision": "authority",
+            "fencing_token": "fence",
+            "fencing_owner": "owner",
+            "durable_barrier_id": "barrier",
+            "artifact_root": _context()["artifact_root"],
+            "source": "source",
+            "destination": _context()["destination"],
+            "manifest": "manifest",
+            "selector_ref": "selector",
+            "barrier_identity_digest": "digest",
+            "target": "new",
+            "envelope_digest": "envelope",
+        }
+        adapter = BoundBackupPhaseAdapter(
+            _GitAdapter(), OPERATION, {**context, "binding": {"project_id": "project"}}
+        )
+        drifted = {**context, "fencing_token": "foreign"}
+        with self.assertRaisesRegex(BackupExecutionError, "identity mismatch"):
+            adapter.execute("backup", drifted)
+
     def test_git_dispatch_returns_only_verified_non_mutating_evidence(self) -> None:
         result = execute_verified_backup(_GitAdapter(), OPERATION, _context())
         self.assertTrue(result["backup_verified"])
