@@ -34,6 +34,7 @@ not an implementation proof.
 | Concrete SQLite rereader | `test_concrete_release_rereader_derives_and_rechecks_actual_authority`, selector/projection/sidecar swap tests | public hostile tests present; trace refinement and release orchestration pending |
 | Typed bound rollback rejection | `test_rollback_rejects_forged_bound_verifier_before_backend_or_handler`, `test_rollback_rejects_mismatched_capability_before_journal_activity`, `test_bound_rollback_rejects_stale_and_replaced_sessions_before_git`, `test_bound_rollback_rejects_malformed_admission_before_git`, `test_bound_rollback_rejects_stale_and_replaced_sessions_before_sqlite`, `test_bound_rollback_rejects_malformed_admission_before_sqlite` | bounded executable rejection evidence; correspondence and mutation authorization remain not-proven |
 | Typed recovery rejection preservation | `test_v10_session_intent_recovery_fences_and_requires_newer_fence` (PR #289) | bounded executable evidence at `99b65e6`; implementation refinement pending |
+| Process-death and ambiguous recovery | `process_death_evidence` in `v10-refinement-contract.json` | six exact hostile independent-process mappings; implementation refinement remains not-proven |
 
 The names above are resolved against the implementation snapshot recorded in
 `evidence.json`; they are not claims about later source revisions. The model

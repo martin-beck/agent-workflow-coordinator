@@ -81,6 +81,32 @@
       "evidence": "tests/test_sqlite_mutation_barrier.py::test_trusted_provisioning_creates_released_baseline"
     }
   ],
+  "process_death_evidence": [
+    {
+      "model_actions": ["MarkAmbiguous", "AmbiguousIsWriteClosed"],
+      "implementation_test": "tests/test_sqlite_mutation_barrier.py::test_sigkill_session_commit_recovers_ambiguous_then_verified_release"
+    },
+    {
+      "model_actions": ["RejectStaleCAS", "LockOwnership"],
+      "implementation_test": "tests/test_sqlite_mutation_barrier.py::test_sigkill_during_unknown_recovery_preserves_ambiguity_until_new_fence"
+    },
+    {
+      "model_actions": ["Acquire", "RecheckHeld"],
+      "implementation_test": "tests/test_sqlite_mutation_barrier.py::test_sigkill_after_reconciliation_commit_recovers_new_fence_from_history"
+    },
+    {
+      "model_actions": ["MarkAmbiguous", "RejectStaleCAS"],
+      "implementation_test": "tests/test_rollback_control_store.py::test_v10_session_intent_recovery_fences_and_requires_newer_fence"
+    },
+    {
+      "model_actions": ["MarkAmbiguous", "AmbiguousIsWriteClosed"],
+      "implementation_test": "tests/test_rollback_control_store.py::test_v10_interrupted_recovery_residue_requires_exact_revision_chain"
+    },
+    {
+      "model_actions": ["RecheckHeld", "RejectStaleCAS"],
+      "implementation_test": "tests/test_rollback_control_store.py::test_v10_active_wal_sidecar_replacement_fails_closed_before_recheck"
+    }
+  ],
   "refinement_boundary": {
     "class": "bounded-executable-correspondence",
     "implementation_refinement": "not-proven",

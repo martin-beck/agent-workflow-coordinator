@@ -147,6 +147,26 @@ class UpgradeFormalEvidenceTests(unittest.TestCase):
                 self.assertIn(selector, (ROOT / path).read_text(encoding="utf-8"), selector)
         self.assertEqual("not-proven", contract["refinement_boundary"]["implementation_refinement"])
 
+    def test_v10_contract_binds_process_death_evidence_without_refinement_overclaim(self) -> None:
+        contract = json.loads(CONTRACT.read_text(encoding="utf-8"))
+        evidence = contract["process_death_evidence"]
+        self.assertGreaterEqual(len(evidence), 6)
+        required_actions = {
+            "MarkAmbiguous",
+            "AmbiguousIsWriteClosed",
+            "RejectStaleCAS",
+            "LockOwnership",
+            "Acquire",
+            "RecheckHeld",
+        }
+        observed_actions = {action for entry in evidence for action in entry["model_actions"]}
+        self.assertTrue(required_actions <= observed_actions)
+        for entry in evidence:
+            path, selector = entry["implementation_test"].split("::", 1)
+            self.assertTrue((ROOT / path).exists(), path)
+            self.assertIn(selector, (ROOT / path).read_text(encoding="utf-8"), selector)
+        self.assertEqual("not-proven", contract["refinement_boundary"]["implementation_refinement"])
+
 
 if __name__ == "__main__":
     unittest.main()
