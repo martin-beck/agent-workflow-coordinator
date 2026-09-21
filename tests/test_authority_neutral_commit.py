@@ -1,0 +1,76 @@
+# Copyright (C) Huawei Technologies Co., Ltd. 2026. All rights reserved.
+# SPDX-License-Identifier: MIT
+"""Hostile tests for commit prerequisite authorization evidence."""
+
+from __future__ import annotations
+
+import unittest
+
+from tools.authority_neutral_commit import (
+    BoundCommitAuthorizationAdapter,
+    CommitAuthorizationExecutionError,
+    execute_verified_commit_authorization,
+)
+
+OPERATION = {"operation_id": "op-1:commit", "opcode": "authority.commit.admit"}
+EVIDENCE = {
+    "backend": "sqlite",
+    "target": "new",
+    "operation_id": "op-1",
+    "fencing_token": "fence-1",
+    "state_revision": 7,
+    "barrier_id": "barrier-1",
+    "backup_verified": True,
+    "restore_roundtrip_verified": True,
+    "staged_verified": True,
+    "manifest_verified": True,
+    "selector_admission_verified": True,
+    "runtime_replacement_admission_verified": True,
+    "backend_identity_verified": True,
+    "mutates_authority": False,
+}
+
+
+class CommitAuthorizationTests(unittest.TestCase):
+    def test_prerequisites_are_verified_without_authorizing_commit(self) -> None:
+        result = execute_verified_commit_authorization(OPERATION, EVIDENCE)
+        self.assertTrue(result["commit_prerequisites_verified"])
+        self.assertFalse(result["commit_authorized"])
+        self.assertFalse(result["mutates_authority"])
+
+    def test_rejects_forged_or_unverified_prerequisites(self) -> None:
+        with self.assertRaisesRegex(CommitAuthorizationExecutionError, "unsupported"):
+            execute_verified_commit_authorization({"opcode": "authority.atomic_replace"}, EVIDENCE)
+        with self.assertRaisesRegex(CommitAuthorizationExecutionError, "identity"):
+            execute_verified_commit_authorization(OPERATION, {**EVIDENCE, "target": "rollback"})
+        for field, value, message in (
+            ("backup_verified", False, "unverified"),
+            ("selector_admission_verified", False, "unverified"),
+            ("mutates_authority", True, "mutating"),
+            ("state_revision", 0, "revision"),
+            ("barrier_id", "", "barrier_id"),
+        ):
+            with (
+                self.subTest(field=field),
+                self.assertRaisesRegex(CommitAuthorizationExecutionError, message),
+            ):
+                execute_verified_commit_authorization(OPERATION, {**EVIDENCE, field: value})
+        missing = dict(EVIDENCE)
+        missing.pop("runtime_replacement_admission_verified")
+        with self.assertRaisesRegex(CommitAuthorizationExecutionError, "incomplete"):
+            execute_verified_commit_authorization(OPERATION, missing)
+
+    def test_bound_adapter_rejects_phase_and_identity_drift(self) -> None:
+        with self.assertRaisesRegex(CommitAuthorizationExecutionError, "unsupported"):
+            BoundCommitAuthorizationAdapter({"opcode": "authority.atomic_replace"}, EVIDENCE)
+        adapter = BoundCommitAuthorizationAdapter(OPERATION, EVIDENCE)
+        result = adapter.execute("commit_admission", EVIDENCE)
+        self.assertTrue(result["commit_prerequisites_verified"])
+        with self.assertRaisesRegex(CommitAuthorizationExecutionError, "unsupported"):
+            adapter.execute("commit", EVIDENCE)
+        with self.assertRaisesRegex(CommitAuthorizationExecutionError, "identity mismatch"):
+            adapter.execute("commit_admission", {**EVIDENCE, "fencing_token": "foreign"})
+
+
+if __name__ == "__main__":
+    unittest.main()
