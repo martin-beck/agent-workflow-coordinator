@@ -429,6 +429,26 @@ class MutationFence:
         """Public read-only binding check for future caller-owned adapters."""
         self._verify()
 
+    def bind_session_identity(self, identity: object) -> None:
+        """Bind this long-lived fence to one trusted admitted session."""
+        from tools.upgrade_identity import BarrierSessionIdentity
+
+        if not isinstance(identity, BarrierSessionIdentity):
+            raise MutationFenceError("barrier session identity is required")
+        bound = (
+            identity.project_id,
+            identity.attempt_id,
+            identity.state_revision,
+            identity.authority_revision_at_acquire,
+            identity.durable_barrier_id,
+            identity.fencing_token,
+            identity.fencing_owner,
+            identity.identity_digest,
+        )
+        if self._bound_session_identity is not None and self._bound_session_identity != bound:
+            raise MutationFenceError("barrier session identity already bound")
+        self._bound_session_identity = bound
+
     def _verify_marker(self, record: dict[str, object]) -> str:
         if record.get("identity_digest") != _digest(
             {key: value for key, value in record.items() if key != "identity_digest"}
