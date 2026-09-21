@@ -15,6 +15,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Protocol, cast, runtime_checkable
 
+from tools.authority_neutral_backup import BoundBackupPhaseAdapter
 from tools.rollback_evidence import BackupObservation
 from tools.upgrade_admission import (
     admit_preflight,
@@ -518,7 +519,7 @@ def _validate_context(supplied: dict[str, object], operation_id: str) -> None:
 class UpgradeEngine:
     """Execute exactly eight ordered phases with durable outcomes."""
 
-    def __init__(
+    def __init__(  # noqa: C901
         self,
         operation_id: str,
         journal: Path,
@@ -526,6 +527,8 @@ class UpgradeEngine:
         lock_path: Path | None = None,
         backend_adapter: BackendAdapter | None = None,
         rollback_bound_verifier: BoundRollbackCapability | None = None,
+        backup_operation: Mapping[str, object] | None = None,
+        backup_context: Mapping[str, object] | None = None,
     ) -> None:
         if not operation_id or ":" in operation_id:
             raise UpgradeError("invalid operation identity")
@@ -534,6 +537,18 @@ class UpgradeEngine:
         self.lock_path = lock_path or journal.parent / ".upgrade-engine.lock"
         self.backend_adapter = backend_adapter
         self.rollback_bound_verifier = rollback_bound_verifier
+        if (backup_operation is None) != (backup_context is None):
+            raise UpgradeError("backup operation and context must be supplied together")
+        self._backup_phase_adapter: BoundBackupPhaseAdapter | None = None
+        if backup_operation is not None and backup_context is not None:
+            if backend_adapter is None:
+                raise UpgradeError("backup capability requires a backend adapter")
+            try:
+                self._backup_phase_adapter = BoundBackupPhaseAdapter(
+                    backend_adapter, backup_operation, backup_context
+                )
+            except Exception as error:
+                raise UpgradeError("backup capability binding is invalid") from error
         self._verified_rollback_context: dict[str, object] | None = None
         supplied = dict(context)
         _validate_context(supplied, operation_id)
@@ -908,7 +923,14 @@ class UpgradeEngine:
                 snapshot = self.backend_adapter.snapshot(phase, frozen_context)
                 self._bind_snapshot(snapshot)
                 self._admit(phase, {**snapshot})
-                adapter_result = self.backend_adapter.execute(phase, frozen_context)
+                executor = (
+                    self._backup_phase_adapter
+                    if phase == "backup" and self._backup_phase_adapter is not None
+                    else self.backend_adapter
+                )
+                if executor is None:
+                    raise UpgradeError("backend adapter is required for authoritative upgrade")
+                adapter_result = executor.execute(phase, frozen_context)
                 result = dict(adapter_result)
                 handler_result = (
                     handlers[phase](step_id, cast(Mapping[str, Any], _freeze(value))) or {}

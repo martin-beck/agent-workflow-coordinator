@@ -17,6 +17,7 @@ from typing import Any, cast
 from unittest.mock import patch
 
 from tools import upgrade_engine as upgrade_engine_module
+from tools.authority_neutral_backup import BoundBackupPhaseAdapter
 from tools.git_authority_adapter import GitAuthorityAdapter
 from tools.rollback_control_store import (
     SQLiteAuthorityRuntimeState,
@@ -169,6 +170,47 @@ class FailingAdapter(FakeAdapter):
 
 
 class UpgradeEngineTests(unittest.TestCase):
+    def test_engine_binds_verified_backup_capability_to_backup_phase(self) -> None:
+        class GeneratedAdapter(FakeAdapter):
+            def __init__(self) -> None:
+                super().__init__()
+                self.generated_calls = 0
+
+            def execute_generated_operation(
+                self,
+                _operation: Mapping[str, object],
+                _destination: Path,
+                _binding: dict[str, Any],
+            ) -> dict[str, object]:
+                self.generated_calls += 1
+                return {
+                    "outcome": "completed",
+                    "backend": "sqlite",
+                    "backup_verified": True,
+                    "restore_roundtrip_verified": True,
+                    "backend_identity_verified": True,
+                    "mutates_authority": False,
+                    "fencing_token": "fence-1",
+                }
+
+        with tempfile.TemporaryDirectory() as directory:
+            adapter = GeneratedAdapter()
+            engine = UpgradeEngine(
+                "op-1",
+                Path(directory) / "journal.json",
+                CONTEXT,
+                backend_adapter=adapter,
+                backup_operation={"opcode": "backend.backup"},
+                backup_context={**CONTEXT, "binding": {"project_id": CONTEXT["project_id"]}},
+            )
+            capability = engine._backup_phase_adapter
+            self.assertIsInstance(capability, BoundBackupPhaseAdapter)
+            if capability is None:
+                self.fail("backup capability was not bound")
+            result = capability.execute("backup", CONTEXT)
+            self.assertEqual("completed", result["outcome"])
+            self.assertEqual(1, adapter.generated_calls)
+
     def test_bound_capability_rejects_incomplete_bindings_and_contexts(self) -> None:
         context = PhaseContext(**cast(dict[str, Any], ROLLBACK_CONTEXT))
         with self.assertRaisesRegex(UpgradeError, "capability is incomplete"):
