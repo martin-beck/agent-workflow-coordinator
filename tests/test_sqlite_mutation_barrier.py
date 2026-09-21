@@ -15,6 +15,7 @@ from typing import Any, cast
 from unittest.mock import patch
 
 import tools.handoffctl as handoffctl
+import tools.mutation_fence as mutation_fence
 from tools.admission_lease import AdmissionLease, validate_recheck
 from tools.handoffctl import locked
 from tools.lock_domain_scope import LockDomainScope
@@ -224,6 +225,15 @@ def _held_scope_owner(root_text: str, ready: Any) -> None:
     )
     scope = LockDomainScope.bind(session, _fence(root, control), lease, recheck, locked)
     with scope.hold():
+        ready.set()
+        multiprocessing.Event().wait()
+
+
+def _held_control_owner(root_text: str, ready: Any) -> None:
+    """Hold only the control lock so a writer exercises its bounded wait."""
+    root = Path(root_text)
+    fence = _fence(root, _control(root))
+    with fence.control_locked():
         ready.set()
         multiprocessing.Event().wait()
 
@@ -604,6 +614,38 @@ class SQLiteMutationBarrierProcessTests(unittest.TestCase):
         revision, meta_json = self._authority_revision()
         self.assertEqual(2, revision)
         self.assertIn("mutated after verified release", meta_json)
+
+    def test_writer_times_out_on_control_lock_without_mutating_authority(self) -> None:
+        released = self._release(self._create_held())
+        context = multiprocessing.get_context("fork")
+        ready = context.Event()
+        holder = context.Process(
+            target=_held_control_owner,
+            args=(self.directory.name, ready),
+        )
+        holder.start()
+        self.assertTrue(ready.wait(5))
+
+        result = context.Queue()
+        with patch.object(mutation_fence, "LOCK_TIMEOUT_SECONDS", 0.2):
+            writer = context.Process(
+                target=_normal_writer,
+                args=(self.directory.name, result),
+            )
+            writer.start()
+            writer.join(3)
+        self.assertEqual(0, writer.exitcode)
+        self.assertEqual(
+            (
+                "rejected",
+                "MutationFenceError",
+                "control.lock acquisition timed out after 0.2s",
+            ),
+            result.get(timeout=1),
+        )
+        self._kill(holder)
+        self.assertEqual(released, self.session.snapshot())
+        self.assertEqual(1, self._authority_revision()[0])
 
     def test_every_inventoried_route_rejects_while_barrier_is_held(self) -> None:
         self._create_held()
