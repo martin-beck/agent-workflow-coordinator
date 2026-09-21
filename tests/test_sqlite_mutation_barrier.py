@@ -553,6 +553,32 @@ class SQLiteMutationBarrierProcessTests(unittest.TestCase):
             self.assertEqual(expected, self._run_route(route), route)
         self.assertEqual(1, self._authority_revision()[0])
 
+    def test_every_inventoried_route_rejects_while_barrier_is_releasing(self) -> None:
+        held = self._create_held()
+        child = BarrierChildIdentity("forward-1", "new", held.identity.identity_digest)
+        bound = self.session.bind_child(held.revision, child)
+        self.session.begin_reopen(bound.revision, "new")
+        expected = (
+            "rejected",
+            "MutationFenceError",
+            "authority mutation rejected while barrier is releasing",
+        )
+        for route in ("mutate", "update_observations", "append_command_result", "retire"):
+            self.assertEqual(expected, self._run_route(route), route)
+        self.assertEqual(1, self._authority_revision()[0])
+
+    def test_every_inventoried_route_rejects_while_barrier_is_ambiguous(self) -> None:
+        held = self._create_held()
+        self.session.mark_ambiguous(held.revision, "route-state-test")
+        expected = (
+            "rejected",
+            "MutationFenceError",
+            "authority mutation rejected while barrier is ambiguous",
+        )
+        for route in ("mutate", "update_observations", "append_command_result", "retire"):
+            self.assertEqual(expected, self._run_route(route), route)
+        self.assertEqual(1, self._authority_revision()[0])
+
     def test_sigkill_after_route_effects_rolls_back_and_releases_locks(self) -> None:
         released = self._release(self._create_held())
         context = multiprocessing.get_context("fork")
