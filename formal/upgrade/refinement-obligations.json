@@ -1,0 +1,79 @@
+{
+  "schema_version": 1,
+  "kind": "implementation-refinement-obligation-matrix",
+  "contract": "formal/upgrade/v10-refinement-contract.json",
+  "contract_sha256": "d8ca82e7cdc0cf102b888b12a23176fbf0fb3570515b2d972f201198ff006e65",
+  "decision": "deny",
+  "decision_rule": "deny unless every obligation is proven at the exact implementation revision and independently reviewed",
+  "obligations": [
+    {
+      "id": "locks-and-admission",
+      "model_actions": ["AcquireCommon", "AcquireControl", "AcquireAuthority", "ReleaseAuthority", "ReleaseControl", "ReleaseCommon"],
+      "implementation_scope": "ordered non-reentrant repository, control-store, and authority lock admission",
+      "evidence": [
+        "tests/test_upgrade_engine.py::UpgradeEngineTests.test_commit_validate_and_reopen_require_safety_evidence",
+        "tests/test_git_authority_adapter.py::GitAuthorityAdapterTests.test_scoped_wrapper_is_the_only_composed_mutation_boundary"
+      ],
+      "status": "not-proven"
+    },
+    {
+      "id": "barrier-recheck-and-stale-cas",
+      "model_actions": ["ObserveAuthority", "RecheckHeld", "RejectStaleCAS"],
+      "implementation_scope": "descriptor-bound barrier and authority identity reread before admission",
+      "evidence": [
+        "tests/test_durable_binding.py::DurableBindingTests.test_replacement_and_symlink_are_rejected"
+      ],
+      "status": "not-proven"
+    },
+    {
+      "id": "sqlite-write-fence",
+      "model_actions": ["RequestWrite", "AcceptWrite", "RejectWrite", "FinishWrite"],
+      "implementation_scope": "all SQLite task, observation, result, migration, and reconciliation writes",
+      "evidence": [
+        "tests/test_sqlite_mutation_barrier.py::SQLiteMutationBarrierProcessTests.test_released_writer_factory_cannot_bypass_held_barrier"
+      ],
+      "status": "not-proven"
+    },
+    {
+      "id": "ambiguous-recovery",
+      "model_actions": ["MarkAmbiguous", "Acquire"],
+      "implementation_scope": "process death, WAL/SHM uncertainty, durable write-closed recovery",
+      "evidence": [
+        "tests/test_sqlite_mutation_barrier.py::SQLiteMutationBarrierProcessTests.test_sigkill_session_commit_recovers_ambiguous_then_verified_release"
+      ],
+      "status": "not-proven"
+    },
+    {
+      "id": "functional-availability",
+      "model_actions": ["FunctionalAvailability", "Reopen"],
+      "implementation_scope": "known-good or validated-new runtime remains functional at every boundary",
+      "evidence": [
+        "tests/test_upgrade_engine.py::UpgradeEngineTests.test_commit_validate_and_reopen_require_safety_evidence"
+      ],
+      "status": "not-proven"
+    },
+    {
+      "id": "selector-to-execution-binding",
+      "model_actions": ["ObserveSelector", "ValidateRuntime", "Dispatch"],
+      "implementation_scope": "retained descriptor, canonical bytes, selector publication, and execution identity",
+      "evidence": [
+        "tests/test_git_authority_adapter.py::GitAuthorityAdapterTests.test_snapshot_bound_rejects_session_or_identity_drift_before_observation"
+      ],
+      "status": "not-proven"
+    },
+    {
+      "id": "git-mutation-boundary",
+      "model_actions": ["Backup", "Commit", "Rollback"],
+      "implementation_scope": "Git backup, ref mutation, restore, and rollback continuity",
+      "evidence": [
+        "tests/test_git_authority_adapter.py::GitAuthorityAdapterTests.test_rollback_recheck_never_authorizes_mutation"
+      ],
+      "status": "not-proven"
+    }
+  ],
+  "nonclaims": [
+    "The matrix is not an implementation-refinement proof.",
+    "A passing bounded TLC run does not prove Python correspondence.",
+    "No selector publication, runtime replacement, commit, apply, rollback, or release publication is authorized."
+  ]
+}
