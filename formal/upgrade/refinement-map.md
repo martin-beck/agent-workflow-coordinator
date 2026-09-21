@@ -22,6 +22,7 @@ not an implementation proof.
 
 | Model obligation | Intended implementation evidence | Status |
 | --- | --- | --- |
+| integrated ordered transition and functional failure preservation | `test_complete_trace_is_functional_and_mutation_free`, `test_rejects_order_identity_and_mutation_drift`, `test_failure_paths_require_functional_write_closed_recovery`, `test_bound_rehearsal_rejects_trace_identity_drift` | bounded executable integrated rehearsal evidence; implementation refinement pending |
 | diagnostic recovery evidence before rollback authorization | `test_diagnostic_recovery_evidence_never_authorizes_rollback`, `test_rejects_forged_or_unverified_recovery`, `test_bound_adapter_rejects_phase_and_identity_drift` | bounded executable diagnostic recovery evidence; implementation refinement pending |
 | commit authorization before mutation | `test_prerequisites_are_verified_without_authorizing_commit`, `test_rejects_forged_or_unverified_prerequisites`, `test_bound_adapter_rejects_phase_and_identity_drift` | bounded executable commit authorization evidence; implementation refinement pending |
 | runtime replacement admission before mutation | `test_admission_verifies_runtime_and_selector_without_mutation`, `test_rejects_forged_context_manifest_selector_and_backend_failures`, `test_bound_adapter_rejects_phase_and_identity_drift` | bounded executable runtime admission evidence; implementation refinement pending |
