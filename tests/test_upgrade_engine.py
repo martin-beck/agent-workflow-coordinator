@@ -18,6 +18,7 @@ from unittest.mock import patch
 
 from tools import upgrade_engine as upgrade_engine_module
 from tools.authority_neutral_backup import BoundBackupPhaseAdapter
+from tools.authority_neutral_stage import BoundStagePhaseAdapter
 from tools.git_authority_adapter import GitAuthorityAdapter
 from tools.rollback_control_store import (
     SQLiteAuthorityRuntimeState,
@@ -170,6 +171,42 @@ class FailingAdapter(FakeAdapter):
 
 
 class UpgradeEngineTests(unittest.TestCase):
+    def test_engine_binds_verified_stage_capability_to_stage_phase(self) -> None:
+        class StageAdapter(FakeAdapter):
+            def __init__(self) -> None:
+                super().__init__()
+                self.stage_calls = 0
+
+            def execute(self, phase: str, context: object) -> dict[str, object]:
+                if phase == "stage":
+                    self.stage_calls += 1
+                return super().execute(phase, context)
+
+        stage_context = {
+            **CONTEXT,
+            "runtime_root": "/artifacts/runtime",
+            "manifest_digest": "a" * 64,
+            "binding": {"project_id": CONTEXT["project_id"]},
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            adapter = StageAdapter()
+            engine = UpgradeEngine(
+                "op-1",
+                Path(directory) / "journal.json",
+                CONTEXT,
+                backend_adapter=adapter,
+                stage_operation={"operation_id": "op-1:stage", "opcode": "backend.stage"},
+                stage_context=stage_context,
+            )
+            capability = engine._stage_phase_adapter
+            self.assertIsInstance(capability, BoundStagePhaseAdapter)
+            if capability is None:
+                self.fail("stage capability was not bound")
+            with patch("tools.authority_neutral_stage.verify_runtime_manifest", return_value=True):
+                result = capability.execute("stage", CONTEXT)
+            self.assertTrue(result["staged_verified"])
+            self.assertEqual(0, adapter.stage_calls)
+
     def test_engine_binds_verified_backup_capability_to_backup_phase(self) -> None:
         class GeneratedAdapter(FakeAdapter):
             def __init__(self) -> None:
