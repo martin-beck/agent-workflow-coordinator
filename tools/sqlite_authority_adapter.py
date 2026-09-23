@@ -752,6 +752,30 @@ class SQLiteAuthorityAdapter:
         except (SQLiteAuthorityError, SQLiteMutationError) as error:
             raise SQLiteAuthorityError("SQLite commit capability binding was rejected") from error
 
+    def bind_durable_commit_capability(
+        self,
+        admission: Any,
+        journal: Any,
+        *,
+        session_revision: int,
+        admission_reread: Any,
+        connector: Any = sqlite3.connect,
+    ) -> Any:
+        """Bind SQLite's isolated effect to the durable journal seam."""
+        from tools.authority_mutation import DurableBoundBackendMutation
+
+        capability = self.bind_commit_capability(
+            admission,
+            admission_reread=admission_reread,
+            connector=connector,
+        )
+        return DurableBoundBackendMutation(
+            admission,
+            journal,
+            session_revision=session_revision,
+            backend_effect=lambda effect: capability.commit(effect),
+        )
+
     @staticmethod
     def observe_backup_identity(
         backup: Path,

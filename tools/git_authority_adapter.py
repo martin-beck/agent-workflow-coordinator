@@ -192,6 +192,34 @@ class GitAuthorityAdapter:
         except GitMutationError as error:
             raise GitAuthorityError("Git commit capability binding was rejected") from error
 
+    def bind_durable_commit_capability(
+        self,
+        admission: Any,
+        journal: Any,
+        *,
+        session_revision: int,
+        admission_reread: Any,
+        expected_branch: str,
+        expected_head: str,
+        runner: Any = subprocess.run,
+    ) -> Any:
+        """Bind Git's isolated effect to the durable journal seam."""
+        from tools.authority_mutation import DurableBoundBackendMutation
+
+        capability = self.bind_commit_capability(
+            admission,
+            admission_reread=admission_reread,
+            expected_branch=expected_branch,
+            expected_head=expected_head,
+            runner=runner,
+        )
+        return DurableBoundBackendMutation(
+            admission,
+            journal,
+            session_revision=session_revision,
+            backend_effect=lambda message: capability.commit(message),
+        )
+
     @staticmethod
     def observe_backup_identity(
         backup: Path,
