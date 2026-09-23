@@ -13,8 +13,8 @@
     }
   },
   "implementation_snapshot": {
-    "revision": "75a96fcf9020f82789d252e84702ddb36a7eb964",
-    "runtime_revision": "75a96fcf9020f82789d252e84702ddb36a7eb964",
+    "revision": "9cd6dfa",
+    "runtime_revision": "9cd6dfa",
     "status": "descriptor-safe control-store and SQLite DB/WAL/SHM rereads plus bounded independent-process barrier/write evidence; executable apply and rollback remain rejection-only"
   },
   "correspondence": [
@@ -80,6 +80,16 @@
         "tests/test_authority_mutation.py::AuthorityMutationTests.test_termination_exception_is_ambiguous_and_cannot_retry"
       ],
       "status": "bounded executable cross-backend effect evidence; implementation refinement pending and public dispatch disabled"
+    },
+    {
+      "model_actions": ["AcceptWrite", "FinishWrite", "MarkAmbiguous", "RejectWrite", "Acquire"],
+      "implementation_obligation": "The isolated authority effect journal durably records the bound session and operation before an external effect, publishes a verified outcome only after the effect returns, and converts a worker death with a prepared intent into a write-closed ambiguous session that cannot reuse the operation or fencing token.",
+      "evidence_required": [
+        "tests/test_authority_mutation.py::AuthorityMutationTests.test_durable_effect_publishes_only_after_verified_receipt",
+        "tests/test_authority_mutation.py::AuthorityMutationTests.test_durable_ambiguous_effect_is_durably_marked_ambiguous",
+        "tests/test_sqlite_mutation_barrier.py::test_sigkill_after_authority_effect_requires_recovery_and_new_fence"
+      ],
+      "status": "bounded executable durable external-effect recovery evidence; implementation refinement pending and public dispatch disabled"
     },
     {
       "model_actions": ["AcceptWrite", "FinishWrite", "MarkAmbiguous"],
@@ -227,6 +237,10 @@
     {
       "model_actions": ["RecheckHeld", "RejectStaleCAS"],
       "implementation_test": "tests/test_rollback_control_store.py::test_v10_active_wal_sidecar_replacement_fails_closed_before_recheck"
+    },
+    {
+      "model_actions": ["AcceptWrite", "FinishWrite", "MarkAmbiguous", "RejectWrite", "Acquire"],
+      "implementation_test": "tests/test_sqlite_mutation_barrier.py::test_sigkill_after_authority_effect_requires_recovery_and_new_fence"
     }
   ],
   "refinement_boundary": {

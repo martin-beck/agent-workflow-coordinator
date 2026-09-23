@@ -6,6 +6,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from typing import Any, Protocol
 
 from tools.authority_neutral_commit import CommitAdmissionBundle
 
@@ -24,6 +25,16 @@ class MutationReceipt:
     operation_id: str
     fencing_token: str
     mutates_authority: bool
+
+
+class AuthorityEffectJournal(Protocol):
+    """Durable pre-effect journal used by an isolated mutation capability."""
+
+    def prepare_authority_effect(
+        self, expected_revision: int, operation_id: str, backend: str, target: str
+    ) -> object: ...
+
+    def finish_authority_effect(self, intent: Any, outcome: str) -> Any: ...
 
 
 class BoundAuthorityMutation:
@@ -67,3 +78,53 @@ class BoundAuthorityMutation:
             fencing_token=self._admission.fencing_token,
             mutates_authority=True,
         )
+
+
+class DurableBoundAuthorityMutation:
+    """Add durable process-death fencing around one isolated authority effect.
+
+    The journal is prepared before the effect and completed only after the
+    single-use capability returns a verified receipt.  A worker killed between
+    those points leaves a prepared intent for the control-store recovery path;
+    it never turns an unknown outcome into a retryable success.  This adapter
+    is deliberately not connected to public upgrade dispatch.
+    """
+
+    def __init__(
+        self,
+        admission: CommitAdmissionBundle,
+        journal: AuthorityEffectJournal,
+        *,
+        session_revision: int,
+    ) -> None:
+        if type(session_revision) is not int or session_revision < 1:
+            raise AuthorityMutationError("authority mutation session revision is invalid")
+        self._admission = admission
+        self._journal = journal
+        self._session_revision = session_revision
+        self._capability = BoundAuthorityMutation(admission)
+
+    def execute(self, effect: Callable[[], object]) -> MutationReceipt:
+        intent = self._journal.prepare_authority_effect(
+            self._session_revision,
+            self._admission.operation_id,
+            self._admission.backend,
+            self._admission.target,
+        )
+        try:
+            receipt = self._capability.execute(self._admission.backend, effect)
+        except BaseException:
+            try:
+                self._journal.finish_authority_effect(intent, "ambiguous")
+            except BaseException as journal_error:
+                raise AuthorityMutationAmbiguousError(
+                    "authority mutation recovery journal is ambiguous"
+                ) from journal_error
+            raise
+        try:
+            self._journal.finish_authority_effect(intent, "committed")
+        except BaseException as error:
+            raise AuthorityMutationAmbiguousError(
+                "authority mutation outcome publication is ambiguous"
+            ) from error
+        return receipt
