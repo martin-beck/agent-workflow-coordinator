@@ -2,7 +2,7 @@
   "schema_version": 1,
   "kind": "implementation-refinement-obligation-matrix",
   "contract": "formal/upgrade/v10-refinement-contract.json",
-  "contract_sha256": "9ea9584d6b02f671a804999b623730d74f6941e1a5f187468ed2dd8ea58b4902",
+  "contract_sha256": "45d809840b9692c694aed2741be808effb55ce9592de30da2fd86ba3121c9f31",
   "decision": "deny",
   "decision_rule": "deny unless every obligation is proven at the exact implementation revision and independently reviewed",
   "obligations": [
@@ -39,7 +39,9 @@
       "model_actions": ["MarkAmbiguous", "Acquire"],
       "implementation_scope": "process death, WAL/SHM uncertainty, durable write-closed recovery",
       "evidence": [
-        "tests/test_sqlite_mutation_barrier.py::SQLiteMutationBarrierProcessTests.test_sigkill_session_commit_recovers_ambiguous_then_verified_release"
+        "tests/test_sqlite_mutation_barrier.py::SQLiteMutationBarrierProcessTests.test_sigkill_session_commit_recovers_ambiguous_then_verified_release",
+        "tests/test_sqlite_mutation_barrier.py::test_sigkill_after_authority_effect_requires_recovery_and_new_fence",
+        "tests/test_authority_mutation.py::AuthorityMutationTests.test_durable_ambiguous_effect_is_durably_marked_ambiguous"
       ],
       "status": "not-proven"
     },

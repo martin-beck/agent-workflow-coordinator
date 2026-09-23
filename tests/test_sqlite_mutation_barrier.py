@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import multiprocessing
+import os
 import signal
 import sqlite3
 import tempfile
@@ -17,6 +18,8 @@ from unittest.mock import patch
 import tools.handoffctl as handoffctl
 import tools.mutation_fence as mutation_fence
 from tools.admission_lease import AdmissionLease, validate_recheck
+from tools.authority_mutation import DurableBoundAuthorityMutation
+from tools.authority_neutral_commit import CommitAdmissionBundle
 from tools.handoffctl import locked
 from tools.lock_domain_scope import LockDomainScope
 from tools.mutation_fence import (
@@ -26,7 +29,9 @@ from tools.mutation_fence import (
     provision_control_binding,
 )
 from tools.rollback_control_store import (
+    AuthorityEffectIntent,
     BarrierSessionState,
+    ControlStoreError,
     SQLiteBarrierSessionStore,
     SQLiteRollbackControlStore,
 )
@@ -294,6 +299,38 @@ def _session_commit_waiting_for_sigkill(root_text: str, ready: Any) -> None:
     session_any: Any = session
     session_any._mark_intent_locked = wait_after_commit
     session.create(_identity())
+
+
+def _authority_effect_waiting_for_sigkill(root_text: str, ready: Any) -> None:
+    """Commit an isolated effect, then die before durable outcome publication."""
+    root = Path(root_text)
+    control = _control(root)
+    session = SQLiteBarrierSessionStore(control, lambda: "authority-1")
+    session.create(_identity())
+    admission = CommitAdmissionBundle(
+        backend="sqlite",
+        target="new",
+        operation_id="op-1:commit",
+        fencing_token="fence-1",  # noqa: S106
+        state_revision=1,
+        barrier_id="barrier-1",
+        artifact_identity="artifact-1",
+        manifest_identity="manifest-1",
+        selector_identity="selector-1",
+        runtime_identity="runtime-1",
+    )
+    capability = DurableBoundAuthorityMutation(admission, session, session_revision=1)
+
+    def effect() -> dict[str, object]:
+        with sqlite3.connect(root / "authority.sqlite") as connection:
+            connection.execute(
+                "UPDATE tasks SET body='effect committed before worker death' WHERE id='AR-0001'"
+            )
+            connection.commit()
+        ready.set()
+        os._exit(17)
+
+    capability.execute(effect)
 
 
 def _session_recovery_waiting_for_sigkill(root_text: str, ready: Any) -> None:
@@ -1179,12 +1216,111 @@ class SQLiteMutationBarrierProcessTests(unittest.TestCase):
         self.assertEqual("released", released.status)
         self.assertEqual(("committed",), self._run_writer())
         self.assertEqual(2, self._authority_revision()[0])
+
+    def test_sigkill_after_authority_effect_requires_recovery_and_new_fence(self) -> None:
+        context = multiprocessing.get_context("fork")
+        ready = context.Event()
+        worker = context.Process(
+            target=_authority_effect_waiting_for_sigkill,
+            args=(self.directory.name, ready),
+        )
+        worker.start()
+        self.assertTrue(ready.wait(5))
+        worker.join(5)
+        self.assertEqual(17, worker.exitcode)
+
+        reopened = SQLiteBarrierSessionStore(_control(self.root), lambda: "authority-1")
+        held = reopened.snapshot()
+        assert held is not None
+        self.assertEqual(("held", 1), (held.status, held.revision))
+        with sqlite3.connect(self.authority) as connection:
+            self.assertEqual(
+                "effect committed before worker death",
+                connection.execute("SELECT body FROM tasks WHERE id='AR-0001'").fetchone()[0],
+            )
         with sqlite3.connect(self.control.control_store_path) as connection:
-            outcomes = connection.execute(
-                "SELECT outcome FROM barrier_session_intent ORDER BY proposed_revision"
+            self.assertEqual(
+                [("prepared",)],
+                connection.execute(
+                    "SELECT outcome FROM authority_effect_intent WHERE project_id=?",
+                    (PROJECT,),
+                ).fetchall(),
+            )
+        self.assertEqual(
+            (
+                "rejected",
+                "MutationFenceError",
+                "durable control barrier state is invalid",
+            ),
+            self._run_writer(),
+        )
+        with self.assertRaisesRegex(ControlStoreError, "only ambiguous"):
+            reopened.reconcile_ambiguous(held.revision, held)
+
+        ambiguous = reopened.recover_unknown()
+        assert ambiguous is not None
+        self.assertEqual(("ambiguous", 2), (ambiguous.status, ambiguous.revision))
+        with sqlite3.connect(self.control.control_store_path) as connection:
+            self.assertEqual(
+                [("ambiguous", "process-death")],
+                connection.execute(
+                    "SELECT outcome,cause_code FROM authority_effect_intent WHERE project_id=?",
+                    (PROJECT,),
+                ).fetchall(),
+            )
+        with self.assertRaisesRegex(ControlStoreError, "distinct newer fence"):
+            reopened.reconcile_ambiguous(ambiguous.revision, held)
+
+        replacement = BarrierSessionState(
+            _identity(
+                attempt="attempt-effect-recovered",
+                state_revision=2,
+                barrier="barrier-effect-recovered",
+                fence="fence-effect-recovered",
+                owner="owner-effect-recovered",
+            ),
+            "held",
+            1,
+        )
+        self.assertEqual(replacement, reopened.reconcile_ambiguous(2, replacement))
+        with self.assertRaisesRegex(ControlStoreError, "ambiguous prior outcome"):
+            reopened.prepare_authority_effect(1, "op-1:commit", "sqlite")
+        with sqlite3.connect(self.control.control_store_path) as connection:
+            effect_outcomes = connection.execute(
+                "SELECT outcome FROM authority_effect_intent WHERE project_id=?",
+                (PROJECT,),
             ).fetchall()
-        self.assertNotIn(("prepared",), outcomes)
-        self.assertIn(("ambiguous",), outcomes)
+        self.assertEqual([("ambiguous",)], effect_outcomes)
+
+    def test_authority_effect_journal_validates_identity_and_single_use(self) -> None:
+        with self.assertRaisesRegex(ControlStoreError, "session revision is invalid"):
+            self.session.prepare_authority_effect(0, "op-1", "sqlite")
+        with self.assertRaisesRegex(ControlStoreError, "identity is invalid"):
+            self.session.prepare_authority_effect(1, "", "sqlite")
+        with self.assertRaisesRegex(ControlStoreError, "backend or target"):
+            self.session.prepare_authority_effect(1, "op-1", "git", "rollback")
+        for values in (
+            ("", "op", "sqlite", "new", "attempt", "d" * 64, "fence", 1),
+            ("intent", "op", "other", "new", "attempt", "d" * 64, "fence", 1),
+            ("intent", "op", "sqlite", "new", "attempt", "d" * 64, "fence", 0),
+        ):
+            with self.assertRaisesRegex(ControlStoreError, "identity|backend|revision"):
+                AuthorityEffectIntent(*values)
+
+        held = self._create_held()
+        intent = self.session.prepare_authority_effect(held.revision, "op-1", "sqlite")
+        with self.assertRaisesRegex(ControlStoreError, "outcome is invalid"):
+            self.session.finish_authority_effect(intent, "unknown")
+        with self.assertRaisesRegex(ControlStoreError, "intent is required"):
+            self.session.finish_authority_effect(object(), "committed")  # type: ignore[arg-type]
+        completed = self.session.finish_authority_effect(intent, "committed")
+        self.assertEqual(held, completed)
+        with self.assertRaisesRegex(ControlStoreError, "already recorded"):
+            self.session.prepare_authority_effect(held.revision, "op-1", "sqlite")
+
+        ambiguous_intent = self.session.prepare_authority_effect(held.revision, "op-2", "sqlite")
+        ambiguous = self.session.finish_authority_effect(ambiguous_intent, "ambiguous")
+        self.assertEqual("ambiguous", ambiguous.status)
 
     def test_sigkill_during_unknown_recovery_preserves_ambiguity_until_new_fence(self) -> None:
         context = multiprocessing.get_context("fork")

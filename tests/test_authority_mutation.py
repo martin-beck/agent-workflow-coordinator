@@ -10,6 +10,7 @@ from tools.authority_mutation import (
     AuthorityMutationAmbiguousError,
     AuthorityMutationError,
     BoundAuthorityMutation,
+    DurableBoundAuthorityMutation,
 )
 from tools.authority_neutral_commit import CommitAdmissionBundle
 from tools.git_authority_mutation import GitCommitResult, GitMutationAmbiguousError
@@ -64,6 +65,16 @@ class AuthorityMutationTests(unittest.TestCase):
                 "git", lambda: {**self._result(), "fencing_token": "foreign"}
             )
 
+    def test_rejects_noncallable_effect_before_consuming_capability(self) -> None:
+        capability = BoundAuthorityMutation(_admission())
+        with self.assertRaisesRegex(AuthorityMutationError, "effect is invalid"):
+            capability.execute("git", None)  # type: ignore[arg-type]
+        capability.execute("git", self._result)
+
+    def test_durable_capability_rejects_invalid_session_revision(self) -> None:
+        with self.assertRaisesRegex(AuthorityMutationError, "session revision is invalid"):
+            DurableBoundAuthorityMutation(_admission(), object(), session_revision=0)  # type: ignore[arg-type]
+
     def test_ambiguous_effect_consumes_token_and_cannot_retry(self) -> None:
         capability = BoundAuthorityMutation(_admission("sqlite"))
 
@@ -100,6 +111,83 @@ class AuthorityMutationTests(unittest.TestCase):
             capability.execute("git", terminated)
         with self.assertRaisesRegex(AuthorityMutationError, "already consumed"):
             capability.execute("git", self._result)
+
+    def test_durable_effect_publishes_only_after_verified_receipt(self) -> None:
+        journal: list[tuple[str, str]] = []
+
+        class Journal:
+            def prepare_authority_effect(
+                self,
+                expected_revision: int,
+                operation_id: str,
+                _backend: str,
+                _target: str,
+            ) -> str:
+                self.expected_revision = expected_revision
+                journal.append(("prepared", operation_id))
+                return "intent-1"
+
+            def finish_authority_effect(self, intent: object, outcome: str) -> None:
+                self.intent = intent
+                journal.append((outcome, str(intent)))
+
+        receipt = DurableBoundAuthorityMutation(
+            _admission(), Journal(), session_revision=1
+        ).execute(lambda: self._result())
+        self.assertTrue(receipt.mutates_authority)
+        self.assertEqual([("prepared", "op-1:commit"), ("committed", "intent-1")], journal)
+
+    def test_durable_ambiguous_effect_is_durably_marked_ambiguous(self) -> None:
+        journal: list[str] = []
+
+        class Journal:
+            def prepare_authority_effect(
+                self,
+                _expected_revision: int,
+                _operation_id: str,
+                _backend: str,
+                _target: str,
+            ) -> str:
+                return "intent-uncertain"
+
+            def finish_authority_effect(self, intent: object, outcome: str) -> None:
+                journal.append(f"{intent}:{outcome}")
+
+        capability = DurableBoundAuthorityMutation(_admission(), Journal(), session_revision=1)
+        with self.assertRaisesRegex(AuthorityMutationAmbiguousError, "outcome is ambiguous"):
+            capability.execute(lambda: (_ for _ in ()).throw(TimeoutError("unknown")))
+        self.assertEqual(["intent-uncertain:ambiguous"], journal)
+
+    def test_durable_capability_fails_closed_if_ambiguity_cannot_be_journaled(self) -> None:
+        class Journal:
+            def prepare_authority_effect(
+                self, _revision: int, _operation: str, _backend: str, _target: str
+            ) -> str:
+                return "intent-journal-failure"
+
+            def finish_authority_effect(self, _intent: object, _outcome: str) -> None:
+                raise OSError("journal unavailable")
+
+        with self.assertRaisesRegex(AuthorityMutationAmbiguousError, "recovery journal"):
+            DurableBoundAuthorityMutation(_admission(), Journal(), session_revision=1).execute(
+                lambda: (_ for _ in ()).throw(TimeoutError("unknown"))
+            )
+
+    def test_durable_capability_fails_closed_if_success_publication_is_uncertain(self) -> None:
+        class Journal:
+            def prepare_authority_effect(
+                self, _revision: int, _operation: str, _backend: str, _target: str
+            ) -> str:
+                return "intent-publication-failure"
+
+            def finish_authority_effect(self, _intent: object, outcome: str) -> None:
+                if outcome == "committed":
+                    raise OSError("publication unavailable")
+
+        with self.assertRaisesRegex(AuthorityMutationAmbiguousError, "publication"):
+            DurableBoundAuthorityMutation(_admission(), Journal(), session_revision=1).execute(
+                lambda: self._result()
+            )
 
 
 if __name__ == "__main__":
