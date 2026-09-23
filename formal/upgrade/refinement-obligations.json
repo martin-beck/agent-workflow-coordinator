@@ -2,7 +2,7 @@
   "schema_version": 1,
   "kind": "implementation-refinement-obligation-matrix",
   "contract": "formal/upgrade/v10-refinement-contract.json",
-  "contract_sha256": "23610962b34952277362c5826aed127bb3f501633fa178ef4843a887f5b8fae6",
+  "contract_sha256": "77b0983ffed6bd1212c52aa12fc4ed1dad7066dba93859ea131764e9b7c17d93",
   "decision": "deny",
   "decision_rule": "deny unless every obligation is proven at the exact implementation revision and independently reviewed",
   "obligations": [
@@ -15,6 +15,8 @@
         "tests/test_git_authority_adapter.py::GitAuthorityAdapterTests.test_scoped_wrapper_is_the_only_composed_mutation_boundary",
         "tests/test_lock_domain_scope.py::test_bind_rejects_nonheld_durable_session_before_returning_scope",
         "tests/test_lock_domain_scope.py::LockDomainScopeTests.test_scope_proves_durable_session_inside_all_three_locks",
+        "tests/test_lock_domain_scope.py::LockDomainScopeTests.test_scope_lock_trace_matches_model_acquire_release_order",
+        "tests/test_lock_domain_scope.py::LockDomainScopeTests.test_scope_lock_trace_unwinds_after_trusted_reread_failure",
         "tests/test_lock_domain_scope.py::LockDomainScopeTests.test_hold_releases_locks_when_second_trusted_reread_fails",
         "tests/test_lock_domain_scope.py::LockDomainScopeTests.test_process_death_releases_scope_for_fresh_recheck",
         "tests/test_lock_domain_scope.py::LockDomainScopeTests.test_validated_hold_process_death_releases_scope_for_fresh_caller",

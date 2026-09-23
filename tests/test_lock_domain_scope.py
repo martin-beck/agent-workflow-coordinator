@@ -34,6 +34,7 @@ from tools.lifecycle_trace import (
     validate_terminal_recovery_contract,
 )
 from tools.lock_domain import LockDomainContract, LockDomainError
+from tools.lock_domain_correspondence import validate_lock_domain_trace
 from tools.lock_domain_scope import LockDomainScope
 from tools.mutation_fence import MutationFence, provision, provision_control_binding
 from tools.rollback_control_store import (
@@ -373,6 +374,83 @@ class LockDomainScopeTests(unittest.TestCase):
             self.assertTrue(self.session.operation_owned_by_current_thread)
         self.assertEqual(["held"], events)
         self.assertFalse(self.session.operation_owned_by_current_thread)
+
+    def test_scope_lock_trace_matches_model_acquire_release_order(self) -> None:
+        events: list[str] = []
+        scope = LockDomainScope(
+            self.domain,
+            self.session,
+            self.fence,
+            self.lease,
+            self.recheck,
+            identity(),
+            locked,
+            lock_observer=events.append,
+        )
+        with scope.hold():
+            self.assertTrue(self.session.operation_owned_by_current_thread)
+        self.assertEqual(
+            (
+                "AcquireCommon",
+                "AcquireControl",
+                "AcquireAuthority",
+                "ReleaseAuthority",
+                "ReleaseControl",
+                "ReleaseCommon",
+            ),
+            validate_lock_domain_trace(events),
+        )
+
+    def test_scope_lock_trace_unwinds_after_trusted_reread_failure(self) -> None:
+        events: list[str] = []
+        calls = 0
+        original_recheck = self.session.recheck_held_locked
+
+        def fail_once(*args: object) -> object:
+            nonlocal calls
+            calls += 1
+            if calls == 2:
+                raise ControlStoreError("injected trusted reread failure")
+            return original_recheck(*args)  # type: ignore[arg-type]
+
+        with patch.object(self.session, "recheck_held_locked", side_effect=fail_once):
+            scope = LockDomainScope(
+                self.domain,
+                self.session,
+                self.fence,
+                self.lease,
+                self.recheck,
+                identity(),
+                locked,
+                lock_observer=events.append,
+            )
+            with self.assertRaisesRegex(LockDomainError, "recheck failed"), scope.hold():
+                pass
+        self.assertEqual(
+            (
+                "AcquireCommon",
+                "AcquireControl",
+                "AcquireAuthority",
+                "ReleaseAuthority",
+                "ReleaseControl",
+                "ReleaseCommon",
+            ),
+            validate_lock_domain_trace(events),
+        )
+
+    def test_lock_trace_validator_rejects_invalid_sequences(self) -> None:
+        invalid = (
+            ((), "trace is empty"),
+            (("AcquireControl",), "acquisition order is invalid"),
+            (("AcquireCommon", "AcquireCommon"), "not reentrant"),
+            (("AcquireCommon", "ReleaseCommon", "ReleaseCommon"), "release order is invalid"),
+            (("AcquireCommon", "ReleaseControl"), "release order is invalid"),
+            (("AcquireCommon", "Unknown"), "unknown lock-domain action"),
+            (("AcquireCommon",), "did not release every lock"),
+        )
+        for events, message in invalid:
+            with self.subTest(events=events), self.assertRaisesRegex(ValueError, message):
+                validate_lock_domain_trace(events)
 
     def test_bound_observer_receives_immutable_reread_events(self) -> None:
         observed: list[LifecycleEvent] = []
