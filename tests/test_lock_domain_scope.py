@@ -720,6 +720,12 @@ class LockDomainScopeTests(unittest.TestCase):
             self.assertTrue(self.session.operation_owned_by_current_thread)
         self.assertFalse(self.session.operation_owned_by_current_thread)
 
+    def test_bind_rejects_nonheld_durable_session_before_returning_scope(self) -> None:
+        self.session.mark_ambiguous(1, "bind-admission")
+        with self.assertRaisesRegex(LockDomainError, "not held"):
+            LockDomainScope.bind(self.session, self.fence, self.lease, self.recheck, locked)
+        self.assertFalse(self.session.operation_owned_by_current_thread)
+
     def test_bind_rejects_invalid_caller_components(self) -> None:
         with self.assertRaisesRegex(LockDomainError, "session store"):
             LockDomainScope.bind(cast(Any, None), self.fence, self.lease, self.recheck, locked)

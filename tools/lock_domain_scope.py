@@ -76,6 +76,7 @@ class LockDomainScope:
             identity = LockDomainContract.capture(common_guard, session_store, authority_fence)
             with session_store.lock_owned_by_caller(common_guard):
                 state = session_store.snapshot_owned_by_caller()
+            identity.assert_session_binding(state, lease, session_revision=state.revision)
         return cls(
             identity,
             session_store,
