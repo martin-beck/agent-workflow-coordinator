@@ -76,6 +76,7 @@ class GitCommitCapability:
         runner: _Runner = subprocess.run,
     ) -> None:
         self._repository = repository.absolute()
+        self._parent_identity = self._read_parent_identity(self._repository)
         self._repository_identity = self._read_repository_identity(self._repository)
         if admission.backend != "git" or admission.target != "new":
             raise GitMutationError("Git mutation admission identity is invalid")
@@ -91,6 +92,16 @@ class GitCommitCapability:
         self._consumed = False
 
     @staticmethod
+    def _read_parent_identity(repository: Path) -> tuple[int, int]:
+        try:
+            status = repository.parent.lstat()
+        except OSError as error:
+            raise GitMutationError("Git authority repository parent is unavailable") from error
+        if not stat.S_ISDIR(status.st_mode):
+            raise GitMutationError("Git authority repository parent is not a regular directory")
+        return status.st_dev, status.st_ino
+
+    @staticmethod
     def _read_repository_identity(repository: Path) -> tuple[int, int]:
         try:
             status = repository.lstat()
@@ -102,12 +113,13 @@ class GitCommitCapability:
 
     def _assert_repository_identity(self) -> None:
         try:
+            parent = self._read_parent_identity(self._repository)
             current = self._read_repository_identity(self._repository)
         except GitMutationError as error:
             raise GitMutationRejectedError(
                 "Git authority repository identity changed before commit"
             ) from error
-        if current != self._repository_identity:
+        if parent != self._parent_identity or current != self._repository_identity:
             raise GitMutationRejectedError(
                 "Git authority repository identity changed before commit"
             )

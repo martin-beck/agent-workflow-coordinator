@@ -221,6 +221,18 @@ class GitCommitCapabilityTests(unittest.TestCase):
         with self.assertRaisesRegex(GitMutationRejectedError, "repository identity changed"):
             capability.commit("op-1 authority commit")
 
+    def test_rejects_repository_parent_replacement_before_effect(self) -> None:
+        (self.root / "state").write_text("new\n", encoding="utf-8")
+        _git(self.root, "add", "state")
+        capability = self._capability()
+        original_parent = self.root.parent
+        relocated_parent = original_parent / f"{self.root.name}-parent-replaced"
+        self.root.rename(relocated_parent)
+        self.root.mkdir()
+
+        with self.assertRaisesRegex(GitMutationRejectedError, "repository identity changed"):
+            capability.commit("op-1 authority commit")
+
     def test_classifies_commit_runner_oserror_as_ambiguous(self) -> None:
         (self.root / "state").write_text("new\n", encoding="utf-8")
         _git(self.root, "add", "state")
