@@ -205,6 +205,9 @@
         "tests/test_lock_domain_scope.py::LockDomainScopeTests.test_process_death_releases_scope_for_fresh_recheck",
         "tests/test_lock_domain_scope.py::LockDomainScopeTests.test_validated_hold_process_death_releases_scope_for_fresh_caller",
         "tests/test_lock_domain_scope.py::LockDomainScopeTests.test_binding_abort_allows_fresh_worker_reacquisition_when_identity_is_unchanged",
+        "tests/test_rollback_control_store.py::RollbackControlStoreTests.test_v10_session_intent_recovery_fences_and_requires_newer_fence",
+        "tests/test_rollback_control_store.py::RollbackControlStoreTests.test_v10_process_death_recovery_rejects_missing_or_mismatched_session",
+        "tests/test_rollback_control_store.py::RollbackControlStoreTests.test_v10_session_intent_recovery_rejects_invalid_intent_records",
         "sigkill boundaries",
         "WAL/SHM fault tests",
         "new-session CAS tests"
@@ -214,7 +217,12 @@
     {
       "model_actions": ["RejectStaleCAS", "AmbiguousIsWriteClosed", "LockOwnership"],
       "implementation_obligation": "Typed recovery rejection paths release the operation lock and preserve the durable ambiguous snapshot across stale-fence, reused-fence, authority-mismatch, reread-failure, invalid-revision, and unresolved-intent failures.",
-      "evidence_required": ["tests/test_rollback_control_store.py::test_v10_session_intent_recovery_fences_and_requires_newer_fence", "tests/test_rollback_control_store.py::test_v10_interrupted_recovery_residue_requires_exact_revision_chain"],
+      "evidence_required": [
+        "tests/test_rollback_control_store.py::RollbackControlStoreTests.test_v10_session_intent_recovery_fences_and_requires_newer_fence",
+        "tests/test_rollback_control_store.py::RollbackControlStoreTests.test_v10_session_intent_recovery_and_reconcile_reject_reentrant_or_invalid_calls",
+        "tests/test_rollback_control_store.py::RollbackControlStoreTests.test_v10_interrupted_recovery_residue_requires_exact_revision_chain",
+        "tests/test_rollback_control_store.py::RollbackControlStoreTests.test_v10_session_intent_recovery_rejects_missing_session"
+      ],
       "status": "bounded executable recovery and hostile revision-chain evidence; implementation refinement pending"
     }
   ],
