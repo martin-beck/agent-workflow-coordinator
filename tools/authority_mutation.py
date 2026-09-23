@@ -50,6 +50,7 @@ class BoundAuthorityMutation:
                     "authority mutation outcome is ambiguous; recovery is required"
                 ) from error
             raise
+
         def field(name: str) -> object:
             if isinstance(result, Mapping):
                 return result.get(name)
