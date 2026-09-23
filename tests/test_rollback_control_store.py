@@ -1985,6 +1985,30 @@ class RollbackControlStoreTests(unittest.TestCase):
                     ).fetchall(),
                 )
 
+            finish_control = FlakyStore(Path(directory) / "finish-effect-control.sqlite", PROJECT)
+            finish_control.fail_next_commit = False
+            finish_session = SQLiteBarrierSessionStore(finish_control, lambda: "authority-3")
+            finish_session.create(self._session_identity())
+            finish_intent = finish_session.prepare_authority_effect(1, "effect-finish", "sqlite")
+            finish_control.fail_next_commit = True
+            with self.assertRaisesRegex(
+                ControlStoreError, "authority effect outcome publication is ambiguous"
+            ):
+                finish_session.finish_authority_effect(finish_intent, "committed")
+            self.assertFalse(finish_session.operation_owned_by_current_thread)
+            finished = finish_session.snapshot()
+            self.assertIsNotNone(finished)
+            assert finished is not None
+            self.assertEqual(("ambiguous", 2), (finished.status, finished.revision))
+            with sqlite3.connect(finish_control.path) as connection:
+                self.assertEqual(
+                    [("ambiguous",)],
+                    connection.execute(
+                        "SELECT outcome FROM authority_effect_intent WHERE project_id=?",
+                        (PROJECT,),
+                    ).fetchall(),
+                )
+
     def test_v10_cas_fences_verify_affected_rows_and_recovery_errors(self) -> None:
         class Cursor:
             def __init__(self, rowcount: int) -> None:
