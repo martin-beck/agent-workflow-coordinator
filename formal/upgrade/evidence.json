@@ -98,10 +98,12 @@
       "tests/test_authority_mutation.py": "2612fa1a47ada00e3e6515182d0916c43179e32d8551f5667d02150fa444da58",
       "tests/test_authority_neutral_commit.py": "e6d55411565c660d06b85db6f31cff8b0665e0b3e8b00b4f56c9b7072ac1004d",
       "tests/test_git_authority_mutation.py": "a0e3ab7edccffaea3797e424c1f6e5c9c618ff0503642653a3a8738236e4e250",
+      "tests/test_git_authority_adapter.py": "6428df11723ca90af17e5f3a6bb7cdae98125196b9eb3200ce4aee706c1ab494",
       "tests/test_lock_domain_scope.py": "eb488df243acb733a0f16f567925e6ed603246102254c1e56048c48b04f61936",
       "tests/test_mutation_fence.py": "e2bcea7b96bddd2509b79ff9c5eefd57001d1502949aba30cbbd50a9169e1cbb",
       "tests/test_rollback_control_store.py": "213b2ed4ee7ecff4c3d7c471bf02669c5dd05ae7e2d866e02af92e89369ae394",
       "tests/test_sqlite_authority_mutation.py": "7f78f87ab7a80fc4767a467e7501dd2474cc77e2a1a168ae3720ec9ce1ca90bd",
+      "tests/test_sqlite_authority_adapter.py": "73587e46bb6ac0079fe90f45101c74b2e3cb48255555174125da54a3669b9b0f",
       "tests/test_sqlite_mutation_barrier.py": "a1024855adab3f1254fec1b832e293f0f010cbfce70c71edab39c098b98b5092",
       "tests/test_sqlite_storage.py": "659011189506ecb7f0ad35d9dfb6993127d89c0be277cb2a8fc89ce352009f6c",
       "tests/test_upgrade_commands.py": "793993bd451d02e5c80788f479e56c568b82212eec7b9face50420c6b788247f",
@@ -122,8 +124,8 @@
       "tools/upgrade_identity.py": "754ce7b8ecc3f5521d30597fc259df9a4241e9cd2178dd4d72aba89df5d3133d",
       "tools/validate_upgrade_contract.py": "6c264c4775e4ee1a778181d7e127d9f256c56abd4bfebb02c624e13c289dbc4a"
     },
-    "revision": "c086acd6798ccccb7850ba3e563f561fdc6e42e9",
-    "runtime_revision": "c086acd6798ccccb7850ba3e563f561fdc6e42e9"
+    "revision": "1bad078641cc47a67db915b9056b75ab6717e060",
+    "runtime_revision": "1bad078641cc47a67db915b9056b75ab6717e060"
   },
   "model": "formal/upgrade/UpgradeRecovery.tla",
   "model_sha256": "616d53832ac5ec18bf3242d47b2412195eb64adb2b1035235514e06cc3edf2ba",
