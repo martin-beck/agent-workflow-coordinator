@@ -15,7 +15,7 @@ import subprocess
 import sys
 import unittest
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -61,7 +61,7 @@ class FormalEvidenceTests(unittest.TestCase):
             )
         )
         self.assertIsInstance(value, dict)
-        return value
+        return cast(dict[str, Any], value)
 
     def test_backend_fence_correspondence_is_explicit_and_fail_closed(self) -> None:
         artifact = self._backend_fence_correspondence()
