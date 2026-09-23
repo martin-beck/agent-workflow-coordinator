@@ -280,6 +280,31 @@ if mode == "kill-after-outcome-publication":
     store.begin_reopen = kill_after_return
     store.begin_reopen(2, "new")
 
+if mode in {
+    "kill-after-effect-committed-publication",
+    "kill-after-effect-ambiguous-publication",
+}:
+    effect = store.prepare_authority_effect(2, "subprocess-effect", "sqlite")
+    outcome = (
+        "committed"
+        if mode == "kill-after-effect-committed-publication"
+        else "ambiguous"
+    )
+    original_finish_effect = store.finish_authority_effect
+
+    def kill_after_effect_return(intent, effect_outcome):
+        result = original_finish_effect(intent, effect_outcome)
+        ready_path.write_text(
+            f"effect-{effect_outcome}-after-outcome\n", encoding="utf-8"
+        )
+        with ready_path.open("rb") as ready:
+            os.fsync(ready.fileno())
+        os.kill(os.getpid(), signal.SIGKILL)
+        return result
+
+    store.finish_authority_effect = kill_after_effect_return
+    store.finish_authority_effect(effect, outcome)
+
 if mode != "kill-during-transaction":
     raise SystemExit("unknown test mode")
 
@@ -396,6 +421,29 @@ def _recover_ambiguous_child(control_text: str, authority_text: str, result_text
         pass
     Path(result_text).write_text(
         f"{state.status}:{state.revision}:lock-released\n", encoding="utf-8"
+    )
+
+
+def _recover_effect_child(control_text: str, authority_text: str, result_text: str) -> None:
+    store = SQLiteBarrierSessionStore(
+        SQLiteRollbackControlStore(Path(control_text), PROJECT, Path(authority_text)),
+        lambda: "authority-3",
+    )
+    state = store.recover_unknown()
+    if state is None:
+        raise SystemExit("missing effect recovery state")
+    with store.operation_lock():
+        pass
+    with sqlite3.connect(control_text) as connection:
+        outcome = connection.execute(
+            "SELECT outcome FROM authority_effect_intent WHERE project_id=? AND operation_id=?",
+            (PROJECT, "subprocess-effect"),
+        ).fetchone()
+    if outcome is None:
+        raise SystemExit("missing effect outcome")
+    Path(result_text).write_text(
+        f"{state.status}:{state.revision}:{outcome[0]}:lock-released\n",
+        encoding="utf-8",
     )
 
 
@@ -1005,6 +1053,86 @@ class RollbackControlStoreTests(unittest.TestCase):
                 b"authority remains untouched after outcome publication\n",
                 authority_path.read_bytes(),
             )
+
+    def test_v10_subprocess_death_after_committed_effect_publication_is_reopenable(
+        self,
+    ) -> None:
+        """A death after a committed effect outcome leaves a durable lock-safe journal."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            control_path = root / "control.sqlite"
+            authority_path = root / "authority.sqlite"
+            authority_bytes = b"authority remains untouched after committed effect\n"
+            authority_path.write_bytes(authority_bytes)
+            ready_path = root / "ready"
+            process = self._run_session_process(
+                control_path,
+                authority_path,
+                "kill-after-effect-committed-publication",
+                ready_path,
+            )
+            self._wait_for_file(ready_path, process)
+            self.assertEqual(
+                "effect-committed-after-outcome",
+                ready_path.read_text(encoding="utf-8").strip(),
+            )
+            self.assertEqual(-signal.SIGKILL, process.wait(timeout=10))
+            stdout, stderr = process.communicate()
+            self.assertEqual("", stderr, msg=stdout)
+
+            child_result = root / "child-result"
+            verifier = multiprocessing.get_context("fork").Process(
+                target=_recover_effect_child,
+                args=(str(control_path), str(authority_path), str(child_result)),
+            )
+            verifier.start()
+            verifier.join(timeout=10)
+            self.assertEqual(0, verifier.exitcode)
+            self.assertEqual(
+                "held:2:committed:lock-released\n",
+                child_result.read_text(encoding="utf-8"),
+            )
+            self.assertEqual(authority_bytes, authority_path.read_bytes())
+
+    def test_v10_subprocess_death_after_ambiguous_effect_publication_is_reopenable(
+        self,
+    ) -> None:
+        """A death after an ambiguous effect outcome preserves the durable fence."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            control_path = root / "control.sqlite"
+            authority_path = root / "authority.sqlite"
+            authority_bytes = b"authority remains untouched after ambiguous effect\n"
+            authority_path.write_bytes(authority_bytes)
+            ready_path = root / "ready"
+            process = self._run_session_process(
+                control_path,
+                authority_path,
+                "kill-after-effect-ambiguous-publication",
+                ready_path,
+            )
+            self._wait_for_file(ready_path, process)
+            self.assertEqual(
+                "effect-ambiguous-after-outcome",
+                ready_path.read_text(encoding="utf-8").strip(),
+            )
+            self.assertEqual(-signal.SIGKILL, process.wait(timeout=10))
+            stdout, stderr = process.communicate()
+            self.assertEqual("", stderr, msg=stdout)
+
+            child_result = root / "child-result"
+            verifier = multiprocessing.get_context("fork").Process(
+                target=_recover_effect_child,
+                args=(str(control_path), str(authority_path), str(child_result)),
+            )
+            verifier.start()
+            verifier.join(timeout=10)
+            self.assertEqual(0, verifier.exitcode)
+            self.assertEqual(
+                "ambiguous:3:ambiguous:lock-released\n",
+                child_result.read_text(encoding="utf-8"),
+            )
+            self.assertEqual(authority_bytes, authority_path.read_bytes())
 
     def test_v10_subprocess_death_after_ambiguous_replacement_commit_is_fenced(self) -> None:
         """A fresh process fences an unreported ambiguous-session replacement."""
