@@ -98,3 +98,22 @@ def test_functional_availability_maps_reopen_and_recovery_without_authorizing_mu
     )
     assert any("fresh_capability_reopens" in reference for reference in entry["evidence"])
     assert any("requires_recovery_and_new_fence" in reference for reference in entry["evidence"])
+
+
+def test_selector_execution_binding_maps_read_only_identity_evidence_without_dispatch() -> None:
+    matrix = json.loads(MATRIX.read_text(encoding="utf-8"))
+    entry = next(
+        item for item in matrix["obligations"] if item["id"] == "selector-to-execution-binding"
+    )
+    assert entry["model_actions"] == ["ObserveSelector", "ValidateRuntime", "Dispatch"]
+    assert entry["status"] == "not-proven"
+    assert len(entry["evidence"]) >= 10
+    assert any("SelectorAdmissionTests" in reference for reference in entry["evidence"])
+    assert any("RuntimeAdmissionTests" in reference for reference in entry["evidence"])
+    assert any(
+        "test_snapshot_bound_rechecks_session" in reference for reference in entry["evidence"]
+    )
+    assert any(
+        "test_snapshot_bound_rejects_non_read_only_backend_result" in reference
+        for reference in entry["evidence"]
+    )
