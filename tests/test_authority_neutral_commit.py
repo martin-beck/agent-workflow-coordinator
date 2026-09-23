@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import unittest
+from dataclasses import replace
 
 from tools.authority_neutral_commit import (
     BoundCommitAuthorizationAdapter,
@@ -43,6 +44,10 @@ class CommitAuthorizationTests(unittest.TestCase):
         self.assertFalse(bundle.matches({**EVIDENCE, "runtime_identity": "foreign"}))
         with self.assertRaisesRegex(CommitAuthorizationExecutionError, "artifact_identity"):
             CommitAdmissionBundle.from_evidence({**EVIDENCE, "artifact_identity": ""})
+        with self.assertRaisesRegex(CommitAuthorizationExecutionError, "artifact_identity"):
+            replace(bundle, artifact_identity="")
+        with self.assertRaisesRegex(CommitAuthorizationExecutionError, "identity"):
+            replace(bundle, backend="rollback")
 
     def test_prerequisites_are_verified_without_authorizing_commit(self) -> None:
         result = execute_verified_commit_authorization(OPERATION, EVIDENCE)
