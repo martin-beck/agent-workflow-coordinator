@@ -67,3 +67,20 @@ def test_git_mutation_boundary_maps_backup_commit_and_rollback_without_authorizi
         "No selector publication, runtime replacement, commit, apply, rollback, or release "
         "publication is authorized." in matrix["nonclaims"]
     )
+
+
+def test_sqlite_write_fence_maps_every_route_class_without_authorizing_mutation() -> None:
+    matrix = json.loads(MATRIX.read_text(encoding="utf-8"))
+    entry = next(item for item in matrix["obligations"] if item["id"] == "sqlite-write-fence")
+    assert entry["model_actions"] == ["RequestWrite", "AcceptWrite", "RejectWrite", "FinishWrite"]
+    assert entry["status"] == "not-proven"
+    assert len(entry["evidence"]) >= 12
+    assert any("test_inventory_is_explicit" in reference for reference in entry["evidence"])
+    assert any("every_inventoried_route_rejects" in reference for reference in entry["evidence"])
+    assert any("sigkill_after_route_effects" in reference for reference in entry["evidence"])
+    assert (
+        "Static route coverage does not prove runtime refinement or authorize upgrade mutation."
+        in json.loads(
+            (ROOT / "formal/upgrade/sqlite-route-inventory.json").read_text(encoding="utf-8")
+        )["nonclaims"]
+    )
