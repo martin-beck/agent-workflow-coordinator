@@ -52,6 +52,7 @@
       "model_actions": ["AcceptWrite", "RejectWrite", "FinishWrite"],
       "implementation_obligation": "The authority-neutral commit authorization seam accepts only one immutable bundle of verified backup, stage, selector, runtime, barrier, and fencing evidence and never authorizes or dispatches a commit.",
       "evidence_required": [
+        "tests/test_authority_neutral_commit.py::test_admission_bundle_binds_all_mutation_identities",
         "tests/test_authority_neutral_commit.py::test_prerequisites_are_verified_without_authorizing_commit",
         "tests/test_authority_neutral_commit.py::test_rejects_forged_or_unverified_prerequisites",
         "tests/test_authority_neutral_commit.py::test_bound_adapter_rejects_phase_and_identity_drift"

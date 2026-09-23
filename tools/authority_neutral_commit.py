@@ -66,6 +66,25 @@ class CommitAdmissionBundle:
     selector_identity: str
     runtime_identity: str
 
+    def __post_init__(self) -> None:
+        if self.backend not in {"git", "sqlite"} or self.target != "new":
+            raise CommitAuthorizationExecutionError("commit authorization identity is invalid")
+        for field in ("operation_id", "fencing_token", "barrier_id"):
+            value = getattr(self, field)
+            if not isinstance(value, str) or not value:
+                raise CommitAuthorizationExecutionError(f"commit authorization {field} is invalid")
+        if type(self.state_revision) is not int or self.state_revision < 1:
+            raise CommitAuthorizationExecutionError("commit authorization revision is invalid")
+        for field in (
+            "artifact_identity",
+            "manifest_identity",
+            "selector_identity",
+            "runtime_identity",
+        ):
+            value = getattr(self, field)
+            if not isinstance(value, str) or not value:
+                raise CommitAuthorizationExecutionError(f"commit authorization {field} is invalid")
+
     @classmethod
     def from_evidence(cls, evidence: Mapping[str, object]) -> CommitAdmissionBundle:
         _validate_evidence(evidence)
