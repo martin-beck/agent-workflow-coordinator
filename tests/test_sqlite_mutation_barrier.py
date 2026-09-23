@@ -24,6 +24,7 @@ import tools.mutation_fence as mutation_fence
 from tools.admission_lease import AdmissionLease, validate_recheck
 from tools.authority_mutation import DurableBoundAuthorityMutation
 from tools.authority_neutral_commit import CommitAdmissionBundle
+from tools.git_authority_adapter import GitAuthorityAdapter
 from tools.git_authority_mutation import GitCommitCapability
 from tools.handoffctl import locked
 from tools.lock_domain_scope import LockDomainScope
@@ -40,6 +41,7 @@ from tools.rollback_control_store import (
     SQLiteBarrierSessionStore,
     SQLiteRollbackControlStore,
 )
+from tools.sqlite_authority_adapter import SQLiteAuthorityAdapter
 from tools.sqlite_authority_mutation import (
     SQLiteCommitCapability,
     SQLiteMutationRejectedError,
@@ -335,27 +337,16 @@ def _authority_effect_waiting_for_sigkill(root_text: str, ready: Any) -> None:
         selector_identity="selector-1",
         runtime_identity="runtime-1",
     )
-    capability = DurableBoundAuthorityMutation(admission, session, session_revision=1)
-
     keepalive = sqlite3.connect(root / "authority.sqlite")
     keepalive.execute("PRAGMA wal_autocheckpoint=0")
     keepalive.execute("PRAGMA user_version=1")
     keepalive.commit()
 
-    def identity(path: Path) -> tuple[int, int] | None:
-        try:
-            status = path.lstat()
-        except FileNotFoundError:
-            return None
-        return status.st_dev, status.st_ino
-
-    sqlite_capability = SQLiteCommitCapability(
-        root / "authority.sqlite",
-        admission=admission,
+    capability = SQLiteAuthorityAdapter(root / "authority.sqlite").bind_durable_commit_capability(
+        admission,
+        session,
+        session_revision=1,
         admission_reread=lambda: admission.__dict__,
-        expected_db_identity=identity(root / "authority.sqlite"),  # type: ignore[arg-type]
-        expected_wal_identity=identity(root / "authority.sqlite-wal"),
-        expected_shm_identity=identity(root / "authority.sqlite-shm"),
     )
 
     def effect(connection: sqlite3.Connection) -> None:
@@ -368,7 +359,7 @@ def _authority_effect_waiting_for_sigkill(root_text: str, ready: Any) -> None:
         ready.set()
         os._exit(17)
 
-    capability.execute(lambda: sqlite_capability.commit(effect))
+    capability.execute(effect)
 
 
 def _git_authority_effect_waiting_for_sigkill(root_text: str, ready: Any) -> None:
@@ -392,21 +383,24 @@ def _git_authority_effect_waiting_for_sigkill(root_text: str, ready: Any) -> Non
     git_root = root / "git-authority"
     (git_root / "state").write_text("effect committed before worker death\n", encoding="utf-8")
     _git(git_root, "add", "state")
-    git_capability = GitCommitCapability(
-        git_root,
-        admission=admission,
+    capability = GitAuthorityAdapter(git_root).bind_durable_commit_capability(
+        admission,
+        session,
+        session_revision=1,
         admission_reread=lambda: admission.__dict__,
         expected_branch="main",
         expected_head=_git(git_root, "rev-parse", "HEAD"),
     )
-    capability = DurableBoundAuthorityMutation(admission, session, session_revision=1)
 
-    def effect() -> NoReturn:
-        git_capability.commit("op-git-1 authority commit")
+    def kill_before_finish(
+        _intent: object, _outcome: str, _receipt: object | None = None
+    ) -> NoReturn:
         ready.set()
         os._exit(17)
 
-    capability.execute(effect)
+    session_any: Any = session
+    session_any.finish_authority_effect = kill_before_finish
+    capability.execute("op-git-1 authority commit")
 
 
 def _session_recovery_waiting_for_sigkill(root_text: str, ready: Any) -> None:
