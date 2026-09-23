@@ -1804,6 +1804,42 @@ class RollbackControlStoreTests(unittest.TestCase):
                 existing_session.mark_ambiguous(1, "io-failure")
             self.assertEqual("ambiguous", existing_session.snapshot().status)  # type: ignore[union-attr]
 
+            reconcile_control = FlakyStore(
+                Path(directory) / "reconcile-session-control.sqlite", PROJECT
+            )
+            reconcile_control.fail_next_commit = False
+            reconcile_session = SQLiteBarrierSessionStore(reconcile_control, lambda: "authority-3")
+            reconcile_session.create(self._session_identity())
+            reconcile_session.mark_ambiguous(1, "seed-ambiguity")
+            replacement_record = dict(self._session_identity().as_record())
+            replacement_record.update(
+                {
+                    "attempt_id": "attempt-replacement",
+                    "state_revision": 4,
+                    "durable_barrier_id": "barrier-replacement",
+                    "fencing_token": "fence-replacement",
+                }
+            )
+            from tools.upgrade_identity import canonical_barrier_session_digest
+
+            replacement_record["identity_digest"] = canonical_barrier_session_digest(
+                replacement_record
+            )
+            replacement = BarrierSessionState(
+                BarrierSessionIdentity.from_record(replacement_record), "held", 1
+            )
+            reconcile_control.fail_next_commit = True
+            with self.assertRaisesRegex(
+                ControlStoreError, "reconciliation commit outcome is ambiguous"
+            ):
+                reconcile_session.reconcile_ambiguous(2, replacement)
+            self.assertFalse(reconcile_session.operation_owned_by_current_thread)
+            ambiguous = reconcile_session.snapshot()
+            self.assertIsNotNone(ambiguous)
+            assert ambiguous is not None
+            self.assertEqual("ambiguous", ambiguous.status)
+            self.assertEqual(ambiguous, reconcile_session.recover_unknown())
+
     def test_v10_cas_fences_verify_affected_rows_and_recovery_errors(self) -> None:
         class Cursor:
             def __init__(self, rowcount: int) -> None:
