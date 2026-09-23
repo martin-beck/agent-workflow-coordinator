@@ -10,6 +10,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from typing import Any, cast
+from unittest.mock import patch
 
 from tools.authority_neutral_commit import CommitAdmissionBundle
 from tools.sqlite_authority_mutation import (
@@ -153,6 +154,22 @@ class SQLiteCommitCapabilityTests(unittest.TestCase):
 
         with self.assertRaisesRegex(SQLiteMutationRejectedError, "WAL identity changed"):
             capability.commit(update)
+
+    def test_rejects_sidecar_identity_read_error_before_effect(self) -> None:
+        capability = self._capability()
+        called = False
+
+        def update(connection: sqlite3.Connection) -> None:
+            nonlocal called
+            called = True
+            connection.execute("UPDATE state SET value='bad'")
+
+        with (
+            patch.object(Path, "lstat", side_effect=OSError("identity unavailable")),
+            self.assertRaisesRegex(SQLiteMutationRejectedError, "sidecar identity is unavailable"),
+        ):
+            capability.commit(update)
+        self.assertFalse(called)
 
     def test_rejects_authority_replacement_after_connect_before_effect(self) -> None:
         real_connect = sqlite3.connect

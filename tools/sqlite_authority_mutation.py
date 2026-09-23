@@ -109,7 +109,7 @@ class SQLiteCommitCapability:
         except FileNotFoundError:
             return None
         except OSError as error:
-            raise SQLiteMutationError("SQLite sidecar identity is unavailable") from error
+            raise SQLiteMutationRejectedError("SQLite sidecar identity is unavailable") from error
         if not stat.S_ISREG(status.st_mode) or status.st_nlink != 1:
             raise SQLiteMutationError("SQLite authority file is not a regular private file")
         return status.st_dev, status.st_ino
