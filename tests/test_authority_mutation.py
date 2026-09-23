@@ -12,6 +12,7 @@ from tools.authority_mutation import (
     AuthorityMutationRejectedError,
     BoundAuthorityMutation,
     DurableBoundAuthorityMutation,
+    DurableBoundBackendMutation,
 )
 from tools.authority_neutral_commit import CommitAdmissionBundle
 from tools.git_authority_mutation import GitCommitResult, GitMutationAmbiguousError
@@ -137,6 +138,33 @@ class AuthorityMutationTests(unittest.TestCase):
             capability.execute(None)  # type: ignore[arg-type]
         self.assertEqual([], journal_calls)
         capability.execute(lambda: self._result())
+
+    def test_durable_backend_wrapper_journals_backend_receipt(self) -> None:
+        journal: list[tuple[str, object | None]] = []
+
+        class Journal:
+            def prepare_authority_effect(self, *_args: object, **_kwargs: object) -> str:
+                journal.append(("prepared", None))
+                return "intent"
+
+            def finish_authority_effect(
+                self, _intent: object, outcome: str, receipt: object | None = None
+            ) -> None:
+                journal.append((outcome, receipt))
+
+        wrapper = DurableBoundBackendMutation(
+            _admission(),
+            Journal(),
+            session_revision=1,
+            backend_effect=lambda message: {
+                **self._result(),
+                "operation_id": f"op-1:{message}",
+            },
+        )
+        receipt = wrapper.execute("commit")
+        self.assertTrue(receipt.mutates_authority)
+        self.assertEqual("prepared", journal[0][0])
+        self.assertEqual("committed", journal[1][0])
 
     def test_durable_capability_rejects_invalid_session_revision(self) -> None:
         with self.assertRaisesRegex(AuthorityMutationError, "session revision is invalid"):

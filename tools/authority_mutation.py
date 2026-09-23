@@ -195,3 +195,31 @@ class DurableBoundAuthorityMutation:
                 "authority mutation outcome publication is ambiguous"
             ) from error
         return receipt
+
+
+class DurableBoundBackendMutation:
+    """Compose one backend effect with the durable authority journal.
+
+    ``backend_effect`` is supplied by a concrete Git or SQLite capability and
+    is intentionally kept outside the public upgrade dispatcher.  The wrapper
+    gives those isolated effects the same prepare/finish and process-death
+    semantics as the backend-neutral contract.
+    """
+
+    def __init__(
+        self,
+        admission: CommitAdmissionBundle,
+        journal: AuthorityEffectJournal,
+        *,
+        session_revision: int,
+        backend_effect: Callable[[object], object],
+    ) -> None:
+        if not callable(backend_effect):
+            raise AuthorityMutationError("authority backend effect is invalid")
+        self._durable = DurableBoundAuthorityMutation(
+            admission, journal, session_revision=session_revision
+        )
+        self._backend_effect = backend_effect
+
+    def execute(self, argument: object) -> MutationReceipt:
+        return self._durable.execute(lambda: self._backend_effect(argument))
