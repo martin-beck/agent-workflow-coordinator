@@ -13,8 +13,8 @@
     }
   },
   "implementation_snapshot": {
-    "revision": "ac47e083cd4737a4ff06d4265c6ceb70dd5196bb",
-    "runtime_revision": "ac47e083cd4737a4ff06d4265c6ceb70dd5196bb",
+    "revision": "1265fdaf1469ba4b7efae1494dc4c0df30002630",
+    "runtime_revision": "1265fdaf1469ba4b7efae1494dc4c0df30002630",
     "status": "descriptor-safe control-store and SQLite DB/WAL/SHM rereads plus bounded independent-process barrier/write evidence; executable apply and rollback remain rejection-only"
   },
   "correspondence": [
@@ -81,7 +81,9 @@
         "tests/test_authority_mutation.py::AuthorityMutationTests.test_rejects_backend_or_result_identity_drift",
         "tests/test_authority_mutation.py::AuthorityMutationTests.test_ambiguous_effect_consumes_token_and_cannot_retry",
         "tests/test_authority_mutation.py::AuthorityMutationTests.test_backend_ambiguity_is_normalized_and_cannot_retry",
-        "tests/test_authority_mutation.py::AuthorityMutationTests.test_termination_exception_is_ambiguous_and_cannot_retry"
+        "tests/test_authority_mutation.py::AuthorityMutationTests.test_termination_exception_is_ambiguous_and_cannot_retry",
+        "tests/test_authority_mutation.py::AuthorityMutationTests.test_durable_capability_rejects_admission_session_revision_mismatch",
+        "tests/test_authority_mutation.py::AuthorityMutationTests.test_durable_effect_forwards_exact_admission_identity_to_journal"
       ],
       "status": "bounded executable cross-backend effect evidence; implementation refinement pending and public dispatch disabled"
     },
