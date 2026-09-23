@@ -71,6 +71,8 @@
         "tests/test_lock_domain_scope.py::LockDomainScopeTests.test_binding_abort_allows_fresh_worker_reacquisition_when_identity_is_unchanged",
         "tests/test_rollback_control_store.py::RollbackControlStoreTests.test_v10_session_intent_recovery_fences_and_requires_newer_fence",
         "tests/test_rollback_control_store.py::RollbackControlStoreTests.test_v10_interrupted_recovery_residue_requires_exact_revision_chain",
+        "tests/test_rollback_control_store.py::RollbackControlStoreTests.test_v10_integrated_effect_death_after_committed_finish_is_reopenable",
+        "tests/test_rollback_control_store.py::RollbackControlStoreTests.test_v10_integrated_effect_death_after_ambiguous_finish_is_reopenable",
         "tests/test_authority_effect_correspondence.py::AuthorityEffectCorrespondenceTests.test_rejected_effect_maps_to_reject_write",
         "tests/test_authority_effect_correspondence.py::AuthorityEffectCorrespondenceTests.test_stale_fence_rejection_maps_before_new_fence_recovery"
       ],
