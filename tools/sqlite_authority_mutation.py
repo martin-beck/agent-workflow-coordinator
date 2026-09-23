@@ -211,6 +211,7 @@ class SQLiteCommitCapability:
                 verification.execute("PRAGMA foreign_keys=ON")
                 integrity = str(verification.execute("PRAGMA integrity_check").fetchone()[0])
                 violations = len(verification.execute("PRAGMA foreign_key_check").fetchall())
+            self._assert_filesystem_identity()
         except (OSError, SQLiteMutationError, sqlite3.Error) as error:
             raise SQLiteMutationAmbiguousError(
                 "SQLite post-commit verification is ambiguous"
