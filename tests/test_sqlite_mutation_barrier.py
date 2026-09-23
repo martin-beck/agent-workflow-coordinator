@@ -40,7 +40,10 @@ from tools.rollback_control_store import (
     SQLiteBarrierSessionStore,
     SQLiteRollbackControlStore,
 )
-from tools.sqlite_authority_mutation import SQLiteCommitCapability
+from tools.sqlite_authority_mutation import (
+    SQLiteCommitCapability,
+    SQLiteMutationRejectedError,
+)
 from tools.sqlite_storage import SQLiteBackend, bind_released_sqlite_backend, create_database
 from tools.upgrade_identity import (
     BarrierChildIdentity,
@@ -1795,6 +1798,68 @@ class SQLiteMutationBarrierProcessTests(unittest.TestCase):
         ambiguous_intent = self.session.prepare_authority_effect(held.revision, "op-2", "sqlite")
         ambiguous = self.session.finish_authority_effect(ambiguous_intent, "ambiguous")
         self.assertEqual("ambiguous", ambiguous.status)
+
+    def test_integrated_pre_effect_rejection_is_journaled_without_fencing(self) -> None:
+        held = self._create_held()
+        admission = CommitAdmissionBundle(
+            backend="sqlite",
+            target="new",
+            operation_id="op-integrated-rejected",
+            fencing_token=held.identity.fencing_token,
+            state_revision=held.revision,
+            barrier_id=held.identity.durable_barrier_id,
+            artifact_identity="artifact-1",
+            manifest_identity="manifest-1",
+            selector_identity="selector-1",
+            runtime_identity="runtime-1",
+        )
+
+        def identity(path: Path) -> tuple[int, int] | None:
+            try:
+                status = path.lstat()
+            except FileNotFoundError:
+                return None
+            return status.st_dev, status.st_ino
+
+        stale = dict(admission.__dict__)
+        stale["fencing_token"] = "foreign-fence"  # noqa: S105
+        capability = SQLiteCommitCapability(
+            self.authority,
+            admission=admission,
+            admission_reread=lambda: stale,
+            expected_db_identity=identity(self.authority),  # type: ignore[arg-type]
+            expected_wal_identity=identity(self.authority.with_name("authority.sqlite-wal")),
+            expected_shm_identity=identity(self.authority.with_name("authority.sqlite-shm")),
+        )
+        called = False
+
+        def effect(connection: sqlite3.Connection) -> None:
+            nonlocal called
+            called = True
+            connection.execute("UPDATE tasks SET body='must not publish' WHERE id='AR-0001'")
+
+        with self.assertRaisesRegex(SQLiteMutationRejectedError, "admission identity changed"):
+            DurableBoundAuthorityMutation(
+                admission, self.session, session_revision=held.revision
+            ).execute(lambda: capability.commit(effect))
+        self.assertFalse(called)
+        current = self.session.snapshot()
+        assert current is not None
+        self.assertEqual(("held", held.revision), (current.status, current.revision))
+        with sqlite3.connect(self.authority) as connection:
+            self.assertEqual(
+                "# Authority fixture\n",
+                connection.execute("SELECT body FROM tasks WHERE id='AR-0001'").fetchone()[0],
+            )
+        with sqlite3.connect(self.control.control_store_path) as connection:
+            self.assertEqual(
+                [("rejected",)],
+                connection.execute(
+                    "SELECT outcome FROM authority_effect_intent "
+                    "WHERE project_id=? AND operation_id=?",
+                    (PROJECT, admission.operation_id),
+                ).fetchall(),
+            )
 
     def test_sigkill_during_unknown_recovery_preserves_ambiguity_until_new_fence(self) -> None:
         context = multiprocessing.get_context("fork")
