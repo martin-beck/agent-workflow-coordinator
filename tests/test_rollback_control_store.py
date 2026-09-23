@@ -1932,6 +1932,59 @@ class RollbackControlStoreTests(unittest.TestCase):
             self.assertEqual("ambiguous", ambiguous.status)
             self.assertEqual(ambiguous, reconcile_session.recover_unknown())
 
+            recovery_control = FlakyStore(
+                Path(directory) / "prepared-session-recovery-control.sqlite", PROJECT
+            )
+            recovery_control.fail_next_commit = False
+            recovery_session = SQLiteBarrierSessionStore(recovery_control, lambda: "authority-3")
+            recovery_session.create(self._session_identity())
+            with sqlite3.connect(recovery_control.path) as connection:
+                connection.execute(
+                    "UPDATE barrier_session_intent SET outcome='prepared' WHERE project_id=?",
+                    (PROJECT,),
+                )
+                connection.commit()
+            recovery_control.fail_next_commit = True
+            with self.assertRaisesRegex(ControlStoreError, "recovery commit outcome is ambiguous"):
+                recovery_session.recover_unknown()
+            self.assertFalse(recovery_session.operation_owned_by_current_thread)
+            recovered_session = recovery_session.snapshot()
+            self.assertIsNotNone(recovered_session)
+            assert recovered_session is not None
+            with sqlite3.connect(recovery_control.path) as connection:
+                durable_recovery_row = connection.execute(
+                    "SELECT status,revision FROM barrier_session WHERE project_id=?",
+                    (PROJECT,),
+                ).fetchone()
+            self.assertEqual(("ambiguous", 2), durable_recovery_row)
+            self.assertEqual(
+                ("ambiguous", 2), (recovered_session.status, recovered_session.revision)
+            )
+
+            effect_control = FlakyStore(
+                Path(directory) / "prepared-effect-recovery-control.sqlite", PROJECT
+            )
+            effect_control.fail_next_commit = False
+            effect_session = SQLiteBarrierSessionStore(effect_control, lambda: "authority-3")
+            effect_session.create(self._session_identity())
+            effect_session.prepare_authority_effect(1, "effect-recovery", "sqlite")
+            effect_control.fail_next_commit = True
+            with self.assertRaisesRegex(ControlStoreError, "recovery commit outcome is ambiguous"):
+                effect_session.recover_unknown()
+            self.assertFalse(effect_session.operation_owned_by_current_thread)
+            recovered_effect = effect_session.snapshot()
+            self.assertIsNotNone(recovered_effect)
+            assert recovered_effect is not None
+            self.assertEqual(("ambiguous", 2), (recovered_effect.status, recovered_effect.revision))
+            with sqlite3.connect(effect_control.path) as connection:
+                self.assertEqual(
+                    [("ambiguous",)],
+                    connection.execute(
+                        "SELECT outcome FROM authority_effect_intent WHERE project_id=?",
+                        (PROJECT,),
+                    ).fetchall(),
+                )
+
     def test_v10_cas_fences_verify_affected_rows_and_recovery_errors(self) -> None:
         class Cursor:
             def __init__(self, rowcount: int) -> None:
