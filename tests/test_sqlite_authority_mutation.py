@@ -154,6 +154,41 @@ class SQLiteCommitCapabilityTests(unittest.TestCase):
         with self.assertRaisesRegex(SQLiteMutationRejectedError, "WAL identity changed"):
             capability.commit(update)
 
+    def test_rejects_authority_replacement_after_connect_before_effect(self) -> None:
+        real_connect = sqlite3.connect
+        replaced = False
+
+        def replacing_connector(*args: Any, **kwargs: Any) -> sqlite3.Connection:
+            nonlocal replaced
+            connection = real_connect(*args, **kwargs)
+            if not replaced:
+                replacement = self.root / "replacement.sqlite"
+                shutil.copy2(self.db, replacement)
+                replacement.replace(self.db)
+                replaced = True
+            return cast(sqlite3.Connection, connection)
+
+        called = False
+
+        def update(connection: sqlite3.Connection) -> None:
+            nonlocal called
+            called = True
+            connection.execute("UPDATE state SET value='bad'")
+
+        capability = SQLiteCommitCapability(
+            self.db,
+            admission=self._admission,
+            admission_reread=lambda: self._admission.__dict__,
+            expected_db_identity=self._capability()._db_identity,
+            expected_wal_identity=self._capability()._wal_identity,
+            expected_shm_identity=self._capability()._shm_identity,
+            connector=replacing_connector,
+        )
+        with self.assertRaisesRegex(SQLiteMutationRejectedError, "database identity changed"):
+            capability.commit(update)
+        self.assertTrue(replaced)
+        self.assertFalse(called)
+
     def test_classifies_sqlite_errors_as_ambiguous(self) -> None:
         def invalid(connection: sqlite3.Connection) -> None:
             connection.execute("UPDATE missing SET x=1")

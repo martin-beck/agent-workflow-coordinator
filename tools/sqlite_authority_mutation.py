@@ -166,6 +166,10 @@ class SQLiteCommitCapability:
         connection: sqlite3.Connection | None = None
         try:
             connection = self._connector(self._authority, isolation_level=None, timeout=5)
+            # The pathname may be replaced between the initial admission check
+            # and connect(). Revalidate the opened authority before beginning
+            # any transaction or invoking the caller's effect.
+            self._assert_filesystem_identity()
             connection.execute("PRAGMA foreign_keys=ON")
             connection.execute("PRAGMA synchronous=FULL")
             connection.execute("BEGIN IMMEDIATE")
