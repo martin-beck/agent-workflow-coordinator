@@ -73,9 +73,20 @@ class BoundAuthorityMutation:
                 return result.get(name)
             return getattr(result, name, None)
 
+        expected_identity = {
+            "backend": backend,
+            "target": self._admission.target,
+            "operation_id": self._admission.operation_id,
+            "state_revision": self._admission.state_revision,
+            "barrier_id": self._admission.barrier_id,
+            "artifact_identity": self._admission.artifact_identity,
+            "manifest_identity": self._admission.manifest_identity,
+            "selector_identity": self._admission.selector_identity,
+            "runtime_identity": self._admission.runtime_identity,
+            "fencing_token": self._admission.fencing_token,
+        }
         if (
-            field("operation_id") != self._admission.operation_id
-            or field("fencing_token") != self._admission.fencing_token
+            any(field(name) != value for name, value in expected_identity.items())
             or field("mutates_authority") is not True
         ):
             raise AuthorityMutationError("authority mutation result identity mismatch")

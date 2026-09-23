@@ -79,6 +79,7 @@
       "evidence_required": [
         "tests/test_authority_mutation.py::AuthorityMutationTests.test_effect_is_single_use_and_identity_bound",
         "tests/test_authority_mutation.py::AuthorityMutationTests.test_rejects_backend_or_result_identity_drift",
+        "tests/test_authority_mutation.py::AuthorityMutationTests.test_rejects_any_full_receipt_identity_drift",
         "tests/test_authority_mutation.py::AuthorityMutationTests.test_ambiguous_effect_consumes_token_and_cannot_retry",
         "tests/test_authority_mutation.py::AuthorityMutationTests.test_backend_ambiguity_is_normalized_and_cannot_retry",
         "tests/test_authority_mutation.py::AuthorityMutationTests.test_termination_exception_is_ambiguous_and_cannot_retry",

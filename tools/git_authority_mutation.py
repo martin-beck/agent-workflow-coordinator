@@ -38,7 +38,15 @@ _AdmissionReread = Callable[[], Mapping[str, object]]
 class GitCommitResult:
     """Verified result of one exact-head Git commit."""
 
+    backend: str
+    target: str
     operation_id: str
+    state_revision: int
+    barrier_id: str
+    artifact_identity: str
+    manifest_identity: str
+    selector_identity: str
+    runtime_identity: str
     before_head: str
     after_head: str
     branch: str
@@ -164,7 +172,15 @@ class GitCommitCapability:
         ):
             raise GitMutationAmbiguousError("Git commit postcondition is ambiguous")
         return GitCommitResult(
+            backend=self._admission.backend,
+            target=self._admission.target,
             operation_id=self._operation_id,
+            state_revision=self._admission.state_revision,
+            barrier_id=self._admission.barrier_id,
+            artifact_identity=self._admission.artifact_identity,
+            manifest_identity=self._admission.manifest_identity,
+            selector_identity=self._admission.selector_identity,
+            runtime_identity=self._admission.runtime_identity,
             before_head=before,
             after_head=self._validate_head(after),
             branch=branch,

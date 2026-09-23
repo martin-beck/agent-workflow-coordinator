@@ -331,7 +331,15 @@ if mode in {
             if outcome == "ambiguous":
                 raise TimeoutError("subprocess effect outcome is unknown")
             return {
+                "backend": "sqlite",
+                "target": "new",
                 "operation_id": operation_id,
+                "state_revision": 2,
+                "barrier_id": identity.durable_barrier_id,
+                "artifact_identity": "artifact-subprocess",
+                "manifest_identity": "manifest-subprocess",
+                "selector_identity": "selector-subprocess",
+                "runtime_identity": "runtime-subprocess",
                 "fencing_token": identity.fencing_token,
                 "mutates_authority": True,
             }
