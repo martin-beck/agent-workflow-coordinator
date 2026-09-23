@@ -90,6 +90,17 @@ class AuthorityMutationTests(unittest.TestCase):
             with self.assertRaisesRegex(AuthorityMutationError, "already consumed"):
                 capability.execute(backend, self._result)
 
+    def test_termination_exception_is_ambiguous_and_cannot_retry(self) -> None:
+        capability = BoundAuthorityMutation(_admission())
+
+        def terminated() -> object:
+            raise SystemExit(17)
+
+        with self.assertRaisesRegex(AuthorityMutationAmbiguousError, "outcome is ambiguous"):
+            capability.execute("git", terminated)
+        with self.assertRaisesRegex(AuthorityMutationError, "already consumed"):
+            capability.execute("git", self._result)
+
 
 if __name__ == "__main__":
     unittest.main()
