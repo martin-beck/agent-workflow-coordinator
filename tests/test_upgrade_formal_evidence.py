@@ -248,6 +248,31 @@ class UpgradeFormalEvidenceTests(unittest.TestCase):
             self.assertTrue((ROOT / path).exists(), path)
             self.assertIn(selector, (ROOT / path).read_text(encoding="utf-8"), selector)
 
+    def test_authority_effect_journal_binds_finish_and_ambiguity_correspondence(self) -> None:
+        contract = json.loads(CONTRACT.read_text(encoding="utf-8"))
+        entry = next(
+            value
+            for value in contract["correspondence"]
+            if value["implementation_obligation"].startswith(
+                "The isolated authority effect journal"
+            )
+        )
+        self.assertEqual(
+            ["AcceptWrite", "FinishWrite", "MarkAmbiguous", "RejectWrite", "Acquire"],
+            entry["model_actions"],
+        )
+        self.assertEqual(
+            "bounded executable durable external-effect recovery evidence; "
+            "implementation refinement pending and public dispatch disabled",
+            entry["status"],
+        )
+        for reference in entry["evidence_required"]:
+            path, selector = reference.split("::", 1)
+            self.assertTrue((ROOT / path).exists(), path)
+            self.assertIn(
+                selector.rsplit(".", 1)[-1], (ROOT / path).read_text(encoding="utf-8"), selector
+            )
+
     def test_recovery_evidence_is_mapped_without_authorization_overclaim(self) -> None:
         contract = json.loads(CONTRACT.read_text(encoding="utf-8"))
         entry = next(

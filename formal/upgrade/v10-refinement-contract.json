@@ -99,7 +99,13 @@
         "tests/test_rollback_control_store.py::test_v10_subprocess_death_after_committed_effect_publication_is_reopenable",
         "tests/test_rollback_control_store.py::test_v10_subprocess_death_after_ambiguous_effect_publication_is_reopenable",
         "tests/test_rollback_control_store.py::test_v10_integrated_effect_death_after_committed_finish_is_reopenable",
-        "tests/test_rollback_control_store.py::test_v10_integrated_effect_death_after_ambiguous_finish_is_reopenable"
+        "tests/test_rollback_control_store.py::test_v10_integrated_effect_death_after_ambiguous_finish_is_reopenable",
+        "tests/test_authority_effect_correspondence.py::AuthorityEffectCorrespondenceTests.test_model_contract_binds_effect_actions_and_safety_invariants",
+        "tests/test_authority_effect_correspondence.py::AuthorityEffectCorrespondenceTests.test_verified_committed_receipt_maps_to_finish_write",
+        "tests/test_authority_effect_correspondence.py::AuthorityEffectCorrespondenceTests.test_missing_or_invalid_committed_receipt_is_rejected",
+        "tests/test_authority_effect_correspondence.py::AuthorityEffectCorrespondenceTests.test_ambiguous_outcome_maps_to_write_closed_marking",
+        "tests/test_authority_effect_correspondence.py::AuthorityEffectCorrespondenceTests.test_ambiguous_newer_fence_recovery_maps_to_acquire",
+        "tests/test_authority_effect_correspondence.py::AuthorityEffectCorrespondenceTests.test_invalid_recovery_combinations_fail_closed"
       ],
       "status": "bounded executable durable external-effect recovery evidence; implementation refinement pending and public dispatch disabled"
     },
