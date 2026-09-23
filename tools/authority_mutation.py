@@ -108,7 +108,12 @@ class BoundAuthorityMutation:
             any(field(name) != value for name, value in expected_identity.items())
             or field("mutates_authority") is not True
         ):
-            raise AuthorityMutationError("authority mutation result identity mismatch")
+            # The effect callback has already returned, so a malformed or
+            # drifted receipt cannot be treated as a pre-effect rejection.
+            # The authority outcome is unknown until recovery reconciles it.
+            raise AuthorityMutationAmbiguousError(
+                "authority mutation result identity mismatch; recovery is required"
+            )
         return MutationReceipt(
             backend=backend,
             target=self._admission.target,
