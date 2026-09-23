@@ -2009,6 +2009,11 @@ class SQLiteBarrierSessionStore:
             try:
                 connection.execute("BEGIN IMMEDIATE")
                 self._mark_intent_locked(connection, intent_id, "committed")
+            except Exception as error:
+                raise ControlStoreError(
+                    "barrier session outcome publication is ambiguous; recovery is required"
+                ) from error
+            try:
                 connection.commit()
             except Exception as error:
                 raise ControlStoreError(
