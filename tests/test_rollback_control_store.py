@@ -283,27 +283,76 @@ if mode == "kill-after-outcome-publication":
 if mode in {
     "kill-after-effect-committed-publication",
     "kill-after-effect-ambiguous-publication",
+    "kill-after-integrated-effect-committed-finish",
+    "kill-after-integrated-effect-ambiguous-finish",
 }:
-    effect = store.prepare_authority_effect(2, "subprocess-effect", "sqlite")
+    operation_id = (
+        "subprocess-integrated-effect"
+        if mode.startswith("kill-after-integrated")
+        else "subprocess-effect"
+    )
     outcome = (
         "committed"
-        if mode == "kill-after-effect-committed-publication"
+        if mode.endswith("committed-publication") or mode.endswith("committed-finish")
         else "ambiguous"
     )
-    original_finish_effect = store.finish_authority_effect
+    if mode.startswith("kill-after-integrated"):
+        from tools.authority_mutation import DurableBoundAuthorityMutation
+        from tools.authority_neutral_commit import CommitAdmissionBundle
 
-    def kill_after_effect_return(intent, effect_outcome):
-        result = original_finish_effect(intent, effect_outcome)
-        ready_path.write_text(
-            f"effect-{effect_outcome}-after-outcome\n", encoding="utf-8"
+        admission = CommitAdmissionBundle(
+            backend="sqlite",
+            target="new",
+            operation_id=operation_id,
+            fencing_token=identity.fencing_token,
+            state_revision=2,
+            barrier_id=identity.durable_barrier_id,
+            artifact_identity="artifact-subprocess",
+            manifest_identity="manifest-subprocess",
+            selector_identity="selector-subprocess",
+            runtime_identity="runtime-subprocess",
         )
-        with ready_path.open("rb") as ready:
-            os.fsync(ready.fileno())
-        os.kill(os.getpid(), signal.SIGKILL)
-        return result
+        original_finish_effect = store.finish_authority_effect
 
-    store.finish_authority_effect = kill_after_effect_return
-    store.finish_authority_effect(effect, outcome)
+        def kill_after_effect_return(intent, effect_outcome):
+            result = original_finish_effect(intent, effect_outcome)
+            ready_path.write_text(
+                f"integrated-effect-{effect_outcome}-after-finish\n", encoding="utf-8"
+            )
+            with ready_path.open("rb") as ready:
+                os.fsync(ready.fileno())
+            os.kill(os.getpid(), signal.SIGKILL)
+            return result
+
+        store.finish_authority_effect = kill_after_effect_return
+        capability = DurableBoundAuthorityMutation(admission, store, session_revision=2)
+
+        def integrated_effect():
+            if outcome == "ambiguous":
+                raise TimeoutError("subprocess effect outcome is unknown")
+            return {
+                "operation_id": operation_id,
+                "fencing_token": identity.fencing_token,
+                "mutates_authority": True,
+            }
+
+        capability.execute(integrated_effect)
+    else:
+        effect = store.prepare_authority_effect(2, operation_id, "sqlite")
+        original_finish_effect = store.finish_authority_effect
+
+        def kill_after_effect_return(intent, effect_outcome):
+            result = original_finish_effect(intent, effect_outcome)
+            ready_path.write_text(
+                f"effect-{effect_outcome}-after-outcome\n", encoding="utf-8"
+            )
+            with ready_path.open("rb") as ready:
+                os.fsync(ready.fileno())
+            os.kill(os.getpid(), signal.SIGKILL)
+            return result
+
+        store.finish_authority_effect = kill_after_effect_return
+        store.finish_authority_effect(effect, outcome)
 
 if mode != "kill-during-transaction":
     raise SystemExit("unknown test mode")
@@ -424,7 +473,12 @@ def _recover_ambiguous_child(control_text: str, authority_text: str, result_text
     )
 
 
-def _recover_effect_child(control_text: str, authority_text: str, result_text: str) -> None:
+def _recover_effect_child(
+    control_text: str,
+    authority_text: str,
+    result_text: str,
+    operation_id: str = "subprocess-effect",
+) -> None:
     store = SQLiteBarrierSessionStore(
         SQLiteRollbackControlStore(Path(control_text), PROJECT, Path(authority_text)),
         lambda: "authority-3",
@@ -437,7 +491,7 @@ def _recover_effect_child(control_text: str, authority_text: str, result_text: s
     with sqlite3.connect(control_text) as connection:
         outcome = connection.execute(
             "SELECT outcome FROM authority_effect_intent WHERE project_id=? AND operation_id=?",
-            (PROJECT, "subprocess-effect"),
+            (PROJECT, operation_id),
         ).fetchone()
     if outcome is None:
         raise SystemExit("missing effect outcome")
@@ -1124,6 +1178,92 @@ class RollbackControlStoreTests(unittest.TestCase):
             verifier = multiprocessing.get_context("fork").Process(
                 target=_recover_effect_child,
                 args=(str(control_path), str(authority_path), str(child_result)),
+            )
+            verifier.start()
+            verifier.join(timeout=10)
+            self.assertEqual(0, verifier.exitcode)
+            self.assertEqual(
+                "ambiguous:3:ambiguous:lock-released\n",
+                child_result.read_text(encoding="utf-8"),
+            )
+            self.assertEqual(authority_bytes, authority_path.read_bytes())
+
+    def test_v10_integrated_effect_death_after_committed_finish_is_reopenable(self) -> None:
+        """The durable mutation wrapper remains recoverable after committed finish returns."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            control_path = root / "control.sqlite"
+            authority_path = root / "authority.sqlite"
+            authority_bytes = b"authority remains untouched after integrated commit\n"
+            authority_path.write_bytes(authority_bytes)
+            ready_path = root / "ready"
+            process = self._run_session_process(
+                control_path,
+                authority_path,
+                "kill-after-integrated-effect-committed-finish",
+                ready_path,
+            )
+            self._wait_for_file(ready_path, process)
+            self.assertEqual(
+                "integrated-effect-committed-after-finish",
+                ready_path.read_text(encoding="utf-8").strip(),
+            )
+            self.assertEqual(-signal.SIGKILL, process.wait(timeout=10))
+            stdout, stderr = process.communicate()
+            self.assertEqual("", stderr, msg=stdout)
+
+            child_result = root / "child-result"
+            verifier = multiprocessing.get_context("fork").Process(
+                target=_recover_effect_child,
+                args=(
+                    str(control_path),
+                    str(authority_path),
+                    str(child_result),
+                    "subprocess-integrated-effect",
+                ),
+            )
+            verifier.start()
+            verifier.join(timeout=10)
+            self.assertEqual(0, verifier.exitcode)
+            self.assertEqual(
+                "held:2:committed:lock-released\n",
+                child_result.read_text(encoding="utf-8"),
+            )
+            self.assertEqual(authority_bytes, authority_path.read_bytes())
+
+    def test_v10_integrated_effect_death_after_ambiguous_finish_is_reopenable(self) -> None:
+        """The durable mutation wrapper preserves an ambiguous finish across process death."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            control_path = root / "control.sqlite"
+            authority_path = root / "authority.sqlite"
+            authority_bytes = b"authority remains untouched after integrated ambiguity\n"
+            authority_path.write_bytes(authority_bytes)
+            ready_path = root / "ready"
+            process = self._run_session_process(
+                control_path,
+                authority_path,
+                "kill-after-integrated-effect-ambiguous-finish",
+                ready_path,
+            )
+            self._wait_for_file(ready_path, process)
+            self.assertEqual(
+                "integrated-effect-ambiguous-after-finish",
+                ready_path.read_text(encoding="utf-8").strip(),
+            )
+            self.assertEqual(-signal.SIGKILL, process.wait(timeout=10))
+            stdout, stderr = process.communicate()
+            self.assertEqual("", stderr, msg=stdout)
+
+            child_result = root / "child-result"
+            verifier = multiprocessing.get_context("fork").Process(
+                target=_recover_effect_child,
+                args=(
+                    str(control_path),
+                    str(authority_path),
+                    str(child_result),
+                    "subprocess-integrated-effect",
+                ),
             )
             verifier.start()
             verifier.join(timeout=10)

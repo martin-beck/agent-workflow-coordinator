@@ -13,8 +13,8 @@
     }
   },
   "implementation_snapshot": {
-    "revision": "66c9290f664d530d26fb6d4e2786e53f66c7f356",
-    "runtime_revision": "66c9290f664d530d26fb6d4e2786e53f66c7f356",
+    "revision": "ac47e083cd4737a4ff06d4265c6ceb70dd5196bb",
+    "runtime_revision": "ac47e083cd4737a4ff06d4265c6ceb70dd5196bb",
     "status": "descriptor-safe control-store and SQLite DB/WAL/SHM rereads plus bounded independent-process barrier/write evidence; executable apply and rollback remain rejection-only"
   },
   "correspondence": [
@@ -94,7 +94,9 @@
         "tests/test_sqlite_mutation_barrier.py::SQLiteMutationBarrierProcessTests.test_authority_effect_journal_validates_identity_and_single_use",
         "tests/test_sqlite_mutation_barrier.py::test_sigkill_after_authority_effect_requires_recovery_and_new_fence",
         "tests/test_rollback_control_store.py::test_v10_subprocess_death_after_committed_effect_publication_is_reopenable",
-        "tests/test_rollback_control_store.py::test_v10_subprocess_death_after_ambiguous_effect_publication_is_reopenable"
+        "tests/test_rollback_control_store.py::test_v10_subprocess_death_after_ambiguous_effect_publication_is_reopenable",
+        "tests/test_rollback_control_store.py::test_v10_integrated_effect_death_after_committed_finish_is_reopenable",
+        "tests/test_rollback_control_store.py::test_v10_integrated_effect_death_after_ambiguous_finish_is_reopenable"
       ],
       "status": "bounded executable durable external-effect recovery evidence; implementation refinement pending and public dispatch disabled"
     },
@@ -296,6 +298,14 @@
     {
       "model_actions": ["FinishWrite", "MarkAmbiguous", "Acquire"],
       "implementation_test": "tests/test_rollback_control_store.py::test_v10_subprocess_death_after_ambiguous_effect_publication_is_reopenable"
+    },
+    {
+      "model_actions": ["FinishWrite", "Acquire"],
+      "implementation_test": "tests/test_rollback_control_store.py::test_v10_integrated_effect_death_after_committed_finish_is_reopenable"
+    },
+    {
+      "model_actions": ["FinishWrite", "MarkAmbiguous", "Acquire"],
+      "implementation_test": "tests/test_rollback_control_store.py::test_v10_integrated_effect_death_after_ambiguous_finish_is_reopenable"
     },
     {
       "model_actions": ["AcceptWrite", "FinishWrite", "MarkAmbiguous", "RejectWrite", "Acquire"],
