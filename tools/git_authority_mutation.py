@@ -16,12 +16,19 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
-from tools.authority_mutation import AuthorityMutationAmbiguousError
+from tools.authority_mutation import (
+    AuthorityMutationAmbiguousError,
+    AuthorityMutationRejectedError,
+)
 from tools.authority_neutral_commit import CommitAdmissionBundle
 
 
 class GitMutationError(RuntimeError):
     """A Git authority effect was rejected or its outcome is ambiguous."""
+
+
+class GitMutationRejectedError(GitMutationError, AuthorityMutationRejectedError):
+    """Git admission was rejected before invoking the commit effect."""
 
 
 class GitMutationAmbiguousError(GitMutationError, AuthorityMutationAmbiguousError):
@@ -121,22 +128,22 @@ class GitCommitCapability:
         branch = self._git("symbolic-ref", "--short", "-q", "HEAD")
         head = self._git("rev-parse", "--verify", "HEAD^{commit}")
         if branch != self._expected_branch or head != self._expected_head:
-            raise GitMutationError("Git authority identity changed before commit")
+            raise GitMutationRejectedError("Git authority identity changed before commit")
         status = self._git("status", "--porcelain=v1", "--untracked-files=all")
         lines = [line for line in status.splitlines() if line]
         if any(len(line) < 2 or line[1] != " " for line in lines):
-            raise GitMutationError("Git authority has unstaged or untracked changes")
+            raise GitMutationRejectedError("Git authority has unstaged or untracked changes")
         if not lines:
-            raise GitMutationError("Git authority has no staged change")
+            raise GitMutationRejectedError("Git authority has no staged change")
         return branch, head
 
     def _assert_admission_current(self) -> None:
         try:
             current = self._admission_reread()
         except Exception as error:
-            raise GitMutationError("Git admission reread was rejected") from error
+            raise GitMutationRejectedError("Git admission reread was rejected") from error
         if not isinstance(current, Mapping) or not self._admission.matches(current):
-            raise GitMutationError("Git admission identity changed before commit")
+            raise GitMutationRejectedError("Git admission identity changed before commit")
 
     def commit(self, message: str) -> GitCommitResult:
         if self._consumed:

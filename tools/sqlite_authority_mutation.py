@@ -10,12 +10,19 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
-from tools.authority_mutation import AuthorityMutationAmbiguousError
+from tools.authority_mutation import (
+    AuthorityMutationAmbiguousError,
+    AuthorityMutationRejectedError,
+)
 from tools.authority_neutral_commit import CommitAdmissionBundle
 
 
 class SQLiteMutationError(RuntimeError):
     """A SQLite authority effect was rejected."""
+
+
+class SQLiteMutationRejectedError(SQLiteMutationError, AuthorityMutationRejectedError):
+    """SQLite admission was rejected before opening the effect transaction."""
 
 
 class SQLiteMutationAmbiguousError(SQLiteMutationError, AuthorityMutationAmbiguousError):
@@ -125,9 +132,9 @@ class SQLiteCommitCapability:
         try:
             current = self._admission_reread()
         except Exception as error:
-            raise SQLiteMutationError("SQLite admission reread was rejected") from error
+            raise SQLiteMutationRejectedError("SQLite admission reread was rejected") from error
         if not isinstance(current, Mapping) or not self._admission.matches(current):
-            raise SQLiteMutationError("SQLite admission identity changed before commit")
+            raise SQLiteMutationRejectedError("SQLite admission identity changed before commit")
 
     def _consume(self, effect: _Commit) -> None:
         if self._consumed:
