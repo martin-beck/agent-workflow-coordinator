@@ -198,6 +198,53 @@ def _bound_snapshot_process(
 
 
 class GitAuthorityAdapterTests(unittest.TestCase):
+    def test_adapter_durable_commit_factory_journals_real_git_receipt(self) -> None:
+        admission = CommitAdmissionBundle(
+            backend="git",
+            target="new",
+            operation_id="op-1:commit",
+            fencing_token="fence",  # noqa: S106
+            state_revision=1,
+            barrier_id="barrier",
+            artifact_identity="artifact",
+            manifest_identity="manifest",
+            selector_identity="selector",
+            runtime_identity="runtime",
+        )
+        subprocess.run(["git", "-C", str(self.root), "config", "user.name", "test"], check=True)
+        subprocess.run(
+            ["git", "-C", str(self.root), "config", "user.email", "test@example"], check=True
+        )
+        (self.root / "state").write_text("durable\n")
+        subprocess.run(["git", "-C", str(self.root), "add", "state"], check=True)
+        expected_head = self.adapter._git("rev-parse", "HEAD")
+        journal: list[tuple[str, object | None]] = []
+
+        class Journal:
+            def prepare_authority_effect(self, *_args: object, **_kwargs: object) -> str:
+                journal.append(("prepared", None))
+                return "intent"
+
+            def finish_authority_effect(
+                self, _intent: object, outcome: str, receipt: object | None = None
+            ) -> None:
+                journal.append((outcome, receipt))
+
+        capability = self.adapter.bind_durable_commit_capability(
+            admission,
+            Journal(),
+            session_revision=1,
+            admission_reread=lambda: admission.__dict__,
+            expected_branch=self.adapter._git("symbolic-ref", "--short", "-q", "HEAD"),
+            expected_head=expected_head,
+        )
+        receipt = capability.execute("durable commit")
+
+        self.assertEqual("git", receipt.backend)
+        self.assertEqual("op-1:commit", receipt.operation_id)
+        self.assertEqual(["prepared", "committed"], [item[0] for item in journal])
+        self.assertEqual(receipt, journal[1][1])
+
     def test_adapter_binds_isolated_commit_capability_without_enabling_dispatch(self) -> None:
         admission = CommitAdmissionBundle(
             backend="git",
