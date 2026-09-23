@@ -49,6 +49,18 @@ class CommitAuthorizationTests(unittest.TestCase):
         with self.assertRaisesRegex(CommitAuthorizationExecutionError, "identity"):
             replace(bundle, backend="rollback")
 
+    def test_admission_rejects_unhashable_backend_and_target_values(self) -> None:
+        for field in ("backend", "target"):
+            with (
+                self.subTest(field=field),
+                self.assertRaisesRegex(CommitAuthorizationExecutionError, "identity is invalid"),
+            ):
+                CommitAdmissionBundle.from_evidence({**EVIDENCE, field: []})
+
+    def test_admission_matches_non_mapping_as_false(self) -> None:
+        bundle = CommitAdmissionBundle.from_evidence(EVIDENCE)
+        self.assertFalse(bundle.matches([]))
+
     def test_prerequisites_are_verified_without_authorizing_commit(self) -> None:
         result = execute_verified_commit_authorization(OPERATION, EVIDENCE)
         self.assertTrue(result["commit_prerequisites_verified"])

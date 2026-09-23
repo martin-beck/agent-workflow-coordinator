@@ -67,7 +67,9 @@ class CommitAdmissionBundle:
     runtime_identity: str
 
     def __post_init__(self) -> None:
-        if self.backend not in {"git", "sqlite"} or self.target != "new":
+        if not isinstance(self.backend, str) or self.backend not in {"git", "sqlite"}:
+            raise CommitAuthorizationExecutionError("commit authorization identity is invalid")
+        if not isinstance(self.target, str) or self.target != "new":
             raise CommitAuthorizationExecutionError("commit authorization identity is invalid")
         for field in ("operation_id", "fencing_token", "barrier_id"):
             value = getattr(self, field)
@@ -105,7 +107,9 @@ class CommitAdmissionBundle:
             runtime_identity=cast(str, evidence["runtime_identity"]),
         )
 
-    def matches(self, evidence: Mapping[str, object]) -> bool:
+    def matches(self, evidence: object) -> bool:
+        if not isinstance(evidence, Mapping):
+            return False
         return all(
             evidence.get(field) == getattr(self, field) for field in _MUTATION_BINDING_FIELDS
         )
@@ -114,7 +118,9 @@ class CommitAdmissionBundle:
 def _validate_evidence(evidence: Mapping[str, object]) -> None:
     if not isinstance(evidence, Mapping) or not set(evidence) >= _REQUIRED_EVIDENCE:
         raise CommitAuthorizationExecutionError("commit authorization evidence is incomplete")
-    if evidence["backend"] not in {"git", "sqlite"} or evidence["target"] != "new":
+    if not isinstance(evidence["backend"], str) or evidence["backend"] not in {"git", "sqlite"}:
+        raise CommitAuthorizationExecutionError("commit authorization identity is invalid")
+    if not isinstance(evidence["target"], str) or evidence["target"] != "new":
         raise CommitAuthorizationExecutionError("commit authorization identity is invalid")
     for field in ("operation_id", "fencing_token", "barrier_id"):
         if not isinstance(evidence[field], str) or not evidence[field]:
