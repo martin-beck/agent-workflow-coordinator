@@ -1327,6 +1327,29 @@ class SQLiteMutationBarrierProcessTests(unittest.TestCase):
                     (PROJECT,),
                 ).fetchall(),
             )
+            self.assertEqual(
+                (
+                    "op-1:commit",
+                    "sqlite",
+                    "new",
+                    "attempt-1",
+                    _identity().identity_digest,
+                    "fence-1",
+                    1,
+                    "artifact-1",
+                    "manifest-1",
+                    "selector-1",
+                    "runtime-1",
+                    "prepared",
+                ),
+                connection.execute(
+                    "SELECT operation_id,backend,target,attempt_id,identity_digest,"
+                    "fencing_token,session_revision,artifact_identity,manifest_identity,"
+                    "selector_identity,runtime_identity,outcome "
+                    "FROM authority_effect_intent WHERE project_id=?",
+                    (PROJECT,),
+                ).fetchone(),
+            )
         self.assertEqual(
             (
                 "rejected",
@@ -1348,6 +1371,29 @@ class SQLiteMutationBarrierProcessTests(unittest.TestCase):
                     "SELECT outcome,cause_code FROM authority_effect_intent WHERE project_id=?",
                     (PROJECT,),
                 ).fetchall(),
+            )
+            self.assertEqual(
+                (
+                    "op-1:commit",
+                    "sqlite",
+                    "new",
+                    "attempt-1",
+                    _identity().identity_digest,
+                    "fence-1",
+                    1,
+                    "artifact-1",
+                    "manifest-1",
+                    "selector-1",
+                    "runtime-1",
+                    "ambiguous",
+                ),
+                connection.execute(
+                    "SELECT operation_id,backend,target,attempt_id,identity_digest,"
+                    "fencing_token,session_revision,artifact_identity,manifest_identity,"
+                    "selector_identity,runtime_identity,outcome "
+                    "FROM authority_effect_intent WHERE project_id=?",
+                    (PROJECT,),
+                ).fetchone(),
             )
         with self.assertRaisesRegex(ControlStoreError, "distinct newer fence"):
             reopened.reconcile_ambiguous(ambiguous.revision, held)
@@ -1442,6 +1488,37 @@ class SQLiteMutationBarrierProcessTests(unittest.TestCase):
             self.assertEqual(
                 "newer fence committed after recovery",
                 connection.execute("SELECT body FROM tasks WHERE id='AR-0001'").fetchone()[0],
+            )
+        recovered_identity = _identity(
+            attempt="attempt-effect-recovered",
+            state_revision=2,
+            barrier="barrier-effect-recovered",
+            fence="fence-effect-recovered",
+            owner="owner-effect-recovered",
+        )
+        with sqlite3.connect(self.control.control_store_path) as connection:
+            self.assertEqual(
+                (
+                    "op-2:commit",
+                    "sqlite",
+                    "new",
+                    recovered_identity.attempt_id,
+                    recovered_identity.identity_digest,
+                    recovered_identity.fencing_token,
+                    1,
+                    "artifact-1",
+                    "manifest-1",
+                    "selector-1",
+                    "runtime-1",
+                    "committed",
+                ),
+                connection.execute(
+                    "SELECT operation_id,backend,target,attempt_id,identity_digest,"
+                    "fencing_token,session_revision,artifact_identity,manifest_identity,"
+                    "selector_identity,runtime_identity,outcome "
+                    "FROM authority_effect_intent WHERE project_id=? AND operation_id=?",
+                    (PROJECT, "op-2:commit"),
+                ).fetchone(),
             )
 
     def test_sigkill_after_git_authority_effect_requires_recovery_and_new_fence(self) -> None:
@@ -1544,6 +1621,37 @@ class SQLiteMutationBarrierProcessTests(unittest.TestCase):
                 (PROJECT,),
             ).fetchall()
         self.assertEqual([("ambiguous",), ("committed",)], effect_outcomes)
+        recovered_identity = _identity(
+            attempt="attempt-git-effect-recovered",
+            state_revision=2,
+            barrier="barrier-git-effect-recovered",
+            fence="fence-git-effect-recovered",
+            owner="owner-git-effect-recovered",
+        )
+        with sqlite3.connect(self.control.control_store_path) as connection:
+            self.assertEqual(
+                (
+                    "op-git-2:commit",
+                    "git",
+                    "new",
+                    recovered_identity.attempt_id,
+                    recovered_identity.identity_digest,
+                    recovered_identity.fencing_token,
+                    1,
+                    "artifact-1",
+                    "manifest-1",
+                    "selector-1",
+                    "runtime-1",
+                    "committed",
+                ),
+                connection.execute(
+                    "SELECT operation_id,backend,target,attempt_id,identity_digest,"
+                    "fencing_token,session_revision,artifact_identity,manifest_identity,"
+                    "selector_identity,runtime_identity,outcome "
+                    "FROM authority_effect_intent WHERE project_id=? AND operation_id=?",
+                    (PROJECT, "op-git-2:commit"),
+                ).fetchone(),
+            )
 
     def test_authority_effect_journal_validates_identity_and_single_use(self) -> None:
         with self.assertRaisesRegex(ControlStoreError, "session revision is invalid"):
