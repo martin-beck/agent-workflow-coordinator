@@ -278,6 +278,13 @@ class SQLiteCommitCapabilityTests(unittest.TestCase):
         with self.assertRaises(SQLiteMutationAmbiguousError):
             self._capability().commit(invalid)
 
+    def test_classifies_effect_oserror_as_ambiguous(self) -> None:
+        def failing_effect(_connection: sqlite3.Connection) -> None:
+            raise OSError("injected effect failure")
+
+        with self.assertRaisesRegex(SQLiteMutationAmbiguousError, "commit outcome is ambiguous"):
+            self._capability().commit(failing_effect)
+
     def test_classifies_post_commit_identity_drift_as_ambiguous(self) -> None:
         replacement = self.root / "replacement.sqlite"
 
