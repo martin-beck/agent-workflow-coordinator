@@ -13,8 +13,8 @@
     }
   },
   "implementation_snapshot": {
-    "revision": "5eda94b42b52f9df38551a6dbf90999f308d6b50",
-    "runtime_revision": "5eda94b42b52f9df38551a6dbf90999f308d6b50",
+    "revision": "477ba126bff48223a5b15dd64e0d0def67b8646f",
+    "runtime_revision": "477ba126bff48223a5b15dd64e0d0def67b8646f",
     "status": "descriptor-safe control-store and SQLite DB/WAL/SHM rereads plus bounded independent-process barrier/write evidence; executable apply and rollback remain rejection-only"
   },
   "correspondence": [
@@ -87,6 +87,7 @@
       "evidence_required": [
         "tests/test_authority_mutation.py::AuthorityMutationTests.test_durable_effect_publishes_only_after_verified_receipt",
         "tests/test_authority_mutation.py::AuthorityMutationTests.test_durable_ambiguous_effect_is_durably_marked_ambiguous",
+        "tests/test_sqlite_mutation_barrier.py::SQLiteMutationBarrierProcessTests.test_authority_effect_journal_validates_identity_and_single_use",
         "tests/test_sqlite_mutation_barrier.py::test_sigkill_after_authority_effect_requires_recovery_and_new_fence"
       ],
       "status": "bounded executable durable external-effect recovery evidence; implementation refinement pending and public dispatch disabled"
