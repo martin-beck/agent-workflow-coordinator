@@ -2,7 +2,7 @@
   "schema_version": 1,
   "kind": "implementation-refinement-obligation-matrix",
   "contract": "formal/upgrade/v10-refinement-contract.json",
-  "contract_sha256": "d06c6ee7e2e335cc8f447b36ac8cd195007b73b9e72b3fb036ea17a40a525a0b",
+  "contract_sha256": "1000857059e821752623d80a7ecf3e14499b71a94046a56740157a7af3843fdf",
   "decision": "deny",
   "decision_rule": "deny unless every obligation is proven at the exact implementation revision and independently reviewed",
   "obligations": [
@@ -12,7 +12,8 @@
       "implementation_scope": "ordered non-reentrant repository, control-store, and authority lock admission",
       "evidence": [
         "tests/test_upgrade_engine.py::UpgradeEngineTests.test_commit_validate_and_reopen_require_safety_evidence",
-        "tests/test_git_authority_adapter.py::GitAuthorityAdapterTests.test_scoped_wrapper_is_the_only_composed_mutation_boundary"
+        "tests/test_git_authority_adapter.py::GitAuthorityAdapterTests.test_scoped_wrapper_is_the_only_composed_mutation_boundary",
+        "tests/test_lock_domain_scope.py::test_bind_rejects_nonheld_durable_session_before_returning_scope"
       ],
       "status": "not-proven"
     },

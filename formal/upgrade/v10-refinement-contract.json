@@ -13,8 +13,8 @@
     }
   },
   "implementation_snapshot": {
-    "revision": "7523937563fda911f241ff1a1dc4c4ac354cc5de",
-    "runtime_revision": "7523937563fda911f241ff1a1dc4c4ac354cc5de",
+    "revision": "c086acd6798ccccb7850ba3e563f561fdc6e42e9",
+    "runtime_revision": "c086acd6798ccccb7850ba3e563f561fdc6e42e9",
     "status": "descriptor-safe control-store and SQLite DB/WAL/SHM rereads plus bounded independent-process barrier/write evidence; executable apply and rollback remain rejection-only"
   },
   "correspondence": [
@@ -158,7 +158,12 @@
     {
       "model_actions": ["AcquireCommon", "AcquireControl", "AcquireAuthority", "ReleaseAuthority", "ReleaseControl", "ReleaseCommon"],
       "implementation_obligation": "One non-reentrant operation scope acquires repository-common, control-store, and authority locks in that order and releases them in reverse order.",
-      "evidence_required": ["lock-order tests", "re-entry rejection", "descriptor identity checks"],
+      "evidence_required": [
+        "tests/test_lock_domain_scope.py::test_bind_rejects_nonheld_durable_session_before_returning_scope",
+        "lock-order tests",
+        "re-entry rejection",
+        "descriptor identity checks"
+      ],
       "status": "obligation-only"
     },
     {
