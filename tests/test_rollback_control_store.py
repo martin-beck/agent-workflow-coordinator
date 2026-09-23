@@ -314,8 +314,8 @@ if mode in {
         )
         original_finish_effect = store.finish_authority_effect
 
-        def kill_after_effect_return(intent, effect_outcome):
-            result = original_finish_effect(intent, effect_outcome)
+        def kill_after_effect_return(intent, effect_outcome, receipt=None):
+            result = original_finish_effect(intent, effect_outcome, receipt)
             ready_path.write_text(
                 f"integrated-effect-{effect_outcome}-after-finish\n", encoding="utf-8"
             )
@@ -349,8 +349,8 @@ if mode in {
         effect = store.prepare_authority_effect(2, operation_id, "sqlite")
         original_finish_effect = store.finish_authority_effect
 
-        def kill_after_effect_return(intent, effect_outcome):
-            result = original_finish_effect(intent, effect_outcome)
+        def kill_after_effect_return(intent, effect_outcome, receipt=None):
+            result = original_finish_effect(intent, effect_outcome, receipt)
             ready_path.write_text(
                 f"effect-{effect_outcome}-after-outcome\n", encoding="utf-8"
             )

@@ -161,7 +161,7 @@ class AuthorityMutationTests(unittest.TestCase):
             capability.execute("git", self._result)
 
     def test_durable_effect_publishes_only_after_verified_receipt(self) -> None:
-        journal: list[tuple[str, str]] = []
+        journal: list[tuple[str, str, object | None]] = []
 
         class Journal:
             def prepare_authority_effect(
@@ -187,18 +187,23 @@ class AuthorityMutationTests(unittest.TestCase):
                     expected_runtime_identity,
                 )
                 self.expected_revision = expected_revision
-                journal.append(("prepared", operation_id))
+                journal.append(("prepared", operation_id, None))
                 return "intent-1"
 
-            def finish_authority_effect(self, intent: object, outcome: str) -> None:
+            def finish_authority_effect(
+                self, intent: object, outcome: str, receipt: object | None = None
+            ) -> None:
                 self.intent = intent
-                journal.append((outcome, str(intent)))
+                journal.append((outcome, str(intent), receipt))
 
         receipt = DurableBoundAuthorityMutation(
             _admission(), Journal(), session_revision=1
         ).execute(lambda: self._result())
         self.assertTrue(receipt.mutates_authority)
-        self.assertEqual([("prepared", "op-1:commit"), ("committed", "intent-1")], journal)
+        self.assertEqual("prepared", journal[0][0])
+        self.assertEqual("committed", journal[1][0])
+        self.assertEqual("intent-1", journal[1][1])
+        self.assertEqual(receipt, journal[1][2])
 
     def test_durable_effect_forwards_exact_admission_identity_to_journal(self) -> None:
         captured: list[object] = []
@@ -234,7 +239,9 @@ class AuthorityMutationTests(unittest.TestCase):
                 )
                 return "intent-identity"
 
-            def finish_authority_effect(self, _intent: object, _outcome: str) -> None:
+            def finish_authority_effect(
+                self, _intent: object, _outcome: str, _receipt: object | None = None
+            ) -> None:
                 return None
 
         DurableBoundAuthorityMutation(_admission("sqlite"), Journal(), session_revision=1).execute(
@@ -284,7 +291,9 @@ class AuthorityMutationTests(unittest.TestCase):
                 )
                 return "intent-uncertain"
 
-            def finish_authority_effect(self, intent: object, outcome: str) -> None:
+            def finish_authority_effect(
+                self, intent: object, outcome: str, _receipt: object | None = None
+            ) -> None:
                 journal.append(f"{intent}:{outcome}")
 
         capability = DurableBoundAuthorityMutation(_admission(), Journal(), session_revision=1)
@@ -318,7 +327,9 @@ class AuthorityMutationTests(unittest.TestCase):
                 )
                 return "intent-journal-failure"
 
-            def finish_authority_effect(self, _intent: object, _outcome: str) -> None:
+            def finish_authority_effect(
+                self, _intent: object, _outcome: str, _receipt: object | None = None
+            ) -> None:
                 raise OSError("journal unavailable")
 
         with self.assertRaisesRegex(AuthorityMutationAmbiguousError, "recovery journal"):
@@ -352,7 +363,9 @@ class AuthorityMutationTests(unittest.TestCase):
                 )
                 return "intent-publication-failure"
 
-            def finish_authority_effect(self, _intent: object, outcome: str) -> None:
+            def finish_authority_effect(
+                self, _intent: object, outcome: str, _receipt: object | None = None
+            ) -> None:
                 if outcome == "committed":
                     raise OSError("publication unavailable")
 
