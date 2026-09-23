@@ -77,7 +77,7 @@ class AuthorityMutationTests(unittest.TestCase):
     def test_rejects_backend_or_result_identity_drift(self) -> None:
         with self.assertRaisesRegex(AuthorityMutationError, "backend identity"):
             BoundAuthorityMutation(_admission()).execute("sqlite", self._result)
-        with self.assertRaisesRegex(AuthorityMutationError, "result identity"):
+        with self.assertRaisesRegex(AuthorityMutationAmbiguousError, "result identity"):
             BoundAuthorityMutation(_admission()).execute(
                 "git", lambda: {**self._result(), "fencing_token": "foreign"}
             )
@@ -106,7 +106,10 @@ class AuthorityMutationTests(unittest.TestCase):
 
             with (
                 self.subTest(field=field),
-                self.assertRaisesRegex(AuthorityMutationError, "result identity mismatch"),
+                self.assertRaisesRegex(
+                    AuthorityMutationAmbiguousError,
+                    "result identity mismatch; recovery is required",
+                ),
             ):
                 BoundAuthorityMutation(_admission()).execute("git", drifted_result)
 
@@ -240,7 +243,9 @@ class AuthorityMutationTests(unittest.TestCase):
             ) -> None:
                 journal.append((outcome, receipt))
 
-        with self.assertRaisesRegex(AuthorityMutationError, "result identity mismatch"):
+        with self.assertRaisesRegex(
+            AuthorityMutationAmbiguousError, "result identity mismatch; recovery is required"
+        ):
             DurableBoundAuthorityMutation(_admission(), Journal(), session_revision=1).execute(
                 lambda: {**self._result(), "fencing_token": "foreign"}
             )
