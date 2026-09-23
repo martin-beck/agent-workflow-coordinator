@@ -61,6 +61,7 @@ class SQLiteCommitCapabilityTests(unittest.TestCase):
         return SQLiteCommitCapability(
             self.db,
             admission=self._admission,
+            admission_reread=lambda: self._admission.__dict__,
             expected_db_identity=identity(self.db),  # type: ignore[arg-type]
             expected_wal_identity=identity(self.db.with_name("authority.sqlite-wal")),
             expected_shm_identity=identity(self.db.with_name("authority.sqlite-shm")),
@@ -172,6 +173,7 @@ class SQLiteCommitCapabilityTests(unittest.TestCase):
             SQLiteCommitCapability(
                 self.db,
                 admission=self._admission,
+                admission_reread=lambda: self._admission.__dict__,
                 expected_db_identity=self._capability()._db_identity,
                 expected_wal_identity=self._capability()._wal_identity,
                 expected_shm_identity=self._capability()._shm_identity,
@@ -204,12 +206,37 @@ class SQLiteCommitCapabilityTests(unittest.TestCase):
             capability = SQLiteCommitCapability(
                 self.db,
                 admission=self._admission,
+                admission_reread=lambda: self._admission.__dict__,
                 expected_db_identity=self._capability()._db_identity,
                 expected_wal_identity=self._capability()._wal_identity,
                 expected_shm_identity=self._capability()._shm_identity,
                 connector=connector,
             )
             capability.commit(invalid)
+
+    def test_rejects_stale_admission_reread_before_effect(self) -> None:
+        stale = dict(self._admission.__dict__)
+        stale["state_revision"] = 2
+        capability = SQLiteCommitCapability(
+            self.db,
+            admission=self._admission,
+            admission_reread=lambda: stale,
+            expected_db_identity=self._capability()._db_identity,
+            expected_wal_identity=self._capability()._wal_identity,
+            expected_shm_identity=self._capability()._shm_identity,
+        )
+        called = False
+
+        def update(connection: sqlite3.Connection) -> None:
+            nonlocal called
+            called = True
+            connection.execute("UPDATE state SET value='bad'")
+
+        with self.assertRaisesRegex(SQLiteMutationError, "admission identity changed"):
+            capability.commit(update)
+        self.assertFalse(called)
+        with sqlite3.connect(self.db) as connection:
+            self.assertEqual(("old",), connection.execute("SELECT value FROM state").fetchone())
 
 
 if __name__ == "__main__":

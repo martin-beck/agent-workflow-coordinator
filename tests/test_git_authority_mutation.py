@@ -59,9 +59,11 @@ class GitCommitCapabilityTests(unittest.TestCase):
         )
 
     def _capability(self) -> GitCommitCapability:
+        admission = self._admission()
         return GitCommitCapability(
             self.root,
-            admission=self._admission(),
+            admission=admission,
+            admission_reread=lambda: admission.__dict__,
             expected_branch="main",
             expected_head=_git(self.root, "rev-parse", "HEAD"),
         )
@@ -101,6 +103,7 @@ class GitCommitCapabilityTests(unittest.TestCase):
         result = GitCommitCapability(
             self.root,
             admission=reopened_admission,
+            admission_reread=lambda: reopened_admission.__dict__,
             expected_branch="main",
             expected_head=_git(self.root, "rev-parse", "HEAD"),
         ).commit("op-2 authority commit")
@@ -120,6 +123,7 @@ class GitCommitCapabilityTests(unittest.TestCase):
         stale = GitCommitCapability(
             self.root,
             admission=self._admission(),
+            admission_reread=lambda: self._admission().__dict__,
             expected_branch="main",
             expected_head="0" * 40,
         )
@@ -142,6 +146,7 @@ class GitCommitCapabilityTests(unittest.TestCase):
             GitCommitCapability(
                 self.root,
                 admission=self._admission(),
+                admission_reread=lambda: self._admission().__dict__,
                 expected_branch="main",
                 expected_head=self._capability()._expected_head,
                 runner=timeout_runner,
@@ -167,10 +172,30 @@ class GitCommitCapabilityTests(unittest.TestCase):
             GitCommitCapability(
                 self.root,
                 admission=self._admission(),
+                admission_reread=lambda: self._admission().__dict__,
                 expected_branch="main",
                 expected_head=self._capability()._expected_head,
                 runner=racing_runner,
             ).commit("op-1 authority commit")
+
+    def test_rejects_stale_admission_reread_before_effect(self) -> None:
+        (self.root / "state").write_text("new\n", encoding="utf-8")
+        _git(self.root, "add", "state")
+        admission = self._admission()
+        stale = dict(admission.__dict__)
+        stale["fencing_token"] = "foreign-fence"  # noqa: S105
+        before = _git(self.root, "rev-parse", "HEAD")
+        capability = GitCommitCapability(
+            self.root,
+            admission=admission,
+            admission_reread=lambda: stale,
+            expected_branch="main",
+            expected_head=_git(self.root, "rev-parse", "HEAD"),
+        )
+        with self.assertRaisesRegex(GitMutationError, "admission identity changed"):
+            capability.commit("op-1 authority commit")
+        self.assertEqual(before, _git(self.root, "rev-parse", "HEAD"))
+        self.assertEqual("M  state", _git(self.root, "status", "--porcelain=v1"))
 
 
 if __name__ == "__main__":
