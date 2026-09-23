@@ -238,6 +238,51 @@ class SQLiteCommitCapabilityTests(unittest.TestCase):
         with sqlite3.connect(self.db) as connection:
             self.assertEqual(("old",), connection.execute("SELECT value FROM state").fetchone())
 
+    def test_rejects_every_admission_identity_drift_before_effect(self) -> None:
+        admission = self._admission
+        changes: dict[str, object] = {
+            "backend": "git",
+            "target": "rollback",
+            "operation_id": "foreign-operation",
+            "fencing_token": "foreign-fence",
+            "state_revision": 2,
+            "barrier_id": "foreign-barrier",
+            "artifact_identity": "foreign-artifact",
+            "manifest_identity": "foreign-manifest",
+            "selector_identity": "foreign-selector",
+            "runtime_identity": "foreign-runtime",
+        }
+
+        for field, value in changes.items():
+            stale = dict(admission.__dict__)
+            stale[field] = value
+            called = False
+
+            def update(connection: sqlite3.Connection) -> None:
+                nonlocal called
+                called = True
+                connection.execute("UPDATE state SET value='bad'")
+
+            def read_stale(value: dict[str, object] = stale) -> dict[str, object]:
+                return value
+
+            capability = SQLiteCommitCapability(
+                self.db,
+                admission=admission,
+                admission_reread=read_stale,
+                expected_db_identity=self._capability()._db_identity,
+                expected_wal_identity=self._capability()._wal_identity,
+                expected_shm_identity=self._capability()._shm_identity,
+            )
+            with (
+                self.subTest(field=field),
+                self.assertRaisesRegex(SQLiteMutationError, "admission identity changed"),
+            ):
+                capability.commit(update)
+            self.assertFalse(called)
+            with sqlite3.connect(self.db) as connection:
+                self.assertEqual(("old",), connection.execute("SELECT value FROM state").fetchone())
+
 
 if __name__ == "__main__":
     unittest.main()
