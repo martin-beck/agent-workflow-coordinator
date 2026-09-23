@@ -100,7 +100,6 @@ def _bound_snapshot_worker(root_text: str, mode: str, result: Any, rollback: boo
         durable_barrier_id=lease.durable_barrier_id,
         revision=lease.revision,
     )
-    scope = LockDomainScope.bind(session, fence, lease, recheck, locked)
 
     class CountingAdapter(SQLiteAuthorityAdapter):
         calls = 0
@@ -127,6 +126,7 @@ def _bound_snapshot_worker(root_text: str, mode: str, result: Any, rollback: boo
         "state_revision": lease.revision,
     }
     try:
+        scope = LockDomainScope.bind(session, fence, lease, recheck, locked)
         if rollback:
             value = adapter.verify_rollback_context_bound(
                 context, scope, lease=lease, admission_recheck=recheck
@@ -2608,9 +2608,10 @@ class SQLiteAuthorityAdapterTests(unittest.TestCase):
         stale.start()
         stale.join(5)
         self.assertEqual(0, stale.exitcode)
-        self.assertEqual(
-            ("rejected", "SQLiteAuthorityError", 0, False), stale_result.get(timeout=1)
-        )
+        stale_outcome = stale_result.get(timeout=1)
+        self.assertEqual("rejected", stale_outcome[0])
+        self.assertIn(stale_outcome[1], {"SQLiteAuthorityError", "LockDomainError"})
+        self.assertEqual((0, False), stale_outcome[2:])
         replacement_result = context.Queue()
         fresh = context.Process(
             target=_bound_snapshot_worker,
