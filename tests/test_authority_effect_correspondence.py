@@ -33,6 +33,30 @@ class AuthorityEffectCorrespondenceTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "incomplete"):
                 validate_authority_effect_model_contract(temporary_root)
 
+    def test_model_contract_requires_admission_action_signatures(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            temporary_root = Path(directory)
+            model = temporary_root / "formal/upgrade/HandoffctlUpgradeBarrier.tla"
+            model.parent.mkdir(parents=True)
+            model.write_text(
+                "\n".join(
+                    (
+                        "AcceptWrite(p) ==",
+                        "RejectWrite(p) ==",
+                        "FinishWrite(p) ==",
+                        "MarkAmbiguous(p) ==",
+                        "RejectStaleCAS(p, expected) ==",
+                        "Acquire(p) ==",
+                        "RecheckHeld(p) ==",
+                        "WriteFence ==",
+                        "AmbiguousIsWriteClosed ==",
+                    )
+                ),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "ObserveAuthority"):
+                validate_authority_effect_model_contract(temporary_root)
+
     def test_verified_committed_receipt_maps_to_finish_write(self) -> None:
         self.assertEqual(
             ("AcceptWrite", "FinishWrite"),
