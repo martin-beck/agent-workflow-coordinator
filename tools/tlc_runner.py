@@ -252,7 +252,7 @@ def parser() -> argparse.ArgumentParser:
     )
     result.add_argument(
         "--admission-lock",
-        default=DEFAULT_ADMISSION_LOCK,
+        default=os.environ.get("TLC_ADMISSION_LOCK", DEFAULT_ADMISSION_LOCK),
         help="explicit admission lock; publication workflows retain the canonical default",
     )
     result.add_argument(
