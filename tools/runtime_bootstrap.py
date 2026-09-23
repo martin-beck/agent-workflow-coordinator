@@ -40,6 +40,14 @@ _MANIFEST_ORDER = (
     "trust_policy_sha256",
     "vendor_manifest_sha256",
 )
+_READ_ONLY_RUNTIME_COMMANDS = {
+    (),
+    ("doctor",),
+    ("doctor", "--live"),
+    ("snapshot",),
+    ("render-status",),
+    ("render-status", "--check"),
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -196,9 +204,11 @@ def prepare_runtime_dispatch(
     """Bind caller arguments to the one authenticated coordinator entrypoint.
 
     ``arguments`` are passed after the fixed ``tools/handoffctl.py`` script;
-    callers cannot replace the interpreter, script, release, or runtime path.
-    The returned command retains an entrypoint descriptor and exposes it via
-    ``pass_fds`` for an immediate subprocess invocation.
+    only the explicitly read-only coordinator commands are admitted. Callers
+    cannot replace the interpreter, script, release, runtime path, or invoke
+    a mutating coordinator command. The returned command retains an entrypoint
+    descriptor and exposes it via ``pass_fds`` for an immediate subprocess
+    invocation.
     """
     if not isinstance(admission, DispatchAdmission):
         raise AuthorityError("dispatch admission is not retained")
@@ -209,6 +219,8 @@ def prepare_runtime_dispatch(
         if not isinstance(argument, str) or "\x00" in argument:
             raise AuthorityError("dispatch arguments are invalid")
         normalized.append(argument)
+    if tuple(normalized) not in _READ_ONLY_RUNTIME_COMMANDS:
+        raise AuthorityError("dispatch command is not read-only")
     admission.revalidate()
     entrypoint = _open_fixed_entrypoint(admission.runtime)
     try:
@@ -227,11 +239,11 @@ def run_admitted_runtime(
     *,
     timeout: float | None = None,
 ) -> subprocess.CompletedProcess[str]:
-    """Execute the fixed admitted launcher without accepting a path override.
+    """Execute one fixed, explicitly read-only admitted launcher command.
 
-    This is deliberately a read-only invocation seam: it records no upgrade
-    state and cannot enable mutation.  The descriptor-backed command is kept
-    alive through ``subprocess.run`` and is closed on every outcome.
+    This invocation records no upgrade state and rejects mutating coordinator
+    commands before subprocess creation. The descriptor-backed command is
+    kept alive through ``subprocess.run`` and is closed on every outcome.
     """
     command = prepare_runtime_dispatch(admission, arguments)
     try:
