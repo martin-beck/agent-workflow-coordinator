@@ -98,9 +98,12 @@
       "tests/test_authority_mutation.py": "2612fa1a47ada00e3e6515182d0916c43179e32d8551f5667d02150fa444da58",
       "tests/test_authority_neutral_commit.py": "e6d55411565c660d06b85db6f31cff8b0665e0b3e8b00b4f56c9b7072ac1004d",
       "tests/test_git_authority_mutation.py": "a0e3ab7edccffaea3797e424c1f6e5c9c618ff0503642653a3a8738236e4e250",
+      "tests/test_git_authority_adapter.py": "6428df11723ca90af17e5f3a6bb7cdae98125196b9eb3200ce4aee706c1ab494",
+      "tests/test_lock_domain_scope.py": "eb488df243acb733a0f16f567925e6ed603246102254c1e56048c48b04f61936",
       "tests/test_mutation_fence.py": "e2bcea7b96bddd2509b79ff9c5eefd57001d1502949aba30cbbd50a9169e1cbb",
       "tests/test_rollback_control_store.py": "213b2ed4ee7ecff4c3d7c471bf02669c5dd05ae7e2d866e02af92e89369ae394",
       "tests/test_sqlite_authority_mutation.py": "7f78f87ab7a80fc4767a467e7501dd2474cc77e2a1a168ae3720ec9ce1ca90bd",
+      "tests/test_sqlite_authority_adapter.py": "73587e46bb6ac0079fe90f45101c74b2e3cb48255555174125da54a3669b9b0f",
       "tests/test_sqlite_mutation_barrier.py": "a1024855adab3f1254fec1b832e293f0f010cbfce70c71edab39c098b98b5092",
       "tests/test_sqlite_storage.py": "659011189506ecb7f0ad35d9dfb6993127d89c0be277cb2a8fc89ce352009f6c",
       "tests/test_upgrade_commands.py": "793993bd451d02e5c80788f479e56c568b82212eec7b9face50420c6b788247f",
@@ -111,6 +114,7 @@
       "tools/generate_upgrade_contract.py": "aa9a2ed072df3937b7799b33559d03b1744d3b9049891180d1a4852531df3ada",
       "tools/git_authority_mutation.py": "6c2bc37a6697939809152102b5d658bec98af5ce10ba43e7e91cc84393195cd8",
       "tools/handoffctl.py": "64431290224b91cd285bd500355ad0f92f14a7b172693b8071b2b88a4727883e",
+      "tools/lock_domain_scope.py": "fe3b79f73a3faa7c3dd86ab1ed1994daaa7f3c64403066f435d77a26bf947ce0",
       "tools/mutation_fence.py": "08ff8993ddc63d7622b2bdc22866f62340dbed6d7d648c845df74b06b28e5a21",
       "tools/rollback_control_store.py": "c2cb8147a3f0390f3c56045b94a7c0c15404f4c879928d2389153dafeef72773",
       "tools/sqlite_authority_mutation.py": "0a17eb44bc41062fcc7cd5f48aea21f9e51a79d5bd35e523455876fe4c3ef4af",
@@ -120,8 +124,8 @@
       "tools/upgrade_identity.py": "754ce7b8ecc3f5521d30597fc259df9a4241e9cd2178dd4d72aba89df5d3133d",
       "tools/validate_upgrade_contract.py": "6c264c4775e4ee1a778181d7e127d9f256c56abd4bfebb02c624e13c289dbc4a"
     },
-    "revision": "7523937563fda911f241ff1a1dc4c4ac354cc5de",
-    "runtime_revision": "7523937563fda911f241ff1a1dc4c4ac354cc5de"
+    "revision": "1bad078641cc47a67db915b9056b75ab6717e060",
+    "runtime_revision": "1bad078641cc47a67db915b9056b75ab6717e060"
   },
   "model": "formal/upgrade/UpgradeRecovery.tla",
   "model_sha256": "616d53832ac5ec18bf3242d47b2412195eb64adb2b1035235514e06cc3edf2ba",

@@ -140,7 +140,6 @@ def _bound_snapshot_process(
         durable_barrier_id=durable_barrier_id,
         revision=state_revision,
     )
-    scope = LockDomainScope.bind(session, fence, lease, recheck, locked)
     adapter = GitAuthorityAdapter(Path(repository_text))
     adapter_any: Any = adapter
 
@@ -170,6 +169,7 @@ def _bound_snapshot_process(
         "state_revision": state_revision,
     }
     try:
+        scope = LockDomainScope.bind(session, fence, lease, recheck, locked)
         if rollback:
             value = adapter.verify_rollback_context_bound(
                 active_context,
