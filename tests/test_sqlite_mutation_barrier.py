@@ -2,17 +2,21 @@
 # SPDX-License-Identifier: MIT
 """Independent-process tests for normal SQLite writers at the upgrade barrier."""
 
+# The executable and arguments are fixed test fixtures.
+# ruff: noqa: S603, S607
+
 from __future__ import annotations
 
 import multiprocessing
 import os
 import signal
 import sqlite3
+import subprocess
 import tempfile
 import unittest
 from multiprocessing.process import BaseProcess
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, NoReturn, cast
 from unittest.mock import patch
 
 import tools.handoffctl as handoffctl
@@ -20,6 +24,7 @@ import tools.mutation_fence as mutation_fence
 from tools.admission_lease import AdmissionLease, validate_recheck
 from tools.authority_mutation import DurableBoundAuthorityMutation
 from tools.authority_neutral_commit import CommitAdmissionBundle
+from tools.git_authority_mutation import GitCommitCapability
 from tools.handoffctl import locked
 from tools.lock_domain_scope import LockDomainScope
 from tools.mutation_fence import (
@@ -88,6 +93,13 @@ def _fence(root: Path, control: SQLiteRollbackControlStore) -> MutationFence:
         root / "control-binding.json",
         control.control_lock_path,
     )
+
+
+def _git(root: Path, *args: str) -> str:
+    result = subprocess.run(
+        ["git", "-C", str(root), *args], check=True, capture_output=True, text=True
+    )
+    return result.stdout.rstrip("\n")
 
 
 def _backend(root: Path, fence: MutationFence) -> SQLiteBackend:
@@ -355,6 +367,43 @@ def _authority_effect_waiting_for_sigkill(root_text: str, ready: Any) -> None:
     capability.execute(lambda: sqlite_capability.commit(effect))
 
 
+def _git_authority_effect_waiting_for_sigkill(root_text: str, ready: Any) -> None:
+    """Commit a real Git effect, then die before durable outcome publication."""
+    root = Path(root_text)
+    control = _control(root)
+    session = SQLiteBarrierSessionStore(control, lambda: "authority-1")
+    session.create(_identity())
+    admission = CommitAdmissionBundle(
+        backend="git",
+        target="new",
+        operation_id="op-git-1:commit",
+        fencing_token="fence-1",  # noqa: S106
+        state_revision=1,
+        barrier_id="barrier-1",
+        artifact_identity="artifact-1",
+        manifest_identity="manifest-1",
+        selector_identity="selector-1",
+        runtime_identity="runtime-1",
+    )
+    git_root = root / "git-authority"
+    (git_root / "state").write_text("effect committed before worker death\n", encoding="utf-8")
+    _git(git_root, "add", "state")
+    git_capability = GitCommitCapability(
+        git_root,
+        admission=admission,
+        expected_branch="main",
+        expected_head=_git(git_root, "rev-parse", "HEAD"),
+    )
+    capability = DurableBoundAuthorityMutation(admission, session, session_revision=1)
+
+    def effect() -> NoReturn:
+        git_capability.commit("op-git-1 authority commit")
+        ready.set()
+        os._exit(17)
+
+    capability.execute(effect)
+
+
 def _session_recovery_waiting_for_sigkill(root_text: str, ready: Any) -> None:
     """Pause after durable ambiguity but before intent outcome publication."""
     root = Path(root_text)
@@ -487,6 +536,14 @@ class SQLiteMutationBarrierProcessTests(unittest.TestCase):
         self.directory = tempfile.TemporaryDirectory()
         self.root = Path(self.directory.name)
         self.root.chmod(0o700)
+        self.git_authority = self.root / "git-authority"
+        self.git_authority.mkdir()
+        _git(self.git_authority, "init", "-b", "main")
+        _git(self.git_authority, "config", "user.name", "Test Runner")
+        _git(self.git_authority, "config", "user.email", "test@example.invalid")
+        (self.git_authority / "state").write_text("old\n", encoding="utf-8")
+        _git(self.git_authority, "add", "state")
+        _git(self.git_authority, "commit", "-m", "initial")
         self.authority = self.root / "authority.sqlite"
         self.tasks = self.root / "tasks"
         self.tasks.mkdir()
@@ -1383,6 +1440,100 @@ class SQLiteMutationBarrierProcessTests(unittest.TestCase):
                 "newer fence committed after recovery",
                 connection.execute("SELECT body FROM tasks WHERE id='AR-0001'").fetchone()[0],
             )
+
+    def test_sigkill_after_git_authority_effect_requires_recovery_and_new_fence(self) -> None:
+        context = multiprocessing.get_context("fork")
+        ready = context.Event()
+        worker = context.Process(
+            target=_git_authority_effect_waiting_for_sigkill,
+            args=(self.directory.name, ready),
+        )
+        worker.start()
+        self.assertTrue(ready.wait(5))
+        worker.join(5)
+        self.assertEqual(17, worker.exitcode)
+        self.assertEqual(
+            "effect committed before worker death\n",
+            (self.git_authority / "state").read_text(encoding="utf-8"),
+        )
+
+        reopened = SQLiteBarrierSessionStore(_control(self.root), lambda: "authority-1")
+        held = reopened.snapshot()
+        assert held is not None
+        self.assertEqual(("held", 1), (held.status, held.revision))
+        with sqlite3.connect(self.control.control_store_path) as connection:
+            self.assertEqual(
+                [("prepared",)],
+                connection.execute(
+                    "SELECT outcome FROM authority_effect_intent WHERE project_id=?",
+                    (PROJECT,),
+                ).fetchall(),
+            )
+
+        ambiguous = reopened.recover_unknown()
+        assert ambiguous is not None
+        self.assertEqual(("ambiguous", 2), (ambiguous.status, ambiguous.revision))
+        with self.assertRaisesRegex(ControlStoreError, "distinct newer fence"):
+            reopened.reconcile_ambiguous(ambiguous.revision, held)
+
+        replacement = BarrierSessionState(
+            _identity(
+                attempt="attempt-git-effect-recovered",
+                state_revision=2,
+                barrier="barrier-git-effect-recovered",
+                fence="fence-git-effect-recovered",
+                owner="owner-git-effect-recovered",
+            ),
+            "held",
+            1,
+        )
+        self.assertEqual(replacement, reopened.reconcile_ambiguous(2, replacement))
+        stale_admission = CommitAdmissionBundle(
+            backend="git",
+            target="new",
+            operation_id="op-git-stale:commit",
+            fencing_token="fence-1",  # noqa: S106
+            state_revision=1,
+            barrier_id="barrier-1",
+            artifact_identity="artifact-1",
+            manifest_identity="manifest-1",
+            selector_identity="selector-1",
+            runtime_identity="runtime-1",
+        )
+        with self.assertRaisesRegex(ControlStoreError, "fencing token conflict"):
+            DurableBoundAuthorityMutation(stale_admission, reopened, session_revision=1).execute(
+                lambda: self.fail("stale Git admission reached the effect")
+            )
+
+        (self.git_authority / "state").write_text(
+            "newer fence committed after recovery\n", encoding="utf-8"
+        )
+        _git(self.git_authority, "add", "state")
+        new_admission = CommitAdmissionBundle(
+            backend="git",
+            target="new",
+            operation_id="op-git-2:commit",
+            fencing_token="fence-git-effect-recovered",  # noqa: S106
+            state_revision=1,
+            barrier_id="barrier-git-effect-recovered",
+            artifact_identity="artifact-1",
+            manifest_identity="manifest-1",
+            selector_identity="selector-1",
+            runtime_identity="runtime-1",
+        )
+        git_capability = GitCommitCapability(
+            self.git_authority,
+            admission=new_admission,
+            expected_branch="main",
+            expected_head=_git(self.git_authority, "rev-parse", "HEAD"),
+        )
+        DurableBoundAuthorityMutation(new_admission, reopened, session_revision=1).execute(
+            lambda: git_capability.commit("op-git-2 authority commit")
+        )
+        self.assertEqual(
+            "newer fence committed after recovery\n",
+            (self.git_authority / "state").read_text(encoding="utf-8"),
+        )
         with sqlite3.connect(self.control.control_store_path) as connection:
             effect_outcomes = connection.execute(
                 "SELECT outcome FROM authority_effect_intent WHERE project_id=?",

@@ -13,8 +13,8 @@
     }
   },
   "implementation_snapshot": {
-    "revision": "de382bbeae9133a909721a5c5863c07256baec83",
-    "runtime_revision": "de382bbeae9133a909721a5c5863c07256baec83",
+    "revision": "868fb2826c564f1ddfc7ec3dee6bf2134a50e22b",
+    "runtime_revision": "868fb2826c564f1ddfc7ec3dee6bf2134a50e22b",
     "status": "descriptor-safe control-store and SQLite DB/WAL/SHM rereads plus bounded independent-process barrier/write evidence; executable apply and rollback remain rejection-only"
   },
   "correspondence": [
@@ -244,6 +244,10 @@
     {
       "model_actions": ["AcceptWrite", "FinishWrite", "MarkAmbiguous", "RejectWrite", "Acquire"],
       "implementation_test": "tests/test_sqlite_mutation_barrier.py::test_sigkill_after_authority_effect_requires_recovery_and_new_fence"
+    },
+    {
+      "model_actions": ["AcceptWrite", "FinishWrite", "MarkAmbiguous", "RejectWrite", "Acquire"],
+      "implementation_test": "tests/test_sqlite_mutation_barrier.py::test_sigkill_after_git_authority_effect_requires_recovery_and_new_fence"
     }
   ],
   "refinement_boundary": {
