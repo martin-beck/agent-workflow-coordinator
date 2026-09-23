@@ -100,7 +100,7 @@
       "tests/test_mutation_fence.py": "e2bcea7b96bddd2509b79ff9c5eefd57001d1502949aba30cbbd50a9169e1cbb",
       "tests/test_rollback_control_store.py": "213b2ed4ee7ecff4c3d7c471bf02669c5dd05ae7e2d866e02af92e89369ae394",
       "tests/test_sqlite_authority_mutation.py": "fb44b9878b3cc02cf6ee75123c5c925dbb9a245154d1751b6245cb01efda1bf8",
-      "tests/test_sqlite_mutation_barrier.py": "19d04d938cd919c2b33f1f200ff453aadae72f71eb712add0db8a3ce86fa04d3",
+      "tests/test_sqlite_mutation_barrier.py": "a70fb52282a87dcb8394ff4fbbbac189e115f2279bb911474ddb89141280d551",
       "tests/test_sqlite_storage.py": "659011189506ecb7f0ad35d9dfb6993127d89c0be277cb2a8fc89ce352009f6c",
       "tests/test_upgrade_commands.py": "793993bd451d02e5c80788f479e56c568b82212eec7b9face50420c6b788247f",
       "tests/test_upgrade_contract.py": "04434245a70c249b48d206b0d14427b9ef0d182a8085bd35cc3d6621a8c68cee",
@@ -118,8 +118,8 @@
       "tools/upgrade_identity.py": "754ce7b8ecc3f5521d30597fc259df9a4241e9cd2178dd4d72aba89df5d3133d",
       "tools/validate_upgrade_contract.py": "6c264c4775e4ee1a778181d7e127d9f256c56abd4bfebb02c624e13c289dbc4a"
     },
-    "revision": "9f741663241856e32e2e80a91a81ba5ba2a104be",
-    "runtime_revision": "9f741663241856e32e2e80a91a81ba5ba2a104be"
+    "revision": "5eda94b42b52f9df38551a6dbf90999f308d6b50",
+    "runtime_revision": "5eda94b42b52f9df38551a6dbf90999f308d6b50"
   },
   "model": "formal/upgrade/UpgradeRecovery.tla",
   "model_sha256": "616d53832ac5ec18bf3242d47b2412195eb64adb2b1035235514e06cc3edf2ba",
