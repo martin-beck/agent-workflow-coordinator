@@ -136,6 +136,7 @@
         "tests/test_sqlite_authority_mutation.py::SQLiteCommitCapabilityTests.test_rejects_nonregular_authority_identity_before_effect",
         "tests/test_sqlite_authority_mutation.py::SQLiteCommitCapabilityTests.test_rejects_symlinked_authority_path_before_effect",
         "tests/test_sqlite_authority_mutation.py::SQLiteCommitCapabilityTests.test_rejects_authority_parent_replacement_before_effect",
+        "tests/test_sqlite_authority_mutation.py::SQLiteCommitCapabilityTests.test_rejects_authority_ancestor_replacement_before_effect",
         "tests/test_sqlite_authority_mutation.py::SQLiteCommitCapabilityTests.test_rejects_connector_oserror_before_effect",
         "tests/test_sqlite_authority_mutation.py::SQLiteCommitCapabilityTests.test_rejects_sqlite_setup_error_before_effect",
         "tests/test_sqlite_authority_mutation.py::SQLiteCommitCapabilityTests.test_classifies_oserror_connection_close_failure_as_ambiguous",

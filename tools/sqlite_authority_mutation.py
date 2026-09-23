@@ -114,6 +114,10 @@ class SQLiteCommitCapability:
             current /= part
             try:
                 status = current.lstat()
+            except FileNotFoundError as error:
+                raise SQLiteMutationRejectedError(
+                    "SQLite authority ancestor is unavailable"
+                ) from error
             except OSError as error:
                 raise SQLiteMutationRejectedError(
                     "SQLite sidecar identity is unavailable"
@@ -136,7 +140,15 @@ class SQLiteCommitCapability:
         return status.st_dev, status.st_ino
 
     def _assert_filesystem_identity(self) -> None:
-        if self._ancestor_identities_for(self._authority) != self._ancestor_identities:
+        try:
+            ancestors = self._ancestor_identities_for(self._authority)
+        except SQLiteMutationRejectedError as error:
+            if "ancestor is unavailable" in str(error):
+                raise SQLiteMutationRejectedError(
+                    "SQLite authority ancestor identity changed"
+                ) from error
+            raise
+        if ancestors != self._ancestor_identities:
             raise SQLiteMutationRejectedError("SQLite authority ancestor identity changed")
         if self._identity(self._authority) != self._db_identity:
             raise SQLiteMutationRejectedError("SQLite database identity changed")
