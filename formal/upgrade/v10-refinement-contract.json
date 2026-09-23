@@ -13,8 +13,8 @@
     }
   },
   "implementation_snapshot": {
-    "revision": "21e33644e97f2853ed01f0ab543bc4318a5a1efd",
-    "runtime_revision": "21e33644e97f2853ed01f0ab543bc4318a5a1efd",
+    "revision": "c988ff440af96be889221135b548b443b86fd65b",
+    "runtime_revision": "c988ff440af96be889221135b548b443b86fd65b",
     "status": "descriptor-safe control-store and SQLite DB/WAL/SHM rereads plus bounded independent-process barrier/write evidence; executable apply and rollback remain rejection-only"
   },
   "correspondence": [
@@ -86,7 +86,8 @@
         "tests/test_sqlite_authority_mutation.py::SQLiteCommitCapabilityTests.test_commits_effect_and_verifies_integrity",
         "tests/test_sqlite_authority_mutation.py::SQLiteCommitCapabilityTests.test_rejects_sidecar_identity_drift_before_effect",
         "tests/test_sqlite_authority_mutation.py::SQLiteCommitCapabilityTests.test_classifies_post_commit_identity_drift_as_ambiguous",
-        "tests/test_sqlite_authority_mutation.py::SQLiteCommitCapabilityTests.test_classifies_sqlite_errors_as_ambiguous"
+        "tests/test_sqlite_authority_mutation.py::SQLiteCommitCapabilityTests.test_classifies_sqlite_errors_as_ambiguous",
+        "tests/test_sqlite_authority_mutation.py::SQLiteCommitCapabilityTests.test_classifies_connection_close_failure_as_ambiguous"
       ],
       "status": "bounded executable SQLite effect evidence; implementation refinement pending and public dispatch disabled"
     },
