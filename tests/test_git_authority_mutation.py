@@ -198,6 +198,29 @@ class GitCommitCapabilityTests(unittest.TestCase):
             ).commit("op-1 authority commit")
         self.assertEqual("M  state", _git(self.root, "status", "--porcelain=v1"))
 
+    def test_rejects_symlinked_repository_path(self) -> None:
+        alias = self.root / "repository-alias"
+        alias.symlink_to(self.root, target_is_directory=True)
+        with self.assertRaisesRegex(GitMutationError, "not a regular directory"):
+            GitCommitCapability(
+                alias,
+                admission=self._admission(),
+                admission_reread=lambda: self._admission().__dict__,
+                expected_branch="main",
+                expected_head=_git(self.root, "rev-parse", "HEAD"),
+            )
+
+    def test_rejects_repository_replacement_before_effect(self) -> None:
+        (self.root / "state").write_text("new\n", encoding="utf-8")
+        _git(self.root, "add", "state")
+        capability = self._capability()
+        replacement = self.root.parent / f"{self.root.name}-replaced"
+        self.root.rename(replacement)
+        self.root.mkdir()
+
+        with self.assertRaisesRegex(GitMutationRejectedError, "repository identity changed"):
+            capability.commit("op-1 authority commit")
+
     def test_classifies_commit_runner_oserror_as_ambiguous(self) -> None:
         (self.root / "state").write_text("new\n", encoding="utf-8")
         _git(self.root, "add", "state")
