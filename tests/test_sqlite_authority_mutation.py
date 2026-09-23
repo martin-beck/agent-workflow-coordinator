@@ -228,6 +228,28 @@ class SQLiteCommitCapabilityTests(unittest.TestCase):
             capability.commit(update)
         self.assertFalse(called)
 
+    def test_rejects_authority_ancestor_replacement_before_effect(self) -> None:
+        outer = self.root.parent / f"{self.root.name}-outer"
+        inner = outer / "inner"
+        inner.mkdir(parents=True)
+        relocated_root = inner / "root"
+        self.root.rename(relocated_root)
+        self.db = relocated_root / "authority.sqlite"
+        capability = self._capability()
+        replacement = outer.parent / f"{outer.name}-replaced"
+        outer.rename(replacement)
+        outer.mkdir()
+        called = False
+
+        def update(connection: sqlite3.Connection) -> None:
+            nonlocal called
+            called = True
+            connection.execute("UPDATE state SET value='bad'")
+
+        with self.assertRaisesRegex(SQLiteMutationRejectedError, "ancestor identity changed"):
+            capability.commit(update)
+        self.assertFalse(called)
+
     def test_rejects_connector_oserror_before_effect(self) -> None:
         called = False
 
