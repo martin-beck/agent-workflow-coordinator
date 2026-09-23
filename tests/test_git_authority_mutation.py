@@ -72,6 +72,32 @@ class GitCommitCapabilityTests(unittest.TestCase):
         (self.root / "state").write_text("new\n", encoding="utf-8")
         _git(self.root, "add", "state")
         result = self._capability().commit("op-1 authority commit")
+        self.assertEqual(
+            (
+                "git",
+                "new",
+                "op-1:commit",
+                1,
+                "barrier-1",
+                "artifact-1",
+                "manifest-1",
+                "selector-1",
+                "runtime-1",
+                "fence-1",
+            ),
+            (
+                result.backend,
+                result.target,
+                result.operation_id,
+                result.state_revision,
+                result.barrier_id,
+                result.artifact_identity,
+                result.manifest_identity,
+                result.selector_identity,
+                result.runtime_identity,
+                result.fencing_token,
+            ),
+        )
         self.assertEqual("main", result.branch)
         self.assertNotEqual(result.before_head, result.after_head)
         self.assertTrue(result.mutates_authority)

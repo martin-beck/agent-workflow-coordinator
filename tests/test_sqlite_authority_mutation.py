@@ -72,6 +72,32 @@ class SQLiteCommitCapabilityTests(unittest.TestCase):
             connection.execute("UPDATE state SET value='new' WHERE id=1")
 
         result = self._capability().commit(update)
+        self.assertEqual(
+            (
+                "sqlite",
+                "new",
+                "op-1:commit",
+                1,
+                "barrier-1",
+                "artifact-1",
+                "manifest-1",
+                "selector-1",
+                "runtime-1",
+                "fence-1",
+            ),
+            (
+                result.backend,
+                result.target,
+                result.operation_id,
+                result.state_revision,
+                result.barrier_id,
+                result.artifact_identity,
+                result.manifest_identity,
+                result.selector_identity,
+                result.runtime_identity,
+                result.fencing_token,
+            ),
+        )
         self.assertEqual("ok", result.integrity_check)
         with sqlite3.connect(self.db) as connection:
             self.assertEqual(("new",), connection.execute("SELECT value FROM state").fetchone())

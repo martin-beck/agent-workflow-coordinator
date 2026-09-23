@@ -24,8 +24,15 @@ class SQLiteMutationAmbiguousError(SQLiteMutationError, AuthorityMutationAmbiguo
 
 @dataclass(frozen=True)
 class SQLiteCommitResult:
+    backend: str
+    target: str
     operation_id: str
     state_revision: int
+    barrier_id: str
+    artifact_identity: str
+    manifest_identity: str
+    selector_identity: str
+    runtime_identity: str
     fencing_token: str
     integrity_check: str
     foreign_key_violations: int
@@ -181,8 +188,15 @@ class SQLiteCommitCapability:
         if integrity != "ok" or violations:
             raise SQLiteMutationError("SQLite post-commit integrity is invalid")
         return SQLiteCommitResult(
+            backend=self._admission.backend,
+            target=self._admission.target,
             operation_id=self._admission.operation_id,
             state_revision=self._admission.state_revision,
+            barrier_id=self._admission.barrier_id,
+            artifact_identity=self._admission.artifact_identity,
+            manifest_identity=self._admission.manifest_identity,
+            selector_identity=self._admission.selector_identity,
+            runtime_identity=self._admission.runtime_identity,
             fencing_token=self._admission.fencing_token,
             integrity_check=integrity,
             foreign_key_violations=violations,

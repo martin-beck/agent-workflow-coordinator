@@ -34,9 +34,17 @@ def _admission(backend: str = "git") -> CommitAdmissionBundle:
 
 class AuthorityMutationTests(unittest.TestCase):
     @staticmethod
-    def _result() -> dict[str, object]:
+    def _result(backend: str = "git") -> dict[str, object]:
         return {
+            "backend": backend,
+            "target": "new",
             "operation_id": "op-1:commit",
+            "state_revision": 1,
+            "barrier_id": "barrier-1",
+            "artifact_identity": "artifact-1",
+            "manifest_identity": "manifest-1",
+            "selector_identity": "selector-1",
+            "runtime_identity": "runtime-1",
             "fencing_token": "fence-1",
             "mutates_authority": True,
         }
@@ -46,7 +54,15 @@ class AuthorityMutationTests(unittest.TestCase):
         receipt = capability.execute(
             "git",
             lambda: GitCommitResult(
+                backend="git",
+                target="new",
                 operation_id="op-1:commit",
+                state_revision=1,
+                barrier_id="barrier-1",
+                artifact_identity="artifact-1",
+                manifest_identity="manifest-1",
+                selector_identity="selector-1",
+                runtime_identity="runtime-1",
                 before_head="a" * 40,
                 after_head="b" * 40,
                 branch="main",
@@ -64,6 +80,34 @@ class AuthorityMutationTests(unittest.TestCase):
             BoundAuthorityMutation(_admission()).execute(
                 "git", lambda: {**self._result(), "fencing_token": "foreign"}
             )
+
+    def test_rejects_any_full_receipt_identity_drift(self) -> None:
+        changes: dict[str, object] = {
+            "backend": "sqlite",
+            "target": "rollback",
+            "operation_id": "foreign-operation",
+            "state_revision": 2,
+            "barrier_id": "foreign-barrier",
+            "artifact_identity": "foreign-artifact",
+            "manifest_identity": "foreign-manifest",
+            "selector_identity": "foreign-selector",
+            "runtime_identity": "foreign-runtime",
+            "fencing_token": "foreign-fence",
+        }
+        for field, value in changes.items():
+
+            def drifted_result(
+                field_name: str = field, field_value: object = value
+            ) -> dict[str, object]:
+                result = self._result()
+                result[field_name] = field_value
+                return result
+
+            with (
+                self.subTest(field=field),
+                self.assertRaisesRegex(AuthorityMutationError, "result identity mismatch"),
+            ):
+                BoundAuthorityMutation(_admission()).execute("git", drifted_result)
 
     def test_rejects_noncallable_effect_before_consuming_capability(self) -> None:
         capability = BoundAuthorityMutation(_admission())
@@ -175,7 +219,7 @@ class AuthorityMutationTests(unittest.TestCase):
                 return None
 
         DurableBoundAuthorityMutation(_admission("sqlite"), Journal(), session_revision=1).execute(
-            lambda: self._result()
+            lambda: self._result("sqlite")
         )
         self.assertEqual(
             [1, "op-1:commit", "sqlite", "new", "fence-1", "barrier-1"],
