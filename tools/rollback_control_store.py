@@ -2009,11 +2009,16 @@ class SQLiteBarrierSessionStore:
             try:
                 connection.execute("BEGIN IMMEDIATE")
                 self._mark_intent_locked(connection, intent_id, "committed")
-                connection.commit()
             except Exception as error:
                 raise ControlStoreError(
                     "barrier session outcome publication is ambiguous; recovery is required"
                 ) from error
+            try:
+                connection.commit()
+            except Exception as error:
+                raise ControlStoreError(
+                    "barrier session outcome publication is ambiguous; recovery is required"
+                ) from self._mark_recovery_ambiguous_after_commit_failure(connection, error)
             return supplied
 
     def _recover_prepared_locked(  # noqa: C901
@@ -2099,11 +2104,23 @@ class SQLiteBarrierSessionStore:
                 if cursor.rowcount != 1:
                     raise ControlStoreError("recovery ambiguity fencing lost its row fence")
             for intent_id, *_ in self._prepared_intents_locked(connection):
-                self._mark_intent_locked(connection, intent_id, "ambiguous", "commit-uncertain")
-            for intent in self._prepared_effect_intents_locked(connection):
-                self._mark_effect_intent_locked(
-                    connection, intent.intent_id, "ambiguous", "commit-uncertain"
+                cursor = connection.execute(
+                    "UPDATE barrier_session_intent SET outcome='ambiguous',"
+                    "cause_code='commit-uncertain' WHERE project_id=? AND intent_id=? "
+                    "AND outcome='prepared'",
+                    (self.project_id, intent_id),
                 )
+                if cursor.rowcount != 1:
+                    raise ControlStoreError("recovery session intent fence was lost")
+            for intent in self._prepared_effect_intents_locked(connection):
+                cursor = connection.execute(
+                    "UPDATE authority_effect_intent SET outcome='ambiguous',"
+                    "cause_code='commit-uncertain' WHERE project_id=? AND intent_id=? "
+                    "AND outcome='prepared'",
+                    (self.project_id, intent.intent_id),
+                )
+                if cursor.rowcount != 1:
+                    raise ControlStoreError("recovery effect intent fence was lost")
             connection.commit()
         except Exception as recovery_error:
             raise ControlStoreError(
@@ -2242,7 +2259,12 @@ class SQLiteBarrierSessionStore:
                     current.forward_child,
                     current.rollback_child,
                 )
-            connection.commit()
+            try:
+                connection.commit()
+            except Exception as error:
+                raise ControlStoreError(
+                    "authority effect outcome publication is ambiguous; recovery is required"
+                ) from self._mark_recovery_ambiguous_after_commit_failure(connection, error)
             return current
 
     def _recover_prepared_effects_locked(

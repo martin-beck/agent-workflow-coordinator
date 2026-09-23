@@ -1828,7 +1828,7 @@ class RollbackControlStoreTests(unittest.TestCase):
                     BarrierSessionState(identity, "releasing", 1),
                 )
 
-    def test_v10_commit_failure_is_durably_ambiguous(self) -> None:
+    def test_v10_commit_failure_is_durably_ambiguous(self) -> None:  # noqa: C901
         class FlakyConnection:
             def __init__(self, connection: sqlite3.Connection, owner: Any) -> None:
                 self.connection = connection
@@ -1841,6 +1841,11 @@ class RollbackControlStoreTests(unittest.TestCase):
                 if self.owner.fail_next_commit:
                     self.owner.fail_next_commit = False
                     raise sqlite3.OperationalError("injected commit boundary failure")
+                if self.owner.fail_commit_after is not None:
+                    if self.owner.fail_commit_after == 0:
+                        self.owner.fail_commit_after = None
+                        raise sqlite3.OperationalError("injected commit boundary failure")
+                    self.owner.fail_commit_after -= 1
                 self.connection.commit()
 
             def rollback(self) -> None:
@@ -1850,6 +1855,7 @@ class RollbackControlStoreTests(unittest.TestCase):
             def __init__(self, *args: Any) -> None:
                 super().__init__(*args)
                 self.fail_next_commit = True
+                self.fail_commit_after: int | None = None
 
             @contextmanager
             def _connection(self) -> Iterator[Any]:
@@ -1961,6 +1967,29 @@ class RollbackControlStoreTests(unittest.TestCase):
                 ("ambiguous", 2), (recovered_session.status, recovered_session.revision)
             )
 
+            second_recovery_control = FlakyStore(
+                Path(directory) / "prepared-session-second-recovery-control.sqlite", PROJECT
+            )
+            second_recovery_control.fail_next_commit = False
+            second_recovery_session = SQLiteBarrierSessionStore(
+                second_recovery_control, lambda: "authority-3"
+            )
+            second_recovery_session.create(self._session_identity())
+            with sqlite3.connect(second_recovery_control.path) as connection:
+                connection.execute(
+                    "UPDATE barrier_session_intent SET outcome='prepared' WHERE project_id=?",
+                    (PROJECT,),
+                )
+                connection.commit()
+            second_recovery_control.fail_commit_after = 1
+            with self.assertRaisesRegex(ControlStoreError, "recovery commit outcome is ambiguous"):
+                second_recovery_session.recover_unknown()
+            self.assertFalse(second_recovery_session.operation_owned_by_current_thread)
+            second_recovered = second_recovery_session.snapshot()
+            self.assertIsNotNone(second_recovered)
+            assert second_recovered is not None
+            self.assertEqual(("ambiguous", 2), (second_recovered.status, second_recovered.revision))
+
             effect_control = FlakyStore(
                 Path(directory) / "prepared-effect-recovery-control.sqlite", PROJECT
             )
@@ -1984,6 +2013,55 @@ class RollbackControlStoreTests(unittest.TestCase):
                         (PROJECT,),
                     ).fetchall(),
                 )
+
+            finish_control = FlakyStore(Path(directory) / "finish-effect-control.sqlite", PROJECT)
+            finish_control.fail_next_commit = False
+            finish_session = SQLiteBarrierSessionStore(finish_control, lambda: "authority-3")
+            finish_session.create(self._session_identity())
+            finish_intent = finish_session.prepare_authority_effect(1, "effect-finish", "sqlite")
+            finish_control.fail_next_commit = True
+            with self.assertRaisesRegex(
+                ControlStoreError, "authority effect outcome publication is ambiguous"
+            ):
+                finish_session.finish_authority_effect(finish_intent, "committed")
+            self.assertFalse(finish_session.operation_owned_by_current_thread)
+            finished = finish_session.snapshot()
+            self.assertIsNotNone(finished)
+            assert finished is not None
+            self.assertEqual(("ambiguous", 2), (finished.status, finished.revision))
+            with sqlite3.connect(finish_control.path) as connection:
+                self.assertEqual(
+                    [("ambiguous",)],
+                    connection.execute(
+                        "SELECT outcome FROM authority_effect_intent WHERE project_id=?",
+                        (PROJECT,),
+                    ).fetchall(),
+                )
+
+            publication_control = FlakyStore(
+                Path(directory) / "session-publication-control.sqlite", PROJECT
+            )
+            publication_control.fail_next_commit = False
+            publication_session = SQLiteBarrierSessionStore(
+                publication_control, lambda: "authority-3"
+            )
+            publication_identity = self._session_identity()
+            publication_session.create(publication_identity)
+            publication_session.bind_child(
+                1, BarrierChildIdentity.bind(publication_identity, "publication-child", "new")
+            )
+            publication_control.fail_commit_after = 1
+            with self.assertRaisesRegex(
+                ControlStoreError, "barrier session outcome publication is ambiguous"
+            ):
+                publication_session.begin_reopen(2, "new")
+            self.assertFalse(publication_session.operation_owned_by_current_thread)
+            publication_state = publication_session.snapshot()
+            self.assertIsNotNone(publication_state)
+            assert publication_state is not None
+            self.assertEqual(
+                ("ambiguous", 4), (publication_state.status, publication_state.revision)
+            )
 
     def test_v10_cas_fences_verify_affected_rows_and_recovery_errors(self) -> None:
         class Cursor:
