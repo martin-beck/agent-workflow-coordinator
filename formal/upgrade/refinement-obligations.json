@@ -2,7 +2,7 @@
   "schema_version": 1,
   "kind": "implementation-refinement-obligation-matrix",
   "contract": "formal/upgrade/v10-refinement-contract.json",
-  "contract_sha256": "1ed273b015f317e41b7e22b6981a3fd25194cd6ffec1ad70933f5ec6cca62f92",
+  "contract_sha256": "b15abfeff3ccb8bd7e2c4720b340b9f0dc6a0713f735f22c4b1752da3ee79122",
   "decision": "deny",
   "decision_rule": "deny unless every obligation is proven at the exact implementation revision and independently reviewed",
   "obligations": [
@@ -96,7 +96,13 @@
       "implementation_scope": "known-good or validated-new runtime remains functional at every boundary",
       "evidence": [
         "tests/test_upgrade_engine.py::UpgradeEngineTests.test_commit_validate_and_reopen_require_safety_evidence",
-        "tests/test_upgrade_admission.py::UpgradeAdmissionTests.test_reopen_requires_explicit_functional_availability"
+        "tests/test_upgrade_admission.py::UpgradeAdmissionTests.test_reopen_requires_explicit_functional_availability",
+        "tests/test_upgrade_engine.py::UpgradeEngineTests.test_loaded_rollback_requires_authority_and_runtime_revalidation",
+        "tests/test_upgrade_engine.py::UpgradeEngineTests.test_apply_rejects_failed_state_and_unreconciled_rollback_record",
+        "tests/test_git_authority_mutation.py::GitCommitCapabilityTests.test_capability_is_single_use_but_fresh_capability_reopens",
+        "tests/test_sqlite_authority_mutation.py::SQLiteCommitCapabilityTests.test_capability_is_single_use_but_fresh_capability_reopens",
+        "tests/test_sqlite_mutation_barrier.py::SQLiteMutationBarrierProcessTests.test_sigkill_after_authority_effect_requires_recovery_and_new_fence",
+        "tests/test_sqlite_mutation_barrier.py::SQLiteMutationBarrierProcessTests.test_sigkill_after_git_authority_effect_requires_recovery_and_new_fence"
       ],
       "status": "not-proven"
     },

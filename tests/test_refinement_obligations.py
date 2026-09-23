@@ -84,3 +84,17 @@ def test_sqlite_write_fence_maps_every_route_class_without_authorizing_mutation(
             (ROOT / "formal/upgrade/sqlite-route-inventory.json").read_text(encoding="utf-8")
         )["nonclaims"]
     )
+
+
+def test_functional_availability_maps_reopen_and_recovery_without_authorizing_mutation() -> None:
+    matrix = json.loads(MATRIX.read_text(encoding="utf-8"))
+    entry = next(item for item in matrix["obligations"] if item["id"] == "functional-availability")
+    assert entry["model_actions"] == ["FunctionalAvailability", "Reopen"]
+    assert entry["status"] == "not-proven"
+    assert len(entry["evidence"]) >= 7
+    assert any(
+        "test_reopen_requires_explicit_functional_availability" in reference
+        for reference in entry["evidence"]
+    )
+    assert any("fresh_capability_reopens" in reference for reference in entry["evidence"])
+    assert any("requires_recovery_and_new_fence" in reference for reference in entry["evidence"])

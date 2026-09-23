@@ -234,9 +234,10 @@
         "tests/test_rollback_control_store.py::RollbackControlStoreTests.test_v10_session_intent_recovery_fences_and_requires_newer_fence",
         "tests/test_rollback_control_store.py::RollbackControlStoreTests.test_v10_process_death_recovery_rejects_missing_or_mismatched_session",
         "tests/test_rollback_control_store.py::RollbackControlStoreTests.test_v10_session_intent_recovery_rejects_invalid_intent_records",
-        "sigkill boundaries",
-        "WAL/SHM fault tests",
-        "new-session CAS tests"
+        "tests/test_sqlite_mutation_barrier.py::test_sigkill_session_commit_recovers_ambiguous_then_verified_release",
+        "tests/test_sqlite_mutation_barrier.py::test_sigkill_during_unknown_recovery_preserves_ambiguity_until_new_fence",
+        "tests/test_sqlite_mutation_barrier.py::test_sigkill_after_reconciliation_commit_recovers_new_fence_from_history",
+        "tests/test_rollback_control_store.py::test_v10_active_wal_sidecar_replacement_fails_closed_before_recheck"
       ],
       "status": "bounded executable SIGKILL evidence covers CAS publication and interrupted ambiguous-recovery intent residue in tests/test_sqlite_mutation_barrier.py; implementation refinement pending"
     },
