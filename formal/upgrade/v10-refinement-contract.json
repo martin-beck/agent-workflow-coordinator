@@ -69,6 +69,16 @@
       "status": "bounded executable Git effect evidence; implementation refinement pending and public dispatch disabled"
     },
     {
+      "model_actions": ["AcceptWrite", "FinishWrite", "MarkAmbiguous"],
+      "implementation_obligation": "The backend-neutral authority effect contract binds one immutable admission to the selected Git or SQLite backend, validates the returned operation and fencing identities, and consumes the capability after success, failure, or ambiguity so no uncertain effect can be retried.",
+      "evidence_required": [
+        "tests/test_authority_mutation.py::AuthorityMutationTests.test_effect_is_single_use_and_identity_bound",
+        "tests/test_authority_mutation.py::AuthorityMutationTests.test_rejects_backend_or_result_identity_drift",
+        "tests/test_authority_mutation.py::AuthorityMutationTests.test_ambiguous_effect_consumes_token_and_cannot_retry"
+      ],
+      "status": "bounded executable cross-backend effect evidence; implementation refinement pending and public dispatch disabled"
+    },
+    {
       "model_actions": ["MarkAmbiguous", "RejectWrite", "FunctionalAvailability"],
       "implementation_obligation": "The authority-neutral recovery seam validates known-good backup, restore, runtime, barrier, and fencing evidence as diagnostic-only and never authorizes rollback mutation.",
       "evidence_required": [
