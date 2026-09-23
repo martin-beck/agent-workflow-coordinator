@@ -2,7 +2,7 @@
   "schema_version": 1,
   "kind": "implementation-refinement-obligation-matrix",
   "contract": "formal/upgrade/v10-refinement-contract.json",
-  "contract_sha256": "4f98ec6cf0161cdba0043b41f66df22dd69eb75bc191f88bcf9bc8212cdcab72",
+  "contract_sha256": "3680a5ad88ad3e7c0d0515b29796aa9daabd08b15ef9e97519bc72c5b0ea3de8",
   "decision": "deny",
   "decision_rule": "deny unless every obligation is proven at the exact implementation revision and independently reviewed",
   "obligations": [
@@ -21,7 +21,9 @@
       "model_actions": ["ObserveAuthority", "RecheckHeld", "RejectStaleCAS"],
       "implementation_scope": "descriptor-bound barrier and authority identity reread before admission",
       "evidence": [
-        "tests/test_durable_binding.py::DurableBindingTests.test_replacement_and_symlink_are_rejected"
+        "tests/test_durable_binding.py::DurableBindingTests.test_replacement_and_symlink_are_rejected",
+        "tests/test_git_authority_mutation.py::test_rejects_stale_admission_reread_before_effect",
+        "tests/test_sqlite_authority_mutation.py::test_rejects_stale_admission_reread_before_effect"
       ],
       "status": "not-proven"
     },
