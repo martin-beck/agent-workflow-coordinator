@@ -43,13 +43,12 @@ class BoundAuthorityMutation:
         self._consumed = True
         try:
             result = effect()
-        except Exception as error:
-            # A failed or ambiguous effect is never retried through this token.
-            if isinstance(error, (AuthorityMutationAmbiguousError, TimeoutError)):
-                raise AuthorityMutationAmbiguousError(
-                    "authority mutation outcome is ambiguous; recovery is required"
-                ) from error
-            raise
+        except BaseException as error:
+            # Any effect that does not return a verified result, including a
+            # termination exception, has an uncertain authority outcome.
+            raise AuthorityMutationAmbiguousError(
+                "authority mutation outcome is ambiguous; recovery is required"
+            ) from error
 
         def field(name: str) -> object:
             if isinstance(result, Mapping):
