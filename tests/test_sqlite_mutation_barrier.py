@@ -35,6 +35,7 @@ from tools.rollback_control_store import (
     SQLiteBarrierSessionStore,
     SQLiteRollbackControlStore,
 )
+from tools.sqlite_authority_mutation import SQLiteCommitCapability
 from tools.sqlite_storage import SQLiteBackend, bind_released_sqlite_backend, create_database
 from tools.upgrade_identity import (
     BarrierChildIdentity,
@@ -302,7 +303,7 @@ def _session_commit_waiting_for_sigkill(root_text: str, ready: Any) -> None:
 
 
 def _authority_effect_waiting_for_sigkill(root_text: str, ready: Any) -> None:
-    """Commit an isolated effect, then die before durable outcome publication."""
+    """Commit a real SQLite effect, then die before durable outcome publication."""
     root = Path(root_text)
     control = _control(root)
     session = SQLiteBarrierSessionStore(control, lambda: "authority-1")
@@ -321,16 +322,37 @@ def _authority_effect_waiting_for_sigkill(root_text: str, ready: Any) -> None:
     )
     capability = DurableBoundAuthorityMutation(admission, session, session_revision=1)
 
-    def effect() -> dict[str, object]:
-        with sqlite3.connect(root / "authority.sqlite") as connection:
-            connection.execute(
-                "UPDATE tasks SET body='effect committed before worker death' WHERE id='AR-0001'"
-            )
-            connection.commit()
+    keepalive = sqlite3.connect(root / "authority.sqlite")
+    keepalive.execute("PRAGMA wal_autocheckpoint=0")
+    keepalive.execute("PRAGMA user_version=1")
+    keepalive.commit()
+
+    def identity(path: Path) -> tuple[int, int] | None:
+        try:
+            status = path.lstat()
+        except FileNotFoundError:
+            return None
+        return status.st_dev, status.st_ino
+
+    sqlite_capability = SQLiteCommitCapability(
+        root / "authority.sqlite",
+        admission=admission,
+        expected_db_identity=identity(root / "authority.sqlite"),  # type: ignore[arg-type]
+        expected_wal_identity=identity(root / "authority.sqlite-wal"),
+        expected_shm_identity=identity(root / "authority.sqlite-shm"),
+    )
+
+    def effect(connection: sqlite3.Connection) -> None:
+        connection.execute(
+            "UPDATE tasks SET body='effect committed before worker death' WHERE id='AR-0001'"
+        )
+        connection.commit()
+        connection.close()
+        keepalive.close()
         ready.set()
         os._exit(17)
 
-    capability.execute(effect)
+    capability.execute(lambda: sqlite_capability.commit(effect))
 
 
 def _session_recovery_waiting_for_sigkill(root_text: str, ready: Any) -> None:
