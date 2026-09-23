@@ -13,8 +13,8 @@
     }
   },
   "implementation_snapshot": {
-    "revision": "ee892bce8a01bb075d7f2af1d3529a6d8a89f7be",
-    "runtime_revision": "ee892bce8a01bb075d7f2af1d3529a6d8a89f7be",
+    "revision": "c6b69b453b09ebc644bc27a60d1be8790360e9d9",
+    "runtime_revision": "c6b69b453b09ebc644bc27a60d1be8790360e9d9",
     "status": "descriptor-safe control-store and SQLite DB/WAL/SHM rereads plus bounded independent-process barrier/write evidence; executable apply and rollback remain rejection-only"
   },
   "correspondence": [
@@ -75,7 +75,8 @@
       "evidence_required": [
         "tests/test_authority_mutation.py::AuthorityMutationTests.test_effect_is_single_use_and_identity_bound",
         "tests/test_authority_mutation.py::AuthorityMutationTests.test_rejects_backend_or_result_identity_drift",
-        "tests/test_authority_mutation.py::AuthorityMutationTests.test_ambiguous_effect_consumes_token_and_cannot_retry"
+        "tests/test_authority_mutation.py::AuthorityMutationTests.test_ambiguous_effect_consumes_token_and_cannot_retry",
+        "tests/test_authority_mutation.py::AuthorityMutationTests.test_backend_ambiguity_is_normalized_and_cannot_retry"
       ],
       "status": "bounded executable cross-backend effect evidence; implementation refinement pending and public dispatch disabled"
     },
