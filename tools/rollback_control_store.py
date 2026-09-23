@@ -2349,7 +2349,15 @@ class SQLiteBarrierSessionStore:
                 "forward_child,rollback_child) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 values,
             )
-            connection.commit()
+            try:
+                connection.commit()
+            except Exception as error:
+                raise ControlStoreError(
+                    "barrier session reconciliation commit outcome is ambiguous; "
+                    "recovery is required"
+                ) from self._mark_ambiguous_after_commit_failure(
+                    connection, replacement, expected_revision, error
+                )
             try:
                 connection.execute("BEGIN IMMEDIATE")
                 self._mark_intent_locked(connection, intent_id, "reconciled")
