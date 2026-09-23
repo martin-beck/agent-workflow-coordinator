@@ -13,8 +13,8 @@
     }
   },
   "implementation_snapshot": {
-    "revision": "bd1f0ebe849416bf3df071f5230c76887e57f2f4",
-    "runtime_revision": "bd1f0ebe849416bf3df071f5230c76887e57f2f4",
+    "revision": "21e33644e97f2853ed01f0ab543bc4318a5a1efd",
+    "runtime_revision": "21e33644e97f2853ed01f0ab543bc4318a5a1efd",
     "status": "descriptor-safe control-store and SQLite DB/WAL/SHM rereads plus bounded independent-process barrier/write evidence; executable apply and rollback remain rejection-only"
   },
   "correspondence": [
@@ -64,7 +64,8 @@
       "evidence_required": [
         "tests/test_git_authority_mutation.py::GitCommitCapabilityTests.test_commits_only_pre_staged_change_and_verifies_postconditions",
         "tests/test_git_authority_mutation.py::GitCommitCapabilityTests.test_rejects_unstaged_or_empty_changes",
-        "tests/test_git_authority_mutation.py::GitCommitCapabilityTests.test_rejects_head_drift_and_ambiguous_runner_outcome"
+        "tests/test_git_authority_mutation.py::GitCommitCapabilityTests.test_rejects_head_drift_and_ambiguous_runner_outcome",
+        "tests/test_git_authority_mutation.py::GitCommitCapabilityTests.test_rejects_a_concurrent_commit_after_the_effect"
       ],
       "status": "bounded executable Git effect evidence; implementation refinement pending and public dispatch disabled"
     },
