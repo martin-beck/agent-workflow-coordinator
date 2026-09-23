@@ -95,6 +95,7 @@
   "implementation_snapshot": {
     "files": {
       "schema/upgrade-contract.schema.json": "88c8aeab53b897129948bb5551e0b19ea1cb241a9f6521267c4a1042d01b838d",
+      "tests/test_authority_neutral_commit.py": "e6d55411565c660d06b85db6f31cff8b0665e0b3e8b00b4f56c9b7072ac1004d",
       "tests/test_authority_mutation.py": "2612fa1a47ada00e3e6515182d0916c43179e32d8551f5667d02150fa444da58",
       "tests/test_git_authority_mutation.py": "484db2f4b173908ae389a6a062810b2ee93fcc11a246657f3e2490f81c2de66d",
       "tests/test_mutation_fence.py": "e2bcea7b96bddd2509b79ff9c5eefd57001d1502949aba30cbbd50a9169e1cbb",
@@ -106,6 +107,7 @@
       "tests/test_upgrade_contract.py": "04434245a70c249b48d206b0d14427b9ef0d182a8085bd35cc3d6621a8c68cee",
       "tests/test_upgrade_identity.py": "d677ab21c8048fdda10e8b302082c05b0aa387a8e0ba1f81e189f84011cc89f3",
       "tools/authority_mutation.py": "22ca44b6a835d956d5b4b40f81db480e0e7ab03c55d22b4ac73827f87d16d8f6",
+      "tools/authority_neutral_commit.py": "951bac3ef4edad4ba410c876cfa7b9d4952c443c311f92543cc8b4b3a07a0670",
       "tools/generate_upgrade_contract.py": "aa9a2ed072df3937b7799b33559d03b1744d3b9049891180d1a4852531df3ada",
       "tools/git_authority_mutation.py": "e19a46a696ab03bd36685636f84db052ed9f94161f1dae7c172f13657ccddb90",
       "tools/handoffctl.py": "64431290224b91cd285bd500355ad0f92f14a7b172693b8071b2b88a4727883e",
@@ -118,8 +120,8 @@
       "tools/upgrade_identity.py": "754ce7b8ecc3f5521d30597fc259df9a4241e9cd2178dd4d72aba89df5d3133d",
       "tools/validate_upgrade_contract.py": "6c264c4775e4ee1a778181d7e127d9f256c56abd4bfebb02c624e13c289dbc4a"
     },
-    "revision": "868fb2826c564f1ddfc7ec3dee6bf2134a50e22b",
-    "runtime_revision": "868fb2826c564f1ddfc7ec3dee6bf2134a50e22b"
+    "revision": "7f29ef79dc27ae174633e46c00d85149ce03e3ea",
+    "runtime_revision": "7f29ef79dc27ae174633e46c00d85149ce03e3ea"
   },
   "model": "formal/upgrade/UpgradeRecovery.tla",
   "model_sha256": "616d53832ac5ec18bf3242d47b2412195eb64adb2b1035235514e06cc3edf2ba",

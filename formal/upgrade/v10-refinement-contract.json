@@ -13,8 +13,8 @@
     }
   },
   "implementation_snapshot": {
-    "revision": "868fb2826c564f1ddfc7ec3dee6bf2134a50e22b",
-    "runtime_revision": "868fb2826c564f1ddfc7ec3dee6bf2134a50e22b",
+    "revision": "7f29ef79dc27ae174633e46c00d85149ce03e3ea",
+    "runtime_revision": "7f29ef79dc27ae174633e46c00d85149ce03e3ea",
     "status": "descriptor-safe control-store and SQLite DB/WAL/SHM rereads plus bounded independent-process barrier/write evidence; executable apply and rollback remain rejection-only"
   },
   "correspondence": [
