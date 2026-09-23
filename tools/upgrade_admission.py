@@ -43,6 +43,7 @@ QUIESCENCE_PREDICATES = (
 
 REOPEN_PREDICATES = (
     "maintenance_barrier",
+    "functional_available",
     "runtime_validated",
     "backend_roundtrip_valid",
     "projections_valid",

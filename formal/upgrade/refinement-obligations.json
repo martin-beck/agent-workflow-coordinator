@@ -81,7 +81,8 @@
       "model_actions": ["FunctionalAvailability", "Reopen"],
       "implementation_scope": "known-good or validated-new runtime remains functional at every boundary",
       "evidence": [
-        "tests/test_upgrade_engine.py::UpgradeEngineTests.test_commit_validate_and_reopen_require_safety_evidence"
+        "tests/test_upgrade_engine.py::UpgradeEngineTests.test_commit_validate_and_reopen_require_safety_evidence",
+        "tests/test_upgrade_admission.py::UpgradeAdmissionTests.test_reopen_requires_explicit_functional_availability"
       ],
       "status": "not-proven"
     },

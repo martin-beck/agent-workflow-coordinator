@@ -40,6 +40,7 @@ ADMISSION_TRUE_FIELDS = (
     "scratch_capacity_ok",
     "backup_destination_restorable",
     "maintenance_barrier",
+    "functional_available",
     "workers_drained",
     "leases_fenced",
     "wrapped_commands_drained",
