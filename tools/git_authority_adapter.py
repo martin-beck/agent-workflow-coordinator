@@ -162,6 +162,36 @@ class GitAuthorityAdapter:
 
         restore_backup(backup, destination, session=_issue(self, backup))
 
+    def bind_commit_capability(
+        self,
+        admission: Any,
+        *,
+        admission_reread: Any,
+        expected_branch: str,
+        expected_head: str,
+        runner: Any = subprocess.run,
+    ) -> Any:
+        """Bind the isolated Git effect seam without enabling public dispatch.
+
+        The returned capability still requires a caller-owned admission and
+        remains outside ``execute`` and the upgrade command dispatcher.  This
+        factory makes the concrete adapter-to-effect binding explicit while
+        preserving the separate refinement gate.
+        """
+        from tools.git_authority_mutation import GitCommitCapability, GitMutationError
+
+        try:
+            return GitCommitCapability(
+                self._repository,
+                admission=admission,
+                admission_reread=admission_reread,
+                expected_branch=expected_branch,
+                expected_head=expected_head,
+                runner=runner,
+            )
+        except GitMutationError as error:
+            raise GitAuthorityError("Git commit capability binding was rejected") from error
+
     @staticmethod
     def observe_backup_identity(
         backup: Path,
