@@ -160,6 +160,7 @@
       "evidence_required": [
         "tests/test_upgrade_engine.py::test_engine_binds_verified_stage_capability_to_stage_phase",
         "tests/test_authority_neutral_stage.py::test_bound_adapter_dispatches_stage_and_rejects_drift",
+        "tests/test_authority_neutral_stage.py::test_bound_adapter_rejects_selector_drift_before_runtime_verification",
         "tests/test_authority_neutral_stage.py::test_rejects_artifact_escape_and_bad_digest"
       ],
       "status": "bounded executable stage verification evidence; implementation refinement pending"
