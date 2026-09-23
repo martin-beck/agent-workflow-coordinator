@@ -16,6 +16,7 @@ from tools.sqlite_authority_mutation import (
     SQLiteCommitCapability,
     SQLiteMutationAmbiguousError,
     SQLiteMutationError,
+    SQLiteMutationRejectedError,
 )
 
 
@@ -258,7 +259,7 @@ class SQLiteCommitCapabilityTests(unittest.TestCase):
             called = True
             connection.execute("UPDATE state SET value='bad'")
 
-        with self.assertRaisesRegex(SQLiteMutationError, "admission identity changed"):
+        with self.assertRaisesRegex(SQLiteMutationRejectedError, "admission identity changed"):
             capability.commit(update)
         self.assertFalse(called)
         with sqlite3.connect(self.db) as connection:
@@ -302,7 +303,7 @@ class SQLiteCommitCapabilityTests(unittest.TestCase):
             )
             with (
                 self.subTest(field=field),
-                self.assertRaisesRegex(SQLiteMutationError, "admission identity changed"),
+                self.assertRaisesRegex(SQLiteMutationRejectedError, "admission identity changed"),
             ):
                 capability.commit(update)
             self.assertFalse(called)

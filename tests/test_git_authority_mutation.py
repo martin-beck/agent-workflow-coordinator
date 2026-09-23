@@ -18,6 +18,7 @@ from tools.git_authority_mutation import (
     GitCommitCapability,
     GitMutationAmbiguousError,
     GitMutationError,
+    GitMutationRejectedError,
 )
 
 
@@ -218,7 +219,7 @@ class GitCommitCapabilityTests(unittest.TestCase):
             expected_branch="main",
             expected_head=_git(self.root, "rev-parse", "HEAD"),
         )
-        with self.assertRaisesRegex(GitMutationError, "admission identity changed"):
+        with self.assertRaisesRegex(GitMutationRejectedError, "admission identity changed"):
             capability.commit("op-1 authority commit")
         self.assertEqual(before, _git(self.root, "rev-parse", "HEAD"))
         self.assertEqual("M  state", _git(self.root, "status", "--porcelain=v1"))
@@ -263,7 +264,7 @@ class GitCommitCapabilityTests(unittest.TestCase):
             )
             with (
                 self.subTest(field=field),
-                self.assertRaisesRegex(GitMutationError, "admission identity changed"),
+                self.assertRaisesRegex(GitMutationRejectedError, "admission identity changed"),
             ):
                 capability.commit("op-1 authority commit")
             self.assertFalse(called)

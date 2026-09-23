@@ -1487,7 +1487,7 @@ class SQLiteBarrierSessionStore:
         outcome: str,
         cause_code: str | None = None,
     ) -> None:
-        if outcome not in {"committed", "ambiguous"}:
+        if outcome not in {"committed", "rejected", "ambiguous"}:
             raise ControlStoreError("authority effect intent outcome is invalid")
         cursor = connection.execute(
             "UPDATE authority_effect_intent SET outcome=?,cause_code=? "
@@ -2320,7 +2320,7 @@ class SQLiteBarrierSessionStore:
         """Publish an effect result, fencing ambiguity instead of retrying it."""
         if not isinstance(intent, AuthorityEffectIntent):
             raise ControlStoreError("authority effect intent is required")
-        if outcome not in {"committed", "ambiguous"}:
+        if outcome not in {"committed", "rejected", "ambiguous"}:
             raise ControlStoreError("authority effect outcome is invalid")
         if outcome == "committed" and intent.artifact_identity is not None:
             _validate_authority_effect_receipt(intent, receipt)

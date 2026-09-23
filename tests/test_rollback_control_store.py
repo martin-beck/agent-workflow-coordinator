@@ -583,6 +583,28 @@ class StaticAuthorityRuntimeRereader:
 
 
 class RollbackControlStoreTests(unittest.TestCase):
+    def test_rejected_authority_effect_is_write_closed_without_fencing_session(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            control = SQLiteRollbackControlStore(root / "control.sqlite", PROJECT)
+            store = SQLiteBarrierSessionStore(control, lambda: "authority-3")
+            store.create(self._session_identity())
+            intent = store.prepare_authority_effect(1, "effect-rejected", "sqlite")
+
+            state = store.finish_authority_effect(intent, "rejected")
+
+            self.assertEqual(("held", 1), (state.status, state.revision))
+            self.assertEqual(state, store.snapshot())
+            with sqlite3.connect(control.path) as connection:
+                self.assertEqual(
+                    [("rejected",)],
+                    connection.execute(
+                        "SELECT outcome FROM authority_effect_intent "
+                        "WHERE project_id=? AND operation_id=?",
+                        (PROJECT, "effect-rejected"),
+                    ).fetchall(),
+                )
+
     def test_legacy_barrier_schema_is_rejected_without_mutation(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "control.sqlite"

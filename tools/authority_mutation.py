@@ -15,6 +15,10 @@ class AuthorityMutationError(RuntimeError):
     """An authority effect was rejected or already consumed."""
 
 
+class AuthorityMutationRejectedError(AuthorityMutationError):
+    """An authority effect was rejected before the external effect began."""
+
+
 class AuthorityMutationAmbiguousError(AuthorityMutationError):
     """An effect had an uncertain outcome and cannot be retried."""
 
@@ -74,6 +78,8 @@ class BoundAuthorityMutation:
         self._consumed = True
         try:
             result = effect()
+        except AuthorityMutationRejectedError:
+            raise
         except BaseException as error:
             # Any effect that does not return a verified result, including a
             # termination exception, has an uncertain authority outcome.
@@ -159,6 +165,14 @@ class DurableBoundAuthorityMutation:
         )
         try:
             receipt = self._capability.execute(self._admission.backend, effect)
+        except AuthorityMutationRejectedError:
+            try:
+                self._journal.finish_authority_effect(intent, "rejected")
+            except BaseException as journal_error:
+                raise AuthorityMutationAmbiguousError(
+                    "authority mutation rejection publication is ambiguous"
+                ) from journal_error
+            raise
         except BaseException:
             try:
                 self._journal.finish_authority_effect(intent, "ambiguous")
