@@ -68,6 +68,7 @@ class GitCommitCapability:
         if not self._repository.is_dir():
             raise GitMutationError("Git authority repository is unavailable")
         self._runner = runner
+        self._consumed = False
 
     @staticmethod
     def _validate_text(value: str, label: str) -> str:
@@ -117,8 +118,11 @@ class GitCommitCapability:
         return branch, head
 
     def commit(self, message: str) -> GitCommitResult:
+        if self._consumed:
+            raise GitMutationError("Git mutation capability already consumed")
         message = self._validate_text(message, "commit message")
         branch, before = self._assert_before()
+        self._consumed = True
         try:
             result = self._runner(
                 ["git", "-C", str(self._repository), "commit", "--no-verify", "-m", message],

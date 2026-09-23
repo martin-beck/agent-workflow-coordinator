@@ -75,6 +75,38 @@ class GitCommitCapabilityTests(unittest.TestCase):
         self.assertTrue(result.mutates_authority)
         self.assertEqual("", _git(self.root, "status", "--porcelain=v1", "--untracked-files=all"))
 
+    def test_capability_is_single_use_but_fresh_capability_reopens(self) -> None:
+        (self.root / "state").write_text("first\n", encoding="utf-8")
+        _git(self.root, "add", "state")
+        capability = self._capability()
+        capability.commit("op-1 authority commit")
+
+        with self.assertRaisesRegex(GitMutationError, "already consumed"):
+            capability.commit("op-1 replay")
+
+        (self.root / "state").write_text("second\n", encoding="utf-8")
+        _git(self.root, "add", "state")
+        reopened_admission = CommitAdmissionBundle(
+            backend="git",
+            target="new",
+            operation_id="op-2:commit",
+            fencing_token="fence-2",  # noqa: S106
+            state_revision=2,
+            barrier_id="barrier-2",
+            artifact_identity="artifact-1",
+            manifest_identity="manifest-1",
+            selector_identity="selector-1",
+            runtime_identity="runtime-1",
+        )
+        result = GitCommitCapability(
+            self.root,
+            admission=reopened_admission,
+            expected_branch="main",
+            expected_head=_git(self.root, "rev-parse", "HEAD"),
+        ).commit("op-2 authority commit")
+        self.assertEqual("fence-2", result.fencing_token)
+        self.assertEqual("second\n", (self.root / "state").read_text(encoding="utf-8"))
+
     def test_rejects_unstaged_or_empty_changes(self) -> None:
         with self.assertRaisesRegex(GitMutationError, "no staged"):
             self._capability().commit("op-1 authority commit")
