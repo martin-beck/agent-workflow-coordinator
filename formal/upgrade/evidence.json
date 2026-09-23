@@ -120,8 +120,8 @@
       "tools/upgrade_identity.py": "754ce7b8ecc3f5521d30597fc259df9a4241e9cd2178dd4d72aba89df5d3133d",
       "tools/validate_upgrade_contract.py": "6c264c4775e4ee1a778181d7e127d9f256c56abd4bfebb02c624e13c289dbc4a"
     },
-    "revision": "ae8b208de697e609f8429abcc03dac1e60b9b4e5",
-    "runtime_revision": "ae8b208de697e609f8429abcc03dac1e60b9b4e5"
+    "revision": "7523937563fda911f241ff1a1dc4c4ac354cc5de",
+    "runtime_revision": "7523937563fda911f241ff1a1dc4c4ac354cc5de"
   },
   "model": "formal/upgrade/UpgradeRecovery.tla",
   "model_sha256": "616d53832ac5ec18bf3242d47b2412195eb64adb2b1035235514e06cc3edf2ba",
