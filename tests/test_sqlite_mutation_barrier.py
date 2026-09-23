@@ -1307,12 +1307,88 @@ class SQLiteMutationBarrierProcessTests(unittest.TestCase):
         self.assertEqual(replacement, reopened.reconcile_ambiguous(2, replacement))
         with self.assertRaisesRegex(ControlStoreError, "ambiguous prior outcome"):
             reopened.prepare_authority_effect(1, "op-1:commit", "sqlite")
+
+        stale_called = False
+
+        def stale_effect() -> dict[str, object]:
+            nonlocal stale_called
+            stale_called = True
+            return {
+                "operation_id": "op-stale:commit",
+                "fencing_token": "fence-effect-1",
+                "mutates_authority": True,
+            }
+
+        stale_admission = CommitAdmissionBundle(
+            backend="sqlite",
+            target="new",
+            operation_id="op-stale:commit",
+            fencing_token="fence-effect-1",  # noqa: S106
+            state_revision=1,
+            barrier_id="barrier-1",
+            artifact_identity="artifact-1",
+            manifest_identity="manifest-1",
+            selector_identity="selector-1",
+            runtime_identity="runtime-1",
+        )
+        with self.assertRaisesRegex(ControlStoreError, "fencing token conflict"):
+            DurableBoundAuthorityMutation(stale_admission, reopened, session_revision=1).execute(
+                stale_effect
+            )
+        self.assertFalse(stale_called)
+
+        new_admission = CommitAdmissionBundle(
+            backend="sqlite",
+            target="new",
+            operation_id="op-2:commit",
+            fencing_token="fence-effect-recovered",  # noqa: S106
+            state_revision=1,
+            barrier_id="barrier-effect-recovered",
+            artifact_identity="artifact-1",
+            manifest_identity="manifest-1",
+            selector_identity="selector-1",
+            runtime_identity="runtime-1",
+        )
+        keepalive = sqlite3.connect(self.authority)
+        keepalive.execute("PRAGMA wal_autocheckpoint=0")
+        keepalive.execute("PRAGMA user_version=1")
+        keepalive.commit()
+
+        def identity(path: Path) -> tuple[int, int] | None:
+            try:
+                status = path.lstat()
+            except FileNotFoundError:
+                return None
+            return status.st_dev, status.st_ino
+
+        sqlite_capability = SQLiteCommitCapability(
+            self.authority,
+            admission=new_admission,
+            expected_db_identity=identity(self.authority),  # type: ignore[arg-type]
+            expected_wal_identity=identity(self.authority.with_name("authority.sqlite-wal")),
+            expected_shm_identity=identity(self.authority.with_name("authority.sqlite-shm")),
+        )
+
+        def reopened_effect(connection: sqlite3.Connection) -> None:
+            connection.execute(
+                "UPDATE tasks SET body='newer fence committed after recovery' WHERE id='AR-0001'"
+            )
+
+        DurableBoundAuthorityMutation(new_admission, reopened, session_revision=1).execute(
+            lambda: sqlite_capability.commit(reopened_effect)
+        )
+        keepalive.close()
+        with sqlite3.connect(self.authority) as connection:
+            self.assertEqual(
+                "newer fence committed after recovery",
+                connection.execute("SELECT body FROM tasks WHERE id='AR-0001'").fetchone()[0],
+            )
         with sqlite3.connect(self.control.control_store_path) as connection:
             effect_outcomes = connection.execute(
                 "SELECT outcome FROM authority_effect_intent WHERE project_id=?",
                 (PROJECT,),
             ).fetchall()
-        self.assertEqual([("ambiguous",)], effect_outcomes)
+        self.assertEqual([("ambiguous",), ("committed",)], effect_outcomes)
 
     def test_authority_effect_journal_validates_identity_and_single_use(self) -> None:
         with self.assertRaisesRegex(ControlStoreError, "session revision is invalid"):
@@ -1330,6 +1406,20 @@ class SQLiteMutationBarrierProcessTests(unittest.TestCase):
                 AuthorityEffectIntent(*values)
 
         held = self._create_held()
+        with self.assertRaisesRegex(ControlStoreError, "fencing token conflict"):
+            self.session.prepare_authority_effect(
+                held.revision,
+                "op-fencing-mismatch",
+                "sqlite",
+                expected_fencing_token="foreign-fence",
+            )
+        with self.assertRaisesRegex(ControlStoreError, "barrier identity conflict"):
+            self.session.prepare_authority_effect(
+                held.revision,
+                "op-barrier-mismatch",
+                "sqlite",
+                expected_barrier_id="foreign-barrier",
+            )
         intent = self.session.prepare_authority_effect(held.revision, "op-1", "sqlite")
         with self.assertRaisesRegex(ControlStoreError, "outcome is invalid"):
             self.session.finish_authority_effect(intent, "unknown")

@@ -31,7 +31,14 @@ class AuthorityEffectJournal(Protocol):
     """Durable pre-effect journal used by an isolated mutation capability."""
 
     def prepare_authority_effect(
-        self, expected_revision: int, operation_id: str, backend: str, target: str
+        self,
+        expected_revision: int,
+        operation_id: str,
+        backend: str,
+        target: str,
+        *,
+        expected_fencing_token: str | None = None,
+        expected_barrier_id: str | None = None,
     ) -> object: ...
 
     def finish_authority_effect(self, intent: Any, outcome: str) -> Any: ...
@@ -110,6 +117,8 @@ class DurableBoundAuthorityMutation:
             self._admission.operation_id,
             self._admission.backend,
             self._admission.target,
+            expected_fencing_token=self._admission.fencing_token,
+            expected_barrier_id=self._admission.barrier_id,
         )
         try:
             receipt = self._capability.execute(self._admission.backend, effect)
