@@ -204,6 +204,9 @@ class GitCommitCapability:
             raise GitMutationAmbiguousError("Git commit outcome is ambiguous")
         committed_head = self._commit_head(result)
         try:
+            # A replacement after Git returns cannot be reported as a receipt
+            # for the authority admitted before the effect.
+            self._assert_repository_identity()
             after_branch = self._git("symbolic-ref", "--short", "-q", "HEAD")
             after = self._git("rev-parse", "--verify", "HEAD^{commit}")
             status = self._git("status", "--porcelain=v1", "--untracked-files=all")
