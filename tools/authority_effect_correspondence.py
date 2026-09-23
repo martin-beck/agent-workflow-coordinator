@@ -15,8 +15,21 @@ MODEL_ACTIONS = frozenset(
         "MarkAmbiguous",
         "RejectStaleCAS",
         "Acquire",
+        "ObserveAuthority",
+        "RecheckHeld",
     }
 )
+
+MODEL_ACTION_SIGNATURES = {
+    "AcceptWrite": "AcceptWrite(p) ==",
+    "RejectWrite": "RejectWrite(p) ==",
+    "FinishWrite": "FinishWrite(p) ==",
+    "MarkAmbiguous": "MarkAmbiguous(p) ==",
+    "RejectStaleCAS": "RejectStaleCAS(p, expected) ==",
+    "Acquire": "Acquire(p) ==",
+    "ObserveAuthority": "ObserveAuthority(p, revision) ==",
+    "RecheckHeld": "RecheckHeld(p) ==",
+}
 
 
 def validate_authority_effect_model_contract(root: Path) -> None:
@@ -26,12 +39,10 @@ def validate_authority_effect_model_contract(root: Path) -> None:
         text = model.read_text(encoding="utf-8")
     except OSError as error:
         raise ValueError("authority-effect model is unavailable") from error
-    signatures = {
-        action: f"{action}(p) ==" for action in MODEL_ACTIONS if action != "RejectStaleCAS"
-    }
-    signatures["RejectStaleCAS"] = "RejectStaleCAS(p, expected) =="
     missing = [
-        f"action {action}" for action, signature in signatures.items() if signature not in text
+        f"action {action}"
+        for action, signature in MODEL_ACTION_SIGNATURES.items()
+        if signature not in text
     ]
     missing.extend(
         f"invariant {invariant}"
