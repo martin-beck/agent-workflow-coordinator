@@ -2,7 +2,7 @@
   "schema_version": 1,
   "kind": "implementation-refinement-obligation-matrix",
   "contract": "formal/upgrade/v10-refinement-contract.json",
-  "contract_sha256": "45d809840b9692c694aed2741be808effb55ce9592de30da2fd86ba3121c9f31",
+  "contract_sha256": "6a61cf3aee6a04b31fd6619f94078f7b4de1e5aba35b1f413cc8b7e0b7f57cc7",
   "decision": "deny",
   "decision_rule": "deny unless every obligation is proven at the exact implementation revision and independently reviewed",
   "obligations": [
