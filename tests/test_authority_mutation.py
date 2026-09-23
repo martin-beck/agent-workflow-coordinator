@@ -122,7 +122,11 @@ class AuthorityMutationTests(unittest.TestCase):
                 operation_id: str,
                 _backend: str,
                 _target: str,
+                *,
+                expected_fencing_token: str | None = None,
+                expected_barrier_id: str | None = None,
             ) -> str:
+                del expected_fencing_token, expected_barrier_id
                 self.expected_revision = expected_revision
                 journal.append(("prepared", operation_id))
                 return "intent-1"
@@ -147,7 +151,11 @@ class AuthorityMutationTests(unittest.TestCase):
                 _operation_id: str,
                 _backend: str,
                 _target: str,
+                *,
+                expected_fencing_token: str | None = None,
+                expected_barrier_id: str | None = None,
             ) -> str:
+                del expected_fencing_token, expected_barrier_id
                 return "intent-uncertain"
 
             def finish_authority_effect(self, intent: object, outcome: str) -> None:
@@ -161,8 +169,16 @@ class AuthorityMutationTests(unittest.TestCase):
     def test_durable_capability_fails_closed_if_ambiguity_cannot_be_journaled(self) -> None:
         class Journal:
             def prepare_authority_effect(
-                self, _revision: int, _operation: str, _backend: str, _target: str
+                self,
+                _revision: int,
+                _operation: str,
+                _backend: str,
+                _target: str,
+                *,
+                expected_fencing_token: str | None = None,
+                expected_barrier_id: str | None = None,
             ) -> str:
+                del expected_fencing_token, expected_barrier_id
                 return "intent-journal-failure"
 
             def finish_authority_effect(self, _intent: object, _outcome: str) -> None:
@@ -176,8 +192,16 @@ class AuthorityMutationTests(unittest.TestCase):
     def test_durable_capability_fails_closed_if_success_publication_is_uncertain(self) -> None:
         class Journal:
             def prepare_authority_effect(
-                self, _revision: int, _operation: str, _backend: str, _target: str
+                self,
+                _revision: int,
+                _operation: str,
+                _backend: str,
+                _target: str,
+                *,
+                expected_fencing_token: str | None = None,
+                expected_barrier_id: str | None = None,
             ) -> str:
+                del expected_fencing_token, expected_barrier_id
                 return "intent-publication-failure"
 
             def finish_authority_effect(self, _intent: object, outcome: str) -> None:

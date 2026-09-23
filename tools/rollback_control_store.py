@@ -2068,6 +2068,9 @@ class SQLiteBarrierSessionStore:
         operation_id: str,
         backend: str,
         target: str = "new",
+        *,
+        expected_fencing_token: str | None = None,
+        expected_barrier_id: str | None = None,
     ) -> AuthorityEffectIntent:
         """Durably fence one external authority effect before invoking it.
 
@@ -2081,6 +2084,12 @@ class SQLiteBarrierSessionStore:
             raise ControlStoreError("authority effect identity is invalid")
         if backend not in {"git", "sqlite"} or target != "new":
             raise ControlStoreError("authority effect backend or target is invalid")
+        for value, label in (
+            (expected_fencing_token, "fencing token"),
+            (expected_barrier_id, "barrier identity"),
+        ):
+            if value is not None and (not isinstance(value, str) or not value):
+                raise ControlStoreError(f"authority effect {label} is invalid")
         if self.operation_owned_by_current_thread:
             raise ControlStoreError("control store lock is non-reentrant")
         with self.operation_lock(), self._control._connection() as connection:
@@ -2090,6 +2099,16 @@ class SQLiteBarrierSessionStore:
                 raise ControlStoreError("authority effect requires a held barrier session")
             if current.revision != expected_revision:
                 raise ControlStoreError("authority effect session revision conflict")
+            if (
+                expected_fencing_token is not None
+                and current.identity.fencing_token != expected_fencing_token
+            ):
+                raise ControlStoreError("authority effect fencing token conflict")
+            if (
+                expected_barrier_id is not None
+                and current.identity.durable_barrier_id != expected_barrier_id
+            ):
+                raise ControlStoreError("authority effect barrier identity conflict")
             prepared = self._prepared_effect_intents_locked(connection)
             if prepared:
                 raise ControlStoreError("authority effect has unresolved intent")
