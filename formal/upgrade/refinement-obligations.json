@@ -143,6 +143,7 @@
         "tests/test_git_authority_mutation.py::GitCommitCapabilityTests.test_commits_only_pre_staged_change_and_verifies_postconditions",
         "tests/test_git_authority_mutation.py::GitCommitCapabilityTests.test_rejects_unstaged_or_empty_changes",
         "tests/test_git_authority_mutation.py::GitCommitCapabilityTests.test_rejects_head_drift_and_ambiguous_runner_outcome",
+        "tests/test_git_authority_mutation.py::GitCommitCapabilityTests.test_classifies_nonzero_commit_after_ref_update_as_ambiguous",
         "tests/test_git_authority_adapter.py::GitAuthorityAdapterTests.test_rollback_recheck_never_authorizes_mutation",
         "tests/test_git_authority_adapter.py::GitAuthorityAdapterTests.test_bound_rollback_rejects_stale_and_replaced_sessions_before_git",
         "tests/test_git_authority_adapter.py::GitAuthorityAdapterTests.test_bound_rollback_rejects_tampered_git_results_without_state_change",

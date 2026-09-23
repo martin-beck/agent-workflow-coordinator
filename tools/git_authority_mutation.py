@@ -163,7 +163,10 @@ class GitCommitCapability:
         except (OSError, subprocess.TimeoutExpired) as error:
             raise GitMutationAmbiguousError("Git commit outcome is ambiguous") from error
         if result.returncode != 0:
-            raise GitMutationError("Git commit was rejected")
+            # A nonzero exit does not prove that Git made no ref update.  The
+            # caller must fence the operation and recover/reconcile before a
+            # fresh capability can be issued.
+            raise GitMutationAmbiguousError("Git commit outcome is ambiguous")
         committed_head = self._commit_head(result)
         try:
             after_branch = self._git("symbolic-ref", "--short", "-q", "HEAD")

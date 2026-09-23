@@ -180,6 +180,35 @@ class GitCommitCapabilityTests(unittest.TestCase):
                 runner=timeout_runner,
             ).commit("op-1 authority commit")
 
+    def test_classifies_nonzero_commit_after_ref_update_as_ambiguous(self) -> None:
+        (self.root / "state").write_text("new\n", encoding="utf-8")
+        _git(self.root, "add", "state")
+
+        def commit_then_fail(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
+            command = cast(list[str], args[0])
+            result = subprocess.run(command, **cast(Any, kwargs))
+            if command[3:4] == ["commit"] and result.returncode == 0:
+                return subprocess.CompletedProcess(
+                    command,
+                    1,
+                    stdout=result.stdout,
+                    stderr="commit result delivery failed",
+                )
+            return result
+
+        capability = GitCommitCapability(
+            self.root,
+            admission=self._admission(),
+            admission_reread=lambda: self._admission().__dict__,
+            expected_branch="main",
+            expected_head=_git(self.root, "rev-parse", "HEAD"),
+            runner=commit_then_fail,
+        )
+        with self.assertRaisesRegex(GitMutationAmbiguousError, "outcome is ambiguous"):
+            capability.commit("op-1 authority commit")
+        self.assertEqual("", _git(self.root, "status", "--porcelain=v1"))
+        self.assertEqual("new\n", (self.root / "state").read_text(encoding="utf-8"))
+
     def test_rejects_a_concurrent_commit_after_the_effect(self) -> None:
         (self.root / "state").write_text("new\n", encoding="utf-8")
         _git(self.root, "add", "state")
