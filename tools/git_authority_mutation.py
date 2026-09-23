@@ -11,6 +11,7 @@ It is the independently testable effect seam for the Git mutation gate.
 from __future__ import annotations
 
 import re
+import stat
 import subprocess
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -74,7 +75,8 @@ class GitCommitCapability:
         expected_head: str,
         runner: _Runner = subprocess.run,
     ) -> None:
-        self._repository = repository.resolve()
+        self._repository = repository.absolute()
+        self._repository_identity = self._read_repository_identity(self._repository)
         if admission.backend != "git" or admission.target != "new":
             raise GitMutationError("Git mutation admission identity is invalid")
         self._admission = admission
@@ -85,10 +87,30 @@ class GitCommitCapability:
         self._fencing_token = self._validate_text(admission.fencing_token, "fencing token")
         self._expected_branch = self._validate_text(expected_branch, "branch identity")
         self._expected_head = self._validate_head(expected_head)
-        if not self._repository.is_dir():
-            raise GitMutationError("Git authority repository is unavailable")
         self._runner = runner
         self._consumed = False
+
+    @staticmethod
+    def _read_repository_identity(repository: Path) -> tuple[int, int]:
+        try:
+            status = repository.lstat()
+        except OSError as error:
+            raise GitMutationError("Git authority repository is unavailable") from error
+        if not stat.S_ISDIR(status.st_mode):
+            raise GitMutationError("Git authority repository is not a regular directory")
+        return status.st_dev, status.st_ino
+
+    def _assert_repository_identity(self) -> None:
+        try:
+            current = self._read_repository_identity(self._repository)
+        except GitMutationError as error:
+            raise GitMutationRejectedError(
+                "Git authority repository identity changed before commit"
+            ) from error
+        if current != self._repository_identity:
+            raise GitMutationRejectedError(
+                "Git authority repository identity changed before commit"
+            )
 
     @staticmethod
     def _validate_text(value: str, label: str) -> str:
@@ -125,6 +147,7 @@ class GitCommitCapability:
         return match.group(1)
 
     def _assert_before(self) -> tuple[str, str]:
+        self._assert_repository_identity()
         branch = self._git("symbolic-ref", "--short", "-q", "HEAD")
         head = self._git("rev-parse", "--verify", "HEAD^{commit}")
         if branch != self._expected_branch or head != self._expected_head:
