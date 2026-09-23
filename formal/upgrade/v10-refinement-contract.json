@@ -93,6 +93,7 @@
       "implementation_obligation": "The isolated authority effect journal durably records the bound session and operation before an external effect, publishes a verified outcome only after the effect returns, and converts a worker death with a prepared intent into a write-closed ambiguous session that cannot reuse the operation or fencing token.",
       "evidence_required": [
         "tests/test_authority_mutation.py::AuthorityMutationTests.test_durable_effect_publishes_only_after_verified_receipt",
+        "tests/test_authority_mutation.py::AuthorityMutationTests.test_durable_identity_rejection_is_journaled_ambiguous_without_publication",
         "tests/test_authority_mutation.py::AuthorityMutationTests.test_durable_ambiguous_effect_is_durably_marked_ambiguous",
         "tests/test_sqlite_mutation_barrier.py::SQLiteMutationBarrierProcessTests.test_authority_effect_journal_validates_identity_and_single_use",
         "tests/test_sqlite_mutation_barrier.py::test_sigkill_after_authority_effect_requires_recovery_and_new_fence",

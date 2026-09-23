@@ -205,6 +205,46 @@ class AuthorityMutationTests(unittest.TestCase):
         self.assertEqual("intent-1", journal[1][1])
         self.assertEqual(receipt, journal[1][2])
 
+    def test_durable_identity_rejection_is_journaled_ambiguous_without_publication(self) -> None:
+        journal: list[tuple[str, object | None]] = []
+
+        class Journal:
+            def prepare_authority_effect(
+                self,
+                _expected_revision: int,
+                _operation_id: str,
+                _backend: str,
+                _target: str,
+                *,
+                expected_fencing_token: str | None = None,
+                expected_barrier_id: str | None = None,
+                expected_artifact_identity: str | None = None,
+                expected_manifest_identity: str | None = None,
+                expected_selector_identity: str | None = None,
+                expected_runtime_identity: str | None = None,
+            ) -> str:
+                del (
+                    expected_fencing_token,
+                    expected_barrier_id,
+                    expected_artifact_identity,
+                    expected_manifest_identity,
+                    expected_selector_identity,
+                    expected_runtime_identity,
+                )
+                journal.append(("prepared", None))
+                return "intent-rejected"
+
+            def finish_authority_effect(
+                self, _intent: object, outcome: str, receipt: object | None = None
+            ) -> None:
+                journal.append((outcome, receipt))
+
+        with self.assertRaisesRegex(AuthorityMutationError, "result identity mismatch"):
+            DurableBoundAuthorityMutation(_admission(), Journal(), session_revision=1).execute(
+                lambda: {**self._result(), "fencing_token": "foreign"}
+            )
+        self.assertEqual([("prepared", None), ("ambiguous", None)], journal)
+
     def test_durable_effect_forwards_exact_admission_identity_to_journal(self) -> None:
         captured: list[object] = []
 

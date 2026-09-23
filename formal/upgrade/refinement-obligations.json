@@ -2,7 +2,7 @@
   "schema_version": 1,
   "kind": "implementation-refinement-obligation-matrix",
   "contract": "formal/upgrade/v10-refinement-contract.json",
-  "contract_sha256": "bbda6fbd6f62120693e626fcf5f47b8b1f5c7ca45a5beccf85f693db47a727f0",
+  "contract_sha256": "5b5fbc95a80d2cd8341fc2abdc72dca9e7ce9d96a1730f8983034ff49a357aad",
   "decision": "deny",
   "decision_rule": "deny unless every obligation is proven at the exact implementation revision and independently reviewed",
   "obligations": [
@@ -56,6 +56,7 @@
         "tests/test_sqlite_mutation_barrier.py::test_sigkill_after_authority_effect_requires_recovery_and_new_fence",
         "tests/test_sqlite_mutation_barrier.py::test_sigkill_after_git_authority_effect_requires_recovery_and_new_fence",
         "tests/test_authority_mutation.py::AuthorityMutationTests.test_durable_ambiguous_effect_is_durably_marked_ambiguous",
+        "tests/test_authority_mutation.py::AuthorityMutationTests.test_durable_identity_rejection_is_journaled_ambiguous_without_publication",
         "tests/test_lock_domain_scope.py::LockDomainScopeTests.test_process_death_releases_scope_for_fresh_recheck",
         "tests/test_lock_domain_scope.py::LockDomainScopeTests.test_validated_hold_process_death_releases_scope_for_fresh_caller",
         "tests/test_lock_domain_scope.py::LockDomainScopeTests.test_binding_abort_allows_fresh_worker_reacquisition_when_identity_is_unchanged",
