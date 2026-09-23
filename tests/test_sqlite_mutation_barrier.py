@@ -1575,7 +1575,33 @@ class SQLiteMutationBarrierProcessTests(unittest.TestCase):
                 "sqlite",
                 expected_barrier_id="foreign-barrier",
             )
-        intent = self.session.prepare_authority_effect(held.revision, "op-1", "sqlite")
+        intent = self.session.prepare_authority_effect(
+            held.revision,
+            "op-1",
+            "sqlite",
+            expected_fencing_token=held.identity.fencing_token,
+            expected_barrier_id=held.identity.durable_barrier_id,
+        )
+        with sqlite3.connect(self.control.control_store_path) as connection:
+            persisted = connection.execute(
+                "SELECT operation_id,backend,target,attempt_id,identity_digest,"
+                "fencing_token,session_revision,outcome "
+                "FROM authority_effect_intent WHERE project_id=? AND intent_id=?",
+                (PROJECT, intent.intent_id),
+            ).fetchone()
+        self.assertEqual(
+            (
+                intent.operation_id,
+                intent.backend,
+                intent.target,
+                held.identity.attempt_id,
+                held.identity.identity_digest,
+                held.identity.fencing_token,
+                held.revision,
+                "prepared",
+            ),
+            persisted,
+        )
         with self.assertRaisesRegex(ControlStoreError, "outcome is invalid"):
             self.session.finish_authority_effect(intent, "unknown")
         with self.assertRaisesRegex(ControlStoreError, "intent is required"):
