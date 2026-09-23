@@ -13,8 +13,8 @@
     }
   },
   "implementation_snapshot": {
-    "revision": "4676a9eeb4f9f87fa9339225457134ed7f6a8964",
-    "runtime_revision": "4676a9eeb4f9f87fa9339225457134ed7f6a8964",
+    "revision": "bd1f0ebe849416bf3df071f5230c76887e57f2f4",
+    "runtime_revision": "bd1f0ebe849416bf3df071f5230c76887e57f2f4",
     "status": "descriptor-safe control-store and SQLite DB/WAL/SHM rereads plus bounded independent-process barrier/write evidence; executable apply and rollback remain rejection-only"
   },
   "correspondence": [
@@ -77,6 +77,17 @@
         "tests/test_authority_mutation.py::AuthorityMutationTests.test_ambiguous_effect_consumes_token_and_cannot_retry"
       ],
       "status": "bounded executable cross-backend effect evidence; implementation refinement pending and public dispatch disabled"
+    },
+    {
+      "model_actions": ["AcceptWrite", "FinishWrite", "MarkAmbiguous"],
+      "implementation_obligation": "The isolated SQLite authority effect accepts one immutable SQLite admission bundle, verifies database/WAL/SHM identities before and after the transaction, uses full synchronous durability, checks integrity and foreign keys, and classifies post-commit identity or verification uncertainty as ambiguous without enabling public upgrade dispatch.",
+      "evidence_required": [
+        "tests/test_sqlite_authority_mutation.py::SQLiteCommitCapabilityTests.test_commits_effect_and_verifies_integrity",
+        "tests/test_sqlite_authority_mutation.py::SQLiteCommitCapabilityTests.test_rejects_sidecar_identity_drift_before_effect",
+        "tests/test_sqlite_authority_mutation.py::SQLiteCommitCapabilityTests.test_classifies_post_commit_identity_drift_as_ambiguous",
+        "tests/test_sqlite_authority_mutation.py::SQLiteCommitCapabilityTests.test_classifies_sqlite_errors_as_ambiguous"
+      ],
+      "status": "bounded executable SQLite effect evidence; implementation refinement pending and public dispatch disabled"
     },
     {
       "model_actions": ["MarkAmbiguous", "RejectWrite", "FunctionalAvailability"],
