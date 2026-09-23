@@ -1769,11 +1769,29 @@ class SQLiteMutationBarrierProcessTests(unittest.TestCase):
             self.session.finish_authority_effect(object(), "committed")  # type: ignore[arg-type]
         with self.assertRaisesRegex(ControlStoreError, "receipt identity mismatch"):
             self.session.finish_authority_effect(intent, "committed")
+        with sqlite3.connect(self.control.control_store_path) as connection:
+            self.assertEqual(
+                ("prepared",),
+                connection.execute(
+                    "SELECT outcome FROM authority_effect_intent "
+                    "WHERE project_id=? AND intent_id=?",
+                    (PROJECT, intent.intent_id),
+                ).fetchone(),
+            )
         with self.assertRaisesRegex(ControlStoreError, "receipt identity mismatch"):
             self.session.finish_authority_effect(
                 intent,
                 "committed",
                 {"backend": "git"},
+            )
+        with sqlite3.connect(self.control.control_store_path) as connection:
+            self.assertEqual(
+                ("prepared",),
+                connection.execute(
+                    "SELECT outcome FROM authority_effect_intent "
+                    "WHERE project_id=? AND intent_id=?",
+                    (PROJECT, intent.intent_id),
+                ).fetchone(),
             )
         completed = self.session.finish_authority_effect(
             intent,
