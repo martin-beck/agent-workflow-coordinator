@@ -305,6 +305,36 @@ class UpgradeFormalEvidenceTests(unittest.TestCase):
                 selector,
             )
 
+    def test_lock_domain_contract_binds_exact_hostile_evidence(self) -> None:
+        contract = json.loads(CONTRACT.read_text(encoding="utf-8"))
+        entry = next(
+            value
+            for value in contract["correspondence"]
+            if value["implementation_obligation"].startswith("One non-reentrant operation scope")
+        )
+        self.assertEqual(
+            [
+                "AcquireCommon",
+                "AcquireControl",
+                "AcquireAuthority",
+                "ReleaseAuthority",
+                "ReleaseControl",
+                "ReleaseCommon",
+            ],
+            entry["model_actions"],
+        )
+        self.assertEqual("obligation-only", entry["status"])
+        self.assertNotIn(
+            "lock-order tests",
+            entry["evidence_required"],
+        )
+        self.assertNotIn("re-entry rejection", entry["evidence_required"])
+        self.assertNotIn("descriptor identity checks", entry["evidence_required"])
+        for reference in entry["evidence_required"]:
+            path, selector = reference.split("::", 1)
+            self.assertTrue((ROOT / path).exists(), path)
+            self.assertIn(selector.rsplit(".", 1)[-1], (ROOT / path).read_text(), selector)
+
     def test_recovery_evidence_is_mapped_without_authorization_overclaim(self) -> None:
         contract = json.loads(CONTRACT.read_text(encoding="utf-8"))
         entry = next(

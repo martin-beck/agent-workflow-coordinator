@@ -188,9 +188,10 @@
         "tests/test_lock_domain_scope.py::LockDomainScopeTests.test_validated_hold_process_death_releases_scope_for_fresh_caller",
         "tests/test_lock_domain_scope.py::LockDomainScopeTests.test_binding_abort_releases_locks_and_fresh_worker_rejects_replaced_identity",
         "tests/test_lock_domain_scope.py::LockDomainScopeTests.test_repeated_handoff_rereads_authority_before_rejecting_stale_retry",
-        "lock-order tests",
-        "re-entry rejection",
-        "descriptor identity checks"
+        "tests/test_mutation_fence.py::MutationFenceTests.test_scope_is_nonreentrant_and_sqlite_route_uses_it",
+        "tests/test_rollback_control_store.py::RollbackControlStoreTests.test_operation_lock_is_single_nonreentrant_outer_scope",
+        "tests/test_lock_domain.py::LockDomainTests.test_replaced_descriptor_and_inactive_guard_fail_closed",
+        "tests/test_lock_domain.py::LockDomainTests.test_identity_rejects_nonregular_descriptor_and_symlink"
       ],
       "status": "obligation-only"
     },
