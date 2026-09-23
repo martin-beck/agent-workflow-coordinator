@@ -75,7 +75,9 @@ class SQLiteCommitCapability:
             raise SQLiteMutationError("SQLite mutation admission identity is invalid")
         if type(admission.state_revision) is not int or admission.state_revision < 1:
             raise SQLiteMutationError("SQLite mutation revision is invalid")
-        self._authority = authority.resolve()
+        # Preserve the supplied pathname so the pre-effect lstat fence can
+        # reject a symlinked authority instead of silently following it.
+        self._authority = authority.absolute()
         self._admission = admission
         if not callable(admission_reread):
             raise SQLiteMutationError("SQLite admission reread is invalid")
