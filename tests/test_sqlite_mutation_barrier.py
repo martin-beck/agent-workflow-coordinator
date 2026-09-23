@@ -347,6 +347,8 @@ def _authority_effect_waiting_for_sigkill(root_text: str, ready: Any) -> None:
             "UPDATE tasks SET body='effect committed before worker death' WHERE id='AR-0001'"
         )
         connection.commit()
+        connection.close()
+        keepalive.close()
         ready.set()
         os._exit(17)
 
