@@ -113,6 +113,7 @@ class SQLiteCommitCapability:
         try:
             connection = sqlite3.connect(self._authority, isolation_level=None, timeout=5)
             connection.execute("PRAGMA foreign_keys=ON")
+            connection.execute("PRAGMA synchronous=FULL")
             connection.execute("BEGIN IMMEDIATE")
             effect(connection)
             connection.commit()
@@ -132,9 +133,10 @@ class SQLiteCommitCapability:
         try:
             self._assert_filesystem_identity()
             with sqlite3.connect(self._authority) as verification:
+                verification.execute("PRAGMA foreign_keys=ON")
                 integrity = str(verification.execute("PRAGMA integrity_check").fetchone()[0])
                 violations = len(verification.execute("PRAGMA foreign_key_check").fetchall())
-        except (OSError, sqlite3.Error) as error:
+        except (OSError, SQLiteMutationError, sqlite3.Error) as error:
             raise SQLiteMutationAmbiguousError(
                 "SQLite post-commit verification is ambiguous"
             ) from error

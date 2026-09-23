@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import shutil
 import sqlite3
 import tempfile
 import unittest
@@ -84,6 +85,19 @@ class SQLiteCommitCapabilityTests(unittest.TestCase):
 
         with self.assertRaises(SQLiteMutationAmbiguousError):
             self._capability().commit(invalid)
+
+    def test_classifies_post_commit_identity_drift_as_ambiguous(self) -> None:
+        replacement = self.root / "replacement.sqlite"
+
+        def update(connection: sqlite3.Connection) -> None:
+            connection.execute("UPDATE state SET value='new' WHERE id=1")
+            shutil.copy2(self.db, replacement)
+            replacement.replace(self.db)
+
+        with self.assertRaisesRegex(
+            SQLiteMutationAmbiguousError, "post-commit verification is ambiguous"
+        ):
+            self._capability().commit(update)
 
 
 if __name__ == "__main__":
