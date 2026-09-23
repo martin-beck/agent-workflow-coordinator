@@ -77,7 +77,11 @@ class SQLiteCommitCapabilityTests(unittest.TestCase):
 
     def test_capability_is_single_use_but_fresh_capability_reopens(self) -> None:
         capability = self._capability()
-        capability.commit(lambda connection: connection.execute("UPDATE state SET value='first'"))
+
+        def first_update(connection: sqlite3.Connection) -> None:
+            connection.execute("UPDATE state SET value='first'")
+
+        capability.commit(first_update)
 
         called = False
 
@@ -103,9 +107,11 @@ class SQLiteCommitCapabilityTests(unittest.TestCase):
             runtime_identity="runtime-1",
         )
         self._admission = reopened_admission
-        self._capability().commit(
-            lambda connection: connection.execute("UPDATE state SET value='second'")
-        )
+
+        def second_update(connection: sqlite3.Connection) -> None:
+            connection.execute("UPDATE state SET value='second'")
+
+        self._capability().commit(second_update)
         with sqlite3.connect(self.db) as connection:
             self.assertEqual(("second",), connection.execute("SELECT value FROM state").fetchone())
 
