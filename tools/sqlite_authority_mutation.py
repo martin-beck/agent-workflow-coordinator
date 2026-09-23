@@ -33,6 +33,7 @@ class SQLiteCommitResult:
 
 
 _Commit = Callable[[sqlite3.Connection], None]
+_Connector = Callable[..., sqlite3.Connection]
 
 
 class SQLiteCommitCapability:
@@ -51,6 +52,7 @@ class SQLiteCommitCapability:
         expected_db_identity: tuple[int, int],
         expected_wal_identity: tuple[int, int] | None,
         expected_shm_identity: tuple[int, int] | None,
+        connector: _Connector = sqlite3.connect,
     ) -> None:
         if admission.backend != "sqlite" or admission.target != "new":
             raise SQLiteMutationError("SQLite mutation admission identity is invalid")
@@ -61,6 +63,7 @@ class SQLiteCommitCapability:
         self._db_identity = expected_db_identity
         self._wal_identity = expected_wal_identity
         self._shm_identity = expected_shm_identity
+        self._connector = connector
         self._validate_identity(expected_db_identity, "database")
         self._validate_optional_identity(expected_wal_identity, "WAL")
         self._validate_optional_identity(expected_shm_identity, "SHM")
@@ -105,13 +108,22 @@ class SQLiteCommitCapability:
         ):
             raise SQLiteMutationError("SQLite SHM identity changed")
 
+    @staticmethod
+    def _close_connection(connection: sqlite3.Connection) -> None:
+        try:
+            connection.close()
+        except sqlite3.Error as error:
+            raise SQLiteMutationAmbiguousError(
+                "SQLite connection close outcome is ambiguous"
+            ) from error
+
     def commit(self, effect: _Commit) -> SQLiteCommitResult:
         if not callable(effect):
             raise SQLiteMutationError("SQLite authority effect is invalid")
         self._assert_filesystem_identity()
         connection: sqlite3.Connection | None = None
         try:
-            connection = sqlite3.connect(self._authority, isolation_level=None, timeout=5)
+            connection = self._connector(self._authority, isolation_level=None, timeout=5)
             connection.execute("PRAGMA foreign_keys=ON")
             connection.execute("PRAGMA synchronous=FULL")
             connection.execute("BEGIN IMMEDIATE")
@@ -129,7 +141,7 @@ class SQLiteCommitCapability:
             raise
         finally:
             if connection is not None:
-                connection.close()
+                self._close_connection(connection)
         try:
             self._assert_filesystem_identity()
             with sqlite3.connect(self._authority) as verification:

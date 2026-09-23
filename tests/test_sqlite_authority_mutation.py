@@ -9,6 +9,7 @@ import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
+from typing import Any, cast
 
 from tools.authority_neutral_commit import CommitAdmissionBundle
 from tools.sqlite_authority_mutation import (
@@ -27,6 +28,11 @@ class SQLiteCommitCapabilityTests(unittest.TestCase):
             connection.execute("PRAGMA journal_mode=WAL")
             connection.execute("CREATE TABLE state (id INTEGER PRIMARY KEY, value TEXT NOT NULL)")
             connection.execute("INSERT INTO state VALUES (1, 'old')")
+        # Keep WAL/SHM identities materialized for the duration of each hostile case.
+        self.keepalive = sqlite3.connect(self.db)
+        self.keepalive.execute("PRAGMA wal_autocheckpoint=0")
+        self.keepalive.execute("PRAGMA user_version=1")
+        self.keepalive.commit()
         self._admission = CommitAdmissionBundle(
             backend="sqlite",
             target="new",
@@ -41,6 +47,7 @@ class SQLiteCommitCapabilityTests(unittest.TestCase):
         )
 
     def tearDown(self) -> None:
+        self.keepalive.close()
         self.temp.cleanup()
 
     def _capability(self) -> SQLiteCommitCapability:
@@ -98,6 +105,38 @@ class SQLiteCommitCapabilityTests(unittest.TestCase):
             SQLiteMutationAmbiguousError, "post-commit verification is ambiguous"
         ):
             self._capability().commit(update)
+
+    def test_classifies_connection_close_failure_as_ambiguous(self) -> None:
+        real_connect = sqlite3.connect
+
+        class CloseFailingConnection:
+            def __init__(self, connection: sqlite3.Connection) -> None:
+                self._connection = connection
+
+            def __getattr__(self, name: str) -> object:
+                return getattr(self._connection, name)
+
+            def close(self) -> None:
+                self._connection.close()
+                raise sqlite3.OperationalError("injected close failure")
+
+        def connector(*args: Any, **kwargs: Any) -> sqlite3.Connection:
+            return cast(sqlite3.Connection, CloseFailingConnection(real_connect(*args, **kwargs)))
+
+        def update(connection: sqlite3.Connection) -> None:
+            connection.execute("UPDATE state SET value='new'")
+
+        with self.assertRaisesRegex(
+            SQLiteMutationAmbiguousError, "connection close outcome is ambiguous"
+        ):
+            SQLiteCommitCapability(
+                self.db,
+                admission=self._admission,
+                expected_db_identity=self._capability()._db_identity,
+                expected_wal_identity=self._capability()._wal_identity,
+                expected_shm_identity=self._capability()._shm_identity,
+                connector=connector,
+            ).commit(update)
 
 
 if __name__ == "__main__":
