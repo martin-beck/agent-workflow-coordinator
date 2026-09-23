@@ -124,7 +124,11 @@
         "tests/test_authority_neutral_rehearsal.py::test_complete_trace_is_functional_and_mutation_free",
         "tests/test_authority_neutral_rehearsal.py::test_rejects_order_identity_and_mutation_drift",
         "tests/test_authority_neutral_rehearsal.py::test_failure_paths_require_functional_write_closed_recovery",
-        "tests/test_authority_neutral_rehearsal.py::test_bound_rehearsal_rejects_trace_identity_drift"
+        "tests/test_authority_neutral_rehearsal.py::test_bound_rehearsal_rejects_trace_identity_drift",
+        "tests/test_git_authority_mutation.py::test_capability_is_single_use_but_fresh_capability_reopens",
+        "tests/test_sqlite_authority_mutation.py::test_capability_is_single_use_but_fresh_capability_reopens",
+        "tests/test_sqlite_mutation_barrier.py::test_sigkill_after_authority_effect_requires_recovery_and_new_fence",
+        "tests/test_sqlite_mutation_barrier.py::test_sigkill_after_git_authority_effect_requires_recovery_and_new_fence"
       ],
       "status": "bounded executable integrated rehearsal evidence; implementation refinement pending"
     },
