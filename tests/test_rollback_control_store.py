@@ -148,7 +148,10 @@ if mode == "probe-after-sidecar":
     raise SystemExit(0)
 
 store.create(identity)
-if mode != "kill-after-ambiguous-replacement-commit":
+if mode not in {
+    "kill-after-ambiguous-replacement-commit",
+    "kill-after-ambiguous-reconciliation-outcome-publication",
+}:
     store.bind_child(1, BarrierChildIdentity.bind(identity, "subprocess-forward", "new"))
 
 if mode == "kill-after-ambiguous-replacement-commit":
@@ -176,6 +179,34 @@ if mode == "kill-after-ambiguous-replacement-commit":
         original_mark_intent(connection, intent_id, outcome, cause_code)
 
     store._mark_intent_locked = kill_before_reconciled
+    store.reconcile_ambiguous(2, replacement)
+
+if mode == "kill-after-ambiguous-reconciliation-outcome-publication":
+    store.mark_ambiguous(1, "seed-ambiguity")
+    replacement_record = dict(identity_record)
+    replacement_record.update(
+        {
+            "attempt_id": "subprocess-replacement",
+            "state_revision": 4,
+            "durable_barrier_id": "barrier-replacement",
+            "fencing_token": "fence-replacement",
+        }
+    )
+    replacement_record["identity_digest"] = canonical_barrier_session_digest(replacement_record)
+    replacement = BarrierSessionState(
+        BarrierSessionIdentity.from_record(replacement_record), "held", 1
+    )
+    original_reconcile = store.reconcile_ambiguous
+
+    def kill_after_reconciled(expected_revision, replacement):
+        result = original_reconcile(expected_revision, replacement)
+        ready_path.write_text("reconciliation-outcome-published\n", encoding="utf-8")
+        with ready_path.open("rb") as ready:
+            os.fsync(ready.fileno())
+        os.kill(os.getpid(), signal.SIGKILL)
+        return result
+
+    store.reconcile_ambiguous = kill_after_reconciled
     store.reconcile_ambiguous(2, replacement)
 
 if mode == "clean":
@@ -359,7 +390,13 @@ def _recover_ambiguous_child(control_text: str, authority_text: str, result_text
     state = store.recover_unknown()
     if state is None:
         raise SystemExit("missing recovery state")
-    Path(result_text).write_text(f"{state.status}:{state.revision}\n", encoding="utf-8")
+    if store.operation_owned_by_current_thread:
+        raise SystemExit("recovery retained the operation lock")
+    with store.operation_lock():
+        pass
+    Path(result_text).write_text(
+        f"{state.status}:{state.revision}:lock-released\n", encoding="utf-8"
+    )
 
 
 def authority_task() -> tuple[Path, dict[str, object], str]:
@@ -903,7 +940,9 @@ class RollbackControlStoreTests(unittest.TestCase):
             verifier.start()
             verifier.join(timeout=10)
             self.assertEqual(0, verifier.exitcode)
-            self.assertEqual("ambiguous:4\n", child_result.read_text(encoding="utf-8"))
+            self.assertEqual(
+                "ambiguous:4:lock-released\n", child_result.read_text(encoding="utf-8")
+            )
             recovered = store.snapshot()
             self.assertIsNotNone(recovered)
             assert recovered is not None
@@ -999,7 +1038,7 @@ class RollbackControlStoreTests(unittest.TestCase):
             verifier.start()
             verifier.join(timeout=10)
             self.assertEqual(0, verifier.exitcode)
-            self.assertEqual("held:1\n", verifier_result.read_text(encoding="utf-8"))
+            self.assertEqual("held:1:lock-released\n", verifier_result.read_text(encoding="utf-8"))
 
             reopened = SQLiteBarrierSessionStore(
                 SQLiteRollbackControlStore(control_path, PROJECT, authority_path),
@@ -1010,6 +1049,59 @@ class RollbackControlStoreTests(unittest.TestCase):
             self.assertEqual(("held", 1), (reopened.status, reopened.revision))
             self.assertEqual("subprocess-replacement", reopened.identity.attempt_id)
             self.assertEqual(authority_bytes, authority_path.read_bytes())
+
+    def test_v10_subprocess_death_after_ambiguous_reconciliation_outcome_is_recoverable(
+        self,
+    ) -> None:
+        """A death after reconciliation publication remains reopenable and lock-safe."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            control_path = root / "control.sqlite"
+            authority_path = root / "authority.sqlite"
+            authority_bytes = b"authority remains untouched after reconciliation\n"
+            authority_path.write_bytes(authority_bytes)
+            ready_path = root / "ready"
+            process = self._run_session_process(
+                control_path,
+                authority_path,
+                "kill-after-ambiguous-reconciliation-outcome-publication",
+                ready_path,
+            )
+            self._wait_for_file(ready_path, process)
+            self.assertEqual(
+                "reconciliation-outcome-published",
+                ready_path.read_text(encoding="utf-8").strip(),
+            )
+            self.assertEqual(-signal.SIGKILL, process.wait(timeout=10))
+            stdout, stderr = process.communicate()
+            self.assertEqual("", stderr, msg=stdout)
+
+            verifier_result = root / "recovered-child-result"
+            verifier = multiprocessing.get_context("fork").Process(
+                target=_recover_ambiguous_child,
+                args=(str(control_path), str(authority_path), str(verifier_result)),
+            )
+            verifier.start()
+            verifier.join(timeout=10)
+            self.assertEqual(0, verifier.exitcode)
+            self.assertEqual("held:1:lock-released\n", verifier_result.read_text(encoding="utf-8"))
+
+            reopened = SQLiteBarrierSessionStore(
+                SQLiteRollbackControlStore(control_path, PROJECT, authority_path),
+                lambda: "authority-3",
+            )
+            state = reopened.snapshot()
+            self.assertIsNotNone(state)
+            assert state is not None
+            self.assertEqual(("held", 1), (state.status, state.revision))
+            self.assertEqual("subprocess-replacement", state.identity.attempt_id)
+            self.assertEqual(authority_bytes, authority_path.read_bytes())
+            with sqlite3.connect(control_path) as connection:
+                outcomes = connection.execute(
+                    "SELECT outcome FROM barrier_session_intent WHERE project_id=?",
+                    (PROJECT,),
+                ).fetchall()
+            self.assertEqual([("committed",), ("committed",), ("reconciled",)], outcomes)
 
     def test_v10_durable_session_persists_children_and_reopen(self) -> None:
         from tools.upgrade_identity import BarrierChildIdentity
