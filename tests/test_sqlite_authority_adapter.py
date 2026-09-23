@@ -185,6 +185,51 @@ class Scope:
 
 
 class SQLiteAuthorityAdapterTests(unittest.TestCase):
+    def test_adapter_durable_commit_factory_journals_real_sqlite_receipt(self) -> None:
+        admission = CommitAdmissionBundle(
+            backend="sqlite",
+            target="new",
+            operation_id="op-1:commit",
+            fencing_token="fence",  # noqa: S106
+            state_revision=1,
+            barrier_id="barrier",
+            artifact_identity="artifact",
+            manifest_identity="manifest",
+            selector_identity="selector",
+            runtime_identity="runtime",
+        )
+        journal: list[tuple[str, object | None]] = []
+
+        class Journal:
+            def prepare_authority_effect(self, *_args: object, **_kwargs: object) -> str:
+                journal.append(("prepared", None))
+                return "intent"
+
+            def finish_authority_effect(
+                self, _intent: object, outcome: str, receipt: object | None = None
+            ) -> None:
+                journal.append((outcome, receipt))
+
+        capability = self.adapter.bind_durable_commit_capability(
+            admission,
+            Journal(),
+            session_revision=1,
+            admission_reread=lambda: admission.__dict__,
+        )
+        receipt = capability.execute(
+            lambda connection: connection.execute(
+                "UPDATE records SET body = 'durable' WHERE id = 1"
+            )
+        )
+
+        self.assertEqual("sqlite", receipt.backend)
+        with sqlite3.connect(self.authority) as connection:
+            self.assertEqual(
+                "durable", connection.execute("SELECT body FROM records").fetchone()[0]
+            )
+        self.assertEqual(["prepared", "committed"], [item[0] for item in journal])
+        self.assertEqual(receipt, journal[1][1])
+
     def test_adapter_binds_isolated_commit_capability_without_enabling_dispatch(self) -> None:
         admission = CommitAdmissionBundle(
             backend="sqlite",
