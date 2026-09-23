@@ -29,7 +29,9 @@
       "evidence": [
         "tests/test_durable_binding.py::DurableBindingTests.test_replacement_and_symlink_are_rejected",
         "tests/test_git_authority_mutation.py::test_rejects_stale_admission_reread_before_effect",
+        "tests/test_git_authority_mutation.py::GitCommitCapabilityTests.test_rejects_every_admission_identity_drift_before_effect",
         "tests/test_sqlite_authority_mutation.py::test_rejects_stale_admission_reread_before_effect",
+        "tests/test_sqlite_authority_mutation.py::SQLiteCommitCapabilityTests.test_rejects_every_admission_identity_drift_before_effect",
         "tests/test_lock_domain_scope.py::LockDomainScopeTests.test_hold_rejects_trusted_authority_drift_between_rereads",
         "tests/test_lock_domain_scope.py::LockDomainScopeTests.test_abort_then_recheck_rejects_durable_session_state_change",
         "tests/test_lock_domain_scope.py::LockDomainScopeTests.test_fresh_process_reread_rejects_old_lease_after_durable_retry"

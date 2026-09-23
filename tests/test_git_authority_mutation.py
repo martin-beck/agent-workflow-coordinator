@@ -197,6 +197,53 @@ class GitCommitCapabilityTests(unittest.TestCase):
         self.assertEqual(before, _git(self.root, "rev-parse", "HEAD"))
         self.assertEqual("M  state", _git(self.root, "status", "--porcelain=v1"))
 
+    def test_rejects_every_admission_identity_drift_before_effect(self) -> None:
+        (self.root / "state").write_text("new\n", encoding="utf-8")
+        _git(self.root, "add", "state")
+        admission = self._admission()
+        before = _git(self.root, "rev-parse", "HEAD")
+        changes: dict[str, object] = {
+            "backend": "sqlite",
+            "target": "rollback",
+            "operation_id": "foreign-operation",
+            "fencing_token": "foreign-fence",
+            "state_revision": 2,
+            "barrier_id": "foreign-barrier",
+            "artifact_identity": "foreign-artifact",
+            "manifest_identity": "foreign-manifest",
+            "selector_identity": "foreign-selector",
+            "runtime_identity": "foreign-runtime",
+        }
+
+        for field, value in changes.items():
+            stale = dict(admission.__dict__)
+            stale[field] = value
+            called = False
+
+            def effect() -> object:
+                nonlocal called
+                called = True
+                return object()
+
+            def read_stale(value: dict[str, object] = stale) -> dict[str, object]:
+                return value
+
+            capability = GitCommitCapability(
+                self.root,
+                admission=admission,
+                admission_reread=read_stale,
+                expected_branch="main",
+                expected_head=before,
+            )
+            with (
+                self.subTest(field=field),
+                self.assertRaisesRegex(GitMutationError, "admission identity changed"),
+            ):
+                capability.commit("op-1 authority commit")
+            self.assertFalse(called)
+            self.assertEqual(before, _git(self.root, "rev-parse", "HEAD"))
+            self.assertEqual("M  state", _git(self.root, "status", "--porcelain=v1"))
+
 
 if __name__ == "__main__":
     unittest.main()
