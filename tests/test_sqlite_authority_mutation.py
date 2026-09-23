@@ -189,6 +189,29 @@ class SQLiteCommitCapabilityTests(unittest.TestCase):
             capability.commit(update)
         self.assertFalse(called)
 
+    def test_rejects_symlinked_authority_path_before_effect(self) -> None:
+        original = self._capability()
+        alias = self.root / "authority-alias.sqlite"
+        alias.symlink_to(self.db)
+        called = False
+
+        def update(connection: sqlite3.Connection) -> None:
+            nonlocal called
+            called = True
+            connection.execute("UPDATE state SET value='bad'")
+
+        capability = SQLiteCommitCapability(
+            alias,
+            admission=self._admission,
+            admission_reread=lambda: self._admission.__dict__,
+            expected_db_identity=original._db_identity,
+            expected_wal_identity=original._wal_identity,
+            expected_shm_identity=original._shm_identity,
+        )
+        with self.assertRaisesRegex(SQLiteMutationRejectedError, "not a regular private file"):
+            capability.commit(update)
+        self.assertFalse(called)
+
     def test_rejects_connector_oserror_before_effect(self) -> None:
         called = False
 
