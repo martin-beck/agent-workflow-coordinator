@@ -101,7 +101,7 @@
       "tests/test_git_authority_mutation.py": "a0e3ab7edccffaea3797e424c1f6e5c9c618ff0503642653a3a8738236e4e250",
       "tests/test_lock_domain_scope.py": "eb488df243acb733a0f16f567925e6ed603246102254c1e56048c48b04f61936",
       "tests/test_mutation_fence.py": "e2bcea7b96bddd2509b79ff9c5eefd57001d1502949aba30cbbd50a9169e1cbb",
-      "tests/test_rollback_control_store.py": "572dcbde5bbf1dc84f7439cfcfaffc98cf665ad970700672136850df7fe91e0d",
+      "tests/test_rollback_control_store.py": "e053afff88db867fa1aa878dbd55eb43be4b426087bee5fb460c67cb4af28c54",
       "tests/test_sqlite_authority_adapter.py": "73587e46bb6ac0079fe90f45101c74b2e3cb48255555174125da54a3669b9b0f",
       "tests/test_sqlite_authority_mutation.py": "7f78f87ab7a80fc4767a467e7501dd2474cc77e2a1a168ae3720ec9ce1ca90bd",
       "tests/test_sqlite_mutation_barrier.py": "a1024855adab3f1254fec1b832e293f0f010cbfce70c71edab39c098b98b5092",
