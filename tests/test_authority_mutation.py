@@ -75,6 +75,10 @@ class AuthorityMutationTests(unittest.TestCase):
         with self.assertRaisesRegex(AuthorityMutationError, "session revision is invalid"):
             DurableBoundAuthorityMutation(_admission(), object(), session_revision=0)  # type: ignore[arg-type]
 
+    def test_durable_capability_rejects_admission_session_revision_mismatch(self) -> None:
+        with self.assertRaisesRegex(AuthorityMutationError, "revision mismatch"):
+            DurableBoundAuthorityMutation(_admission(), object(), session_revision=2)  # type: ignore[arg-type]
+
     def test_ambiguous_effect_consumes_token_and_cannot_retry(self) -> None:
         capability = BoundAuthorityMutation(_admission("sqlite"))
 
@@ -140,6 +144,43 @@ class AuthorityMutationTests(unittest.TestCase):
         ).execute(lambda: self._result())
         self.assertTrue(receipt.mutates_authority)
         self.assertEqual([("prepared", "op-1:commit"), ("committed", "intent-1")], journal)
+
+    def test_durable_effect_forwards_exact_admission_identity_to_journal(self) -> None:
+        captured: list[object] = []
+
+        class Journal:
+            def prepare_authority_effect(
+                self,
+                expected_revision: int,
+                operation_id: str,
+                backend: str,
+                target: str,
+                *,
+                expected_fencing_token: str | None = None,
+                expected_barrier_id: str | None = None,
+            ) -> str:
+                captured.extend(
+                    [
+                        expected_revision,
+                        operation_id,
+                        backend,
+                        target,
+                        expected_fencing_token,
+                        expected_barrier_id,
+                    ]
+                )
+                return "intent-identity"
+
+            def finish_authority_effect(self, _intent: object, _outcome: str) -> None:
+                return None
+
+        DurableBoundAuthorityMutation(_admission("sqlite"), Journal(), session_revision=1).execute(
+            lambda: self._result()
+        )
+        self.assertEqual(
+            [1, "op-1:commit", "sqlite", "new", "fence-1", "barrier-1"],
+            captured,
+        )
 
     def test_durable_ambiguous_effect_is_durably_marked_ambiguous(self) -> None:
         journal: list[str] = []

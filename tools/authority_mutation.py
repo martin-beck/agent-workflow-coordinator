@@ -106,6 +106,8 @@ class DurableBoundAuthorityMutation:
     ) -> None:
         if type(session_revision) is not int or session_revision < 1:
             raise AuthorityMutationError("authority mutation session revision is invalid")
+        if admission.state_revision != session_revision:
+            raise AuthorityMutationError("authority mutation admission/session revision mismatch")
         self._admission = admission
         self._journal = journal
         self._session_revision = session_revision
