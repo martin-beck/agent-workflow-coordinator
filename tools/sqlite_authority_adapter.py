@@ -718,6 +718,40 @@ class SQLiteAuthorityAdapter:
             owner=self,
         )
 
+    def bind_commit_capability(
+        self,
+        admission: Any,
+        *,
+        admission_reread: Any,
+        connector: Any = sqlite3.connect,
+    ) -> Any:
+        """Bind the isolated SQLite effect seam without enabling dispatch.
+
+        The capability captures the adapter's already-validated database and
+        sidecar identities.  It is intentionally not reachable through
+        ``execute`` or the public upgrade dispatcher while refinement is
+        unproven.
+        """
+        from tools.sqlite_authority_mutation import SQLiteCommitCapability, SQLiteMutationError
+
+        try:
+            self._check_identity()
+            sidecar = {
+                suffix: (None if identity is None else (identity[0], identity[1]))
+                for suffix, identity in self._sidecar_identities.items()
+            }
+            return SQLiteCommitCapability(
+                self._authority,
+                admission=admission,
+                admission_reread=admission_reread,
+                expected_db_identity=self._session_identity,
+                expected_wal_identity=sidecar["-wal"],
+                expected_shm_identity=sidecar["-shm"],
+                connector=connector,
+            )
+        except (SQLiteAuthorityError, SQLiteMutationError) as error:
+            raise SQLiteAuthorityError("SQLite commit capability binding was rejected") from error
+
     @staticmethod
     def observe_backup_identity(
         backup: Path,

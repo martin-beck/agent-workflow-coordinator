@@ -21,6 +21,7 @@ from unittest.mock import MagicMock, patch
 
 import tools.sqlite_storage as sqlite_storage
 from tools.admission_lease import AdmissionLease, validate_recheck
+from tools.authority_neutral_commit import CommitAdmissionBundle
 from tools.git_authority_adapter import (
     GitAuthorityAdapter,
     GitAuthorityError,
@@ -28,6 +29,7 @@ from tools.git_authority_adapter import (
     GitRollbackArtifactBinding,
     GitRollbackSessionState,
 )
+from tools.git_authority_mutation import GitCommitCapability
 from tools.git_backup import BackupError, create_backup
 from tools.handoffctl import locked
 from tools.lock_domain import LockDomainContract
@@ -196,6 +198,29 @@ def _bound_snapshot_process(
 
 
 class GitAuthorityAdapterTests(unittest.TestCase):
+    def test_adapter_binds_isolated_commit_capability_without_enabling_dispatch(self) -> None:
+        admission = CommitAdmissionBundle(
+            backend="git",
+            target="new",
+            operation_id="op-1:commit",
+            fencing_token="fence",  # noqa: S106
+            state_revision=1,
+            barrier_id="barrier",
+            artifact_identity="artifact",
+            manifest_identity="manifest",
+            selector_identity="selector",
+            runtime_identity="runtime",
+        )
+        capability = self.adapter.bind_commit_capability(
+            admission,
+            admission_reread=lambda: admission.__dict__,
+            expected_branch="master",
+            expected_head=self.adapter._git("rev-parse", "HEAD"),
+        )
+        self.assertIsInstance(capability, GitCommitCapability)
+        with self.assertRaisesRegex(GitAuthorityError, "not implemented"):
+            self.adapter.execute("commit", CONTEXT)
+
     def test_git_backup_observation_rejects_foreign_adapter_and_path(self) -> None:
         session = GitRollbackSessionState(
             PROJECT, "authority", 1, "fence", "owner", "barrier", "a" * 40, "main"

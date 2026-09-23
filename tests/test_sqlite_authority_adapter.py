@@ -19,6 +19,7 @@ from typing import Any, cast
 from unittest.mock import patch
 
 from tools.admission_lease import AdmissionLease, validate_recheck
+from tools.authority_neutral_commit import CommitAdmissionBundle
 from tools.generate_upgrade_contract import generate
 from tools.handoffctl import locked
 from tools.lock_domain_scope import LockDomainScope
@@ -34,6 +35,7 @@ from tools.sqlite_authority_adapter import (
     SQLiteAuthorityError,
     SQLiteLifecycleExecutor,
 )
+from tools.sqlite_authority_mutation import SQLiteCommitCapability
 from tools.upgrade_authority import commit_runtime_selector
 from tools.upgrade_engine import BoundRollbackCapability, PhaseContext, UpgradeEngine
 from tools.upgrade_identity import (
@@ -183,6 +185,27 @@ class Scope:
 
 
 class SQLiteAuthorityAdapterTests(unittest.TestCase):
+    def test_adapter_binds_isolated_commit_capability_without_enabling_dispatch(self) -> None:
+        admission = CommitAdmissionBundle(
+            backend="sqlite",
+            target="new",
+            operation_id="op-1:commit",
+            fencing_token="fence",  # noqa: S106
+            state_revision=1,
+            barrier_id="barrier",
+            artifact_identity="artifact",
+            manifest_identity="manifest",
+            selector_identity="selector",
+            runtime_identity="runtime",
+        )
+        capability = self.adapter.bind_commit_capability(
+            admission,
+            admission_reread=lambda: admission.__dict__,
+        )
+        self.assertIsInstance(capability, SQLiteCommitCapability)
+        with self.assertRaisesRegex(SQLiteAuthorityError, "not implemented"):
+            self.adapter.execute("commit", CONTEXT)
+
     def _durable_state(self) -> tuple[bytes, object]:
         return self.authority.read_bytes(), self.session.snapshot()
 
