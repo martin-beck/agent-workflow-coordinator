@@ -116,17 +116,17 @@ class SQLiteCommitCapability:
 
     def _assert_filesystem_identity(self) -> None:
         if self._identity(self._authority) != self._db_identity:
-            raise SQLiteMutationError("SQLite database identity changed")
+            raise SQLiteMutationRejectedError("SQLite database identity changed")
         if (
             self._identity(self._authority.with_name(self._authority.name + "-wal"))
             != self._wal_identity
         ):
-            raise SQLiteMutationError("SQLite WAL identity changed")
+            raise SQLiteMutationRejectedError("SQLite WAL identity changed")
         if (
             self._identity(self._authority.with_name(self._authority.name + "-shm"))
             != self._shm_identity
         ):
-            raise SQLiteMutationError("SQLite SHM identity changed")
+            raise SQLiteMutationRejectedError("SQLite SHM identity changed")
 
     def _assert_admission_current(self) -> None:
         try:
