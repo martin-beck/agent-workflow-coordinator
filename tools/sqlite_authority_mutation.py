@@ -147,7 +147,7 @@ class SQLiteCommitCapability:
     def _close_connection(connection: sqlite3.Connection) -> None:
         try:
             connection.close()
-        except sqlite3.Error as error:
+        except (OSError, sqlite3.Error) as error:
             raise SQLiteMutationAmbiguousError(
                 "SQLite connection close outcome is ambiguous"
             ) from error
@@ -156,7 +156,7 @@ class SQLiteCommitCapability:
     def _rollback_connection(connection: sqlite3.Connection) -> None:
         try:
             connection.rollback()
-        except sqlite3.Error as error:
+        except (OSError, sqlite3.Error) as error:
             raise SQLiteMutationAmbiguousError("SQLite rollback outcome is ambiguous") from error
 
     def commit(self, effect: _Commit) -> SQLiteCommitResult:
