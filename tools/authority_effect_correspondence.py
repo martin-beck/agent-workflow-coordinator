@@ -98,3 +98,14 @@ def authority_effect_actions(
         recovered_with_new_fence=recovered_with_new_fence,
         stale_fence_rejected=stale_fence_rejected,
     )
+
+
+def authority_admission_actions(
+    *, authority_rechecked: bool, admission_allowed: bool
+) -> tuple[str, ...]:
+    """Classify a bound authority reread and its non-mutating admission result."""
+    if not authority_rechecked:
+        raise ValueError("authority admission requires a trusted reread")
+    if admission_allowed:
+        return ("ObserveAuthority", "RecheckHeld")
+    return ("ObserveAuthority", "RecheckHeld", "RejectStaleCAS")

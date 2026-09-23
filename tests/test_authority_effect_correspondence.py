@@ -10,6 +10,7 @@ import unittest
 from pathlib import Path
 
 from tools.authority_effect_correspondence import (
+    authority_admission_actions,
     authority_effect_actions,
     validate_authority_effect_model_contract,
 )
@@ -76,6 +77,22 @@ class AuthorityEffectCorrespondenceTests(unittest.TestCase):
     def test_stale_fence_rejection_requires_ambiguous_outcome(self) -> None:
         with self.assertRaisesRegex(ValueError, "stale-fence rejection"):
             authority_effect_actions("committed", receipt_valid=True, stale_fence_rejected=True)
+
+    def test_rechecked_authority_admission_maps_to_model_reread(self) -> None:
+        self.assertEqual(
+            ("ObserveAuthority", "RecheckHeld"),
+            authority_admission_actions(authority_rechecked=True, admission_allowed=True),
+        )
+
+    def test_rechecked_stale_authority_admission_maps_to_rejection(self) -> None:
+        self.assertEqual(
+            ("ObserveAuthority", "RecheckHeld", "RejectStaleCAS"),
+            authority_admission_actions(authority_rechecked=True, admission_allowed=False),
+        )
+
+    def test_authority_admission_without_reread_fails_closed(self) -> None:
+        with self.assertRaisesRegex(ValueError, "trusted reread"):
+            authority_admission_actions(authority_rechecked=False, admission_allowed=True)
 
     def test_invalid_recovery_combinations_fail_closed(self) -> None:
         with self.assertRaisesRegex(ValueError, "cannot carry"):

@@ -2,7 +2,7 @@
   "schema_version": 1,
   "kind": "implementation-refinement-obligation-matrix",
   "contract": "formal/upgrade/v10-refinement-contract.json",
-  "contract_sha256": "5b5fbc95a80d2cd8341fc2abdc72dca9e7ce9d96a1730f8983034ff49a357aad",
+  "contract_sha256": "9093ce03531eab30627be16aa1e8a9fbc7360e33af2a797f14bf4b1beb75ea13",
   "decision": "deny",
   "decision_rule": "deny unless every obligation is proven at the exact implementation revision and independently reviewed",
   "obligations": [
@@ -34,7 +34,8 @@
         "tests/test_sqlite_authority_mutation.py::SQLiteCommitCapabilityTests.test_rejects_every_admission_identity_drift_before_effect",
         "tests/test_lock_domain_scope.py::LockDomainScopeTests.test_hold_rejects_trusted_authority_drift_between_rereads",
         "tests/test_lock_domain_scope.py::LockDomainScopeTests.test_abort_then_recheck_rejects_durable_session_state_change",
-        "tests/test_lock_domain_scope.py::LockDomainScopeTests.test_fresh_process_reread_rejects_old_lease_after_durable_retry"
+        "tests/test_lock_domain_scope.py::LockDomainScopeTests.test_fresh_process_reread_rejects_old_lease_after_durable_retry",
+        "tests/test_authority_effect_correspondence.py::AuthorityEffectCorrespondenceTests.test_rechecked_stale_authority_admission_maps_to_rejection"
       ],
       "status": "not-proven"
     },
