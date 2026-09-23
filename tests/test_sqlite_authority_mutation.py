@@ -75,6 +75,40 @@ class SQLiteCommitCapabilityTests(unittest.TestCase):
         with sqlite3.connect(self.db) as connection:
             self.assertEqual(("new",), connection.execute("SELECT value FROM state").fetchone())
 
+    def test_capability_is_single_use_but_fresh_capability_reopens(self) -> None:
+        capability = self._capability()
+        capability.commit(lambda connection: connection.execute("UPDATE state SET value='first'"))
+
+        called = False
+
+        def replay(connection: sqlite3.Connection) -> None:
+            nonlocal called
+            called = True
+            connection.execute("UPDATE state SET value='replayed'")
+
+        with self.assertRaisesRegex(SQLiteMutationError, "already consumed"):
+            capability.commit(replay)
+        self.assertFalse(called)
+
+        reopened_admission = CommitAdmissionBundle(
+            backend="sqlite",
+            target="new",
+            operation_id="op-2:commit",
+            fencing_token="fence-2",  # noqa: S106
+            state_revision=2,
+            barrier_id="barrier-2",
+            artifact_identity="artifact-1",
+            manifest_identity="manifest-1",
+            selector_identity="selector-1",
+            runtime_identity="runtime-1",
+        )
+        self._admission = reopened_admission
+        self._capability().commit(
+            lambda connection: connection.execute("UPDATE state SET value='second'")
+        )
+        with sqlite3.connect(self.db) as connection:
+            self.assertEqual(("second",), connection.execute("SELECT value FROM state").fetchone())
+
     def test_rejects_sidecar_identity_drift_before_effect(self) -> None:
         capability = self._capability()
         wal = self.db.with_name("authority.sqlite-wal")

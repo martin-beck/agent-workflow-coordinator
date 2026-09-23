@@ -64,6 +64,7 @@ class SQLiteCommitCapability:
         self._wal_identity = expected_wal_identity
         self._shm_identity = expected_shm_identity
         self._connector = connector
+        self._consumed = False
         self._validate_identity(expected_db_identity, "database")
         self._validate_optional_identity(expected_wal_identity, "WAL")
         self._validate_optional_identity(expected_shm_identity, "SHM")
@@ -108,6 +109,13 @@ class SQLiteCommitCapability:
         ):
             raise SQLiteMutationError("SQLite SHM identity changed")
 
+    def _consume(self, effect: _Commit) -> None:
+        if self._consumed:
+            raise SQLiteMutationError("SQLite mutation capability already consumed")
+        if not callable(effect):
+            raise SQLiteMutationError("SQLite authority effect is invalid")
+        self._consumed = True
+
     @staticmethod
     def _close_connection(connection: sqlite3.Connection) -> None:
         try:
@@ -125,8 +133,7 @@ class SQLiteCommitCapability:
             raise SQLiteMutationAmbiguousError("SQLite rollback outcome is ambiguous") from error
 
     def commit(self, effect: _Commit) -> SQLiteCommitResult:
-        if not callable(effect):
-            raise SQLiteMutationError("SQLite authority effect is invalid")
+        self._consume(effect)
         self._assert_filesystem_identity()
         connection: sqlite3.Connection | None = None
         try:
