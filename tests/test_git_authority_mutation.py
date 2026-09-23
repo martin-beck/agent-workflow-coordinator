@@ -180,6 +180,48 @@ class GitCommitCapabilityTests(unittest.TestCase):
                 runner=timeout_runner,
             ).commit("op-1 authority commit")
 
+    def test_rejects_identity_runner_oserror_before_effect(self) -> None:
+        (self.root / "state").write_text("new\n", encoding="utf-8")
+        _git(self.root, "add", "state")
+
+        def failing_runner(*_args: object, **_kwargs: object) -> subprocess.CompletedProcess[str]:
+            raise OSError("injected identity read failure")
+
+        with self.assertRaisesRegex(GitMutationRejectedError, "identity reread was rejected"):
+            GitCommitCapability(
+                self.root,
+                admission=self._admission(),
+                admission_reread=lambda: self._admission().__dict__,
+                expected_branch="main",
+                expected_head=self._capability()._expected_head,
+                runner=failing_runner,
+            ).commit("op-1 authority commit")
+        self.assertEqual("M  state", _git(self.root, "status", "--porcelain=v1"))
+
+    def test_classifies_commit_runner_oserror_as_ambiguous(self) -> None:
+        (self.root / "state").write_text("new\n", encoding="utf-8")
+        _git(self.root, "add", "state")
+
+        def failing_runner(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
+            command = cast(list[str], args[0])
+            if command[3:4] == ["commit"]:
+                raise OSError("injected commit failure")
+            return cast(
+                subprocess.CompletedProcess[str],
+                subprocess.run(command, **cast(Any, kwargs)),
+            )
+
+        with self.assertRaisesRegex(GitMutationAmbiguousError, "commit outcome is ambiguous"):
+            GitCommitCapability(
+                self.root,
+                admission=self._admission(),
+                admission_reread=lambda: self._admission().__dict__,
+                expected_branch="main",
+                expected_head=self._capability()._expected_head,
+                runner=failing_runner,
+            ).commit("op-1 authority commit")
+        self.assertEqual("M  state", _git(self.root, "status", "--porcelain=v1"))
+
     def test_classifies_nonzero_commit_after_ref_update_as_ambiguous(self) -> None:
         (self.root / "state").write_text("new\n", encoding="utf-8")
         _git(self.root, "add", "state")
