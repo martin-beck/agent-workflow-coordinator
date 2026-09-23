@@ -252,6 +252,43 @@ class SQLiteCommitCapabilityTests(unittest.TestCase):
         ):
             self._capability().commit(update)
 
+    def test_classifies_identity_drift_after_verification_close_as_ambiguous(self) -> None:
+        real_connect = sqlite3.connect
+        root = self.root
+        db = self.db
+
+        class ReplacingVerificationConnection:
+            def __init__(self, connection: sqlite3.Connection) -> None:
+                self._connection = connection
+
+            def __enter__(self) -> sqlite3.Connection:
+                return self._connection.__enter__()
+
+            def __exit__(self, *args: Any) -> bool | None:
+                result = self._connection.__exit__(*args)
+                replacement = root / "replacement.sqlite"
+                shutil.copy2(db, replacement)
+                replacement.replace(db)
+                return result
+
+            def __getattr__(self, name: str) -> object:
+                return getattr(self._connection, name)
+
+        def verification_connector(*args: Any, **kwargs: Any) -> ReplacingVerificationConnection:
+            return ReplacingVerificationConnection(real_connect(*args, **kwargs))
+
+        with (
+            patch.object(sqlite3, "connect", side_effect=verification_connector),
+            self.assertRaisesRegex(
+                SQLiteMutationAmbiguousError, "post-commit verification is ambiguous"
+            ),
+        ):
+
+            def update(connection: sqlite3.Connection) -> None:
+                connection.execute("UPDATE state SET value='new'")
+
+            self._capability().commit(update)
+
     def test_classifies_connection_close_failure_as_ambiguous(self) -> None:
         real_connect = sqlite3.connect
 
