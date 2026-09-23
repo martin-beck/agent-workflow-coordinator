@@ -12,7 +12,8 @@ from tools.authority_mutation import (
     BoundAuthorityMutation,
 )
 from tools.authority_neutral_commit import CommitAdmissionBundle
-from tools.git_authority_mutation import GitCommitResult
+from tools.git_authority_mutation import GitCommitResult, GitMutationAmbiguousError
+from tools.sqlite_authority_mutation import SQLiteMutationAmbiguousError
 
 
 def _admission(backend: str = "git") -> CommitAdmissionBundle:
@@ -73,6 +74,21 @@ class AuthorityMutationTests(unittest.TestCase):
             capability.execute("sqlite", ambiguous)
         with self.assertRaisesRegex(AuthorityMutationError, "already consumed"):
             capability.execute("sqlite", self._result)
+
+    def test_backend_ambiguity_is_normalized_and_cannot_retry(self) -> None:
+        for backend, error in (
+            ("git", GitMutationAmbiguousError("git uncertain")),
+            ("sqlite", SQLiteMutationAmbiguousError("sqlite uncertain")),
+        ):
+            capability = BoundAuthorityMutation(_admission(backend))
+
+            def ambiguous(error: Exception = error) -> object:
+                raise error
+
+            with self.assertRaisesRegex(AuthorityMutationAmbiguousError, "outcome is ambiguous"):
+                capability.execute(backend, ambiguous)
+            with self.assertRaisesRegex(AuthorityMutationError, "already consumed"):
+                capability.execute(backend, self._result)
 
 
 if __name__ == "__main__":

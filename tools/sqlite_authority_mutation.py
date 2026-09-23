@@ -10,6 +10,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
+from tools.authority_mutation import AuthorityMutationAmbiguousError
 from tools.authority_neutral_commit import CommitAdmissionBundle
 
 
@@ -17,7 +18,7 @@ class SQLiteMutationError(RuntimeError):
     """A SQLite authority effect was rejected."""
 
 
-class SQLiteMutationAmbiguousError(SQLiteMutationError):
+class SQLiteMutationAmbiguousError(SQLiteMutationError, AuthorityMutationAmbiguousError):
     """The SQLite commit outcome cannot be classified safely."""
 
 

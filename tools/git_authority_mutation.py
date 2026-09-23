@@ -16,6 +16,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
+from tools.authority_mutation import AuthorityMutationAmbiguousError
 from tools.authority_neutral_commit import CommitAdmissionBundle
 
 
@@ -23,7 +24,7 @@ class GitMutationError(RuntimeError):
     """A Git authority effect was rejected or its outcome is ambiguous."""
 
 
-class GitMutationAmbiguousError(GitMutationError):
+class GitMutationAmbiguousError(GitMutationError, AuthorityMutationAmbiguousError):
     """The Git process outcome cannot be classified as success or failure."""
 
 
