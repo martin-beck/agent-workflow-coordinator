@@ -283,9 +283,11 @@ class SQLiteCommitCapabilityTests(unittest.TestCase):
                 SQLiteMutationAmbiguousError, "post-commit verification is ambiguous"
             ),
         ):
-            self._capability().commit(
-                lambda connection: connection.execute("UPDATE state SET value='new'")
-            )
+
+            def update(connection: sqlite3.Connection) -> None:
+                connection.execute("UPDATE state SET value='new'")
+
+            self._capability().commit(update)
 
     def test_classifies_connection_close_failure_as_ambiguous(self) -> None:
         real_connect = sqlite3.connect

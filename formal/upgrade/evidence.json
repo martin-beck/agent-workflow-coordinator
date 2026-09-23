@@ -103,7 +103,7 @@
       "tests/test_mutation_fence.py": "e2bcea7b96bddd2509b79ff9c5eefd57001d1502949aba30cbbd50a9169e1cbb",
       "tests/test_rollback_control_store.py": "e66d090e3c514745336a2621e853580fd14448d66ca2cec9f767ce6a04eb5856",
       "tests/test_sqlite_authority_adapter.py": "73587e46bb6ac0079fe90f45101c74b2e3cb48255555174125da54a3669b9b0f",
-      "tests/test_sqlite_authority_mutation.py": "2117f3e8f83c1e908d8296c10336ef13e7760c5a7943b48770c73fcb2e02b35f",
+      "tests/test_sqlite_authority_mutation.py": "507494d4761e66dcfdc0b43f121be665aadccdf52b2c4e033f2e0a46aeaab5dc",
       "tests/test_sqlite_mutation_barrier.py": "e3b23e06dbaca6089ed5c5af8f943520a93044a99db30ced5423af8a5606bdc8",
       "tests/test_sqlite_storage.py": "659011189506ecb7f0ad35d9dfb6993127d89c0be277cb2a8fc89ce352009f6c",
       "tests/test_upgrade_commands.py": "793993bd451d02e5c80788f479e56c568b82212eec7b9face50420c6b788247f",
