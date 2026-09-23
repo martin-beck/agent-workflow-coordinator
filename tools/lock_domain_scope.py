@@ -15,6 +15,8 @@ from tools.mutation_fence import MutationFence
 from tools.rollback_control_store import ControlStoreError, SQLiteBarrierSessionStore
 from tools.upgrade_identity import BarrierSessionIdentity
 
+LockDomainObserver = Callable[[str], None]
+
 
 class LockDomainScope:
     """Caller-owned scope proving one durable session under one lock domain.
@@ -35,6 +37,7 @@ class LockDomainScope:
         common_lock: Callable[[], AbstractContextManager[CoordinatorLockGuard]],
         session_revision: int | None = None,
         observer: LifecycleObserver | None = None,
+        lock_observer: LockDomainObserver | None = None,
     ) -> None:
         self._identity = identity
         self._session_store = session_store
@@ -47,6 +50,7 @@ class LockDomainScope:
         # durable row CAS revision and can diverge after reconciliation.
         self._session_revision = lease.revision if session_revision is None else session_revision
         self._observer = observer
+        self._lock_observer = lock_observer
         self._event_token = object()
 
     @classmethod
@@ -58,6 +62,7 @@ class LockDomainScope:
         recheck: AdmissionRecheck,
         common_lock: Callable[[], AbstractContextManager[CoordinatorLockGuard]],
         observer: LifecycleObserver | None = None,
+        lock_observer: LockDomainObserver | None = None,
     ) -> LockDomainScope:
         """Bind a caller-owned scope to canonical descriptors only.
 
@@ -87,6 +92,7 @@ class LockDomainScope:
             common_lock,
             state.revision,
             observer,
+            lock_observer,
         )
 
     def assert_ordered(self) -> None:
@@ -143,15 +149,31 @@ class LockDomainScope:
         with self._common_lock() as common_guard:
             if not isinstance(common_guard, CoordinatorLockGuard):
                 raise RuntimeError("common lock capability is invalid")
+            self._observe_lock("AcquireCommon")
             self._identity.assert_current(common_guard, self._session_store, self._authority_fence)
-            with self._session_store.lock_owned_by_caller(common_guard):
-                self._recheck_session(common_guard)
-                with self._authority_fence.locked():
-                    self._identity.assert_current(
-                        common_guard, self._session_store, self._authority_fence
-                    )
-                    self._recheck_session(common_guard)
-                    yield object()
+            try:
+                with self._session_store.lock_owned_by_caller(common_guard):
+                    self._observe_lock("AcquireControl")
+                    try:
+                        self._recheck_session(common_guard)
+                        with self._authority_fence.locked():
+                            self._observe_lock("AcquireAuthority")
+                            try:
+                                self._identity.assert_current(
+                                    common_guard, self._session_store, self._authority_fence
+                                )
+                                self._recheck_session(common_guard)
+                                yield object()
+                            finally:
+                                self._observe_lock("ReleaseAuthority")
+                    finally:
+                        self._observe_lock("ReleaseControl")
+            finally:
+                self._observe_lock("ReleaseCommon")
+
+    def _observe_lock(self, action: str) -> None:
+        if self._lock_observer is not None:
+            self._lock_observer(action)
 
     def _recheck_session(self, common_guard: CoordinatorLockGuard) -> None:
         """Reread trusted session evidence while the caller owns control locks."""
