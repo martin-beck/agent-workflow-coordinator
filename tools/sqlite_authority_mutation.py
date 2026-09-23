@@ -143,9 +143,8 @@ class SQLiteCommitCapability:
         try:
             ancestors = self._ancestor_identities_for(self._authority)
         except SQLiteMutationRejectedError as error:
-            if (
-                "ancestor is unavailable" in str(error)
-                or "ancestor is not a directory" in str(error)
+            if "ancestor is unavailable" in str(error) or "ancestor is not a directory" in str(
+                error
             ):
                 raise SQLiteMutationRejectedError(
                     "SQLite authority ancestor identity changed"
