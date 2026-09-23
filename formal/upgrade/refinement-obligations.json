@@ -2,7 +2,7 @@
   "schema_version": 1,
   "kind": "implementation-refinement-obligation-matrix",
   "contract": "formal/upgrade/v10-refinement-contract.json",
-  "contract_sha256": "ab9ac278331931ea2d8e9e7806e4a1be156ea1a95444ed03d6ed3b06b36e38f0",
+  "contract_sha256": "1986300d2d30dd1ee8c1863906986a920e7de9d203d48fac298f4458fce55cd8",
   "decision": "deny",
   "decision_rule": "deny unless every obligation is proven at the exact implementation revision and independently reviewed",
   "obligations": [
@@ -13,7 +13,12 @@
       "evidence": [
         "tests/test_upgrade_engine.py::UpgradeEngineTests.test_commit_validate_and_reopen_require_safety_evidence",
         "tests/test_git_authority_adapter.py::GitAuthorityAdapterTests.test_scoped_wrapper_is_the_only_composed_mutation_boundary",
-        "tests/test_lock_domain_scope.py::test_bind_rejects_nonheld_durable_session_before_returning_scope"
+        "tests/test_lock_domain_scope.py::test_bind_rejects_nonheld_durable_session_before_returning_scope",
+        "tests/test_lock_domain_scope.py::LockDomainScopeTests.test_scope_proves_durable_session_inside_all_three_locks",
+        "tests/test_lock_domain_scope.py::LockDomainScopeTests.test_hold_releases_locks_when_second_trusted_reread_fails",
+        "tests/test_lock_domain_scope.py::LockDomainScopeTests.test_process_death_releases_scope_for_fresh_recheck",
+        "tests/test_lock_domain_scope.py::LockDomainScopeTests.test_validated_hold_process_death_releases_scope_for_fresh_caller",
+        "tests/test_lock_domain_scope.py::LockDomainScopeTests.test_binding_abort_releases_locks_and_fresh_worker_rejects_replaced_identity"
       ],
       "status": "not-proven"
     },
@@ -24,7 +29,10 @@
       "evidence": [
         "tests/test_durable_binding.py::DurableBindingTests.test_replacement_and_symlink_are_rejected",
         "tests/test_git_authority_mutation.py::test_rejects_stale_admission_reread_before_effect",
-        "tests/test_sqlite_authority_mutation.py::test_rejects_stale_admission_reread_before_effect"
+        "tests/test_sqlite_authority_mutation.py::test_rejects_stale_admission_reread_before_effect",
+        "tests/test_lock_domain_scope.py::LockDomainScopeTests.test_hold_rejects_trusted_authority_drift_between_rereads",
+        "tests/test_lock_domain_scope.py::LockDomainScopeTests.test_abort_then_recheck_rejects_durable_session_state_change",
+        "tests/test_lock_domain_scope.py::LockDomainScopeTests.test_fresh_process_reread_rejects_old_lease_after_durable_retry"
       ],
       "status": "not-proven"
     },
@@ -44,7 +52,10 @@
       "evidence": [
         "tests/test_sqlite_mutation_barrier.py::SQLiteMutationBarrierProcessTests.test_sigkill_session_commit_recovers_ambiguous_then_verified_release",
         "tests/test_sqlite_mutation_barrier.py::test_sigkill_after_authority_effect_requires_recovery_and_new_fence",
-        "tests/test_authority_mutation.py::AuthorityMutationTests.test_durable_ambiguous_effect_is_durably_marked_ambiguous"
+        "tests/test_authority_mutation.py::AuthorityMutationTests.test_durable_ambiguous_effect_is_durably_marked_ambiguous",
+        "tests/test_lock_domain_scope.py::LockDomainScopeTests.test_process_death_releases_scope_for_fresh_recheck",
+        "tests/test_lock_domain_scope.py::LockDomainScopeTests.test_validated_hold_process_death_releases_scope_for_fresh_caller",
+        "tests/test_lock_domain_scope.py::LockDomainScopeTests.test_binding_abort_allows_fresh_worker_reacquisition_when_identity_is_unchanged"
       ],
       "status": "not-proven"
     },

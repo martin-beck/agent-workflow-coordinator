@@ -160,6 +160,12 @@
       "implementation_obligation": "One non-reentrant operation scope acquires repository-common, control-store, and authority locks in that order and releases them in reverse order.",
       "evidence_required": [
         "tests/test_lock_domain_scope.py::test_bind_rejects_nonheld_durable_session_before_returning_scope",
+        "tests/test_lock_domain_scope.py::LockDomainScopeTests.test_scope_proves_durable_session_inside_all_three_locks",
+        "tests/test_lock_domain_scope.py::LockDomainScopeTests.test_hold_releases_locks_when_second_trusted_reread_fails",
+        "tests/test_lock_domain_scope.py::LockDomainScopeTests.test_process_death_releases_scope_for_fresh_recheck",
+        "tests/test_lock_domain_scope.py::LockDomainScopeTests.test_validated_hold_process_death_releases_scope_for_fresh_caller",
+        "tests/test_lock_domain_scope.py::LockDomainScopeTests.test_binding_abort_releases_locks_and_fresh_worker_rejects_replaced_identity",
+        "tests/test_lock_domain_scope.py::LockDomainScopeTests.test_repeated_handoff_rereads_authority_before_rejecting_stale_retry",
         "lock-order tests",
         "re-entry rejection",
         "descriptor identity checks"
@@ -169,7 +175,16 @@
     {
       "model_actions": ["ObserveAuthority", "RecheckHeld", "RejectStaleCAS"],
       "implementation_obligation": "A writer rereads the durable control barrier and authority binding from descriptor-bound state immediately before admission; stale or non-released state rejects without mutation.",
-      "evidence_required": ["binding rename/swap tests", "control-store identity tests", "stale revision tests"],
+      "evidence_required": [
+        "tests/test_lock_domain_scope.py::LockDomainScopeTests.test_hold_rejects_trusted_authority_drift_between_rereads",
+        "tests/test_lock_domain_scope.py::LockDomainScopeTests.test_abort_then_recheck_rejects_durable_session_state_change",
+        "tests/test_lock_domain_scope.py::LockDomainScopeTests.test_fresh_process_reread_rejects_old_lease_after_durable_retry",
+        "tests/test_git_authority_mutation.py::test_rejects_stale_admission_reread_before_effect",
+        "tests/test_sqlite_authority_mutation.py::test_rejects_stale_admission_reread_before_effect",
+        "binding rename/swap tests",
+        "control-store identity tests",
+        "stale revision tests"
+      ],
       "status": "obligation-only"
     },
     {
@@ -186,7 +201,14 @@
     {
       "model_actions": ["MarkAmbiguous", "Acquire"],
       "implementation_obligation": "Process death or uncertain WAL/control-store outcomes preserve durable write-closed state; recovery must reread and reconcile before a newer fenced session can proceed.",
-      "evidence_required": ["sigkill boundaries", "WAL/SHM fault tests", "new-session CAS tests"],
+      "evidence_required": [
+        "tests/test_lock_domain_scope.py::LockDomainScopeTests.test_process_death_releases_scope_for_fresh_recheck",
+        "tests/test_lock_domain_scope.py::LockDomainScopeTests.test_validated_hold_process_death_releases_scope_for_fresh_caller",
+        "tests/test_lock_domain_scope.py::LockDomainScopeTests.test_binding_abort_allows_fresh_worker_reacquisition_when_identity_is_unchanged",
+        "sigkill boundaries",
+        "WAL/SHM fault tests",
+        "new-session CAS tests"
+      ],
       "status": "bounded executable SIGKILL evidence covers CAS publication and interrupted ambiguous-recovery intent residue in tests/test_sqlite_mutation_barrier.py; implementation refinement pending"
     },
     {
