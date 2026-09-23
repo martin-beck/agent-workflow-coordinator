@@ -59,11 +59,13 @@ not an implementation proof.
 The names above are resolved against the implementation snapshot recorded in
 `evidence.json`; they are not claims about later source revisions. The model
 actions are coarser than the Python phase journal, so passing these tests does
-not establish a trace-preserving refinement. In particular, no test currently
-binds the abstract `Backends` parameter or `fence` variable to a model
-transition, and Git remains fail-closed. The model's fence increment is an
-abstract admission token only; it is not evidence of implementation CAS or
-stale-owner rejection.
+not establish a trace-preserving refinement. The machine-readable
+`backend-fence-correspondence.json` now binds the model's `Backends` domain to
+the exercised Git and SQLite route families and binds the concrete stale-fence
+and recovery tests to the model's `fence` variable and `Preflight` transition.
+That is bounded concrete evidence only: the concrete fence is not proven equal
+to the model's abstract counter, Git remains fail-closed, and no trace
+preserving refinement or stale-owner theorem is claimed.
 
 The final product snapshot also contains the fail-closed `upgrade check` and
 `upgrade plan` commands. Their `apply` and `rollback` paths intentionally
