@@ -9,6 +9,7 @@ import ast
 import hashlib
 import io
 import json
+import os
 import re
 import runpy
 import subprocess
@@ -946,6 +947,8 @@ class FormalEvidenceTests(unittest.TestCase):
         self.assertIn("of exhaustive exploration", attest)
         self.assertIn("attestation requires TLC_CGROUP_MODE=required", attest)
         self.assertIn("runner-produced outcome manifest", attest)
+        self.assertIn('effective_bound("TLC_MEMORY_MAX", "3G", boundary)', attest)
+        self.assertIn('effective_bound("TLC_SWAP_MAX", "3G", boundary)', attest)
 
     def test_workflow_separates_fork_pr_publication_and_weekly_tiers(self) -> None:
         workflow = (ROOT / ".github" / "workflows" / "verify.yml").read_text()
@@ -1028,6 +1031,23 @@ class FormalEvidenceTests(unittest.TestCase):
         ):
             runpy.run_path(str(script), run_name="__main__")
         self.assertIn("failed or incomplete formal runs", stderr.getvalue())
+
+    def test_required_attestation_rejects_missing_or_malformed_bounds(self) -> None:
+        effective_bound = runpy.run_path(str(ROOT / "formal" / "handoffctl" / "attest.py"))[
+            "effective_bound"
+        ]
+        with (
+            mock.patch.dict(os.environ, {}, clear=True),
+            self.assertRaisesRegex(ValueError, "needs TLC_MEMORY_MAX"),
+        ):
+            effective_bound("TLC_MEMORY_MAX", "3G", "required")
+        with (
+            mock.patch.dict(os.environ, {"TLC_MEMORY_MAX": "bad"}, clear=True),
+            self.assertRaisesRegex(ValueError, "must be"),
+        ):
+            effective_bound("TLC_MEMORY_MAX", "3G", "required")
+        with mock.patch.dict(os.environ, {}, clear=True):
+            self.assertEqual("3G", effective_bound("TLC_MEMORY_MAX", "3G", "portable"))
 
 
 if __name__ == "__main__":
