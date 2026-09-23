@@ -115,6 +115,31 @@ class GitCommitCapabilityTests(unittest.TestCase):
                 runner=timeout_runner,
             ).commit("op-1 authority commit")
 
+    def test_rejects_a_concurrent_commit_after_the_effect(self) -> None:
+        (self.root / "state").write_text("new\n", encoding="utf-8")
+        _git(self.root, "add", "state")
+
+        def racing_runner(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
+            command = cast(list[str], args[0])
+            result = cast(
+                subprocess.CompletedProcess[str],
+                subprocess.run(command, **cast(Any, kwargs)),
+            )
+            if command[3:4] == ["commit"] and result.returncode == 0:
+                (self.root / "race").write_text("concurrent\n", encoding="utf-8")
+                _git(self.root, "add", "race")
+                _git(self.root, "commit", "--no-verify", "-m", "concurrent writer")
+            return result
+
+        with self.assertRaisesRegex(GitMutationAmbiguousError, "postcondition"):
+            GitCommitCapability(
+                self.root,
+                admission=self._admission(),
+                expected_branch="main",
+                expected_head=self._capability()._expected_head,
+                runner=racing_runner,
+            ).commit("op-1 authority commit")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -28,6 +28,7 @@ class GitMutationAmbiguousError(GitMutationError):
 
 
 _SAFE_MESSAGE = re.compile(r"[A-Za-z0-9][A-Za-z0-9 ._:/-]{0,127}\Z")
+_COMMIT_HEAD = re.compile(r"\[[^\]]+\s+([0-9a-f]{7,64})\]")
 _Runner = Callable[..., subprocess.CompletedProcess[str]]
 
 
@@ -94,6 +95,13 @@ class GitCommitCapability:
             raise GitMutationError("Git identity reread was rejected")
         return result.stdout.rstrip("\n")
 
+    @staticmethod
+    def _commit_head(result: subprocess.CompletedProcess[str]) -> str:
+        match = _COMMIT_HEAD.search(f"{result.stdout}\n{result.stderr}")
+        if match is None:
+            raise GitMutationAmbiguousError("Git commit identity is unavailable")
+        return match.group(1)
+
     def _assert_before(self) -> tuple[str, str]:
         branch = self._git("symbolic-ref", "--short", "-q", "HEAD")
         head = self._git("rev-parse", "--verify", "HEAD^{commit}")
@@ -122,13 +130,19 @@ class GitCommitCapability:
             raise GitMutationAmbiguousError("Git commit outcome is ambiguous") from error
         if result.returncode != 0:
             raise GitMutationError("Git commit was rejected")
+        committed_head = self._commit_head(result)
         try:
             after_branch = self._git("symbolic-ref", "--short", "-q", "HEAD")
             after = self._git("rev-parse", "--verify", "HEAD^{commit}")
             status = self._git("status", "--porcelain=v1", "--untracked-files=all")
         except GitMutationAmbiguousError:
             raise
-        if after_branch != branch or after == before or status:
+        if (
+            after_branch != branch
+            or after == before
+            or not after.startswith(committed_head)
+            or status
+        ):
             raise GitMutationAmbiguousError("Git commit postcondition is ambiguous")
         return GitCommitResult(
             operation_id=self._operation_id,
