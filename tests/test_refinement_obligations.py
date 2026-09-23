@@ -59,7 +59,7 @@ def test_git_mutation_boundary_maps_backup_commit_and_rollback_without_authorizi
     entry = next(item for item in matrix["obligations"] if item["id"] == "git-mutation-boundary")
     assert entry["model_actions"] == ["Backup", "Commit", "Rollback"]
     assert entry["status"] == "not-proven"
-    assert len(entry["evidence"]) >= 10
+    assert len(entry["evidence"]) >= 12
     assert any("generated_backup_executor" in reference for reference in entry["evidence"])
     assert any("GitCommitCapabilityTests" in reference for reference in entry["evidence"])
     assert any("bound_rollback_rejects" in reference for reference in entry["evidence"])
@@ -115,5 +115,13 @@ def test_selector_execution_binding_maps_read_only_identity_evidence_without_dis
     )
     assert any(
         "test_snapshot_bound_rejects_non_read_only_backend_result" in reference
+        for reference in entry["evidence"]
+    )
+    assert any(
+        "test_apply_and_rollback_reject_both_backends_without_writes" in reference
+        for reference in entry["evidence"]
+    )
+    assert any(
+        "test_contract_file_and_dispatch_boundaries_fail_closed" in reference
         for reference in entry["evidence"]
     )
