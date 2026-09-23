@@ -1559,6 +1559,47 @@ class SQLiteMutationBarrierProcessTests(unittest.TestCase):
         ):
             with self.assertRaisesRegex(ControlStoreError, "identity|backend|revision"):
                 AuthorityEffectIntent(*values)
+        with self.assertRaisesRegex(ControlStoreError, "admission identity is invalid"):
+            AuthorityEffectIntent(
+                "intent",
+                "op",
+                "sqlite",
+                "new",
+                "attempt",
+                "d" * 64,
+                "fence",
+                1,
+                "",
+                "manifest",
+                "selector",
+                "runtime",
+            )
+        with self.assertRaisesRegex(ControlStoreError, "admission identity is incomplete"):
+            AuthorityEffectIntent(
+                "intent",
+                "op",
+                "sqlite",
+                "new",
+                "attempt",
+                "d" * 64,
+                "fence",
+                1,
+                "artifact",
+            )
+        with self.assertRaisesRegex(ControlStoreError, "admission identity is invalid"):
+            self.session.prepare_authority_effect(
+                1,
+                "op-invalid-admission",
+                "sqlite",
+                expected_artifact_identity="",
+            )
+        with self.assertRaisesRegex(ControlStoreError, "admission identity is incomplete"):
+            self.session.prepare_authority_effect(
+                1,
+                "op-incomplete-admission",
+                "sqlite",
+                expected_artifact_identity="artifact",
+            )
 
         held = self._create_held()
         with self.assertRaisesRegex(ControlStoreError, "fencing token conflict"):
@@ -1581,11 +1622,16 @@ class SQLiteMutationBarrierProcessTests(unittest.TestCase):
             "sqlite",
             expected_fencing_token=held.identity.fencing_token,
             expected_barrier_id=held.identity.durable_barrier_id,
+            expected_artifact_identity="artifact-1",
+            expected_manifest_identity="manifest-1",
+            expected_selector_identity="selector-1",
+            expected_runtime_identity="runtime-1",
         )
         with sqlite3.connect(self.control.control_store_path) as connection:
             persisted = connection.execute(
                 "SELECT operation_id,backend,target,attempt_id,identity_digest,"
-                "fencing_token,session_revision,outcome "
+                "fencing_token,session_revision,artifact_identity,manifest_identity,"
+                "selector_identity,runtime_identity,outcome "
                 "FROM authority_effect_intent WHERE project_id=? AND intent_id=?",
                 (PROJECT, intent.intent_id),
             ).fetchone()
@@ -1598,6 +1644,10 @@ class SQLiteMutationBarrierProcessTests(unittest.TestCase):
                 held.identity.identity_digest,
                 held.identity.fencing_token,
                 held.revision,
+                "artifact-1",
+                "manifest-1",
+                "selector-1",
+                "runtime-1",
                 "prepared",
             ),
             persisted,

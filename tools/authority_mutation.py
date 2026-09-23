@@ -39,6 +39,10 @@ class AuthorityEffectJournal(Protocol):
         *,
         expected_fencing_token: str | None = None,
         expected_barrier_id: str | None = None,
+        expected_artifact_identity: str | None = None,
+        expected_manifest_identity: str | None = None,
+        expected_selector_identity: str | None = None,
+        expected_runtime_identity: str | None = None,
     ) -> object: ...
 
     def finish_authority_effect(self, intent: Any, outcome: str) -> Any: ...
@@ -132,6 +136,10 @@ class DurableBoundAuthorityMutation:
             self._admission.target,
             expected_fencing_token=self._admission.fencing_token,
             expected_barrier_id=self._admission.barrier_id,
+            expected_artifact_identity=self._admission.artifact_identity,
+            expected_manifest_identity=self._admission.manifest_identity,
+            expected_selector_identity=self._admission.selector_identity,
+            expected_runtime_identity=self._admission.runtime_identity,
         )
         try:
             receipt = self._capability.execute(self._admission.backend, effect)

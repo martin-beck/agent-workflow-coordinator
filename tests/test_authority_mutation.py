@@ -173,8 +173,19 @@ class AuthorityMutationTests(unittest.TestCase):
                 *,
                 expected_fencing_token: str | None = None,
                 expected_barrier_id: str | None = None,
+                expected_artifact_identity: str | None = None,
+                expected_manifest_identity: str | None = None,
+                expected_selector_identity: str | None = None,
+                expected_runtime_identity: str | None = None,
             ) -> str:
-                del expected_fencing_token, expected_barrier_id
+                del (
+                    expected_fencing_token,
+                    expected_barrier_id,
+                    expected_artifact_identity,
+                    expected_manifest_identity,
+                    expected_selector_identity,
+                    expected_runtime_identity,
+                )
                 self.expected_revision = expected_revision
                 journal.append(("prepared", operation_id))
                 return "intent-1"
@@ -202,6 +213,10 @@ class AuthorityMutationTests(unittest.TestCase):
                 *,
                 expected_fencing_token: str | None = None,
                 expected_barrier_id: str | None = None,
+                expected_artifact_identity: str | None = None,
+                expected_manifest_identity: str | None = None,
+                expected_selector_identity: str | None = None,
+                expected_runtime_identity: str | None = None,
             ) -> str:
                 captured.extend(
                     [
@@ -211,6 +226,10 @@ class AuthorityMutationTests(unittest.TestCase):
                         target,
                         expected_fencing_token,
                         expected_barrier_id,
+                        expected_artifact_identity,
+                        expected_manifest_identity,
+                        expected_selector_identity,
+                        expected_runtime_identity,
                     ]
                 )
                 return "intent-identity"
@@ -222,7 +241,18 @@ class AuthorityMutationTests(unittest.TestCase):
             lambda: self._result("sqlite")
         )
         self.assertEqual(
-            [1, "op-1:commit", "sqlite", "new", "fence-1", "barrier-1"],
+            [
+                1,
+                "op-1:commit",
+                "sqlite",
+                "new",
+                "fence-1",
+                "barrier-1",
+                "artifact-1",
+                "manifest-1",
+                "selector-1",
+                "runtime-1",
+            ],
             captured,
         )
 
@@ -239,8 +269,19 @@ class AuthorityMutationTests(unittest.TestCase):
                 *,
                 expected_fencing_token: str | None = None,
                 expected_barrier_id: str | None = None,
+                expected_artifact_identity: str | None = None,
+                expected_manifest_identity: str | None = None,
+                expected_selector_identity: str | None = None,
+                expected_runtime_identity: str | None = None,
             ) -> str:
-                del expected_fencing_token, expected_barrier_id
+                del (
+                    expected_fencing_token,
+                    expected_barrier_id,
+                    expected_artifact_identity,
+                    expected_manifest_identity,
+                    expected_selector_identity,
+                    expected_runtime_identity,
+                )
                 return "intent-uncertain"
 
             def finish_authority_effect(self, intent: object, outcome: str) -> None:
@@ -262,8 +303,19 @@ class AuthorityMutationTests(unittest.TestCase):
                 *,
                 expected_fencing_token: str | None = None,
                 expected_barrier_id: str | None = None,
+                expected_artifact_identity: str | None = None,
+                expected_manifest_identity: str | None = None,
+                expected_selector_identity: str | None = None,
+                expected_runtime_identity: str | None = None,
             ) -> str:
-                del expected_fencing_token, expected_barrier_id
+                del (
+                    expected_fencing_token,
+                    expected_barrier_id,
+                    expected_artifact_identity,
+                    expected_manifest_identity,
+                    expected_selector_identity,
+                    expected_runtime_identity,
+                )
                 return "intent-journal-failure"
 
             def finish_authority_effect(self, _intent: object, _outcome: str) -> None:
@@ -285,8 +337,19 @@ class AuthorityMutationTests(unittest.TestCase):
                 *,
                 expected_fencing_token: str | None = None,
                 expected_barrier_id: str | None = None,
+                expected_artifact_identity: str | None = None,
+                expected_manifest_identity: str | None = None,
+                expected_selector_identity: str | None = None,
+                expected_runtime_identity: str | None = None,
             ) -> str:
-                del expected_fencing_token, expected_barrier_id
+                del (
+                    expected_fencing_token,
+                    expected_barrier_id,
+                    expected_artifact_identity,
+                    expected_manifest_identity,
+                    expected_selector_identity,
+                    expected_runtime_identity,
+                )
                 return "intent-publication-failure"
 
             def finish_authority_effect(self, _intent: object, outcome: str) -> None:
