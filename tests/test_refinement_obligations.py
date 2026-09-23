@@ -52,3 +52,18 @@ def test_contract_mutation_gate_is_rejection_only_while_matrix_is_unproven() -> 
     contract = json.loads(CONTRACT.read_text(encoding="utf-8"))
     assert matrix["decision"] == "deny"
     assert "rejection-only" in contract["mutation_gate"]
+
+
+def test_git_mutation_boundary_maps_backup_commit_and_rollback_without_authorizing_them() -> None:
+    matrix = json.loads(MATRIX.read_text(encoding="utf-8"))
+    entry = next(item for item in matrix["obligations"] if item["id"] == "git-mutation-boundary")
+    assert entry["model_actions"] == ["Backup", "Commit", "Rollback"]
+    assert entry["status"] == "not-proven"
+    assert len(entry["evidence"]) >= 10
+    assert any("generated_backup_executor" in reference for reference in entry["evidence"])
+    assert any("GitCommitCapabilityTests" in reference for reference in entry["evidence"])
+    assert any("bound_rollback_rejects" in reference for reference in entry["evidence"])
+    assert (
+        "No selector publication, runtime replacement, commit, apply, rollback, or release "
+        "publication is authorized." in matrix["nonclaims"]
+    )
