@@ -15,7 +15,7 @@ import subprocess
 import sys
 import unittest
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -54,6 +54,70 @@ def configured_bounds(configs: list[Path]) -> dict[str, int]:
 
 
 class FormalEvidenceTests(unittest.TestCase):
+    def _backend_fence_correspondence(self) -> dict[str, Any]:
+        value = json.loads(
+            (ROOT / "formal" / "upgrade" / "backend-fence-correspondence.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.assertIsInstance(value, dict)
+        return cast(dict[str, Any], value)
+
+    def test_backend_fence_correspondence_is_explicit_and_fail_closed(self) -> None:
+        artifact = self._backend_fence_correspondence()
+        self.assertEqual(1, artifact["schema_version"])
+        self.assertEqual("bounded-backend-fence-correspondence", artifact["kind"])
+        self.assertEqual(["git", "sqlite"], artifact["model"]["backend_domain"])
+        self.assertEqual("Backends", artifact["model"]["backend_constant"])
+        self.assertEqual("backend", artifact["model"]["backend_variable"])
+        self.assertEqual("fence", artifact["model"]["fence_variable"])
+        self.assertEqual("Nat", artifact["model"]["fence_domain"])
+        self.assertEqual("Preflight", artifact["model"]["fence_transition"])
+        self.assertEqual("rejection-only", artifact["implementation"]["mutation_gate"])
+        self.assertEqual("bounded-concrete-binding-only", artifact["evidence"]["status"])
+        self.assertEqual("not-proven", artifact["evidence"]["correspondence_claim"])
+        self.assertEqual(3, len(artifact["evidence"]["nonclaims"]))
+
+    def test_backend_fence_correspondence_binds_model_and_config_digests(self) -> None:
+        artifact = self._backend_fence_correspondence()
+        model = ROOT / artifact["model"]["path"]
+        config = ROOT / artifact["model"]["config"]
+        self.assertEqual(
+            artifact["model"]["sha256"], hashlib.sha256(model.read_bytes()).hexdigest()
+        )
+        self.assertEqual(
+            artifact["model"]["config_sha256"], hashlib.sha256(config.read_bytes()).hexdigest()
+        )
+        self.assertIn('CONSTANT Backends = {"git", "sqlite"}', config.read_text())
+        self.assertRegex(model.read_text(), r"fence' = \[fence EXCEPT !\[op\] = @ \+ 1\]")
+
+    def test_backend_fence_correspondence_references_resolve_to_tests(self) -> None:
+        artifact = self._backend_fence_correspondence()
+        references = [
+            *artifact["implementation"]["backend_routes"]["git"],
+            *artifact["implementation"]["backend_routes"]["sqlite"],
+            *artifact["implementation"]["fence_routes"],
+        ]
+        self.assertEqual(len(references), len(set(references)))
+        for reference in references:
+            relative, qualified = reference.split("::", 1)
+            _class_name, separator, method_name = qualified.rpartition(".")
+            if not separator:
+                method_name = qualified
+            source = (ROOT / relative).read_text(encoding="utf-8")
+            self.assertIsNotNone(
+                re.search(rf"^    def {re.escape(method_name)}\(", source, re.MULTILINE),
+                reference,
+            )
+
+    def test_backend_fence_correspondence_domains_match_model(self) -> None:
+        artifact = self._backend_fence_correspondence()
+        model = (ROOT / artifact["model"]["path"]).read_text(encoding="utf-8")
+        config = (ROOT / artifact["model"]["config"]).read_text(encoding="utf-8")
+        self.assertRegex(model, r"backend \\in \[Operations -> Backends\]")
+        self.assertRegex(model, r"fence \\in \[Operations -> Nat\]")
+        self.assertIn('CONSTANT Backends = {"git", "sqlite"}', config)
+
     def test_sqlite_correspondence_nonclaims_are_nonempty(self) -> None:
         artifact = json.loads(
             (ROOT / "formal" / "upgrade" / "sqlite-snapshot-correspondence.json").read_text()
