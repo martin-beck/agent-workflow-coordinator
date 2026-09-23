@@ -224,7 +224,7 @@ class SQLiteCommitCapabilityTests(unittest.TestCase):
             called = True
             connection.execute("UPDATE state SET value='bad'")
 
-        with self.assertRaisesRegex(SQLiteMutationRejectedError, "parent identity changed"):
+        with self.assertRaisesRegex(SQLiteMutationRejectedError, "ancestor identity changed"):
             capability.commit(update)
         self.assertFalse(called)
 

@@ -78,7 +78,7 @@ class SQLiteCommitCapability:
         # Preserve the supplied pathname so the pre-effect lstat fence can
         # reject a symlinked authority instead of silently following it.
         self._authority = authority.absolute()
-        self._parent_identity = self._directory_identity(self._authority.parent)
+        self._ancestor_identities = self._ancestor_identities_for(self._authority)
         self._admission = admission
         if not callable(admission_reread):
             raise SQLiteMutationError("SQLite admission reread is invalid")
@@ -107,14 +107,21 @@ class SQLiteCommitCapability:
             cls._validate_identity(value, label)
 
     @staticmethod
-    def _directory_identity(path: Path) -> tuple[int, int]:
-        try:
-            status = path.lstat()
-        except OSError as error:
-            raise SQLiteMutationRejectedError("SQLite sidecar identity is unavailable") from error
-        if not stat.S_ISDIR(status.st_mode):
-            raise SQLiteMutationRejectedError("SQLite authority parent is not a regular directory")
-        return status.st_dev, status.st_ino
+    def _ancestor_identities_for(path: Path) -> tuple[tuple[str, int, int], ...]:
+        identities: list[tuple[str, int, int]] = []
+        current = Path(path.anchor)
+        for part in path.parent.parts[1:]:
+            current /= part
+            try:
+                status = current.lstat()
+            except OSError as error:
+                raise SQLiteMutationRejectedError(
+                    "SQLite sidecar identity is unavailable"
+                ) from error
+            if not stat.S_ISDIR(status.st_mode):
+                raise SQLiteMutationRejectedError("SQLite authority ancestor is not a directory")
+            identities.append((str(current), status.st_dev, status.st_ino))
+        return tuple(identities)
 
     @staticmethod
     def _identity(path: Path) -> tuple[int, int] | None:
@@ -129,8 +136,8 @@ class SQLiteCommitCapability:
         return status.st_dev, status.st_ino
 
     def _assert_filesystem_identity(self) -> None:
-        if self._directory_identity(self._authority.parent) != self._parent_identity:
-            raise SQLiteMutationRejectedError("SQLite authority parent identity changed")
+        if self._ancestor_identities_for(self._authority) != self._ancestor_identities:
+            raise SQLiteMutationRejectedError("SQLite authority ancestor identity changed")
         if self._identity(self._authority) != self._db_identity:
             raise SQLiteMutationRejectedError("SQLite database identity changed")
         if (

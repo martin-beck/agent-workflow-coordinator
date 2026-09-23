@@ -73,6 +73,7 @@
         "tests/test_git_authority_mutation.py::GitCommitCapabilityTests.test_rejects_symlinked_repository_path",
         "tests/test_git_authority_mutation.py::GitCommitCapabilityTests.test_rejects_repository_replacement_before_effect",
         "tests/test_git_authority_mutation.py::GitCommitCapabilityTests.test_rejects_repository_parent_replacement_before_effect",
+        "tests/test_git_authority_mutation.py::GitCommitCapabilityTests.test_rejects_repository_ancestor_replacement_before_effect",
         "tests/test_git_authority_mutation.py::GitCommitCapabilityTests.test_classifies_commit_runner_oserror_as_ambiguous",
         "tests/test_git_authority_mutation.py::GitCommitCapabilityTests.test_classifies_nonzero_commit_after_ref_update_as_ambiguous",
         "tests/test_git_authority_mutation.py::GitCommitCapabilityTests.test_classifies_post_commit_identity_reread_failure_as_ambiguous",
