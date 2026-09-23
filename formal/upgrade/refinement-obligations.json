@@ -2,7 +2,7 @@
   "schema_version": 1,
   "kind": "implementation-refinement-obligation-matrix",
   "contract": "formal/upgrade/v10-refinement-contract.json",
-  "contract_sha256": "03e14db0595ec50153fb2e6d9631328f9c754d36857ddd3a14c669da3f21f61b",
+  "contract_sha256": "143be11e7ffbf573a8d6a81f82bb22ad55aff8b42fe8659e95919ce0823407dd",
   "decision": "deny",
   "decision_rule": "deny unless every obligation is proven at the exact implementation revision and independently reviewed",
   "obligations": [
@@ -144,6 +144,8 @@
         "tests/test_git_authority_mutation.py::GitCommitCapabilityTests.test_commits_only_pre_staged_change_and_verifies_postconditions",
         "tests/test_git_authority_mutation.py::GitCommitCapabilityTests.test_rejects_unstaged_or_empty_changes",
         "tests/test_git_authority_mutation.py::GitCommitCapabilityTests.test_rejects_head_drift_and_ambiguous_runner_outcome",
+        "tests/test_git_authority_mutation.py::GitCommitCapabilityTests.test_rejects_identity_runner_oserror_before_effect",
+        "tests/test_git_authority_mutation.py::GitCommitCapabilityTests.test_classifies_commit_runner_oserror_as_ambiguous",
         "tests/test_git_authority_mutation.py::GitCommitCapabilityTests.test_classifies_nonzero_commit_after_ref_update_as_ambiguous",
         "tests/test_git_authority_mutation.py::GitCommitCapabilityTests.test_classifies_post_commit_identity_reread_failure_as_ambiguous",
         "tests/test_git_authority_adapter.py::GitAuthorityAdapterTests.test_rollback_recheck_never_authorizes_mutation",
