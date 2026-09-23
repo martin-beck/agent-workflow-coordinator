@@ -275,6 +275,52 @@ class RuntimeBootstrapTests(unittest.TestCase):
                     prepare_runtime_dispatch(admission, "other-runtime.py")
                 admission.close()
 
+    def test_prepare_dispatch_rejects_mutating_command_arguments(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            releases = root / "releases"
+            releases.mkdir(mode=0o700)
+            selected = releases / "v1.2.3"
+            selected.mkdir(mode=0o700)
+            self._write_manifest(selected)
+            self._write_entrypoint(selected)
+            selector = root / "runtime-selector.json"
+            commit_runtime_selector(selector, "v1.2.3", "v1.2.2")
+            with resolve_selected_runtime_bound(
+                selector, releases, self._identity_for_release(), self._verifier
+            ) as resolved:
+                admission = resolved.admit_for_dispatch()
+                for arguments in (("claim", "AR-1"), ("update", "AR-1"), ("reconcile",)):
+                    with (
+                        self.subTest(arguments=arguments),
+                        self.assertRaisesRegex(AuthorityError, "dispatch command is not read-only"),
+                    ):
+                        prepare_runtime_dispatch(admission, arguments)
+                admission.close()
+
+    def test_run_admitted_runtime_rejects_mutating_command_before_spawn(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            releases = root / "releases"
+            releases.mkdir(mode=0o700)
+            selected = releases / "v1.2.3"
+            selected.mkdir(mode=0o700)
+            self._write_manifest(selected)
+            self._write_entrypoint(selected)
+            selector = root / "runtime-selector.json"
+            commit_runtime_selector(selector, "v1.2.3", "v1.2.2")
+            with resolve_selected_runtime_bound(
+                selector, releases, self._identity_for_release(), self._verifier
+            ) as resolved:
+                admission = resolved.admit_for_dispatch()
+                with (
+                    patch("tools.runtime_bootstrap.subprocess.run") as run,
+                    self.assertRaisesRegex(AuthorityError, "dispatch command is not read-only"),
+                ):
+                    run_admitted_runtime(admission, ("reconcile", "--commit"))
+                run.assert_not_called()
+                admission.close()
+
     def test_prepare_dispatch_rejects_entrypoint_symlink(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

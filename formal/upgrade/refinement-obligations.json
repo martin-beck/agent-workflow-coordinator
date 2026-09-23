@@ -123,7 +123,9 @@
         "tests/test_git_authority_adapter.py::GitAuthorityAdapterTests.test_snapshot_bound_rejects_session_or_identity_drift_before_observation",
         "tests/test_git_authority_adapter.py::GitAuthorityAdapterTests.test_snapshot_bound_rejects_non_read_only_backend_result",
         "tests/test_upgrade_commands.py::UpgradeCommandTests.test_apply_and_rollback_reject_both_backends_without_writes",
-        "tests/test_upgrade_commands.py::UpgradeCommandTests.test_contract_file_and_dispatch_boundaries_fail_closed"
+        "tests/test_upgrade_commands.py::UpgradeCommandTests.test_contract_file_and_dispatch_boundaries_fail_closed",
+        "tests/test_runtime_bootstrap.py::RuntimeBootstrapTests.test_prepare_dispatch_rejects_mutating_command_arguments",
+        "tests/test_runtime_bootstrap.py::RuntimeBootstrapTests.test_run_admitted_runtime_rejects_mutating_command_before_spawn"
       ],
       "status": "not-proven"
     },
