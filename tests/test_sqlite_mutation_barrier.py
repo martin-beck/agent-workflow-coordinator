@@ -349,6 +349,7 @@ def _authority_effect_waiting_for_sigkill(root_text: str, ready: Any) -> None:
     sqlite_capability = SQLiteCommitCapability(
         root / "authority.sqlite",
         admission=admission,
+        admission_reread=lambda: admission.__dict__,
         expected_db_identity=identity(root / "authority.sqlite"),  # type: ignore[arg-type]
         expected_wal_identity=identity(root / "authority.sqlite-wal"),
         expected_shm_identity=identity(root / "authority.sqlite-shm"),
@@ -391,6 +392,7 @@ def _git_authority_effect_waiting_for_sigkill(root_text: str, ready: Any) -> Non
     git_capability = GitCommitCapability(
         git_root,
         admission=admission,
+        admission_reread=lambda: admission.__dict__,
         expected_branch="main",
         expected_head=_git(git_root, "rev-parse", "HEAD"),
     )
@@ -1421,6 +1423,7 @@ class SQLiteMutationBarrierProcessTests(unittest.TestCase):
         sqlite_capability = SQLiteCommitCapability(
             self.authority,
             admission=new_admission,
+            admission_reread=lambda: new_admission.__dict__,
             expected_db_identity=identity(self.authority),  # type: ignore[arg-type]
             expected_wal_identity=identity(self.authority.with_name("authority.sqlite-wal")),
             expected_shm_identity=identity(self.authority.with_name("authority.sqlite-shm")),
@@ -1524,6 +1527,7 @@ class SQLiteMutationBarrierProcessTests(unittest.TestCase):
         git_capability = GitCommitCapability(
             self.git_authority,
             admission=new_admission,
+            admission_reread=lambda: new_admission.__dict__,
             expected_branch="main",
             expected_head=_git(self.git_authority, "rev-parse", "HEAD"),
         )

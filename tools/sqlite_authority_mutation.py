@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import sqlite3
 import stat
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -34,6 +34,7 @@ class SQLiteCommitResult:
 
 _Commit = Callable[[sqlite3.Connection], None]
 _Connector = Callable[..., sqlite3.Connection]
+_AdmissionReread = Callable[[], Mapping[str, object]]
 
 
 class SQLiteCommitCapability:
@@ -49,6 +50,7 @@ class SQLiteCommitCapability:
         authority: Path,
         *,
         admission: CommitAdmissionBundle,
+        admission_reread: _AdmissionReread,
         expected_db_identity: tuple[int, int],
         expected_wal_identity: tuple[int, int] | None,
         expected_shm_identity: tuple[int, int] | None,
@@ -60,6 +62,9 @@ class SQLiteCommitCapability:
             raise SQLiteMutationError("SQLite mutation revision is invalid")
         self._authority = authority.resolve()
         self._admission = admission
+        if not callable(admission_reread):
+            raise SQLiteMutationError("SQLite admission reread is invalid")
+        self._admission_reread = admission_reread
         self._db_identity = expected_db_identity
         self._wal_identity = expected_wal_identity
         self._shm_identity = expected_shm_identity
@@ -109,6 +114,14 @@ class SQLiteCommitCapability:
         ):
             raise SQLiteMutationError("SQLite SHM identity changed")
 
+    def _assert_admission_current(self) -> None:
+        try:
+            current = self._admission_reread()
+        except Exception as error:
+            raise SQLiteMutationError("SQLite admission reread was rejected") from error
+        if not isinstance(current, Mapping) or not self._admission.matches(current):
+            raise SQLiteMutationError("SQLite admission identity changed before commit")
+
     def _consume(self, effect: _Commit) -> None:
         if self._consumed:
             raise SQLiteMutationError("SQLite mutation capability already consumed")
@@ -135,6 +148,7 @@ class SQLiteCommitCapability:
     def commit(self, effect: _Commit) -> SQLiteCommitResult:
         self._consume(effect)
         self._assert_filesystem_identity()
+        self._assert_admission_current()
         connection: sqlite3.Connection | None = None
         try:
             connection = self._connector(self._authority, isolation_level=None, timeout=5)

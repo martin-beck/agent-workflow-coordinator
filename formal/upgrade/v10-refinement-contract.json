@@ -13,8 +13,8 @@
     }
   },
   "implementation_snapshot": {
-    "revision": "2f91cff9d639608c2cff46cc352e683e03fa93b5",
-    "runtime_revision": "2f91cff9d639608c2cff46cc352e683e03fa93b5",
+    "revision": "ae8b208de697e609f8429abcc03dac1e60b9b4e5",
+    "runtime_revision": "ae8b208de697e609f8429abcc03dac1e60b9b4e5",
     "status": "descriptor-safe control-store and SQLite DB/WAL/SHM rereads plus bounded independent-process barrier/write evidence; executable apply and rollback remain rejection-only"
   },
   "correspondence": [
@@ -34,7 +34,9 @@
       "evidence_required": [
         "tests/test_authority_neutral_selector.py::test_admission_is_read_only_and_bound_to_visibility_scope",
         "tests/test_authority_neutral_selector.py::test_rejects_invalid_identity_and_backend_failures",
-        "tests/test_authority_neutral_selector.py::test_bound_adapter_rejects_phase_and_identity_drift"
+        "tests/test_authority_neutral_selector.py::test_bound_adapter_rejects_phase_and_identity_drift",
+        "tests/test_git_authority_mutation.py::test_rejects_stale_admission_reread_before_effect",
+        "tests/test_sqlite_authority_mutation.py::test_rejects_stale_admission_reread_before_effect"
       ],
       "status": "bounded executable selector admission evidence; implementation refinement pending"
     },

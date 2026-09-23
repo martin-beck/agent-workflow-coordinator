@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import re
 import subprocess
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -31,6 +31,7 @@ class GitMutationAmbiguousError(GitMutationError, AuthorityMutationAmbiguousErro
 _SAFE_MESSAGE = re.compile(r"[A-Za-z0-9][A-Za-z0-9 ._:/-]{0,127}\Z")
 _COMMIT_HEAD = re.compile(r"\[[^\]]+\s+([0-9a-f]{7,64})\]")
 _Runner = Callable[..., subprocess.CompletedProcess[str]]
+_AdmissionReread = Callable[[], Mapping[str, object]]
 
 
 @dataclass(frozen=True)
@@ -53,6 +54,7 @@ class GitCommitCapability:
         repository: Path,
         *,
         admission: CommitAdmissionBundle,
+        admission_reread: _AdmissionReread,
         expected_branch: str,
         expected_head: str,
         runner: _Runner = subprocess.run,
@@ -61,6 +63,9 @@ class GitCommitCapability:
         if admission.backend != "git" or admission.target != "new":
             raise GitMutationError("Git mutation admission identity is invalid")
         self._admission = admission
+        if not callable(admission_reread):
+            raise GitMutationError("Git admission reread is invalid")
+        self._admission_reread = admission_reread
         self._operation_id = self._validate_text(admission.operation_id, "operation identity")
         self._fencing_token = self._validate_text(admission.fencing_token, "fencing token")
         self._expected_branch = self._validate_text(expected_branch, "branch identity")
@@ -117,11 +122,20 @@ class GitCommitCapability:
             raise GitMutationError("Git authority has no staged change")
         return branch, head
 
+    def _assert_admission_current(self) -> None:
+        try:
+            current = self._admission_reread()
+        except Exception as error:
+            raise GitMutationError("Git admission reread was rejected") from error
+        if not isinstance(current, Mapping) or not self._admission.matches(current):
+            raise GitMutationError("Git admission identity changed before commit")
+
     def commit(self, message: str) -> GitCommitResult:
         if self._consumed:
             raise GitMutationError("Git mutation capability already consumed")
         message = self._validate_text(message, "commit message")
         branch, before = self._assert_before()
+        self._assert_admission_current()
         self._consumed = True
         try:
             result = self._runner(
