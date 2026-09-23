@@ -44,6 +44,7 @@ from tools.upgrade_engine import (
     Handler,
     PhaseContext,
     RollbackAuthorizationCapability,
+    RollbackBackupEvidence,
     SQLiteRollbackObservationCapability,
     UpgradeEngine,
     UpgradeError,
@@ -2590,29 +2591,26 @@ class UpgradeEngineTests(unittest.TestCase):
         context = PhaseContext(**cast(dict[str, Any], ROLLBACK_CONTEXT))
         evidence_capability = BoundRollbackCapability.bind(context, adapter)
         capability = RollbackAuthorizationCapability.bind(context, evidence_capability)
-        valid_evidence = {
-            **ROLLBACK_CONTEXT,
-            "phase": "rollback",
-            "backend_identity_verified": True,
-            "mutates_authority": False,
-            "backup_verified": True,
-            "restore_roundtrip_verified": True,
-            "rollback_context_verified": False,
-        }
+        typed = RollbackBackupEvidence.from_observations(
+            ROLLBACK_CONTEXT, b"backup-v1", {"manifest": "v1"}, "control-store-1", 1
+        )
+        valid_evidence = typed.as_mapping()
         with self.assertRaisesRegex(UpgradeError, "not enabled"):
-            capability.authorize(ROLLBACK_CONTEXT, valid_evidence)
+            capability.authorize(ROLLBACK_CONTEXT, typed)
         with self.assertRaisesRegex(UpgradeError, "context or evidence is invalid"):
-            capability.authorize(None, valid_evidence)  # type: ignore[arg-type]
+            capability.validate(None, valid_evidence)  # type: ignore[arg-type]
+        with self.assertRaisesRegex(UpgradeError, "typed evidence"):
+            capability.authorize(ROLLBACK_CONTEXT, valid_evidence)
         forged = dict(ROLLBACK_CONTEXT)
         forged["fencing_token"] = "forged"  # noqa: S105
         with self.assertRaisesRegex(UpgradeError, "identity mismatch"):
-            capability.authorize(forged, valid_evidence)
+            capability.validate(forged, valid_evidence)
         incomplete = dict(ROLLBACK_CONTEXT)
         incomplete.pop("envelope_digest")
         with self.assertRaisesRegex(UpgradeError, "context is invalid"):
-            capability.authorize(incomplete, valid_evidence)
+            capability.validate(incomplete, valid_evidence)
         with self.assertRaisesRegex(UpgradeError, "diagnostic-only"):
-            capability.authorize(
+            capability.validate(
                 ROLLBACK_CONTEXT, {**valid_evidence, "rollback_context_verified": True}
             )
         for hostile, message in (
@@ -2634,7 +2632,22 @@ class UpgradeEngineTests(unittest.TestCase):
             ),
         ):
             with self.subTest(hostile=hostile), self.assertRaisesRegex(UpgradeError, message):
-                capability.authorize(ROLLBACK_CONTEXT, hostile)  # type: ignore[arg-type]
+                capability.validate(ROLLBACK_CONTEXT, hostile)  # type: ignore[arg-type]
+
+        self.assertNotEqual(
+            typed.backup_bytes_digest,
+            RollbackBackupEvidence.from_observations(
+                ROLLBACK_CONTEXT, b"backup-v2", {"manifest": "v1"}, "control-store-1", 1
+            ).backup_bytes_digest,
+        )
+        with self.assertRaisesRegex(UpgradeError, "trusted provenance"):
+            RollbackBackupEvidence(
+                tuple(ROLLBACK_CONTEXT.items()),
+                typed.backup_bytes_digest,
+                typed.manifest_digest,
+                typed.control_store_identity,
+                typed.control_store_revision,
+            )
 
     def test_rollback_authorization_preflight_requires_bound_observation_and_cas(self) -> None:
         class EvidenceAdapter(FakeAdapter):
@@ -2761,6 +2774,44 @@ class UpgradeEngineTests(unittest.TestCase):
             )
             with self.assertRaisesRegex(UpgradeError, "identity mismatch"):
                 capability.observe({**ROLLBACK_CONTEXT, "operation_id": "foreign"})
+
+    def test_typed_rollback_evidence_rejects_untrusted_observations(self) -> None:
+        invalid: tuple[tuple[object, object, object, object], ...] = (
+            (bytearray(b"backup"), {"manifest": "v1"}, "control-store-1", 1),
+            (b"backup", [], "control-store-1", 1),
+            (b"backup", {"manifest": "v1"}, "", 1),
+            (b"backup", {"manifest": "v1"}, "control-store-1", True),
+        )
+        for observations in invalid:
+            with self.subTest(observations=observations), self.assertRaises(UpgradeError):
+                RollbackBackupEvidence.from_observations(ROLLBACK_CONTEXT, *cast(Any, observations))
+
+    def test_rollback_validation_rejects_backup_identity_drift(self) -> None:
+        class EvidenceAdapter(FakeAdapter):
+            def verify_rollback_context_bound(
+                self, context: Mapping[str, object]
+            ) -> Mapping[str, object]:
+                return dict(context)
+
+        context = PhaseContext(**cast(dict[str, Any], ROLLBACK_CONTEXT))
+        capability = RollbackAuthorizationCapability.bind(
+            context, BoundRollbackCapability.bind(context, EvidenceAdapter())
+        )
+        typed = RollbackBackupEvidence.from_observations(
+            ROLLBACK_CONTEXT, b"backup-v1", {"manifest": "v1"}, "control-store-1", 1
+        )
+        evidence = typed.as_mapping()
+        for field, value in (
+            ("backup_bytes_digest", "0" * 64),
+            ("manifest_digest", "1" * 64),
+            ("control_store_identity", "replaced"),
+            ("control_store_revision", 2),
+        ):
+            with (
+                self.subTest(field=field),
+                self.assertRaisesRegex(UpgradeError, "backup identity is invalid"),
+            ):
+                capability.validate(ROLLBACK_CONTEXT, {**evidence, field: value})
 
     def test_bound_rollback_inspection_dispatches_initialized_real_adapters(self) -> None:
         """Concrete adapter identity is retained without authorizing rollback."""
