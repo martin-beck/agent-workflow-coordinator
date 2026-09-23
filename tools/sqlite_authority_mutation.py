@@ -9,6 +9,7 @@ import stat
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from typing import NoReturn
 
 from tools.authority_mutation import (
     AuthorityMutationAmbiguousError,
@@ -159,11 +160,26 @@ class SQLiteCommitCapability:
         except (OSError, sqlite3.Error) as error:
             raise SQLiteMutationAmbiguousError("SQLite rollback outcome is ambiguous") from error
 
+    def _classify_oserror(
+        self,
+        error: OSError,
+        connection: sqlite3.Connection | None,
+        effect_started: bool,
+    ) -> NoReturn:
+        if connection is not None:
+            self._rollback_connection(connection)
+        if not effect_started:
+            raise SQLiteMutationRejectedError(
+                "SQLite authority connection was rejected before effect"
+            ) from error
+        raise SQLiteMutationAmbiguousError("SQLite commit outcome is ambiguous") from error
+
     def commit(self, effect: _Commit) -> SQLiteCommitResult:
         self._consume(effect)
         self._assert_filesystem_identity()
         self._assert_admission_current()
         connection: sqlite3.Connection | None = None
+        effect_started = False
         try:
             connection = self._connector(self._authority, isolation_level=None, timeout=5)
             # The pathname may be replaced between the initial admission check
@@ -173,8 +189,11 @@ class SQLiteCommitCapability:
             connection.execute("PRAGMA foreign_keys=ON")
             connection.execute("PRAGMA synchronous=FULL")
             connection.execute("BEGIN IMMEDIATE")
+            effect_started = True
             effect(connection)
             connection.commit()
+        except OSError as error:
+            self._classify_oserror(error, connection, effect_started)
         except sqlite3.Error as error:
             if connection is not None:
                 self._rollback_connection(connection)

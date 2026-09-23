@@ -171,6 +171,32 @@ class SQLiteCommitCapabilityTests(unittest.TestCase):
             capability.commit(update)
         self.assertFalse(called)
 
+    def test_rejects_connector_oserror_before_effect(self) -> None:
+        called = False
+
+        def connector(*_args: Any, **_kwargs: Any) -> sqlite3.Connection:
+            raise OSError("injected connector failure")
+
+        def update(connection: sqlite3.Connection) -> None:
+            nonlocal called
+            called = True
+            connection.execute("UPDATE state SET value='bad'")
+
+        capability = SQLiteCommitCapability(
+            self.db,
+            admission=self._admission,
+            admission_reread=lambda: self._admission.__dict__,
+            expected_db_identity=self._capability()._db_identity,
+            expected_wal_identity=self._capability()._wal_identity,
+            expected_shm_identity=self._capability()._shm_identity,
+            connector=connector,
+        )
+        with self.assertRaisesRegex(
+            SQLiteMutationRejectedError, "connection was rejected before effect"
+        ):
+            capability.commit(update)
+        self.assertFalse(called)
+
     def test_rejects_authority_replacement_after_connect_before_effect(self) -> None:
         real_connect = sqlite3.connect
         replaced = False
