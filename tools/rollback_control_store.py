@@ -199,6 +199,32 @@ class AuthorityEffectIntent:
             raise ControlStoreError("authority effect admission identity is incomplete")
 
 
+def _validate_authority_effect_receipt(
+    intent: AuthorityEffectIntent, receipt: object | None
+) -> None:
+    """Require a committed receipt to match every persisted admission field."""
+
+    def receipt_field(name: str) -> object:
+        if isinstance(receipt, Mapping):
+            return receipt.get(name)
+        return getattr(receipt, name, None)
+
+    expected = {
+        "backend": intent.backend,
+        "target": intent.target,
+        "operation_id": intent.operation_id,
+        "state_revision": intent.session_revision,
+        "artifact_identity": intent.artifact_identity,
+        "manifest_identity": intent.manifest_identity,
+        "selector_identity": intent.selector_identity,
+        "runtime_identity": intent.runtime_identity,
+        "fencing_token": intent.fencing_token,
+        "mutates_authority": True,
+    }
+    if any(receipt_field(name) != value for name, value in expected.items()):
+        raise ControlStoreError("authority effect receipt identity mismatch")
+
+
 class BarrierSessionContract:
     """Small pure CAS contract used to gate a future durable adapter.
 
@@ -2285,14 +2311,19 @@ class SQLiteBarrierSessionStore:
             connection.commit()
             return intent
 
-    def finish_authority_effect(
-        self, intent: AuthorityEffectIntent, outcome: str
+    def finish_authority_effect(  # noqa: C901
+        self,
+        intent: AuthorityEffectIntent,
+        outcome: str,
+        receipt: object | None = None,
     ) -> BarrierSessionState:
         """Publish an effect result, fencing ambiguity instead of retrying it."""
         if not isinstance(intent, AuthorityEffectIntent):
             raise ControlStoreError("authority effect intent is required")
         if outcome not in {"committed", "ambiguous"}:
             raise ControlStoreError("authority effect outcome is invalid")
+        if outcome == "committed" and intent.artifact_identity is not None:
+            _validate_authority_effect_receipt(intent, receipt)
         if self.operation_owned_by_current_thread:
             raise ControlStoreError("control store lock is non-reentrant")
         with self.operation_lock(), self._control._connection() as connection:

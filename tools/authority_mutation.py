@@ -22,7 +22,14 @@ class AuthorityMutationAmbiguousError(AuthorityMutationError):
 @dataclass(frozen=True)
 class MutationReceipt:
     backend: str
+    target: str
     operation_id: str
+    state_revision: int
+    barrier_id: str
+    artifact_identity: str
+    manifest_identity: str
+    selector_identity: str
+    runtime_identity: str
     fencing_token: str
     mutates_authority: bool
 
@@ -45,7 +52,9 @@ class AuthorityEffectJournal(Protocol):
         expected_runtime_identity: str | None = None,
     ) -> object: ...
 
-    def finish_authority_effect(self, intent: Any, outcome: str) -> Any: ...
+    def finish_authority_effect(
+        self, intent: Any, outcome: str, receipt: Any | None = None
+    ) -> Any: ...
 
 
 class BoundAuthorityMutation:
@@ -96,7 +105,14 @@ class BoundAuthorityMutation:
             raise AuthorityMutationError("authority mutation result identity mismatch")
         return MutationReceipt(
             backend=backend,
+            target=self._admission.target,
             operation_id=self._admission.operation_id,
+            state_revision=self._admission.state_revision,
+            barrier_id=self._admission.barrier_id,
+            artifact_identity=self._admission.artifact_identity,
+            manifest_identity=self._admission.manifest_identity,
+            selector_identity=self._admission.selector_identity,
+            runtime_identity=self._admission.runtime_identity,
             fencing_token=self._admission.fencing_token,
             mutates_authority=True,
         )
@@ -152,7 +168,7 @@ class DurableBoundAuthorityMutation:
                 ) from journal_error
             raise
         try:
-            self._journal.finish_authority_effect(intent, "committed")
+            self._journal.finish_authority_effect(intent, "committed", receipt)
         except BaseException as error:
             raise AuthorityMutationAmbiguousError(
                 "authority mutation outcome publication is ambiguous"

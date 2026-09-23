@@ -1656,7 +1656,30 @@ class SQLiteMutationBarrierProcessTests(unittest.TestCase):
             self.session.finish_authority_effect(intent, "unknown")
         with self.assertRaisesRegex(ControlStoreError, "intent is required"):
             self.session.finish_authority_effect(object(), "committed")  # type: ignore[arg-type]
-        completed = self.session.finish_authority_effect(intent, "committed")
+        with self.assertRaisesRegex(ControlStoreError, "receipt identity mismatch"):
+            self.session.finish_authority_effect(intent, "committed")
+        with self.assertRaisesRegex(ControlStoreError, "receipt identity mismatch"):
+            self.session.finish_authority_effect(
+                intent,
+                "committed",
+                {"backend": "git"},
+            )
+        completed = self.session.finish_authority_effect(
+            intent,
+            "committed",
+            {
+                "backend": "sqlite",
+                "target": "new",
+                "operation_id": "op-1",
+                "state_revision": held.revision,
+                "artifact_identity": "artifact-1",
+                "manifest_identity": "manifest-1",
+                "selector_identity": "selector-1",
+                "runtime_identity": "runtime-1",
+                "fencing_token": held.identity.fencing_token,
+                "mutates_authority": True,
+            },
+        )
         self.assertEqual(held, completed)
         with self.assertRaisesRegex(ControlStoreError, "already recorded"):
             self.session.prepare_authority_effect(held.revision, "op-1", "sqlite")
