@@ -193,7 +193,7 @@
         "tests/test_lock_domain.py::LockDomainTests.test_replaced_descriptor_and_inactive_guard_fail_closed",
         "tests/test_lock_domain.py::LockDomainTests.test_identity_rejects_nonregular_descriptor_and_symlink"
       ],
-      "status": "obligation-only"
+      "status": "bounded executable lock-domain and identity evidence; implementation refinement pending"
     },
     {
       "model_actions": ["ObserveAuthority", "RecheckHeld", "RejectStaleCAS"],
@@ -207,11 +207,15 @@
         "tests/test_authority_effect_correspondence.py::AuthorityEffectCorrespondenceTests.test_rechecked_authority_admission_maps_to_model_reread",
         "tests/test_authority_effect_correspondence.py::AuthorityEffectCorrespondenceTests.test_rechecked_stale_authority_admission_maps_to_rejection",
         "tests/test_authority_effect_correspondence.py::AuthorityEffectCorrespondenceTests.test_authority_admission_without_reread_fails_closed",
-        "binding rename/swap tests",
-        "control-store identity tests",
-        "stale revision tests"
+        "tests/test_rollback_control_store.py::RollbackControlStoreTests.test_control_path_swap_after_binding_fails_without_authority_mutation",
+        "tests/test_rollback_control_store.py::RollbackControlStoreTests.test_control_swap_between_descriptor_validation_and_sqlite_open_fails_closed",
+        "tests/test_rollback_control_store.py::RollbackControlStoreTests.test_bound_parent_authority_and_project_swaps_fail_closed",
+        "tests/test_rollback_control_store.py::RollbackControlStoreTests.test_v10_durable_session_recheck_is_fresh_and_read_only",
+        "tests/test_rollback_control_store.py::RollbackControlStoreTests.test_v10_multiprocess_stale_fence_writer_is_rejected",
+        "tests/test_rollback_control_store.py::RollbackControlStoreTests.test_v10_caller_owned_recheck_rejects_stale_identity_and_authority",
+        "tests/test_rollback_control_store.py::RollbackControlStoreTests.test_cas_conflict_and_binding_mismatch_fail_closed"
       ],
-      "status": "obligation-only"
+      "status": "bounded executable barrier identity and stale-fence evidence; implementation refinement pending"
     },
     {
       "model_actions": ["RequestWrite", "AcceptWrite", "RejectWrite", "FinishWrite"],
