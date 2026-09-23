@@ -151,7 +151,7 @@ class SQLiteCommitCapabilityTests(unittest.TestCase):
         def update(connection: sqlite3.Connection) -> None:
             connection.execute("UPDATE state SET value='bad'")
 
-        with self.assertRaisesRegex(SQLiteMutationError, "WAL identity changed"):
+        with self.assertRaisesRegex(SQLiteMutationRejectedError, "WAL identity changed"):
             capability.commit(update)
 
     def test_classifies_sqlite_errors_as_ambiguous(self) -> None:

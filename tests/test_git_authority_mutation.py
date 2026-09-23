@@ -209,6 +209,33 @@ class GitCommitCapabilityTests(unittest.TestCase):
         self.assertEqual("", _git(self.root, "status", "--porcelain=v1"))
         self.assertEqual("new\n", (self.root / "state").read_text(encoding="utf-8"))
 
+    def test_classifies_post_commit_identity_reread_failure_as_ambiguous(self) -> None:
+        (self.root / "state").write_text("new\n", encoding="utf-8")
+        _git(self.root, "add", "state")
+        committed = False
+
+        def fail_after_commit(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
+            nonlocal committed
+            command = cast(list[str], args[0])
+            if committed and command[3:5] == ["rev-parse", "--verify"]:
+                return subprocess.CompletedProcess(command, 1, stdout="", stderr="reread failed")
+            result = subprocess.run(command, **cast(Any, kwargs))
+            if command[3:4] == ["commit"] and result.returncode == 0:
+                committed = True
+            return result
+
+        capability = GitCommitCapability(
+            self.root,
+            admission=self._admission(),
+            admission_reread=lambda: self._admission().__dict__,
+            expected_branch="main",
+            expected_head=_git(self.root, "rev-parse", "HEAD"),
+            runner=fail_after_commit,
+        )
+        with self.assertRaisesRegex(GitMutationAmbiguousError, "postcondition"):
+            capability.commit("op-1 authority commit")
+        self.assertEqual("", _git(self.root, "status", "--porcelain=v1"))
+
     def test_rejects_a_concurrent_commit_after_the_effect(self) -> None:
         (self.root / "state").write_text("new\n", encoding="utf-8")
         _git(self.root, "add", "state")

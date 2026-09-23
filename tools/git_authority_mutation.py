@@ -112,9 +112,9 @@ class GitCommitCapability:
                 timeout=10,
             )
         except (OSError, subprocess.TimeoutExpired) as error:
-            raise GitMutationAmbiguousError("Git identity reread is ambiguous") from error
+            raise GitMutationRejectedError("Git identity reread was rejected") from error
         if result.returncode != 0:
-            raise GitMutationError("Git identity reread was rejected")
+            raise GitMutationRejectedError("Git identity reread was rejected")
         return result.stdout.rstrip("\n")
 
     @staticmethod
@@ -174,6 +174,8 @@ class GitCommitCapability:
             status = self._git("status", "--porcelain=v1", "--untracked-files=all")
         except GitMutationAmbiguousError:
             raise
+        except GitMutationError as error:
+            raise GitMutationAmbiguousError("Git commit postcondition is ambiguous") from error
         if (
             after_branch != branch
             or after == before
