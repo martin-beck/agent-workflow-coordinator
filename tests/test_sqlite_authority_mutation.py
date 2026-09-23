@@ -197,6 +197,45 @@ class SQLiteCommitCapabilityTests(unittest.TestCase):
             capability.commit(update)
         self.assertFalse(called)
 
+    def test_rejects_sqlite_setup_error_before_effect(self) -> None:
+        real_connect = sqlite3.connect
+        called = False
+
+        class SetupFailingConnection:
+            def __init__(self, connection: sqlite3.Connection) -> None:
+                self._connection = connection
+
+            def execute(self, sql: str, *args: Any) -> sqlite3.Cursor:
+                if sql == "PRAGMA foreign_keys=ON":
+                    raise sqlite3.OperationalError("injected setup failure")
+                return self._connection.execute(sql, *args)
+
+            def __getattr__(self, name: str) -> object:
+                return getattr(self._connection, name)
+
+        def connector(*args: Any, **kwargs: Any) -> sqlite3.Connection:
+            return cast(sqlite3.Connection, SetupFailingConnection(real_connect(*args, **kwargs)))
+
+        def update(connection: sqlite3.Connection) -> None:
+            nonlocal called
+            called = True
+            connection.execute("UPDATE state SET value='bad'")
+
+        capability = SQLiteCommitCapability(
+            self.db,
+            admission=self._admission,
+            admission_reread=lambda: self._admission.__dict__,
+            expected_db_identity=self._capability()._db_identity,
+            expected_wal_identity=self._capability()._wal_identity,
+            expected_shm_identity=self._capability()._shm_identity,
+            connector=connector,
+        )
+        with self.assertRaisesRegex(
+            SQLiteMutationRejectedError, "setup was rejected before effect"
+        ):
+            capability.commit(update)
+        self.assertFalse(called)
+
     def test_rejects_authority_replacement_after_connect_before_effect(self) -> None:
         real_connect = sqlite3.connect
         replaced = False

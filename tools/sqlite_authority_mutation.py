@@ -174,6 +174,20 @@ class SQLiteCommitCapability:
             ) from error
         raise SQLiteMutationAmbiguousError("SQLite commit outcome is ambiguous") from error
 
+    def _classify_sqlite_error(
+        self,
+        error: sqlite3.Error,
+        connection: sqlite3.Connection | None,
+        effect_started: bool,
+    ) -> NoReturn:
+        if connection is not None:
+            self._rollback_connection(connection)
+        if not effect_started:
+            raise SQLiteMutationRejectedError(
+                "SQLite authority setup was rejected before effect"
+            ) from error
+        raise SQLiteMutationAmbiguousError("SQLite commit outcome is ambiguous") from error
+
     def commit(self, effect: _Commit) -> SQLiteCommitResult:
         self._consume(effect)
         self._assert_filesystem_identity()
@@ -195,9 +209,7 @@ class SQLiteCommitCapability:
         except OSError as error:
             self._classify_oserror(error, connection, effect_started)
         except sqlite3.Error as error:
-            if connection is not None:
-                self._rollback_connection(connection)
-            raise SQLiteMutationAmbiguousError("SQLite commit outcome is ambiguous") from error
+            self._classify_sqlite_error(error, connection, effect_started)
         except Exception:
             if connection is not None:
                 self._rollback_connection(connection)
