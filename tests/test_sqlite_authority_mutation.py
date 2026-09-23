@@ -138,6 +138,39 @@ class SQLiteCommitCapabilityTests(unittest.TestCase):
                 connector=connector,
             ).commit(update)
 
+    def test_classifies_rollback_failure_as_ambiguous(self) -> None:
+        real_connect = sqlite3.connect
+
+        class RollbackFailingConnection:
+            def __init__(self, connection: sqlite3.Connection) -> None:
+                self._connection = connection
+
+            def __getattr__(self, name: str) -> object:
+                return getattr(self._connection, name)
+
+            def rollback(self) -> None:
+                raise sqlite3.OperationalError("injected rollback failure")
+
+        def connector(*args: Any, **kwargs: Any) -> sqlite3.Connection:
+            return cast(
+                sqlite3.Connection,
+                RollbackFailingConnection(real_connect(*args, **kwargs)),
+            )
+
+        def invalid(connection: sqlite3.Connection) -> None:
+            connection.execute("UPDATE missing SET x=1")
+
+        with self.assertRaisesRegex(SQLiteMutationAmbiguousError, "rollback outcome is ambiguous"):
+            capability = SQLiteCommitCapability(
+                self.db,
+                admission=self._admission,
+                expected_db_identity=self._capability()._db_identity,
+                expected_wal_identity=self._capability()._wal_identity,
+                expected_shm_identity=self._capability()._shm_identity,
+                connector=connector,
+            )
+            capability.commit(invalid)
+
 
 if __name__ == "__main__":
     unittest.main()

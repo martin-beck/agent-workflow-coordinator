@@ -7,7 +7,6 @@ from __future__ import annotations
 import sqlite3
 import stat
 from collections.abc import Callable
-from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -117,6 +116,13 @@ class SQLiteCommitCapability:
                 "SQLite connection close outcome is ambiguous"
             ) from error
 
+    @staticmethod
+    def _rollback_connection(connection: sqlite3.Connection) -> None:
+        try:
+            connection.rollback()
+        except sqlite3.Error as error:
+            raise SQLiteMutationAmbiguousError("SQLite rollback outcome is ambiguous") from error
+
     def commit(self, effect: _Commit) -> SQLiteCommitResult:
         if not callable(effect):
             raise SQLiteMutationError("SQLite authority effect is invalid")
@@ -131,13 +137,11 @@ class SQLiteCommitCapability:
             connection.commit()
         except sqlite3.Error as error:
             if connection is not None:
-                with suppress(sqlite3.Error):
-                    connection.rollback()
+                self._rollback_connection(connection)
             raise SQLiteMutationAmbiguousError("SQLite commit outcome is ambiguous") from error
         except Exception:
             if connection is not None:
-                with suppress(sqlite3.Error):
-                    connection.rollback()
+                self._rollback_connection(connection)
             raise
         finally:
             if connection is not None:
