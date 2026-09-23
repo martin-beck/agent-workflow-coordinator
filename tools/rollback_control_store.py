@@ -2016,7 +2016,7 @@ class SQLiteBarrierSessionStore:
                 ) from error
             return supplied
 
-    def _recover_prepared_locked(
+    def _recover_prepared_locked(  # noqa: C901
         self,
         connection: sqlite3.Connection,
         prepared: list[tuple[str, str, int, int, str, str]],
@@ -2036,7 +2036,12 @@ class SQLiteBarrierSessionStore:
             connection.execute("BEGIN IMMEDIATE")
             for intent_id, *_ in prepared:
                 self._mark_intent_locked(connection, intent_id, "reconciled")
-            connection.commit()
+            try:
+                connection.commit()
+            except Exception as error:
+                raise ControlStoreError(
+                    "recovery commit outcome is ambiguous; durable state must be rechecked"
+                ) from self._mark_recovery_ambiguous_after_commit_failure(connection, error)
             return current
         if current.status != "ambiguous":
             connection.execute("BEGIN IMMEDIATE")
@@ -2055,12 +2060,56 @@ class SQLiteBarrierSessionStore:
                 current.forward_child,
                 current.rollback_child,
             )
-            connection.commit()
+            try:
+                connection.commit()
+            except Exception as error:
+                raise ControlStoreError(
+                    "recovery commit outcome is ambiguous; durable state must be rechecked"
+                ) from self._mark_recovery_ambiguous_after_commit_failure(connection, error)
         connection.execute("BEGIN IMMEDIATE")
         for intent_id, _attempt_id, _expected, _proposed, _digest, _status in prepared:
             self._mark_intent_locked(connection, intent_id, "ambiguous", "process-death")
-        connection.commit()
+        try:
+            connection.commit()
+        except Exception as error:
+            raise ControlStoreError(
+                "recovery commit outcome is ambiguous; durable state must be rechecked"
+            ) from self._mark_recovery_ambiguous_after_commit_failure(connection, error)
         return current
+
+    def _mark_recovery_ambiguous_after_commit_failure(
+        self,
+        connection: sqlite3.Connection,
+        commit_error: Exception,
+    ) -> Exception:
+        """Fence uncertain recovery progress into a durable ambiguous session."""
+        try:
+            connection.rollback()
+            connection.execute("BEGIN IMMEDIATE")
+            latest_row = connection.execute(self._SELECT, (self.project_id,)).fetchone()
+            if latest_row is None:
+                raise ControlStoreError("recovery ambiguity fencing found no session")
+            latest = self._row_state(latest_row)
+            if latest.status in {"held", "releasing"}:
+                cursor = connection.execute(
+                    "UPDATE barrier_session SET status='ambiguous',revision=? "
+                    "WHERE project_id=? AND revision=?",
+                    (latest.revision + 1, self.project_id, latest.revision),
+                )
+                if cursor.rowcount != 1:
+                    raise ControlStoreError("recovery ambiguity fencing lost its row fence")
+            for intent_id, *_ in self._prepared_intents_locked(connection):
+                self._mark_intent_locked(connection, intent_id, "ambiguous", "commit-uncertain")
+            for intent in self._prepared_effect_intents_locked(connection):
+                self._mark_effect_intent_locked(
+                    connection, intent.intent_id, "ambiguous", "commit-uncertain"
+                )
+            connection.commit()
+        except Exception as recovery_error:
+            raise ControlStoreError(
+                "recovery commit outcome is ambiguous and could not be durably fenced"
+            ) from recovery_error
+        return commit_error
 
     def prepare_authority_effect(  # noqa: C901
         self,
@@ -2233,7 +2282,12 @@ class SQLiteBarrierSessionStore:
             self._mark_effect_intent_locked(
                 connection, intent.intent_id, "ambiguous", "process-death"
             )
-        connection.commit()
+        try:
+            connection.commit()
+        except Exception as error:
+            raise ControlStoreError(
+                "recovery commit outcome is ambiguous; durable state must be rechecked"
+            ) from self._mark_recovery_ambiguous_after_commit_failure(connection, error)
         return current
 
     def recover_unknown(self) -> BarrierSessionState | None:
