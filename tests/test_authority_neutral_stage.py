@@ -124,6 +124,17 @@ class AuthorityNeutralStageTests(unittest.TestCase):
             adapter.execute("reopen", context),
         )
 
+    def test_bound_adapter_rejects_selector_drift_before_runtime_verification(self) -> None:
+        context = _context()
+        adapter = BoundStagePhaseAdapter(_Backend(), OPERATION, context)
+        drifted = {**context, "selector_ref": "foreign-selector"}
+        with (
+            patch("tools.authority_neutral_stage.verify_runtime_manifest") as verifier,
+            self.assertRaisesRegex(StageExecutionError, "identity mismatch"),
+        ):
+            adapter.execute("stage", drifted)
+        verifier.assert_not_called()
+
     def test_bound_adapter_rejects_bad_constructor_and_backend_shapes(self) -> None:
         context = _context()
         with self.assertRaisesRegex(StageExecutionError, "unsupported"):
