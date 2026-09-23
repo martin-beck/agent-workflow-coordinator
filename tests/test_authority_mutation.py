@@ -119,6 +119,25 @@ class AuthorityMutationTests(unittest.TestCase):
             capability.execute("git", None)  # type: ignore[arg-type]
         capability.execute("git", self._result)
 
+    def test_durable_rejects_noncallable_effect_before_journaling(self) -> None:
+        journal_calls: list[str] = []
+
+        class Journal:
+            def prepare_authority_effect(self, *_args: object, **_kwargs: object) -> str:
+                journal_calls.append("prepare")
+                return "intent"
+
+            def finish_authority_effect(
+                self, _intent: object, _outcome: str, _receipt: object | None = None
+            ) -> None:
+                journal_calls.append("finish")
+
+        capability = DurableBoundAuthorityMutation(_admission(), Journal(), session_revision=1)
+        with self.assertRaisesRegex(AuthorityMutationError, "effect is invalid"):
+            capability.execute(None)  # type: ignore[arg-type]
+        self.assertEqual([], journal_calls)
+        capability.execute(lambda: self._result())
+
     def test_durable_capability_rejects_invalid_session_revision(self) -> None:
         with self.assertRaisesRegex(AuthorityMutationError, "session revision is invalid"):
             DurableBoundAuthorityMutation(_admission(), object(), session_revision=0)  # type: ignore[arg-type]

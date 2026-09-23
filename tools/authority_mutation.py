@@ -156,6 +156,8 @@ class DurableBoundAuthorityMutation:
         self._capability = BoundAuthorityMutation(admission)
 
     def execute(self, effect: Callable[[], object]) -> MutationReceipt:
+        if not callable(effect):
+            raise AuthorityMutationError("authority mutation effect is invalid")
         intent = self._journal.prepare_authority_effect(
             self._session_revision,
             self._admission.operation_id,
