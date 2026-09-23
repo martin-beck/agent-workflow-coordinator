@@ -197,6 +197,9 @@
         "tests/test_lock_domain_scope.py::LockDomainScopeTests.test_fresh_process_reread_rejects_old_lease_after_durable_retry",
         "tests/test_git_authority_mutation.py::test_rejects_stale_admission_reread_before_effect",
         "tests/test_sqlite_authority_mutation.py::test_rejects_stale_admission_reread_before_effect",
+        "tests/test_authority_effect_correspondence.py::AuthorityEffectCorrespondenceTests.test_rechecked_authority_admission_maps_to_model_reread",
+        "tests/test_authority_effect_correspondence.py::AuthorityEffectCorrespondenceTests.test_rechecked_stale_authority_admission_maps_to_rejection",
+        "tests/test_authority_effect_correspondence.py::AuthorityEffectCorrespondenceTests.test_authority_admission_without_reread_fails_closed",
         "binding rename/swap tests",
         "control-store identity tests",
         "stale revision tests"
