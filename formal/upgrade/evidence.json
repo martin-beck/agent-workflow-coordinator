@@ -98,6 +98,7 @@
       "tests/test_mutation_fence.py": "e2bcea7b96bddd2509b79ff9c5eefd57001d1502949aba30cbbd50a9169e1cbb",
       "tests/test_rollback_control_store.py": "213b2ed4ee7ecff4c3d7c471bf02669c5dd05ae7e2d866e02af92e89369ae394",
       "tests/test_sqlite_mutation_barrier.py": "b96cf91f347d7ed78f2b9a7d381f88eafaf11b8742ef26e5c6f6a210fa0ff76d",
+      "tests/test_sqlite_authority_mutation.py": "a9f6e460f42b52b3799d8bfa4a8484d584f28242da2167ef7426d963d3d98b9b",
       "tests/test_sqlite_storage.py": "659011189506ecb7f0ad35d9dfb6993127d89c0be277cb2a8fc89ce352009f6c",
       "tests/test_upgrade_commands.py": "793993bd451d02e5c80788f479e56c568b82212eec7b9face50420c6b788247f",
       "tests/test_git_authority_mutation.py": "3f22633a83191a87a98496ae162e08e69bbae63290cb443dbfff5bbd00e9189e",
@@ -106,6 +107,7 @@
       "tests/test_upgrade_identity.py": "d677ab21c8048fdda10e8b302082c05b0aa387a8e0ba1f81e189f84011cc89f3",
       "tools/generate_upgrade_contract.py": "aa9a2ed072df3937b7799b33559d03b1744d3b9049891180d1a4852531df3ada",
       "tools/git_authority_mutation.py": "924f50fc25fc646744fd0145d2be7fe49e9463c06d614dcb3482b5674f474050",
+      "tools/sqlite_authority_mutation.py": "e5834b8666874b4691a20ec720f942e065ee8cbf394f990b5c3ca4969f3b508e",
       "tools/authority_mutation.py": "366cfa3d6e105a6859e50c1ebfb9e11691c692a6bb8132e50fcf9db8dc4367ea",
       "tools/handoffctl.py": "64431290224b91cd285bd500355ad0f92f14a7b172693b8071b2b88a4727883e",
       "tools/mutation_fence.py": "08ff8993ddc63d7622b2bdc22866f62340dbed6d7d648c845df74b06b28e5a21",
@@ -116,8 +118,8 @@
       "tools/upgrade_identity.py": "754ce7b8ecc3f5521d30597fc259df9a4241e9cd2178dd4d72aba89df5d3133d",
       "tools/validate_upgrade_contract.py": "6c264c4775e4ee1a778181d7e127d9f256c56abd4bfebb02c624e13c289dbc4a"
     },
-    "revision": "4676a9eeb4f9f87fa9339225457134ed7f6a8964",
-    "runtime_revision": "4676a9eeb4f9f87fa9339225457134ed7f6a8964"
+    "revision": "bd1f0ebe849416bf3df071f5230c76887e57f2f4",
+    "runtime_revision": "bd1f0ebe849416bf3df071f5230c76887e57f2f4"
   },
   "model": "formal/upgrade/UpgradeRecovery.tla",
   "model_sha256": "616d53832ac5ec18bf3242d47b2412195eb64adb2b1035235514e06cc3edf2ba",
