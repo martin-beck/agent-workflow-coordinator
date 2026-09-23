@@ -1411,7 +1411,7 @@ class SQLiteMutationBarrierProcessTests(unittest.TestCase):
                 held.revision,
                 "op-fencing-mismatch",
                 "sqlite",
-                expected_fencing_token="foreign-fence",
+                expected_fencing_token="foreign-fence",  # noqa: S106
             )
         with self.assertRaisesRegex(ControlStoreError, "barrier identity conflict"):
             self.session.prepare_authority_effect(
