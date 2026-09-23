@@ -13,6 +13,7 @@ import unittest
 from pathlib import Path
 from typing import Any, cast
 
+from tools.authority_mutation import AuthorityMutationRejectedError, DurableBoundAuthorityMutation
 from tools.authority_neutral_commit import CommitAdmissionBundle
 from tools.git_authority_mutation import (
     GitCommitCapability,
@@ -223,6 +224,40 @@ class GitCommitCapabilityTests(unittest.TestCase):
             capability.commit("op-1 authority commit")
         self.assertEqual(before, _git(self.root, "rev-parse", "HEAD"))
         self.assertEqual("M  state", _git(self.root, "status", "--porcelain=v1"))
+
+    def test_integrated_pre_effect_rejection_is_journaled_without_git_commit(self) -> None:
+        (self.root / "state").write_text("new\n", encoding="utf-8")
+        _git(self.root, "add", "state")
+        admission = self._admission()
+        stale = dict(admission.__dict__)
+        stale["fencing_token"] = "foreign-fence"  # noqa: S105
+        capability = GitCommitCapability(
+            self.root,
+            admission=admission,
+            admission_reread=lambda: stale,
+            expected_branch="main",
+            expected_head=_git(self.root, "rev-parse", "HEAD"),
+        )
+        journal: list[tuple[str, object | None]] = []
+
+        class Journal:
+            def prepare_authority_effect(self, *_args: object, **_kwargs: object) -> str:
+                journal.append(("prepared", None))
+                return "intent-git-rejected"
+
+            def finish_authority_effect(
+                self, _intent: object, outcome: str, receipt: object | None = None
+            ) -> None:
+                journal.append((outcome, receipt))
+
+        with self.assertRaisesRegex(AuthorityMutationRejectedError, "admission identity changed"):
+            DurableBoundAuthorityMutation(admission, Journal(), session_revision=1).execute(
+                lambda: capability.commit("op-1 authority commit")
+            )
+        self.assertEqual([("prepared", None), ("rejected", None)], journal)
+        self.assertEqual("M  state", _git(self.root, "status", "--porcelain=v1"))
+        self.assertEqual(admission.state_revision, 1)
+        self.assertEqual(admission.fencing_token, "fence-1")
 
     def test_rejects_every_admission_identity_drift_before_effect(self) -> None:
         (self.root / "state").write_text("new\n", encoding="utf-8")
