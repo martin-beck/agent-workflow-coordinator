@@ -69,6 +69,8 @@
         "tests/test_git_authority_mutation.py::GitCommitCapabilityTests.test_capability_is_single_use_but_fresh_capability_reopens",
         "tests/test_git_authority_mutation.py::GitCommitCapabilityTests.test_rejects_unstaged_or_empty_changes",
         "tests/test_git_authority_mutation.py::GitCommitCapabilityTests.test_rejects_head_drift_and_ambiguous_runner_outcome",
+        "tests/test_git_authority_mutation.py::GitCommitCapabilityTests.test_classifies_nonzero_commit_after_ref_update_as_ambiguous",
+        "tests/test_git_authority_mutation.py::GitCommitCapabilityTests.test_classifies_post_commit_identity_reread_failure_as_ambiguous",
         "tests/test_git_authority_mutation.py::GitCommitCapabilityTests.test_rejects_a_concurrent_commit_after_the_effect"
       ],
       "status": "bounded executable Git effect evidence; implementation refinement pending and public dispatch disabled"
@@ -122,6 +124,7 @@
         "tests/test_sqlite_authority_mutation.py::SQLiteCommitCapabilityTests.test_commits_effect_and_verifies_integrity",
         "tests/test_sqlite_authority_mutation.py::SQLiteCommitCapabilityTests.test_capability_is_single_use_but_fresh_capability_reopens",
         "tests/test_sqlite_authority_mutation.py::SQLiteCommitCapabilityTests.test_rejects_sidecar_identity_drift_before_effect",
+        "tests/test_sqlite_authority_mutation.py::SQLiteCommitCapabilityTests.test_rejects_authority_replacement_after_connect_before_effect",
         "tests/test_sqlite_authority_mutation.py::SQLiteCommitCapabilityTests.test_classifies_post_commit_identity_drift_as_ambiguous",
         "tests/test_sqlite_authority_mutation.py::SQLiteCommitCapabilityTests.test_classifies_sqlite_errors_as_ambiguous",
         "tests/test_sqlite_authority_mutation.py::SQLiteCommitCapabilityTests.test_classifies_connection_close_failure_as_ambiguous",
