@@ -61,7 +61,8 @@
         "tests/test_sqlite_mutation_barrier.py::SQLiteMutationBarrierProcessTests.test_forged_released_row_rejects_before_authority_mutation",
         "tests/test_sqlite_mutation_barrier.py::SQLiteMutationBarrierProcessTests.test_every_inventoried_route_rejects_control_store_replacement",
         "tests/test_sqlite_mutation_barrier.py::SQLiteMutationBarrierProcessTests.test_every_inventoried_route_rejects_authority_replacement",
-        "tests/test_sqlite_mutation_barrier.py::SQLiteMutationBarrierProcessTests.test_bound_fence_rejects_identity_change_after_admission"
+        "tests/test_sqlite_mutation_barrier.py::SQLiteMutationBarrierProcessTests.test_bound_fence_rejects_identity_change_after_admission",
+        "tests/test_sqlite_authority_mutation.py::SQLiteCommitCapabilityTests.test_rejects_authority_replacement_after_connect_before_effect"
       ],
       "status": "not-proven"
     },
