@@ -47,9 +47,21 @@
       "implementation_scope": "all SQLite task, observation, result, migration, and reconciliation writes",
       "evidence": [
         "tests/test_sqlite_route_inventory.py::test_inventory_is_explicit_and_every_route_uses_shared_transaction_gate",
+        "tests/test_sqlite_storage.py::SQLiteStorageTest.test_every_write_route_enters_fence_before_sqlite_mutation",
+        "tests/test_sqlite_storage.py::SQLiteStorageTest.test_sqlite_projection_failure_does_not_rollback_committed_task",
+        "tests/test_sqlite_storage.py::SQLiteStorageTest.test_process_death_after_commit_before_projection_reconciles_from_authority",
+        "tests/test_sqlite_storage.py::SQLiteStorageTest.test_command_result_is_an_independent_durable_transaction",
         "tests/test_sqlite_mutation_barrier.py::test_independent_writer_rejects_until_verified_release",
         "tests/test_sqlite_mutation_barrier.py::test_concurrent_released_writers_serialize_one_exact_revision",
-        "tests/test_sqlite_mutation_barrier.py::SQLiteMutationBarrierProcessTests.test_released_writer_factory_cannot_bypass_held_barrier"
+        "tests/test_sqlite_mutation_barrier.py::SQLiteMutationBarrierProcessTests.test_released_writer_factory_cannot_bypass_held_barrier",
+        "tests/test_sqlite_mutation_barrier.py::SQLiteMutationBarrierProcessTests.test_every_inventoried_route_rejects_while_barrier_is_held",
+        "tests/test_sqlite_mutation_barrier.py::SQLiteMutationBarrierProcessTests.test_every_inventoried_route_rejects_while_barrier_is_releasing",
+        "tests/test_sqlite_mutation_barrier.py::SQLiteMutationBarrierProcessTests.test_every_inventoried_route_rejects_while_barrier_is_ambiguous",
+        "tests/test_sqlite_mutation_barrier.py::SQLiteMutationBarrierProcessTests.test_sigkill_after_route_effects_rolls_back_and_releases_locks",
+        "tests/test_sqlite_mutation_barrier.py::SQLiteMutationBarrierProcessTests.test_forged_released_row_rejects_before_authority_mutation",
+        "tests/test_sqlite_mutation_barrier.py::SQLiteMutationBarrierProcessTests.test_every_inventoried_route_rejects_control_store_replacement",
+        "tests/test_sqlite_mutation_barrier.py::SQLiteMutationBarrierProcessTests.test_every_inventoried_route_rejects_authority_replacement",
+        "tests/test_sqlite_mutation_barrier.py::SQLiteMutationBarrierProcessTests.test_bound_fence_rejects_identity_change_after_admission"
       ],
       "status": "not-proven"
     },
