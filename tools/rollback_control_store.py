@@ -93,6 +93,10 @@ class ControlStoreError(RuntimeError):
     """Control-store data is unavailable or failed validation."""
 
 
+class RecoveryRejectedError(ControlStoreError):
+    """Recovery admission was rejected without changing durable state."""
+
+
 class UpgradeAdapter(Protocol):
     """Minimal engine adapter surface wrapped by the control store."""
 
@@ -2429,43 +2433,45 @@ class SQLiteBarrierSessionStore:
     ) -> BarrierSessionState:
         """Replace an ambiguous session only with a distinct newer fence."""
         if type(expected_revision) is not int or expected_revision < 1:
-            raise ControlStoreError("barrier session expected revision is invalid")
+            raise RecoveryRejectedError("barrier session expected revision is invalid")
         if (
             replacement.status != "held"
             or replacement.revision != 1
             or replacement.identity.project_id != self.project_id
         ):
-            raise ControlStoreError("ambiguous reconciliation requires a new held session")
+            raise RecoveryRejectedError("ambiguous reconciliation requires a new held session")
         if self.operation_owned_by_current_thread:
-            raise ControlStoreError("control store lock is non-reentrant")
+            raise RecoveryRejectedError("control store lock is non-reentrant")
         with self.operation_lock(), self._control._connection() as connection:
             self._ensure_table(connection)
             current = self._snapshot_locked()
             if current is None or current.status != "ambiguous":
-                raise ControlStoreError("only ambiguous sessions require reconciliation")
+                raise RecoveryRejectedError("only ambiguous sessions require reconciliation")
             if current.revision != expected_revision:
-                raise ControlStoreError("barrier session CAS conflict")
+                raise RecoveryRejectedError("barrier session CAS conflict")
             if (
                 replacement.identity.attempt_id == current.identity.attempt_id
                 or replacement.identity.state_revision <= current.identity.state_revision
                 or replacement.identity.durable_barrier_id == current.identity.durable_barrier_id
                 or replacement.identity.fencing_token == current.identity.fencing_token
             ):
-                raise ControlStoreError("ambiguous reconciliation requires a distinct newer fence")
+                raise RecoveryRejectedError(
+                    "ambiguous reconciliation requires a distinct newer fence"
+                )
             if self._prepared_intents_locked(connection) or self._prepared_effect_intents_locked(
                 connection
             ):
-                raise ControlStoreError("ambiguous reconciliation has unresolved intent")
+                raise RecoveryRejectedError("ambiguous reconciliation has unresolved intent")
             if self._authority_revision_reader is None:
-                raise ControlStoreError("fresh authority rereader is required")
+                raise RecoveryRejectedError("fresh authority rereader is required")
             try:
                 fresh_authority_revision = self._authority_revision_reader()
             except Exception as error:
-                raise ControlStoreError("fresh authority reread failed") from error
+                raise RecoveryRejectedError("fresh authority reread failed") from error
             if not isinstance(fresh_authority_revision, str) or not fresh_authority_revision:
-                raise ControlStoreError("fresh authority revision is invalid")
+                raise RecoveryRejectedError("fresh authority revision is invalid")
             if fresh_authority_revision != replacement.identity.authority_revision_at_acquire:
-                raise ControlStoreError("replacement authority revision changed")
+                raise RecoveryRejectedError("replacement authority revision changed")
             intent_id = uuid.uuid4().hex
             connection.execute("BEGIN IMMEDIATE")
             connection.execute(

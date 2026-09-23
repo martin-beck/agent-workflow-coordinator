@@ -30,6 +30,7 @@ from tools.rollback_control_store import (
     BarrierSessionContract,
     BarrierSessionState,
     ControlStoreError,
+    RecoveryRejectedError,
     SQLiteAuthorityRuntimeRereader,
     SQLiteAuthorityRuntimeState,
     SQLiteBarrierSessionStore,
@@ -1836,7 +1837,7 @@ class RollbackControlStoreTests(unittest.TestCase):
                 ("ambiguous", held.revision + 1), (recovered.status, recovered.revision)
             )
             self.assertEqual(recovered, store.recover_unknown())
-            with self.assertRaisesRegex(ControlStoreError, "distinct newer fence"):
+            with self.assertRaisesRegex(RecoveryRejectedError, "distinct newer fence"):
                 store.reconcile_ambiguous(recovered.revision, held)
             self.assertFalse(store.operation_owned_by_current_thread)
             self.assertEqual(recovered, store.snapshot())
@@ -1863,7 +1864,7 @@ class RollbackControlStoreTests(unittest.TestCase):
             reused_fence = BarrierSessionState(
                 BarrierSessionIdentity.from_record(reused_fence_record), "held", 1
             )
-            with self.assertRaisesRegex(ControlStoreError, "distinct newer fence"):
+            with self.assertRaisesRegex(RecoveryRejectedError, "distinct newer fence"):
                 store.reconcile_ambiguous(recovered.revision, reused_fence)
             self.assertFalse(store.operation_owned_by_current_thread)
             self.assertEqual(recovered, store.snapshot())
@@ -1883,14 +1884,16 @@ class RollbackControlStoreTests(unittest.TestCase):
             failing_store = SQLiteBarrierSessionStore(
                 SQLiteRollbackControlStore(path, PROJECT), fail_authority_read
             )
-            with self.assertRaisesRegex(ControlStoreError, "fresh authority reread failed"):
+            with self.assertRaisesRegex(RecoveryRejectedError, "fresh authority reread failed"):
                 failing_store.reconcile_ambiguous(recovered.revision, replacement)
             self.assertFalse(failing_store.operation_owned_by_current_thread)
             self.assertEqual(recovered, failing_store.snapshot())
             invalid_store = SQLiteBarrierSessionStore(
                 SQLiteRollbackControlStore(path, PROJECT), lambda: ""
             )
-            with self.assertRaisesRegex(ControlStoreError, "fresh authority revision is invalid"):
+            with self.assertRaisesRegex(
+                RecoveryRejectedError, "fresh authority revision is invalid"
+            ):
                 invalid_store.reconcile_ambiguous(recovered.revision, replacement)
             self.assertFalse(invalid_store.operation_owned_by_current_thread)
             self.assertEqual(recovered, invalid_store.snapshot())
@@ -1916,7 +1919,7 @@ class RollbackControlStoreTests(unittest.TestCase):
                 connection.commit()
             finally:
                 connection.close()
-            with self.assertRaisesRegex(ControlStoreError, "unresolved intent"):
+            with self.assertRaisesRegex(RecoveryRejectedError, "unresolved intent"):
                 store.reconcile_ambiguous(recovered.revision, replacement)
             self.assertFalse(store.operation_owned_by_current_thread)
             self.assertEqual(recovered, store.snapshot())
@@ -2116,11 +2119,11 @@ class RollbackControlStoreTests(unittest.TestCase):
             with store.operation_lock():
                 with self.assertRaisesRegex(ControlStoreError, "non-reentrant"):
                     store.recover_unknown()
-                with self.assertRaisesRegex(ControlStoreError, "non-reentrant"):
+                with self.assertRaisesRegex(RecoveryRejectedError, "non-reentrant"):
                     store.reconcile_ambiguous(held.revision, held)
-            with self.assertRaisesRegex(ControlStoreError, "expected revision is invalid"):
+            with self.assertRaisesRegex(RecoveryRejectedError, "expected revision is invalid"):
                 store.reconcile_ambiguous(0, held)
-            with self.assertRaisesRegex(ControlStoreError, "new held session"):
+            with self.assertRaisesRegex(RecoveryRejectedError, "new held session"):
                 store.reconcile_ambiguous(
                     held.revision,
                     BarrierSessionState(identity, "releasing", 1),
