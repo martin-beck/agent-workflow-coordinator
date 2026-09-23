@@ -2,7 +2,7 @@
   "schema_version": 1,
   "kind": "implementation-refinement-obligation-matrix",
   "contract": "formal/upgrade/v10-refinement-contract.json",
-  "contract_sha256": "dcfe7b21d63ee9936b8b5396814052b5521264a87c44ea3752d3aaf6bcf725af",
+  "contract_sha256": "bbda6fbd6f62120693e626fcf5f47b8b1f5c7ca45a5beccf85f693db47a727f0",
   "decision": "deny",
   "decision_rule": "deny unless every obligation is proven at the exact implementation revision and independently reviewed",
   "obligations": [
@@ -60,7 +60,9 @@
         "tests/test_lock_domain_scope.py::LockDomainScopeTests.test_validated_hold_process_death_releases_scope_for_fresh_caller",
         "tests/test_lock_domain_scope.py::LockDomainScopeTests.test_binding_abort_allows_fresh_worker_reacquisition_when_identity_is_unchanged",
         "tests/test_rollback_control_store.py::RollbackControlStoreTests.test_v10_session_intent_recovery_fences_and_requires_newer_fence",
-        "tests/test_rollback_control_store.py::RollbackControlStoreTests.test_v10_interrupted_recovery_residue_requires_exact_revision_chain"
+        "tests/test_rollback_control_store.py::RollbackControlStoreTests.test_v10_interrupted_recovery_residue_requires_exact_revision_chain",
+        "tests/test_authority_effect_correspondence.py::AuthorityEffectCorrespondenceTests.test_rejected_effect_maps_to_reject_write",
+        "tests/test_authority_effect_correspondence.py::AuthorityEffectCorrespondenceTests.test_stale_fence_rejection_maps_before_new_fence_recovery"
       ],
       "status": "not-proven"
     },

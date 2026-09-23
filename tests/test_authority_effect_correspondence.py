@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -19,6 +20,17 @@ ROOT = Path(__file__).resolve().parents[1]
 class AuthorityEffectCorrespondenceTests(unittest.TestCase):
     def test_model_contract_binds_effect_actions_and_safety_invariants(self) -> None:
         validate_authority_effect_model_contract(ROOT)
+
+    def test_model_contract_rejects_unavailable_or_incomplete_model(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            temporary_root = Path(directory)
+            with self.assertRaisesRegex(ValueError, "unavailable"):
+                validate_authority_effect_model_contract(temporary_root)
+            model = temporary_root / "formal/upgrade/HandoffctlUpgradeBarrier.tla"
+            model.parent.mkdir(parents=True)
+            model.write_text("---- MODULE HandoffctlUpgradeBarrier ----\n", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "incomplete"):
+                validate_authority_effect_model_contract(temporary_root)
 
     def test_verified_committed_receipt_maps_to_finish_write(self) -> None:
         self.assertEqual(
@@ -46,10 +58,31 @@ class AuthorityEffectCorrespondenceTests(unittest.TestCase):
             authority_effect_actions("ambiguous", recovered_with_new_fence=True),
         )
 
+    def test_rejected_effect_maps_to_reject_write(self) -> None:
+        self.assertEqual(("RejectWrite",), authority_effect_actions("rejected"))
+
+    def test_rejected_receipt_verdict_is_rejected(self) -> None:
+        with self.assertRaisesRegex(ValueError, "receipt verdict"):
+            authority_effect_actions("rejected", receipt_valid=False)
+
+    def test_stale_fence_rejection_maps_before_new_fence_recovery(self) -> None:
+        self.assertEqual(
+            ("AcceptWrite", "MarkAmbiguous", "RejectStaleCAS", "Acquire"),
+            authority_effect_actions(
+                "ambiguous", stale_fence_rejected=True, recovered_with_new_fence=True
+            ),
+        )
+
+    def test_stale_fence_rejection_requires_ambiguous_outcome(self) -> None:
+        with self.assertRaisesRegex(ValueError, "stale-fence rejection"):
+            authority_effect_actions("committed", receipt_valid=True, stale_fence_rejected=True)
+
     def test_invalid_recovery_combinations_fail_closed(self) -> None:
         with self.assertRaisesRegex(ValueError, "cannot carry"):
             authority_effect_actions("ambiguous", receipt_valid=False)
         with self.assertRaisesRegex(ValueError, "ambiguous outcome"):
             authority_effect_actions("committed", receipt_valid=True, recovered_with_new_fence=True)
+        with self.assertRaisesRegex(ValueError, "ambiguous outcome"):
+            authority_effect_actions("rejected", stale_fence_rejected=True)
         with self.assertRaisesRegex(ValueError, "invalid"):
             authority_effect_actions("prepared")

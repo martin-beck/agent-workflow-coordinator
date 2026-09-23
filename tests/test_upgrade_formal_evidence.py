@@ -258,7 +258,14 @@ class UpgradeFormalEvidenceTests(unittest.TestCase):
             )
         )
         self.assertEqual(
-            ["AcceptWrite", "FinishWrite", "MarkAmbiguous", "RejectWrite", "Acquire"],
+            [
+                "AcceptWrite",
+                "FinishWrite",
+                "MarkAmbiguous",
+                "RejectWrite",
+                "RejectStaleCAS",
+                "Acquire",
+            ],
             entry["model_actions"],
         )
         self.assertEqual(
