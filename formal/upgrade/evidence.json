@@ -95,7 +95,7 @@
   "implementation_snapshot": {
     "files": {
       "schema/upgrade-contract.schema.json": "88c8aeab53b897129948bb5551e0b19ea1cb241a9f6521267c4a1042d01b838d",
-      "tests/test_authority_mutation.py": "8e07cf8584bc022b511ef8522697835934cfb16d66f8838fa02e325218720c00",
+      "tests/test_authority_mutation.py": "f36c492789ad53b33a13060cf4ecb0866db3b883338d1d18a6536270b6e6de4e",
       "tests/test_authority_neutral_commit.py": "8e0914ca43efe665bd4ef4d28b899d7f36f029315a37183b49c457aa82d87056",
       "tests/test_git_authority_adapter.py": "9ac507e6ddfae751551fd25cfc531d8532947f1a318737b2b0f22c5438de4d85",
       "tests/test_git_authority_mutation.py": "ec12660a23d7d7da5850e4a993ae10a40278edbb6cd835581203dc555d79ce08",
@@ -110,7 +110,7 @@
       "tests/test_upgrade_commands.py": "793993bd451d02e5c80788f479e56c568b82212eec7b9face50420c6b788247f",
       "tests/test_upgrade_contract.py": "04434245a70c249b48d206b0d14427b9ef0d182a8085bd35cc3d6621a8c68cee",
       "tests/test_upgrade_identity.py": "d677ab21c8048fdda10e8b302082c05b0aa387a8e0ba1f81e189f84011cc89f3",
-      "tools/authority_mutation.py": "1de043b9b26be34342f14d84943dca3883d13d77c1855ad4d9ce83494a8c2723",
+      "tools/authority_mutation.py": "b786f7b65f8f3107486126e0cf6583e5ce9979debc6d41c7a236e6a894f85f96",
       "tools/authority_neutral_commit.py": "9a2b153b751a45507da41661d05ec44f0ae7a2b8b41bc17aba350a595cd3964b",
       "tools/generate_upgrade_contract.py": "aa9a2ed072df3937b7799b33559d03b1744d3b9049891180d1a4852531df3ada",
       "tools/git_authority_mutation.py": "d0dad9a3cc9f270ce0b5982d8a4b854d6ce6e58652008f522b74106ad98c4091",
