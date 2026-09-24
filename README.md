@@ -52,6 +52,9 @@ The canonical vocabulary for these guarantees is defined in
 [Coordinator terminology](docs/TERMINOLOGY.md) and enforced by the reviewed
 AWQ terminology profile.
 
+The public role and role-registry contracts are inventoried in
+[Public contracts](docs/PUBLIC_CONTRACTS.md).
+
 ## Adopt it in a project
 
 Prerequisites for normal local SQLite coordination are Python 3.12+, Git, and a local filesystem
@@ -150,6 +153,7 @@ with contract tests and, where applicable, formal model updates. See
 - `formal/handoffctl/`: TLA+ specifications and pinned TLC runner.
 - `tests/`: fault, race, recovery, binding and vendor tests.
 - `schema/`: tracked configuration contracts.
+- `docs/PUBLIC_CONTRACTS.md`: public schema and validator inventory.
 - `examples/project/`: safe initialization examples.
 - `docs/PROJECT_GUIDE.md`: offline guide included in every vendor snapshot.
 
