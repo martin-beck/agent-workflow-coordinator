@@ -814,6 +814,8 @@ class SQLiteAuthorityAdapter:
             return None
         except OSError as error:
             raise SQLiteAuthorityError("SQLite authority sidecar is unavailable") from error
+        except BaseException as error:
+            raise SQLiteAuthorityError("SQLite authority sidecar is unavailable") from error
         if (
             not stat.S_ISREG(value.st_mode)
             or value.st_uid != os.geteuid()
@@ -834,6 +836,8 @@ class SQLiteAuthorityAdapter:
             parent = self._authority.parent.lstat()
             descriptor = self._authority.lstat()
         except OSError as error:
+            raise SQLiteAuthorityError("SQLite authority identity changed") from error
+        except BaseException as error:
             raise SQLiteAuthorityError("SQLite authority identity changed") from error
         current_parent = (parent.st_dev, parent.st_ino)
         current_descriptor = (

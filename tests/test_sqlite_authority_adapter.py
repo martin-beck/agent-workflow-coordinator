@@ -272,6 +272,30 @@ class SQLiteAuthorityAdapterTests(unittest.TestCase):
         with self.assertRaisesRegex(SQLiteAuthorityError, "not implemented"):
             self.adapter.execute("commit", CONTEXT)
 
+    def test_adapter_classifies_termination_during_commit_binding_identity_as_rejected(
+        self,
+    ) -> None:
+        admission = CommitAdmissionBundle(
+            backend="sqlite",
+            target="new",
+            operation_id="op-1:commit",
+            fencing_token="fence",  # noqa: S106
+            state_revision=1,
+            barrier_id="barrier",
+            artifact_identity="artifact",
+            manifest_identity="manifest",
+            selector_identity="selector",
+            runtime_identity="runtime",
+        )
+        with (
+            patch.object(Path, "lstat", side_effect=KeyboardInterrupt("injected termination")),
+            self.assertRaisesRegex(SQLiteAuthorityError, "commit capability binding was rejected"),
+        ):
+            self.adapter.bind_commit_capability(
+                admission,
+                admission_reread=lambda: admission.__dict__,
+            )
+
     def _durable_state(self) -> tuple[bytes, object]:
         return self.authority.read_bytes(), self.session.snapshot()
 
