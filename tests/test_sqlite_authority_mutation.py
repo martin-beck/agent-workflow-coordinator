@@ -811,7 +811,7 @@ class SQLiteCommitCapabilityTests(unittest.TestCase):
         ):
             self._capability().commit(update)
 
-    def test_classifies_post_commit_admission_drift_as_ambiguous(self) -> None:
+    def test_post_commit_admission_drift_requires_fresh_capability(self) -> None:
         admission = self._admission
         stale = dict(admission.__dict__)
         stale["fencing_token"] = "replaced-owner"  # noqa: S105
