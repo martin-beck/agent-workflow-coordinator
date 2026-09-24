@@ -70,6 +70,29 @@ class BoundAuthorityMutation:
         self._admission = admission
         self._consumed = False
 
+    def _result_identity_matches(self, backend: str, result: object) -> bool:
+        def field(name: str) -> object:
+            if isinstance(result, Mapping):
+                return result.get(name)
+            return getattr(result, name, None)
+
+        expected_identity = {
+            "backend": backend,
+            "target": self._admission.target,
+            "operation_id": self._admission.operation_id,
+            "state_revision": self._admission.state_revision,
+            "barrier_id": self._admission.barrier_id,
+            "artifact_identity": self._admission.artifact_identity,
+            "manifest_identity": self._admission.manifest_identity,
+            "selector_identity": self._admission.selector_identity,
+            "runtime_identity": self._admission.runtime_identity,
+            "fencing_token": self._admission.fencing_token,
+        }
+        return not (
+            any(field(name) != value for name, value in expected_identity.items())
+            or field("mutates_authority") is not True
+        )
+
     def execute(self, backend: str, effect: Callable[[], object]) -> MutationReceipt:
         if self._consumed:
             raise AuthorityMutationError("authority mutation capability already consumed")
@@ -89,27 +112,13 @@ class BoundAuthorityMutation:
                 "authority mutation outcome is ambiguous; recovery is required"
             ) from error
 
-        def field(name: str) -> object:
-            if isinstance(result, Mapping):
-                return result.get(name)
-            return getattr(result, name, None)
-
-        expected_identity = {
-            "backend": backend,
-            "target": self._admission.target,
-            "operation_id": self._admission.operation_id,
-            "state_revision": self._admission.state_revision,
-            "barrier_id": self._admission.barrier_id,
-            "artifact_identity": self._admission.artifact_identity,
-            "manifest_identity": self._admission.manifest_identity,
-            "selector_identity": self._admission.selector_identity,
-            "runtime_identity": self._admission.runtime_identity,
-            "fencing_token": self._admission.fencing_token,
-        }
-        if (
-            any(field(name) != value for name, value in expected_identity.items())
-            or field("mutates_authority") is not True
-        ):
+        try:
+            identity_matches = self._result_identity_matches(backend, result)
+        except BaseException as error:
+            raise AuthorityMutationAmbiguousError(
+                "authority mutation result identity mismatch; recovery is required"
+            ) from error
+        if not identity_matches:
             # The effect callback has already returned, so a malformed or
             # drifted receipt cannot be treated as a pre-effect rejection.
             # The authority outcome is unknown until recovery reconciles it.

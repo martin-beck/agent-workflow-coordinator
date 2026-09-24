@@ -212,6 +212,17 @@ class AuthorityMutationTests(unittest.TestCase):
         with self.assertRaisesRegex(AuthorityMutationError, "already consumed"):
             capability.execute("git", self._result)
 
+    def test_termination_during_result_identity_read_is_ambiguous_and_consumes_token(self) -> None:
+        class TerminatingReceipt:
+            def __getattr__(self, _name: str) -> object:
+                raise KeyboardInterrupt("injected termination")
+
+        capability = BoundAuthorityMutation(_admission())
+        with self.assertRaisesRegex(AuthorityMutationAmbiguousError, "result identity mismatch"):
+            capability.execute("git", lambda: TerminatingReceipt())
+        with self.assertRaisesRegex(AuthorityMutationError, "already consumed"):
+            capability.execute("git", self._result)
+
     def test_durable_effect_publishes_only_after_verified_receipt(self) -> None:
         journal: list[tuple[str, str, object | None]] = []
 
