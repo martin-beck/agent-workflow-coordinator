@@ -521,7 +521,7 @@ class AuthorityMutationTests(unittest.TestCase):
             )
         self.assertFalse(effect_called)
 
-    def test_durable_capability_normalizes_control_store_admission_rejection(self) -> None:
+    def test_durable_capability_preserves_control_store_admission_rejection(self) -> None:
         class Journal:
             def prepare_authority_effect(self, *_args: object, **_kwargs: object) -> None:
                 raise ControlStoreError("barrier session revision conflict")

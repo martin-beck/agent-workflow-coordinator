@@ -95,7 +95,7 @@
   "implementation_snapshot": {
     "files": {
       "schema/upgrade-contract.schema.json": "88c8aeab53b897129948bb5551e0b19ea1cb241a9f6521267c4a1042d01b838d",
-      "tests/test_authority_mutation.py": "cd6ba5ab556f5bc3bc66eb41cc881793c65ba6fe6c5d3aea5a7f7baf6564e733",
+      "tests/test_authority_mutation.py": "8e07cf8584bc022b511ef8522697835934cfb16d66f8838fa02e325218720c00",
       "tests/test_authority_neutral_commit.py": "8e0914ca43efe665bd4ef4d28b899d7f36f029315a37183b49c457aa82d87056",
       "tests/test_git_authority_adapter.py": "9ac507e6ddfae751551fd25cfc531d8532947f1a318737b2b0f22c5438de4d85",
       "tests/test_git_authority_mutation.py": "771540216f0660c80dd32df112d794ea4b385623a027723cbcc2b0ad1c907001",
@@ -110,7 +110,7 @@
       "tests/test_upgrade_commands.py": "793993bd451d02e5c80788f479e56c568b82212eec7b9face50420c6b788247f",
       "tests/test_upgrade_contract.py": "04434245a70c249b48d206b0d14427b9ef0d182a8085bd35cc3d6621a8c68cee",
       "tests/test_upgrade_identity.py": "d677ab21c8048fdda10e8b302082c05b0aa387a8e0ba1f81e189f84011cc89f3",
-      "tools/authority_mutation.py": "19ca71cdb57ddec5686699c73d3573fedc58de5bdd629b185ecfb8762441aad1",
+      "tools/authority_mutation.py": "1de043b9b26be34342f14d84943dca3883d13d77c1855ad4d9ce83494a8c2723",
       "tools/authority_neutral_commit.py": "9a2b153b751a45507da41661d05ec44f0ae7a2b8b41bc17aba350a595cd3964b",
       "tools/generate_upgrade_contract.py": "aa9a2ed072df3937b7799b33559d03b1744d3b9049891180d1a4852531df3ada",
       "tools/git_authority_mutation.py": "c5871df7dc262db79f099239310c267075555f3fa45ad4fcbd74750350852767",
@@ -118,7 +118,7 @@
       "tools/lock_domain_correspondence.py": "dd2076c98ca8ba029762b1de758ebb3014dc359de75120f643e8ae13d2834eae",
       "tools/lock_domain_scope.py": "0886eb1d67a2dadfccd770fc2cb94c086000f1f99db95c0473f522bf14d3bc8f",
       "tools/mutation_fence.py": "08ff8993ddc63d7622b2bdc22866f62340dbed6d7d648c845df74b06b28e5a21",
-      "tools/rollback_control_store.py": "8785567ca39cb18a9ffa7bb0b2b9e8a3e0c11faef90d31c02aaaad8318def57e",
+      "tools/rollback_control_store.py": "00951b5d0ef9b2d3401d871a4ba542520bb3af6796a00d2aaec04e3ce2521427",
       "tools/sqlite_authority_mutation.py": "b3abd455df7fcb729d6eec939f6927df31a9b82e53b48cc8dc02c00c8f5c6a1f",
       "tools/sqlite_storage.py": "a5aedad6d2755ea9a23bfbd35940b1cc8518a3eb6637bea6b6a86a82dca125d7",
       "tools/upgrade_admission.py": "0c704e124009112313437715067928423277c8db33940d9fa4cab6d17670d1bd",
