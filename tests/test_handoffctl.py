@@ -2379,6 +2379,21 @@ class HandoffTest(unittest.TestCase):
         _, meta, _ = CORE.locate("AR-0001")
         self.assertEqual("c" * 40, meta["checkpoint_commit"])
 
+    def test_checkpoint_command_uses_product_head_when_called_from_worktree(self) -> None:
+        args = argparse.Namespace(task="AR-0001", owner="worker-a", expected_revision=1)
+        with (
+            patch.object(CORE, "invocation_worktree", return_value=("worktree", "branch")),
+            patch.object(
+                CORE,
+                "run",
+                return_value=subprocess.CompletedProcess(["git"], 0, stdout="e" * 40 + "\n"),
+            ),
+            patch.object(CORE, "mutate") as mutate,
+        ):
+            CORE.cmd_checkpoint(args)
+        self.assertEqual("e" * 40, args.source_commit)
+        mutate.assert_called_once_with(args, "checkpoint")
+
     def test_explicit_status_render_and_stale_check(self) -> None:
         self.make_task()
         CORE.cmd_render_status(check=True)

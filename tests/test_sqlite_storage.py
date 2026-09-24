@@ -738,6 +738,7 @@ class SQLiteStorageTest(unittest.TestCase):
                 "FROM checkpoint_records"
             ).fetchone(),
         )
+        self.assertTrue((self.root / "checkpoints/AR-0001.jsonl").exists())
         self.assertFalse(stale.exists())
         with patch("builtins.print"):
             CORE.cmd_snapshot("AR-0001")
