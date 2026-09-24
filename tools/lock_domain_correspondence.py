@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+from pathlib import Path
 
 _ACQUIRE = {
     "AcquireCommon": "ReleaseCommon",
@@ -12,6 +13,30 @@ _ACQUIRE = {
     "AcquireAuthority": "ReleaseAuthority",
 }
 _RELEASE = {release: acquire for acquire, release in _ACQUIRE.items()}
+_MODEL_ACTION_SIGNATURES = {
+    "AcquireCommon": "AcquireCommon(p) ==",
+    "AcquireControl": "AcquireControl(p) ==",
+    "AcquireAuthority": "AcquireAuthority(p) ==",
+    "ReleaseAuthority": "ReleaseAuthority(p) ==",
+    "ReleaseControl": "ReleaseControl(p) ==",
+    "ReleaseCommon": "ReleaseCommon(p) ==",
+}
+
+
+def validate_lock_domain_model_contract(root: Path) -> None:
+    """Require every concrete lock event to exist in the TLA+ model."""
+    model = root / "formal/upgrade/HandoffctlUpgradeBarrier.tla"
+    try:
+        text = model.read_text(encoding="utf-8")
+    except OSError as error:
+        raise ValueError("lock-domain model is unavailable") from error
+    missing = [
+        f"action {action}"
+        for action, signature in _MODEL_ACTION_SIGNATURES.items()
+        if signature not in text
+    ]
+    if missing:
+        raise ValueError(f"lock-domain model contract is incomplete: {', '.join(missing)}")
 
 
 def validate_lock_domain_trace(events: Iterable[str]) -> tuple[str, ...]:
