@@ -103,6 +103,7 @@ class GitCommitCapabilityTests(unittest.TestCase):
         )
         self.assertEqual("main", result.branch)
         self.assertNotEqual(result.before_head, result.after_head)
+        self.assertEqual(40, len(result.after_head))
         self.assertTrue(result.mutates_authority)
         self.assertEqual("", _git(self.root, "status", "--porcelain=v1", "--untracked-files=all"))
 
@@ -313,7 +314,7 @@ class GitCommitCapabilityTests(unittest.TestCase):
 
         def failing_runner(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
             command = cast(list[str], args[0])
-            if command[3:4] == ["commit"]:
+            if "commit" in command:
                 raise OSError("injected commit failure")
             return cast(
                 subprocess.CompletedProcess[str],
@@ -337,7 +338,7 @@ class GitCommitCapabilityTests(unittest.TestCase):
 
         def terminating_runner(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
             command = cast(list[str], args[0])
-            if command[3:4] == ["commit"]:
+            if "commit" in command:
                 raise KeyboardInterrupt("injected termination")
             return cast(
                 subprocess.CompletedProcess[str],
@@ -372,7 +373,7 @@ class GitCommitCapabilityTests(unittest.TestCase):
 
         def runner(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
             command = cast(list[str], args[0])
-            if command[3:4] == ["commit"]:
+            if "commit" in command:
                 return cast(subprocess.CompletedProcess[str], TerminatingResult())
             return cast(
                 subprocess.CompletedProcess[str], subprocess.run(command, **cast(Any, kwargs))
@@ -397,10 +398,10 @@ class GitCommitCapabilityTests(unittest.TestCase):
         def terminating_runner(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
             nonlocal committed
             command = cast(list[str], args[0])
-            if committed and command[3:5] == ["rev-parse", "--verify"]:
+            if committed and command[-3:-1] == ["rev-parse", "--verify"]:
                 raise KeyboardInterrupt("injected termination")
             result = subprocess.run(command, **cast(Any, kwargs))
-            if command[3:4] == ["commit"] and result.returncode == 0:
+            if "commit" in command and result.returncode == 0:
                 committed = True
             return cast(subprocess.CompletedProcess[str], result)
 
@@ -422,7 +423,7 @@ class GitCommitCapabilityTests(unittest.TestCase):
         def commit_then_fail(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
             command = cast(list[str], args[0])
             result = subprocess.run(command, **cast(Any, kwargs))
-            if command[3:4] == ["commit"] and result.returncode == 0:
+            if "commit" in command and result.returncode == 0:
                 return subprocess.CompletedProcess(
                     command,
                     1,
@@ -452,10 +453,10 @@ class GitCommitCapabilityTests(unittest.TestCase):
         def fail_after_commit(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
             nonlocal committed
             command = cast(list[str], args[0])
-            if committed and command[3:5] == ["rev-parse", "--verify"]:
+            if committed and command[-3:-1] == ["rev-parse", "--verify"]:
                 return subprocess.CompletedProcess(command, 1, stdout="", stderr="reread failed")
             result = subprocess.run(command, **cast(Any, kwargs))
-            if command[3:4] == ["commit"] and result.returncode == 0:
+            if "commit" in command and result.returncode == 0:
                 committed = True
             return result
 
@@ -480,7 +481,7 @@ class GitCommitCapabilityTests(unittest.TestCase):
         def malformed_after(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
             nonlocal committed, committed_head
             command = cast(list[str], args[0])
-            if committed and command[3:5] == ["rev-parse", "--verify"]:
+            if committed and command[-3:-1] == ["rev-parse", "--verify"]:
                 return subprocess.CompletedProcess(
                     command, 0, stdout=f"{committed_head}invalid\n", stderr=""
                 )
@@ -488,7 +489,7 @@ class GitCommitCapabilityTests(unittest.TestCase):
                 subprocess.CompletedProcess[str],
                 subprocess.run(command, **cast(Any, kwargs)),
             )
-            if command[3:4] == ["commit"] and result.returncode == 0:
+            if "commit" in command and result.returncode == 0:
                 committed = True
                 committed_head = result.stdout.split()[1]
             return result
@@ -598,7 +599,7 @@ class GitCommitCapabilityTests(unittest.TestCase):
                 subprocess.CompletedProcess[str],
                 subprocess.run(command, **cast(Any, kwargs)),
             )
-            if command[3:4] == ["commit"] and result.returncode == 0:
+            if "commit" in command and result.returncode == 0:
                 replacement = self.root.parent / f"{self.root.name}-post-effect-replaced"
                 self.root.rename(replacement)
                 self.root.mkdir()
@@ -625,7 +626,7 @@ class GitCommitCapabilityTests(unittest.TestCase):
                 subprocess.CompletedProcess[str],
                 subprocess.run(command, **cast(Any, kwargs)),
             )
-            if command[3:4] == ["commit"] and result.returncode == 0:
+            if "commit" in command and result.returncode == 0:
                 (self.root / "race").write_text("concurrent\n", encoding="utf-8")
                 _git(self.root, "add", "race")
                 _git(self.root, "commit", "--no-verify", "-m", "concurrent writer")
