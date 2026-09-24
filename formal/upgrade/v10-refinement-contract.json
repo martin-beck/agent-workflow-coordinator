@@ -165,7 +165,8 @@
         "tests/test_sqlite_authority_mutation.py::SQLiteCommitCapabilityTests.test_classifies_termination_admission_reread_as_rejected",
         "tests/test_sqlite_authority_mutation.py::SQLiteCommitCapabilityTests.test_classifies_termination_filesystem_identity_reread_as_rejected",
         "tests/test_sqlite_authority_mutation.py::SQLiteCommitCapabilityTests.test_rejects_termination_during_initial_authority_ancestor_identity",
-        "tests/test_sqlite_authority_mutation.py::SQLiteCommitCapabilityTests.test_rejects_termination_during_initial_authority_path_normalization"
+        "tests/test_sqlite_authority_mutation.py::SQLiteCommitCapabilityTests.test_rejects_termination_during_initial_authority_path_normalization",
+        "tests/test_sqlite_authority_adapter.py::SQLiteAuthorityAdapterTests.test_adapter_classifies_termination_during_commit_binding_identity_as_rejected"
       ],
       "status": "bounded executable SQLite effect evidence; implementation refinement pending and public dispatch disabled"
     },

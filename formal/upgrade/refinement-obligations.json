@@ -2,7 +2,7 @@
   "schema_version": 1,
   "kind": "implementation-refinement-obligation-matrix",
   "contract": "formal/upgrade/v10-refinement-contract.json",
-  "contract_sha256": "20fa8eebeabfc194deb3a18076192cd053bde8078e736266414c01f0790b1aad",
+  "contract_sha256": "bc9e967e59a759daab56e337062d448d040e03034d6534803bb0c0149a0cd8e1",
   "decision": "deny",
   "decision_rule": "deny unless every obligation is proven at the exact implementation revision and independently reviewed",
   "obligations": [
@@ -62,7 +62,8 @@
         "tests/test_sqlite_mutation_barrier.py::SQLiteMutationBarrierProcessTests.test_every_inventoried_route_rejects_control_store_replacement",
         "tests/test_sqlite_mutation_barrier.py::SQLiteMutationBarrierProcessTests.test_every_inventoried_route_rejects_authority_replacement",
         "tests/test_sqlite_mutation_barrier.py::SQLiteMutationBarrierProcessTests.test_bound_fence_rejects_identity_change_after_admission",
-        "tests/test_sqlite_authority_mutation.py::SQLiteCommitCapabilityTests.test_rejects_authority_replacement_after_connect_before_effect"
+        "tests/test_sqlite_authority_mutation.py::SQLiteCommitCapabilityTests.test_rejects_authority_replacement_after_connect_before_effect",
+        "tests/test_sqlite_authority_adapter.py::SQLiteAuthorityAdapterTests.test_adapter_classifies_termination_during_commit_binding_identity_as_rejected"
       ],
       "status": "not-proven"
     },
