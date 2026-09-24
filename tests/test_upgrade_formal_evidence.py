@@ -394,7 +394,15 @@ class UpgradeFormalEvidenceTests(unittest.TestCase):
             if value["implementation_obligation"].startswith("The integrated transition rehearsal")
         )
         self.assertEqual(
-            ["BindForward", "ForwardFailure", "MarkAmbiguous", "FunctionalAvailability"],
+            [
+                "BindForward",
+                "ForwardFailure",
+                "BindRollback",
+                "VerifyTerminal",
+                "BeginReopen",
+                "MarkAmbiguous",
+                "FunctionalAvailability",
+            ],
             entry["model_actions"],
         )
         self.assertEqual(
