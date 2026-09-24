@@ -15,7 +15,7 @@
     "fence_transition_effect": "increments fence[op] by one before quiesce"
   },
   "implementation": {
-    "revision": "7cf76b725e957de91be6bb5930454a2d001a5abc",
+    "revision": "3d955c89ec84daecf9d0383922d4329b519472d0",
     "backend_routes": {
       "git": [
         "tests/test_upgrade_campaign.py::UpgradeCampaignTests.test_git_campaign_reopens_functional_old_or_new_runtime_after_each_failure",
