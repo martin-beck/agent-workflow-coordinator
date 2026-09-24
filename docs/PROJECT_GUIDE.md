@@ -39,6 +39,9 @@ rewrites the coordinator source, Git history, and binding files.
   --expected-revision REV`.
 - `rollbacks/operations.jsonl`: bounded rollback journal. Planned, restore-started, completed and
   ambiguous states are durable; an ambiguous operation must be reconciled before retrying.
+- `directives/records.jsonl`: bounded board-directive journal. Each revision carries its authority,
+  precedence, role/task scope, lease and lifecycle. Equal-precedence overlapping active directives
+  are rejected unless they are escalated to guidance AR-0053.
 
 ## Initialize exactly once
 
@@ -98,6 +101,24 @@ tools/handoffctl rollback --checkpoint AR-####-r####
 tools/handoffctl rollback --checkpoint AR-####-r####
 tools/handoffctl rollback --checkpoint AR-####-r#### --reconcile
 ```
+
+Create and transition a directive with exact ownership and revision fencing:
+
+These commands are currently available for the Git authority backend; AR-0083
+tracks the corresponding SQLite migration and doctor coverage.
+
+```sh
+tools/handoffctl directive create --directive-id UD-0001 --authority BOARD-001 \
+  --precedence 10 --role-scope implementer --statement "Preserve the release boundary." \
+  --owner BOARD_OWNER
+tools/handoffctl directive transition UD-0001 activate --owner BOARD_OWNER \
+  --expected-revision 1
+tools/handoffctl directive list --lifecycle active
+```
+
+An overlapping directive at the same precedence cannot become active. Supplying
+`--guidance-ref AR-0053` records it as `escalated` instead, leaving the conflict
+visible for board guidance resolution.
 
 `--reconcile` is required only after a rollback is recorded as `restore_started`
 or `ambiguous`. It may continue only when the product checkout is at the exact
