@@ -132,6 +132,7 @@ MODEL_ACTION_TRANSITIONS = {
     ),
 }
 MODEL_INVARIANT_FRAGMENTS = {
+    "ReleaseEvidence": ('sessionStatus = "released" => terminalVerified /\\ freshRuntimeVerified',),
     "WriteFence": (
         r"\A p \in Processes:",
         'writerPhase[p] = "accepted" => writerAcceptedStatus[p] \\in {"absent", "released"}',
@@ -140,6 +141,21 @@ MODEL_INVARIANT_FRAGMENTS = {
         'sessionStatus = "ambiguous" =>',
         r'\A p \in Processes: writerPhase[p] \notin {"requested", "accepted"}',
     ),
+    "LockOwnership": (
+        'lockStage = "free" <=> lockOwner = NoProcess',
+        'lockStage # "free" => lockOwner \\in Processes',
+    ),
+    "LockOrder": ("lockStage \\in LockStages",),
+    "RecheckEvidence": ('sessionStatus = "releasing" => authorityRechecked',),
+    "StaleCASRejected": (
+        r"\A p \in Processes:",
+        r'casResult[p] = "rejected" => casExpected[p] # casObserved[p]',
+    ),
+    "WriterDrainOnAcquire": (
+        'sessionStatus = "held" =>',
+        r'\A p \in Processes: writerPhase[p] # "accepted"',
+    ),
+    "CasBounded": ("controlRevision <= MaxRevision /\\ fence <= MaxRevision",),
 }
 
 
@@ -157,7 +173,7 @@ def validate_authority_effect_model_contract(root: Path) -> None:
     ]
     missing.extend(
         f"invariant {invariant}"
-        for invariant in ("WriteFence", "AmbiguousIsWriteClosed")
+        for invariant in MODEL_INVARIANT_FRAGMENTS
         if f"{invariant} ==" not in text
     )
     missing.extend(
