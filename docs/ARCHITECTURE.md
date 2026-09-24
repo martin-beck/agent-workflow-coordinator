@@ -15,6 +15,10 @@ journals, while SQLite stores equivalent strict JSON records and regenerates tho
 projections. Task specifications and hierarchy edges remain part of each task record in both
 backends. Directives remain a Git-authority journal and their command path stays fail-closed under
 SQLite until a dedicated backend is reviewed.
+Gate metadata supports the generic ordered `role` -> `spec` -> `decision` stages for new task
+specifications. Existing interaction-gate records retain the legacy
+`intake` -> `discussion` -> `formal_spec_review` -> `reconciliation` sequence; stage parsing and
+revision checks fail closed for unknown or skipped stages.
 
 The opt-in Git backend retains the original model: task JSON front matter and Markdown bodies are
 authority, and the repository-common lock serializes linked worktrees through one inode. A tracked

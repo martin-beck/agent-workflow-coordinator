@@ -45,6 +45,7 @@ if __package__:
         GateError,
         GateStage,
         InteractionEvent,
+        StageGate,
         apply_event,
         gate_errors,
         transition_allowed,
@@ -103,6 +104,7 @@ else:  # pragma: no cover - direct script execution
         GateError,
         GateStage,
         InteractionEvent,
+        StageGate,
         apply_event,
         gate_errors,
         transition_allowed,
@@ -3113,7 +3115,11 @@ def main() -> int:
     item = commands.add_parser("gate")
     item.add_argument("task")
     item.add_argument("--expected-revision", type=int, required=True)
-    item.add_argument("--stage", choices=[stage.value for stage in GateStage], required=True)
+    item.add_argument(
+        "--stage",
+        choices=[stage.value for stage in (*GateStage, *StageGate)],
+        required=True,
+    )
     item.add_argument("--action", choices=("open", "resolve", "reopen"), required=True)
     item.add_argument(
         "--disposition", choices=("accepted", "rejected", "unresolved"), required=True

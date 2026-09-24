@@ -12,6 +12,7 @@ from tools.oracle_lifecycle import (
     GateError,
     GateStage,
     InteractionEvent,
+    StageGate,
     apply_event,
     gate_errors,
     transition_allowed,
@@ -33,7 +34,51 @@ def event(task_revision: int, stage: GateStage, action: str, disposition: str) -
     )
 
 
+def stage_event(
+    task_revision: int, stage: StageGate, action: str, disposition: str
+) -> InteractionEvent:
+    return InteractionEvent(
+        task_id="AR-0022",
+        task_revision=task_revision,
+        stage=stage,
+        action=action,
+        disposition=disposition,
+        before=(ArtifactRef("plan/before", "sha256:" + "a" * 64),),
+        after=(ArtifactRef("plan/after", "sha256:" + "b" * 64),),
+        public_ref="oracle/decision-1",
+        recorded_at="2026-09-17T00:00:00+00:00",
+    )
+
+
 class OracleLifecycleTests(unittest.TestCase):
+    def test_generic_role_spec_decision_gates_are_ordered_and_authorizing(self) -> None:
+        meta: dict[str, Any] = {"id": "AR-0022", "task_revision": 1}
+        for stage in StageGate:
+            revision = meta["task_revision"]
+            apply_event(meta, stage_event(revision, stage, "open", "unresolved"))
+            meta["task_revision"] += 1
+            apply_event(meta, stage_event(meta["task_revision"], stage, "resolve", "accepted"))
+            meta["task_revision"] += 1
+        self.assertEqual([item.value for item in StageGate], meta["oracle_gate"]["completed"])
+        self.assertTrue(meta["oracle_gate"]["authorized"])
+
+    def test_generic_gate_unknown_stage_and_invalid_sequence_fail_closed(self) -> None:
+        valid = stage_event(1, StageGate.ROLE, "open", "accepted").as_record()
+        valid["stage"] = "unknown"
+        with self.assertRaisesRegex(GateError, "unknown interaction gate stage"):
+            InteractionEvent.from_record(valid)
+        self.assertTrue(
+            gate_errors(
+                {
+                    "required": True,
+                    "stage_sequence": ["role", "role"],
+                    "open_stage": None,
+                    "completed": [],
+                    "events": [],
+                }
+            )
+        )
+
     def test_formal_model_is_in_required_fast_tier(self) -> None:
         root = Path(__file__).parents[1]
         verify = (root / "formal/handoffctl/verify.sh").read_text(encoding="utf-8")
