@@ -16,6 +16,7 @@ from tools.authority_mutation import (
 )
 from tools.authority_neutral_commit import CommitAdmissionBundle
 from tools.git_authority_mutation import GitCommitResult, GitMutationAmbiguousError
+from tools.rollback_control_store import ControlStoreAmbiguousError, ControlStoreError
 from tools.sqlite_authority_mutation import SQLiteMutationAmbiguousError
 
 
@@ -519,6 +520,38 @@ class AuthorityMutationTests(unittest.TestCase):
                 effect
             )
         self.assertFalse(effect_called)
+
+    def test_durable_capability_preserves_control_store_admission_rejection(self) -> None:
+        class Journal:
+            def prepare_authority_effect(self, *_args: object, **_kwargs: object) -> None:
+                raise ControlStoreError("barrier session revision conflict")
+
+            def finish_authority_effect(
+                self, _intent: object, _outcome: str, _receipt: object | None = None
+            ) -> None:
+                raise AssertionError("a rejected preparation must not be finished")
+
+        with self.assertRaisesRegex(ControlStoreError, "revision conflict"):
+            DurableBoundAuthorityMutation(_admission(), Journal(), session_revision=1).execute(
+                lambda: self._result()
+            )
+
+    def test_durable_capability_fences_control_store_boundary_ambiguity(self) -> None:
+        class Journal:
+            def prepare_authority_effect(self, *_args: object, **_kwargs: object) -> None:
+                raise ControlStoreAmbiguousError("sidecar identity changed")
+
+            def finish_authority_effect(
+                self, _intent: object, _outcome: str, _receipt: object | None = None
+            ) -> None:
+                raise AssertionError("an ambiguous preparation has no safe intent handle")
+
+        with self.assertRaisesRegex(
+            AuthorityMutationAmbiguousError, "journal preparation is ambiguous"
+        ):
+            DurableBoundAuthorityMutation(_admission(), Journal(), session_revision=1).execute(
+                lambda: self._result()
+            )
 
     def test_durable_capability_fails_closed_if_success_publication_is_uncertain(self) -> None:
         class Journal:

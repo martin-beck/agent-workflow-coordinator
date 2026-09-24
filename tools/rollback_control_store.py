@@ -93,6 +93,10 @@ class ControlStoreError(RuntimeError):
     """Control-store data is unavailable or failed validation."""
 
 
+class ControlStoreAmbiguousError(ControlStoreError):
+    """A durable control-store boundary may have committed before failing."""
+
+
 class RecoveryRejectedError(ControlStoreError):
     """Recovery admission was rejected without changing durable state."""
 
@@ -887,7 +891,9 @@ class SQLiteRollbackControlStore:
                             parent, self.path.name, required=True
                         )
                         if current_sidecars != bound_sidecars:
-                            raise ControlStoreError("control store WAL sidecar identity changed")
+                            raise ControlStoreAmbiguousError(
+                                "control store WAL sidecar identity changed"
+                            )
                 finally:
                     connection.close()
                 reopened_parent, reopened = self._open_bound_file(
@@ -895,7 +901,12 @@ class SQLiteRollbackControlStore:
                 )
                 os.close(reopened)
                 os.close(reopened_parent)
-                self._recheck_authority()
+                try:
+                    self._recheck_authority()
+                except ControlStoreError as error:
+                    raise ControlStoreAmbiguousError(
+                        "control store authority identity became uncertain"
+                    ) from error
             finally:
                 os.close(descriptor)
                 os.close(parent)
