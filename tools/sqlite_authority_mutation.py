@@ -77,8 +77,8 @@ class SQLiteCommitCapability:
             raise SQLiteMutationError("SQLite mutation revision is invalid")
         # Preserve the supplied pathname so the pre-effect lstat fence can
         # reject a symlinked authority instead of silently following it.
-        self._authority = authority.absolute()
         try:
+            self._authority = authority.absolute()
             self._ancestor_identities = self._ancestor_identities_for(self._authority)
         except SQLiteMutationRejectedError:
             raise

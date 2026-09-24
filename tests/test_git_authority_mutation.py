@@ -161,6 +161,13 @@ class GitCommitCapabilityTests(unittest.TestCase):
         ):
             self._capability()
 
+    def test_rejects_termination_during_initial_repository_path_normalization(self) -> None:
+        with (
+            patch.object(Path, "absolute", side_effect=KeyboardInterrupt("injected termination")),
+            self.assertRaisesRegex(GitMutationError, "identity capture was rejected"),
+        ):
+            self._capability()
+
     def test_rejects_unstaged_or_empty_changes(self) -> None:
         with self.assertRaisesRegex(GitMutationError, "no staged"):
             self._capability().commit("op-1 authority commit")

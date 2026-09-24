@@ -155,6 +155,13 @@ class SQLiteCommitCapabilityTests(unittest.TestCase):
         ):
             self._capability()
 
+    def test_rejects_termination_during_initial_authority_path_normalization(self) -> None:
+        with (
+            patch.object(Path, "absolute", side_effect=KeyboardInterrupt("injected termination")),
+            self.assertRaisesRegex(SQLiteMutationRejectedError, "identity capture was rejected"),
+        ):
+            self._capability()
+
     def test_rejects_sidecar_identity_drift_before_effect(self) -> None:
         capability = self._capability()
         wal = self.db.with_name("authority.sqlite-wal")

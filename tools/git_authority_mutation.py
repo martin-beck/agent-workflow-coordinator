@@ -75,8 +75,8 @@ class GitCommitCapability:
         expected_head: str,
         runner: _Runner = subprocess.run,
     ) -> None:
-        self._repository = repository.absolute()
         try:
+            self._repository = repository.absolute()
             self._ancestor_identities = self._read_ancestor_identities(self._repository)
             self._repository_identity = self._read_repository_identity(self._repository)
         except GitMutationError:
