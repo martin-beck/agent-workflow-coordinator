@@ -10,6 +10,8 @@ from pathlib import Path
 MODEL_ACTIONS = frozenset(
     {
         "RequestWrite",
+        "FreshRuntimeRead",
+        "CompleteReopen",
         "AcceptWrite",
         "RejectWrite",
         "FinishWrite",
@@ -22,6 +24,8 @@ MODEL_ACTIONS = frozenset(
 )
 
 MODEL_ACTION_SIGNATURES = {
+    "FreshRuntimeRead": "FreshRuntimeRead(p) ==",
+    "CompleteReopen": "CompleteReopen(p) ==",
     "RequestWrite": "RequestWrite(p) ==",
     "AcceptWrite": "AcceptWrite(p) ==",
     "RejectWrite": "RejectWrite(p) ==",
@@ -34,6 +38,15 @@ MODEL_ACTION_SIGNATURES = {
 }
 
 MODEL_ACTION_TRANSITIONS = {
+    "FreshRuntimeRead": (
+        'sessionStatus = "releasing"',
+        "freshRuntimeVerified' = TRUE",
+    ),
+    "CompleteReopen": (
+        'sessionStatus = "releasing"',
+        'sessionStatus\' = "released"',
+        "controlRevision' = controlRevision + 1",
+    ),
     "RequestWrite": (
         'writerPhase[p] = "idle"',
         'sessionStatus # "ambiguous"',
