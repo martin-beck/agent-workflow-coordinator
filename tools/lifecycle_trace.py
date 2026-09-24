@@ -112,6 +112,17 @@ MODEL_INVARIANTS = {
     ),
     "RollbackRequiresBackup": 'journal[op] = "rolled_back" => backup[op]',
 }
+MODEL_TYPE_FIELDS = (
+    "phase \\in [Operations -> Phases]",
+    "target \\in [Operations -> Targets]",
+    "backend \\in [Operations -> Backends]",
+    "barrier \\in [Operations -> Barriers]",
+    "journal \\in [Operations -> Journals]",
+    "runtime \\in [Operations -> Releases]",
+    "backup \\in [Operations -> BOOLEAN]",
+    "fence \\in [Operations -> Nat]",
+    "available \\in [Operations -> BOOLEAN]",
+)
 
 
 def validate_model_action_contract(root: Path) -> None:
@@ -147,6 +158,9 @@ def validate_model_action_contract(root: Path) -> None:
         f"invariant {name} semantics"
         for name, fragment in MODEL_INVARIANTS.items()
         if fragment not in text
+    )
+    missing.extend(
+        f"TypeInvariant field {fragment}" for fragment in MODEL_TYPE_FIELDS if fragment not in text
     )
     if "THEOREM Spec => []TypeInvariant" not in text:
         missing.append("theorem TypeInvariant")
