@@ -615,7 +615,7 @@ class RollbackControlStoreTests(unittest.TestCase):
             ):
                 store.prepare_authority_effect(1, "effect-reopen-uncertain", "sqlite")
 
-            with sqlite3.connect(control.path) as connection:
+            with closing(sqlite3.connect(control.path)) as connection:
                 self.assertEqual(
                     [("prepared",)],
                     connection.execute(
@@ -637,7 +637,7 @@ class RollbackControlStoreTests(unittest.TestCase):
 
             self.assertEqual(("held", 1), (state.status, state.revision))
             self.assertEqual(state, store.snapshot())
-            with sqlite3.connect(control.path) as connection:
+            with closing(sqlite3.connect(control.path)) as connection:
                 self.assertEqual(
                     [("rejected",)],
                     connection.execute(
@@ -650,13 +650,14 @@ class RollbackControlStoreTests(unittest.TestCase):
     def test_legacy_barrier_schema_is_rejected_without_mutation(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "control.sqlite"
-            with sqlite3.connect(path) as connection:
+            with closing(sqlite3.connect(path)) as connection:
                 connection.execute(
                     "CREATE TABLE barrier (operation_id TEXT PRIMARY KEY, manifest TEXT NOT NULL)"
                 )
+                connection.commit()
             with self.assertRaisesRegex(ControlStoreError, "legacy"):
                 SQLiteRollbackControlStore(path, PROJECT).snapshot("missing")
-            with sqlite3.connect(path) as connection:
+            with closing(sqlite3.connect(path)) as connection:
                 columns = {row[1] for row in connection.execute("PRAGMA table_info(barrier)")}
             self.assertNotIn("selector_ref", columns)
 
@@ -1167,7 +1168,7 @@ class RollbackControlStoreTests(unittest.TestCase):
             verifier.join(timeout=10)
             self.assertEqual(0, verifier.exitcode)
             self.assertEqual("releasing:3\n", child_result.read_text(encoding="utf-8"))
-            with sqlite3.connect(control_path) as connection:
+            with closing(sqlite3.connect(control_path)) as connection:
                 outcomes = connection.execute(
                     "SELECT outcome FROM barrier_session_intent WHERE project_id=?",
                     (PROJECT,),
@@ -1436,7 +1437,7 @@ class RollbackControlStoreTests(unittest.TestCase):
             self.assertEqual(("held", 1), (state.status, state.revision))
             self.assertEqual("subprocess-replacement", state.identity.attempt_id)
             self.assertEqual(authority_bytes, authority_path.read_bytes())
-            with sqlite3.connect(control_path) as connection:
+            with closing(sqlite3.connect(control_path)) as connection:
                 outcomes = connection.execute(
                     "SELECT outcome FROM barrier_session_intent WHERE project_id=?",
                     (PROJECT,),
@@ -1810,7 +1811,7 @@ class RollbackControlStoreTests(unittest.TestCase):
                 )
                 identity = self._session_identity()
                 held = store.create(identity)
-                with sqlite3.connect(path) as connection:
+                with closing(sqlite3.connect(path)) as connection:
                     intent_id = connection.execute(
                         "SELECT intent_id FROM barrier_session_intent WHERE project_id=?",
                         (PROJECT,),
@@ -1832,7 +1833,7 @@ class RollbackControlStoreTests(unittest.TestCase):
                 with self.assertRaisesRegex(ControlStoreError, expected_error):
                     store.recover_unknown()
                 self.assertFalse(store.operation_owned_by_current_thread)
-                with sqlite3.connect(path) as connection:
+                with closing(sqlite3.connect(path)) as connection:
                     outcome = connection.execute(
                         "SELECT outcome FROM barrier_session_intent WHERE intent_id=?",
                         (intent_id,),
@@ -1997,27 +1998,30 @@ class RollbackControlStoreTests(unittest.TestCase):
             )
             identity = self._session_identity()
             store.create(identity)
-            with sqlite3.connect(path) as connection:
+            with closing(sqlite3.connect(path)) as connection:
                 connection.execute(
                     "UPDATE barrier_session_intent SET outcome='prepared',attempt_id='wrong' "
                     "WHERE project_id=?",
                     (PROJECT,),
                 )
+                connection.commit()
             with self.assertRaisesRegex(ControlStoreError, "identity is invalid"):
                 store.recover_unknown()
-            with sqlite3.connect(path) as connection:
+            with closing(sqlite3.connect(path)) as connection:
                 connection.execute(
                     "UPDATE barrier_session_intent SET attempt_id=?,proposed_status=? "
                     "WHERE project_id=?",
                     (identity.attempt_id, "releasing", PROJECT),
                 )
+                connection.commit()
             with self.assertRaisesRegex(ControlStoreError, "identity is invalid"):
                 store.recover_unknown()
-            with sqlite3.connect(path) as connection:
+            with closing(sqlite3.connect(path)) as connection:
                 connection.execute(
                     "UPDATE barrier_session_intent SET proposed_status=? WHERE project_id=?",
                     ("bogus", PROJECT),
                 )
+                connection.commit()
             with self.assertRaisesRegex(ControlStoreError, "identity is invalid"):
                 store.recover_unknown()
 
@@ -2040,7 +2044,7 @@ class RollbackControlStoreTests(unittest.TestCase):
             )
             identity = self._session_identity()
             created = store.create(identity)
-            with sqlite3.connect(path) as connection:
+            with closing(sqlite3.connect(path)) as connection:
                 connection.execute(
                     "UPDATE barrier_session SET status='ambiguous',revision=? WHERE project_id=?",
                     (created.revision + 1, PROJECT),
@@ -2058,7 +2062,7 @@ class RollbackControlStoreTests(unittest.TestCase):
             unchanged = store.snapshot()
             assert unchanged is not None
             self.assertEqual(("ambiguous", 2), (unchanged.status, unchanged.revision))
-            with sqlite3.connect(path) as connection:
+            with closing(sqlite3.connect(path)) as connection:
                 self.assertEqual(
                     [("prepared",)],
                     connection.execute(
@@ -2140,7 +2144,7 @@ class RollbackControlStoreTests(unittest.TestCase):
             self.assertEqual(
                 ("ambiguous", created.revision + 1), (recovered.status, recovered.revision)
             )
-            with sqlite3.connect(path) as connection:
+            with closing(sqlite3.connect(path)) as connection:
                 outcome = connection.execute(
                     "SELECT outcome FROM barrier_session_intent WHERE project_id=?",
                     (PROJECT,),
@@ -2286,7 +2290,7 @@ class RollbackControlStoreTests(unittest.TestCase):
             recovery_control.fail_next_commit = False
             recovery_session = SQLiteBarrierSessionStore(recovery_control, lambda: "authority-3")
             recovery_session.create(self._session_identity())
-            with sqlite3.connect(recovery_control.path) as connection:
+            with closing(sqlite3.connect(recovery_control.path)) as connection:
                 connection.execute(
                     "UPDATE barrier_session_intent SET outcome='prepared' WHERE project_id=?",
                     (PROJECT,),
@@ -2299,7 +2303,7 @@ class RollbackControlStoreTests(unittest.TestCase):
             recovered_session = recovery_session.snapshot()
             self.assertIsNotNone(recovered_session)
             assert recovered_session is not None
-            with sqlite3.connect(recovery_control.path) as connection:
+            with closing(sqlite3.connect(recovery_control.path)) as connection:
                 durable_recovery_row = connection.execute(
                     "SELECT status,revision FROM barrier_session WHERE project_id=?",
                     (PROJECT,),
@@ -2317,7 +2321,7 @@ class RollbackControlStoreTests(unittest.TestCase):
                 second_recovery_control, lambda: "authority-3"
             )
             second_recovery_session.create(self._session_identity())
-            with sqlite3.connect(second_recovery_control.path) as connection:
+            with closing(sqlite3.connect(second_recovery_control.path)) as connection:
                 connection.execute(
                     "UPDATE barrier_session_intent SET outcome='prepared' WHERE project_id=?",
                     (PROJECT,),
@@ -2347,7 +2351,7 @@ class RollbackControlStoreTests(unittest.TestCase):
             self.assertIsNotNone(recovered_effect)
             assert recovered_effect is not None
             self.assertEqual(("ambiguous", 2), (recovered_effect.status, recovered_effect.revision))
-            with sqlite3.connect(effect_control.path) as connection:
+            with closing(sqlite3.connect(effect_control.path)) as connection:
                 self.assertEqual(
                     [("ambiguous",)],
                     connection.execute(
@@ -2371,7 +2375,7 @@ class RollbackControlStoreTests(unittest.TestCase):
             self.assertIsNotNone(finished)
             assert finished is not None
             self.assertEqual(("ambiguous", 2), (finished.status, finished.revision))
-            with sqlite3.connect(finish_control.path) as connection:
+            with closing(sqlite3.connect(finish_control.path)) as connection:
                 self.assertEqual(
                     [("ambiguous",)],
                     connection.execute(
