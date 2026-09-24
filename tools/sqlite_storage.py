@@ -992,6 +992,8 @@ def create_database(
     source_backend: str,
     source_checkpoint: str,
     command_results: Sequence[Meta] = (),
+    session_records: Sequence[Meta] = (),
+    checkpoint_records: Sequence[Meta] = (),
 ) -> None:
     """Build a complete database beside its final target and install atomically."""
     require_local_filesystem(path)
@@ -1061,6 +1063,60 @@ def create_database(
                    VALUES (:task, :owner, :argv_sha256, :returncode, :classification, :at)""",
                 command_results,
             )
+            if session_records:
+                connection.execute(
+                    """CREATE TABLE IF NOT EXISTS session_records(
+                       sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+                       task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+                       task_revision INTEGER NOT NULL,
+                       record_json TEXT NOT NULL CHECK(json_valid(record_json)),
+                       recorded_at TEXT NOT NULL,
+                       UNIQUE(task_id, task_revision)) STRICT"""
+                )
+            if checkpoint_records:
+                connection.execute(
+                    """CREATE TABLE IF NOT EXISTS checkpoint_records(
+                       sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+                       task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+                       task_revision INTEGER NOT NULL,
+                       record_json TEXT NOT NULL CHECK(json_valid(record_json)),
+                       recorded_at TEXT NOT NULL,
+                       UNIQUE(task_id, task_revision)) STRICT"""
+                )
+            if session_records:
+                connection.executemany(
+                    """INSERT INTO session_records
+                       (task_id, task_revision, record_json, recorded_at)
+                       VALUES (:task, :task_revision, :record_json, :recorded_at)""",
+                    [
+                        {
+                            "task": record["task"],
+                            "task_revision": record["task_revision"],
+                            "record_json": json.dumps(
+                                record, sort_keys=True, separators=(",", ":")
+                            ),
+                            "recorded_at": record["recorded_at"],
+                        }
+                        for record in session_records
+                    ],
+                )
+            if checkpoint_records:
+                connection.executemany(
+                    """INSERT INTO checkpoint_records
+                       (task_id, task_revision, record_json, recorded_at)
+                       VALUES (:task, :task_revision, :record_json, :recorded_at)""",
+                    [
+                        {
+                            "task": record["task"],
+                            "task_revision": record["task_revision"],
+                            "record_json": json.dumps(
+                                record, sort_keys=True, separators=(",", ":")
+                            ),
+                            "recorded_at": record["recorded_at"],
+                        }
+                        for record in checkpoint_records
+                    ],
+                )
             connection.commit()
             connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
         finally:

@@ -577,6 +577,40 @@ class SQLiteStorageTest(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "already uses"):
             CORE.cmd_migrate(argparse.Namespace(to="git"))
 
+    def test_migration_preserves_hierarchy_session_and_checkpoint_records(self) -> None:
+        self.configure_core()
+        parent = task("AR-0001")
+        child = task("AR-0002")
+        parent[1]["children"] = ["AR-0002"]
+        child[1]["parent_task_ref"] = "AR-0001"
+        self.write_git_tasks([parent, child])
+        CORE.append_session_record(
+            self.root,
+            CORE.build_session_record(parent[1], "update", "2026-09-08T00:02:00+00:00"),
+        )
+        CORE.append_checkpoint(
+            self.root,
+            CORE.build_checkpoint(parent[1], parent[2], "a" * 40, "2026-09-08T00:03:00+00:00"),
+        )
+        with (
+            patch.object(CORE, "sync_replica_before_write"),
+            patch.object(
+                CORE,
+                "run",
+                return_value=subprocess.CompletedProcess([], 0, "b" * 40 + "\n", ""),
+            ),
+            patch("builtins.print"),
+        ):
+            CORE.cmd_migrate(argparse.Namespace(to="sqlite"))
+        backend = SQLiteBackend(self.database, BINDING, self.tasks)
+        self.assertEqual(["AR-0002"], backend.load_tasks()[0][1]["children"])
+        self.assertEqual(1, len(backend.load_session_records()))
+        self.assertEqual(1, len(backend.load_checkpoint_records()))
+        with patch("builtins.print"):
+            CORE.cmd_migrate(argparse.Namespace(to="git"))
+        self.assertEqual(1, len(CORE.storage_backend().load_session_records()))
+        self.assertEqual(1, len(CORE.storage_backend().load_checkpoint_records()))
+
     def test_sqlite_cli_lifecycle_uses_same_transition_contract(self) -> None:
         self.configure_core(backend="sqlite")
         task_path, task_meta, task_body = task("AR-0001")
