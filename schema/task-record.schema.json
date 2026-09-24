@@ -16,6 +16,8 @@
     "task_revision": {"type": "integer", "minimum": 1},
     "updated_at": {"type": "string", "format": "date-time"},
     "owner": {"type": "string"},
+    "role": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$"},
+    "team": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$"},
     "claim_expires": {"type": "string"},
     "worktree_key": {"type": "string"},
     "branch": {"type": "string"},

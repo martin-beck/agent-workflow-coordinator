@@ -550,6 +550,33 @@ class HandoffTest(unittest.TestCase):
         self.assertIn("&lt;script&gt;alert(1)&lt;/script&gt;", status)
         self.assertNotIn("%%{init: bad}%%", status)
 
+    def test_status_contains_company_role_and_task_rollups_without_private_body_data(self) -> None:
+        self.make_task(
+            "AR-0001",
+            title="Company parent",
+            role="implementer",
+            team="platform",
+            children=["AR-0002"],
+            summary="Public parent summary",
+        )
+        self.make_task(
+            "AR-0002",
+            role="reviewer",
+            team="platform",
+            parent_task_ref="AR-0001",
+            status="done",
+            summary="Public child summary",
+        )
+        tasks = CORE.all_tasks()
+        status = CORE.render_status_view(tasks)
+        self.assertEqual(status, CORE.render_status_view(list(reversed(tasks))))
+        self.assertIn("## Company hierarchy rollup", status)
+        self.assertIn("## Role and team rollup", status)
+        self.assertIn("## Task drill-down", status)
+        self.assertIn("| implementer | platform | 1 | 1 | 0 | 0 |", status)
+        self.assertIn("| Parent | AR-0001 |", status)
+        self.assertNotIn("\n# Test\n", status)
+
     def test_future_series_is_never_omitted_from_graph_or_text_fallback(self) -> None:
         self.make_task("AR-1101")
         status = CORE.render_status_view(CORE.all_tasks())

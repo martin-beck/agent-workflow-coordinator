@@ -190,6 +190,8 @@ REQ = (
 )
 FIELDS = set(REQ) | {
     "owner",
+    "role",
+    "team",
     "claim_expires",
     "worktree_key",
     "branch",
