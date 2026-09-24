@@ -246,10 +246,15 @@ class SQLiteCommitCapability:
             self._classify_oserror(error, connection, effect_started)
         except sqlite3.Error as error:
             self._classify_sqlite_error(error, connection, effect_started)
-        except Exception:
+        except SQLiteMutationRejectedError:
+            # The second identity check runs after connect but before BEGIN;
+            # it is still a pre-effect rejection and must not be relabeled as
+            # an uncertain authority outcome.
+            raise
+        except BaseException as error:
             if connection is not None:
                 self._rollback_connection(connection)
-            raise
+            raise SQLiteMutationAmbiguousError("SQLite commit outcome is ambiguous") from error
         finally:
             if connection is not None:
                 self._close_connection(connection)
