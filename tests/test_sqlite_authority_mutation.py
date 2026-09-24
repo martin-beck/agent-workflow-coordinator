@@ -839,6 +839,29 @@ class SQLiteCommitCapabilityTests(unittest.TestCase):
         with sqlite3.connect(self.db) as connection:
             self.assertEqual(("new",), connection.execute("SELECT value FROM state").fetchone())
 
+        self._admission = CommitAdmissionBundle(
+            backend="sqlite",
+            target="new",
+            operation_id="op-recovered:commit",
+            fencing_token="fence-recovered",  # noqa: S106
+            state_revision=2,
+            barrier_id="barrier-recovered",
+            artifact_identity="artifact-1",
+            manifest_identity="manifest-1",
+            selector_identity="selector-1",
+            runtime_identity="runtime-1",
+        )
+
+        def recovered(connection: sqlite3.Connection) -> None:
+            connection.execute("UPDATE state SET value='recovered' WHERE id=1")
+
+        result = self._capability().commit(recovered)
+        self.assertEqual("ok", result.integrity_check)
+        with sqlite3.connect(self.db) as connection:
+            self.assertEqual(
+                ("recovered",), connection.execute("SELECT value FROM state").fetchone()
+            )
+
     def test_classifies_post_commit_integrity_failure_as_ambiguous(self) -> None:  # noqa: C901
         real_connect = sqlite3.connect
 
