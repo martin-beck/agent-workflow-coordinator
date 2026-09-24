@@ -418,6 +418,27 @@ class SQLiteCommitCapabilityTests(unittest.TestCase):
                 connector=terminating_connector,
             ).commit(update)
 
+    def test_classifies_termination_admission_reread_as_rejected(self) -> None:
+        baseline = self._capability()
+
+        def terminating_reread() -> dict[str, object]:
+            raise KeyboardInterrupt("injected termination")
+
+        capability = SQLiteCommitCapability(
+            self.db,
+            admission=self._admission,
+            admission_reread=terminating_reread,
+            expected_db_identity=baseline._db_identity,
+            expected_wal_identity=baseline._wal_identity,
+            expected_shm_identity=baseline._shm_identity,
+        )
+
+        def update(_connection: sqlite3.Connection) -> None:
+            raise AssertionError("effect must not run")
+
+        with self.assertRaisesRegex(SQLiteMutationRejectedError, "admission reread was rejected"):
+            capability.commit(update)
+
     def test_classifies_post_commit_identity_drift_as_ambiguous(self) -> None:
         replacement = self.root / "replacement.sqlite"
 
