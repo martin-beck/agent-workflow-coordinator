@@ -104,6 +104,39 @@ class SQLiteCommitCapabilityTests(unittest.TestCase):
         with sqlite3.connect(self.db) as connection:
             self.assertEqual(("new",), connection.execute("SELECT value FROM state").fetchone())
 
+    def test_post_commit_verification_closes_its_connection(self) -> None:
+        real_connect = sqlite3.connect
+        closed = False
+
+        class TrackingConnection:
+            def __init__(self, connection: sqlite3.Connection) -> None:
+                self._connection = connection
+
+            def __enter__(self) -> TrackingConnection:
+                self._connection.__enter__()
+                return self
+
+            def __exit__(self, *args: Any) -> bool | None:
+                return self._connection.__exit__(*args)
+
+            def close(self) -> None:
+                nonlocal closed
+                closed = True
+                self._connection.close()
+
+            def __getattr__(self, name: str) -> object:
+                return getattr(self._connection, name)
+
+        def verification_connector(*args: Any, **kwargs: Any) -> TrackingConnection:
+            return TrackingConnection(real_connect(*args, **kwargs))
+
+        def update(connection: sqlite3.Connection) -> None:
+            connection.execute("UPDATE state SET value='closed'")
+
+        with patch.object(sqlite3, "connect", side_effect=verification_connector):
+            self._capability().commit(update)
+        self.assertTrue(closed)
+
     def test_capability_is_single_use_but_fresh_capability_reopens(self) -> None:
         capability = self._capability()
 
@@ -511,6 +544,9 @@ class SQLiteCommitCapabilityTests(unittest.TestCase):
 
             def __exit__(self, *args: Any) -> bool | None:
                 return self._connection.__exit__(*args)
+
+            def close(self) -> None:
+                self._connection.close()
 
             def execute(self, sql: str, *args: Any) -> object:
                 if sql == "PRAGMA integrity_check":

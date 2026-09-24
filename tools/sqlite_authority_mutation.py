@@ -256,10 +256,14 @@ class SQLiteCommitCapability:
     def _verify_post_commit(self) -> tuple[str, int]:
         try:
             self._assert_filesystem_identity()
-            with sqlite3.connect(self._authority) as verification:
-                verification.execute("PRAGMA foreign_keys=ON")
-                integrity = str(verification.execute("PRAGMA integrity_check").fetchone()[0])
-                violations = len(verification.execute("PRAGMA foreign_key_check").fetchall())
+            verification = sqlite3.connect(self._authority)
+            try:
+                with verification:
+                    verification.execute("PRAGMA foreign_keys=ON")
+                    integrity = str(verification.execute("PRAGMA integrity_check").fetchone()[0])
+                    violations = len(verification.execute("PRAGMA foreign_key_check").fetchall())
+            finally:
+                verification.close()
             self._assert_filesystem_identity()
         except (OSError, SQLiteMutationError, sqlite3.Error) as error:
             raise SQLiteMutationAmbiguousError(
