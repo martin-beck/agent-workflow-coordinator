@@ -1472,11 +1472,41 @@ def dependency_satisfied(dependency_id: str, tasks: list[Task]) -> bool:
         current = successor
 
 
+def require_role_admission(owner_id: str, required_role: str = "implementer") -> None:
+    """Require a durable capability when the role workstream is initialized."""
+    state_path = RUNTIME / "roles.json"
+    if not state_path.exists():
+        return
+    try:
+        if __package__:
+            from .roles import role_admission_error as _role_admission_error
+        else:  # pragma: no cover - direct script execution
+            from roles import (  # type: ignore[import-not-found,no-redef]
+                role_admission_error as _role_admission_error,
+            )
+        admission_error = _role_admission_error(
+            state_path,
+            ROOT / "examples/roles/role-registry.json",
+            owner_id=owner_id,
+            required_role=required_role,
+        )
+    except Exception as import_error:  # fail closed if the admission module is unavailable
+        raise RuntimeError(f"role admission unavailable: {import_error}") from import_error
+    if admission_error:
+        raise RuntimeError(admission_error)
+
+
+def require_update_role_admission(kind: str, owner_id: str) -> None:
+    if kind == "update":
+        require_role_admission(owner_id)
+
+
 def apply_claim(args: argparse.Namespace, meta: Meta, tasks: list[Task]) -> str:
     if args.lease_minutes <= 0:
         raise RuntimeError("lease must be positive")
     if meta.get("status") != "open":
         raise RuntimeError(f"{args.task} is not open")
+    require_role_admission(str(args.owner))
     pending = [item for item in meta.get("depends_on", []) if not dependency_satisfied(item, tasks)]
     if pending:
         raise RuntimeError("unfinished dependencies: " + ", ".join(pending))
@@ -1594,6 +1624,7 @@ def require_promotion_preflight(kind: str) -> None:
 def apply_owned_change(args: argparse.Namespace, kind: str, meta: Meta) -> str:  # noqa: C901
     if meta.get("owner") != args.owner:
         raise RuntimeError(f"{args.task} is owned by {meta.get('owner') or 'nobody'}")
+    require_update_role_admission(kind, str(args.owner))
     if kind == "heartbeat":
         if args.lease_minutes <= 0 or meta.get("status") != "in_progress":
             raise RuntimeError("heartbeat requires an active task and positive lease")
@@ -1832,11 +1863,36 @@ def cmd_render_status(*, check: bool) -> None:
         write_status_views(expected)
 
 
+def role_doctor_errors() -> list[str]:
+    if not (RUNTIME / "roles.json").exists():
+        return []
+    try:
+        if __package__:
+            from .roles import role_admission_errors as _role_admission_errors
+        else:  # pragma: no cover - direct script execution
+            from roles import (  # type: ignore[no-redef]
+                role_admission_errors as _role_admission_errors,
+            )
+        active_roles = [
+            (str(meta.get("owner")), "implementer")
+            for _, meta, _ in all_tasks()
+            if meta.get("status") == "in_progress" and meta.get("owner")
+        ]
+        return _role_admission_errors(
+            RUNTIME / "roles.json",
+            ROOT / "examples/roles/role-registry.json",
+            active_roles,
+        )
+    except Exception as error:
+        return [f"role admission unavailable: {error}"]
+
+
 def cmd_doctor(*, live: bool) -> int:
     """Validate static state and optionally compare the live generated views."""
     sqlite = backend_selection()["backend"] == "sqlite"
     sqlite_live = CONFIG.exists() and bool(config().get("github_repository"))
     errors = validate(live=live and (not sqlite or sqlite_live))
+    errors.extend(role_doctor_errors())
     if sqlite:
         errors.extend(SQLiteBackend(DATABASE, project_binding(), TASKS).integrity_errors())
     if REPLICA_BLOCKED.exists():
@@ -1884,6 +1940,7 @@ def require_active_owner(task_id: str, owner: str) -> None:
         errors = active_expiry_errors(task_id, meta.get("claim_expires"))
         if errors:
             raise RuntimeError(errors[0])
+        require_role_admission(owner)
         try:
             transition_allowed(meta, "run")
         except GateError as error:
@@ -2209,7 +2266,7 @@ def dispatch_roles_command(args: argparse.Namespace) -> int:
         from .roles import list_assignments as list_roles
         from .roles import remove as remove_role
     else:  # pragma: no cover - direct script execution
-        from roles import RolesError  # type: ignore[import-not-found,no-redef]
+        from roles import RolesError  # type: ignore[no-redef]
         from roles import assign as assign_role  # type: ignore[no-redef]
         from roles import check as check_roles  # type: ignore[no-redef]
         from roles import list_assignments as list_roles  # type: ignore[no-redef]
