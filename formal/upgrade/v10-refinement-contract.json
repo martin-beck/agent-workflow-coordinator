@@ -152,6 +152,8 @@
         "tests/test_sqlite_authority_mutation.py::SQLiteCommitCapabilityTests.test_classifies_effect_oserror_as_ambiguous",
         "tests/test_sqlite_authority_mutation.py::SQLiteCommitCapabilityTests.test_classifies_connection_close_failure_as_ambiguous",
         "tests/test_sqlite_authority_mutation.py::SQLiteCommitCapabilityTests.test_classifies_rollback_failure_as_ambiguous",
+        "tests/test_sqlite_authority_mutation.py::SQLiteCommitCapabilityTests.test_classifies_termination_connection_close_failure_as_ambiguous",
+        "tests/test_sqlite_authority_mutation.py::SQLiteCommitCapabilityTests.test_classifies_termination_rollback_failure_as_ambiguous",
         "tests/test_sqlite_authority_mutation.py::SQLiteCommitCapabilityTests.test_classifies_termination_admission_reread_as_rejected",
         "tests/test_sqlite_authority_mutation.py::SQLiteCommitCapabilityTests.test_classifies_termination_filesystem_identity_reread_as_rejected"
       ],
