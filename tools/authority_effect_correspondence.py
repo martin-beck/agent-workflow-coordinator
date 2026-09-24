@@ -9,6 +9,7 @@ from pathlib import Path
 
 MODEL_ACTIONS = frozenset(
     {
+        "RequestWrite",
         "AcceptWrite",
         "RejectWrite",
         "FinishWrite",
@@ -21,6 +22,7 @@ MODEL_ACTIONS = frozenset(
 )
 
 MODEL_ACTION_SIGNATURES = {
+    "RequestWrite": "RequestWrite(p) ==",
     "AcceptWrite": "AcceptWrite(p) ==",
     "RejectWrite": "RejectWrite(p) ==",
     "FinishWrite": "FinishWrite(p) ==",
@@ -32,6 +34,11 @@ MODEL_ACTION_SIGNATURES = {
 }
 
 MODEL_ACTION_TRANSITIONS = {
+    "RequestWrite": (
+        'writerPhase[p] = "idle"',
+        'sessionStatus # "ambiguous"',
+        'writerPhase\' = [writerPhase EXCEPT ![p] = "requested"]',
+    ),
     "AcceptWrite": (
         'writerPhase[p] = "requested"',
         'writerPhase\' = [writerPhase EXCEPT ![p] = "accepted"]',
@@ -109,15 +116,15 @@ def _base_authority_effect_actions(outcome: str, receipt_valid: bool | None) -> 
     if outcome == "committed":
         if receipt_valid is not True:
             raise ValueError("committed outcome requires a verified receipt")
-        return ("AcceptWrite", "FinishWrite")
+        return ("RequestWrite", "AcceptWrite", "FinishWrite")
     if outcome == "ambiguous":
         if receipt_valid is not None:
             raise ValueError("ambiguous outcome cannot carry a receipt verdict")
-        return ("AcceptWrite", "MarkAmbiguous")
+        return ("RequestWrite", "AcceptWrite", "MarkAmbiguous")
     if outcome == "rejected":
         if receipt_valid is not None:
             raise ValueError("rejected outcome cannot carry a receipt verdict")
-        return ("RejectWrite",)
+        return ("RequestWrite", "RejectWrite")
     raise ValueError("authority-effect outcome is invalid")
 
 
