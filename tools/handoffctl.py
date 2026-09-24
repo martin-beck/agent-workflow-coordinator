@@ -2200,10 +2200,57 @@ def cmd_upgrade(args: argparse.Namespace) -> int:
     )
 
 
+def dispatch_roles_command(args: argparse.Namespace) -> int:
+    """Dispatch a role command after the permanent project binding passed."""
+    if __package__:
+        from .roles import RolesError
+        from .roles import assign as assign_role
+        from .roles import check as check_roles
+        from .roles import list_assignments as list_roles
+        from .roles import remove as remove_role
+    else:  # pragma: no cover - direct script execution
+        from roles import RolesError  # type: ignore[import-not-found,no-redef]
+        from roles import assign as assign_role  # type: ignore[no-redef]
+        from roles import check as check_roles  # type: ignore[no-redef]
+        from roles import list_assignments as list_roles  # type: ignore[no-redef]
+        from roles import remove as remove_role  # type: ignore[no-redef]
+    try:
+        if args.roles_command == "assign":
+            result = assign_role(
+                args.state,
+                args.registry,
+                expected_revision=args.expected_revision,
+                assignment_id=args.assignment_id,
+                owner_id=args.owner_id,
+                role_id=args.role_id,
+                expires_at=args.expires_at,
+                evidence_kind=args.evidence_kind,
+                evidence_ref=args.evidence_ref,
+                evidence_digest=args.evidence_digest,
+            )
+        elif args.roles_command == "list":
+            result = list_roles(args.state, args.registry, args.owner_id)
+        elif args.roles_command == "check":
+            result = check_roles(args.state, args.registry, args.owner_id)
+        else:
+            result = remove_role(
+                args.state,
+                args.registry,
+                expected_revision=args.expected_revision,
+                assignment_id=args.assignment_id,
+            )
+    except RolesError as error:
+        raise RuntimeError(str(error)) from error
+    print(json.dumps(result, sort_keys=True, separators=(",", ":")))
+    return 0
+
+
 def dispatch_bound_command(args: argparse.Namespace) -> int:  # noqa: C901
     """Dispatch a command only after the permanent project binding has passed."""
     if args.cmd == "reconcile":
         reconcile(do_commit=args.commit, push=args.push)
+    elif args.cmd == "roles":
+        return dispatch_roles_command(args)
     elif args.cmd == "snapshot":
         cmd_snapshot()
     elif args.cmd == "doctor":
@@ -2253,6 +2300,25 @@ def main() -> int:
     item = commands.add_parser("reconcile")
     item.add_argument("--commit", action="store_true")
     item.add_argument("--push", action="store_true")
+    item = commands.add_parser("roles")
+    item.add_argument("--state", type=Path, default=ROOT / ".runtime/roles.json")
+    item.add_argument("--registry", type=Path, default=ROOT / "examples/roles/role-registry.json")
+    role_commands = item.add_subparsers(dest="roles_command", required=True)
+    role = role_commands.add_parser("assign")
+    role.add_argument("--expected-revision", type=int, required=True)
+    role.add_argument("--assignment-id", required=True)
+    role.add_argument("--owner-id", required=True)
+    role.add_argument("--role-id", required=True)
+    role.add_argument("--expires-at", required=True)
+    role.add_argument("--evidence-kind", choices=("review", "policy", "ticket"), required=True)
+    role.add_argument("--evidence-ref", required=True)
+    role.add_argument("--evidence-digest", required=True)
+    role = role_commands.add_parser("list")
+    role.add_argument("--owner-id")
+    role_commands.add_parser("check").add_argument("--owner-id", required=True)
+    role = role_commands.add_parser("remove")
+    role.add_argument("--expected-revision", type=int, required=True)
+    role.add_argument("--assignment-id", required=True)
     commands.add_parser("snapshot")
     item = commands.add_parser("doctor")
     item.add_argument("--live", action="store_true")
