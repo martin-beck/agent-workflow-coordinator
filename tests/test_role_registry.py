@@ -6,11 +6,18 @@
 from __future__ import annotations
 
 import json
+import tempfile
 import unittest
 from pathlib import Path
 from typing import Any
 
-from tools.role_registry import RoleRegistryError, registry_errors, validate_registry
+from tools.role_registry import (
+    RoleRegistryError,
+    _load_json,
+    check_registry,
+    registry_errors,
+    validate_registry,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURES = ROOT / "examples/roles"
@@ -51,6 +58,28 @@ class RoleRegistryTests(unittest.TestCase):
         registry["roles"].append(registry["roles"][0])
         errors = registry_errors(registry)
         self.assertIn("semantic: role_id values must be unique", errors)
+
+    def test_semantic_conflicts_and_file_checker_fail_closed(self) -> None:
+        registry = load_fixture("role-registry.json")
+        role = registry["roles"][0]
+        role["capabilities"].append(dict(role["capabilities"][0]))
+        role["forbidden_actions"].append("source.read")
+        role["tool_policy"]["allow"].append("authority.commit")
+        role["tool_policy"]["deny"].append("authority.commit")
+        errors = registry_errors(registry)
+        self.assertTrue(any("duplicate capability_id" in error for error in errors))
+        self.assertTrue(any("both allowed and forbidden" in error for error in errors))
+        self.assertTrue(any("capability action is forbidden" in error for error in errors))
+        registry["default_role"] = "missing"
+        self.assertIn(
+            "semantic: default_role must reference a declared role", registry_errors(registry)
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "registry.json"
+            path.write_text(json.dumps(load_fixture("role-registry.json")), encoding="utf-8")
+            check_registry(path)
+            with self.assertRaises(RoleRegistryError):
+                _load_json(Path(directory) / "missing.json")
 
 
 if __name__ == "__main__":
