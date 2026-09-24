@@ -224,6 +224,8 @@ class GitAuthorityAdapter:
             )
         except AuthorityMutationError as error:
             raise GitAuthorityError("Git durable commit capability binding was rejected") from error
+        except BaseException as error:
+            raise GitAuthorityError("Git durable commit capability binding was rejected") from error
 
     @staticmethod
     def observe_backup_identity(
