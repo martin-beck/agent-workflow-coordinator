@@ -579,7 +579,39 @@ class SQLiteStorageTest(unittest.TestCase):
 
     def test_sqlite_cli_lifecycle_uses_same_transition_contract(self) -> None:
         self.configure_core(backend="sqlite")
-        self.create()
+        task_path, task_meta, task_body = task("AR-0001")
+        task_meta.update(
+            {
+                "spec_ref": "spec.json",
+                "spec_revision": 1,
+                "spec_acceptance": {
+                    "spec_ref": "spec.json",
+                    "spec_revision": 1,
+                    "status": "pass",
+                    "evidence_class": "contract-test",
+                    "evidence_ref": "awq/evidence/AR-0001",
+                    "evidence_digest": "sha256:" + "c" * 64,
+                },
+            }
+        )
+        self.create([(task_path, task_meta, task_body)])
+        (self.root / "spec.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "spec_ref": "spec.json",
+                    "spec_revision": 1,
+                    "acceptance_predicates": [{"id": "predicate", "description": "pass"}],
+                    "definition_of_done": ["pass"],
+                    "inputs": [{"id": "input", "description": "input"}],
+                    "outputs": [{"id": "output", "description": "output"}],
+                    "allowed_tools": ["source.read"],
+                    "forbidden_tools": [],
+                    "required_evidence_classes": ["contract-test"],
+                    "gates": [{"id": "gate", "description": "pass"}],
+                }
+            )
+        )
         CORE.export_sqlite_projections()
         with patch.object(CORE, "push_replica"):
             CORE.mutate(

@@ -25,6 +25,10 @@ REQUIRED_FRAGMENTS = {
         r't \in SecurityTasks /\ taskStatus[t] = "executed" =>',
         r"SecurityRole \in assignments[executor[t]]",
     ),
+    "DoneRequiresSpecAcceptance": (
+        r'taskStatus[t] = "done" =>',
+        r"specResolved[t] /\ acceptancePassed[t]",
+    ),
 }
 
 

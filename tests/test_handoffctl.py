@@ -666,6 +666,23 @@ class HandoffTest(unittest.TestCase):
 
     def test_claim_update_release_and_stale_revision(self) -> None:
         path = self.make_task()
+        (self.root / "spec.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "spec_ref": "spec.json",
+                    "spec_revision": 1,
+                    "acceptance_predicates": [{"id": "predicate", "description": "pass"}],
+                    "definition_of_done": ["pass"],
+                    "inputs": [{"id": "input", "description": "input"}],
+                    "outputs": [{"id": "output", "description": "output"}],
+                    "allowed_tools": ["source.read"],
+                    "forbidden_tools": [],
+                    "required_evidence_classes": ["contract-test"],
+                    "gates": [{"id": "gate", "description": "pass"}],
+                }
+            )
+        )
         with patch.object(CORE, "commit", return_value=True):
             CORE.mutate(
                 argparse.Namespace(task="AR-0001", owner="worker-a", lease_minutes=10),
@@ -701,6 +718,18 @@ class HandoffTest(unittest.TestCase):
                 ),
                 "update",
             )
+            meta, body = CORE.read_task(path)
+            meta["spec_ref"] = "spec.json"
+            meta["spec_revision"] = 1
+            meta["spec_acceptance"] = {
+                "spec_ref": "spec.json",
+                "spec_revision": 1,
+                "status": "pass",
+                "evidence_class": "contract-test",
+                "evidence_ref": "awq/evidence/AR-0001",
+                "evidence_digest": "sha256:" + "a" * 64,
+            }
+            CORE.write_task(path, meta, body)
             CORE.mutate(
                 argparse.Namespace(
                     task="AR-0001",
@@ -2000,6 +2029,39 @@ class HandoffTest(unittest.TestCase):
             owner="healthy-worker",
             claim_expires="2099-01-01T00:00:00+00:00",
         )
+        healthy_meta, healthy_body = CORE.read_task(healthy)
+        healthy_meta.update(
+            {
+                "spec_ref": "spec.json",
+                "spec_revision": 1,
+                "spec_acceptance": {
+                    "spec_ref": "spec.json",
+                    "spec_revision": 1,
+                    "status": "pass",
+                    "evidence_class": "contract-test",
+                    "evidence_ref": "awq/evidence/AR-0003",
+                    "evidence_digest": "sha256:" + "b" * 64,
+                },
+            }
+        )
+        (self.root / "spec.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "spec_ref": "spec.json",
+                    "spec_revision": 1,
+                    "acceptance_predicates": [{"id": "predicate", "description": "pass"}],
+                    "definition_of_done": ["pass"],
+                    "inputs": [{"id": "input", "description": "input"}],
+                    "outputs": [{"id": "output", "description": "output"}],
+                    "allowed_tools": ["source.read"],
+                    "forbidden_tools": [],
+                    "required_evidence_classes": ["contract-test"],
+                    "gates": [{"id": "gate", "description": "pass"}],
+                }
+            )
+        )
+        CORE.write_task(healthy, healthy_meta, healthy_body)
         promoted = self.make_task("AR-0004", status="planned")
         with patch.object(CORE, "commit", return_value=True):
             CORE.mutate(

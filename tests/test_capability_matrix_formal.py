@@ -23,7 +23,7 @@ class CapabilityMatrixFormalTests(unittest.TestCase):
         self.assertEqual(evidence["evidence_status"], "bounded-model-and-hostile-contract")
         self.assertEqual(evidence["correspondence_claim"], "not-proven")
         self.assertEqual(evidence["runtime_admission"]["status"], "pending")
-        self.assertEqual(evidence["runtime_admission"]["next_consumer"], "AR-0073")
+        self.assertEqual(evidence["runtime_admission"]["next_consumer"], "AR-0071")
         for relative_path in [
             evidence["model"],
             evidence["config"],
@@ -33,6 +33,9 @@ class CapabilityMatrixFormalTests(unittest.TestCase):
 
     def test_model_binds_authorization_review_and_security_invariants(self) -> None:
         validate_capability_model(ROOT)
+        model = (ROOT / "formal/roles/CapabilityMatrix.tla").read_text(encoding="utf-8")
+        self.assertIn("DoneRequiresSpecAcceptance ==", model)
+        self.assertIn("specResolved[t] /\\ acceptancePassed[t]", model)
 
     def test_model_missing_is_rejected(self) -> None:
         with (

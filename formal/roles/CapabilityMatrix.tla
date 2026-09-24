@@ -8,7 +8,7 @@ EXTENDS FiniteSets, Naturals, TLC
 (* Bounded capability semantics. Assignments are descriptive authorization  *)
 (* input; an executed mutation must retain the role evidence that admitted  *)
 (* it, reviewers are distinct from executors, and security work retains the *)
-(* security role.                                                        *)
+(* security role and resolved-spec acceptance is required for completion.   *)
 (***************************************************************************)
 
 CONSTANTS Owners, Roles, Tasks, Actions, NoOwner, NoReviewer,
@@ -21,11 +21,13 @@ ASSUME /\ Owners # {} /\ Roles # {} /\ Tasks # {} /\ Actions # {}
     /\ SecurityRole \in Roles /\ MutationActions \subseteq Actions
     /\ SecurityTasks \subseteq Tasks
 
-TaskStatuses == {"pending", "executed"}
+TaskStatuses == {"pending", "executed", "done"}
 
-VARIABLES assignments, executor, reviewer, taskAction, taskStatus
+VARIABLES assignments, executor, reviewer, taskAction, taskStatus,
+          specResolved, acceptancePassed
 
-vars == <<assignments, executor, reviewer, taskAction, taskStatus>>
+vars == <<assignments, executor, reviewer, taskAction, taskStatus,
+          specResolved, acceptancePassed>>
 
 TypeOK ==
     /\ assignments \in [Owners -> SUBSET Roles]
@@ -33,6 +35,8 @@ TypeOK ==
     /\ reviewer \in [Tasks -> (Owners \cup {NoReviewer})]
     /\ taskAction \in [Tasks -> Actions]
     /\ taskStatus \in [Tasks -> TaskStatuses]
+    /\ specResolved \in [Tasks -> BOOLEAN]
+    /\ acceptancePassed \in [Tasks -> BOOLEAN]
 
 Init ==
     /\ assignments \in [Owners -> SUBSET Roles]
@@ -40,6 +44,8 @@ Init ==
     /\ reviewer = [t \in Tasks |-> NoReviewer]
     /\ taskAction \in [Tasks -> Actions]
     /\ taskStatus = [t \in Tasks |-> "pending"]
+    /\ specResolved = [t \in Tasks |-> FALSE]
+    /\ acceptancePassed = [t \in Tasks |-> FALSE]
 
 Execute(t, owner) ==
     /\ t \in Tasks
@@ -50,7 +56,8 @@ Execute(t, owner) ==
     /\ (t \in SecurityTasks => SecurityRole \in assignments[owner])
     /\ taskStatus' = [taskStatus EXCEPT ![t] = "executed"]
     /\ executor' = [executor EXCEPT ![t] = owner]
-    /\ UNCHANGED <<assignments, reviewer, taskAction>>
+    /\ UNCHANGED <<assignments, reviewer, taskAction, specResolved,
+                    acceptancePassed>>
 
 Review(t, owner) ==
     /\ t \in Tasks
@@ -60,13 +67,41 @@ Review(t, owner) ==
     /\ owner # executor[t]
     /\ ReviewerRole \in assignments[owner]
     /\ reviewer' = [reviewer EXCEPT ![t] = owner]
-    /\ UNCHANGED <<assignments, executor, taskAction, taskStatus>>
+    /\ UNCHANGED <<assignments, executor, taskAction, taskStatus,
+                    specResolved, acceptancePassed>>
+
+ResolveSpec(t) ==
+    /\ t \in Tasks
+    /\ taskStatus[t] = "executed"
+    /\ ~specResolved[t]
+    /\ specResolved' = [specResolved EXCEPT ![t] = TRUE]
+    /\ UNCHANGED <<assignments, executor, reviewer, taskAction,
+                    taskStatus, acceptancePassed>>
+
+AcceptSpec(t) ==
+    /\ t \in Tasks
+    /\ taskStatus[t] = "executed"
+    /\ specResolved[t]
+    /\ ~acceptancePassed[t]
+    /\ acceptancePassed' = [acceptancePassed EXCEPT ![t] = TRUE]
+    /\ UNCHANGED <<assignments, executor, reviewer, taskAction,
+                    taskStatus, specResolved>>
+
+Complete(t) ==
+    /\ t \in Tasks
+    /\ taskStatus[t] = "executed"
+    /\ specResolved[t]
+    /\ acceptancePassed[t]
+    /\ taskStatus' = [taskStatus EXCEPT ![t] = "done"]
+    /\ UNCHANGED <<assignments, executor, reviewer, taskAction,
+                    specResolved, acceptancePassed>>
 
 Skip == UNCHANGED vars
 
 Next ==
     \E t \in Tasks, owner \in Owners:
-        Execute(t, owner) \/ Review(t, owner)
+        Execute(t, owner) \/ Review(t, owner) \/ ResolveSpec(t) \/
+            AcceptSpec(t) \/ Complete(t)
     \/ Skip
 
 NoMutationWithoutRoleAuthorization ==
@@ -84,6 +119,10 @@ SecurityTaskRequiresSecurityRole ==
     \A t \in Tasks:
         t \in SecurityTasks /\ taskStatus[t] = "executed" =>
             SecurityRole \in assignments[executor[t]]
+
+DoneRequiresSpecAcceptance ==
+    \A t \in Tasks:
+        taskStatus[t] = "done" => specResolved[t] /\ acceptancePassed[t]
 
 Spec == Init /\ [][Next]_vars
 
