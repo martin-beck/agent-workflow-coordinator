@@ -7,6 +7,9 @@
 
 from __future__ import annotations
 
+import multiprocessing
+import os
+import signal
 import subprocess
 import tempfile
 import unittest
@@ -30,6 +33,38 @@ def _git(root: Path, *args: str) -> str:
         ["git", "-C", str(root), *args], check=True, capture_output=True, text=True
     )
     return result.stdout.rstrip("\n")
+
+
+def _commit_then_kill_worker(root_text: str, expected_head: str) -> None:
+    root = Path(root_text)
+    admission = CommitAdmissionBundle(
+        backend="git",
+        target="new",
+        operation_id="op-process-death:commit",
+        fencing_token="fence-process-death",  # noqa: S106
+        state_revision=1,
+        barrier_id="barrier-process-death",
+        artifact_identity="artifact-1",
+        manifest_identity="manifest-1",
+        selector_identity="selector-1",
+        runtime_identity="runtime-1",
+    )
+
+    def runner(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
+        command = cast(list[str], args[0])
+        result = subprocess.run(command, **cast(Any, kwargs))
+        if "commit" in command and result.returncode == 0:
+            os.kill(os.getpid(), signal.SIGKILL)
+        return result
+
+    GitCommitCapability(
+        root,
+        admission=admission,
+        admission_reread=lambda: admission.__dict__,
+        expected_branch="main",
+        expected_head=expected_head,
+        runner=runner,
+    ).commit("op-process-death authority commit")
 
 
 class GitCommitCapabilityTests(unittest.TestCase):
@@ -139,6 +174,45 @@ class GitCommitCapabilityTests(unittest.TestCase):
         ).commit("op-2 authority commit")
         self.assertEqual("fence-2", result.fencing_token)
         self.assertEqual("second\n", (self.root / "state").read_text(encoding="utf-8"))
+
+    def test_independent_process_death_after_effect_requires_fresh_capability(self) -> None:
+        (self.root / "state").write_text("new\n", encoding="utf-8")
+        _git(self.root, "add", "state")
+        before = _git(self.root, "rev-parse", "HEAD")
+        context = multiprocessing.get_context("fork")
+        worker = context.Process(target=_commit_then_kill_worker, args=(str(self.root), before))
+        worker.start()
+        worker.join(10)
+        self.assertEqual(-signal.SIGKILL, worker.exitcode)
+
+        after = _git(self.root, "rev-parse", "HEAD")
+        self.assertNotEqual(before, after)
+        self.assertEqual("new\n", (self.root / "state").read_text(encoding="utf-8"))
+        self.assertEqual("", _git(self.root, "status", "--porcelain=v1", "--untracked-files=all"))
+
+        (self.root / "state").write_text("reopened\n", encoding="utf-8")
+        _git(self.root, "add", "state")
+        admission = CommitAdmissionBundle(
+            backend="git",
+            target="new",
+            operation_id="op-process-death-reopen:commit",
+            fencing_token="fence-process-death-reopen",  # noqa: S106
+            state_revision=2,
+            barrier_id="barrier-process-death-reopen",
+            artifact_identity="artifact-1",
+            manifest_identity="manifest-1",
+            selector_identity="selector-1",
+            runtime_identity="runtime-1",
+        )
+        result = GitCommitCapability(
+            self.root,
+            admission=admission,
+            admission_reread=lambda: admission.__dict__,
+            expected_branch="main",
+            expected_head=after,
+        ).commit("op-process-death-reopen authority commit")
+        self.assertEqual(40, len(result.after_head))
+        self.assertNotEqual(after, result.after_head)
 
     def test_rejects_termination_during_initial_repository_identity(self) -> None:
         with (

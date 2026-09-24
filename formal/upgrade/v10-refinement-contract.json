@@ -382,6 +382,10 @@
     {
       "model_actions": ["AcceptWrite", "FinishWrite", "MarkAmbiguous", "RejectWrite", "Acquire"],
       "implementation_test": "tests/test_sqlite_mutation_barrier.py::test_sigkill_after_git_authority_effect_requires_recovery_and_new_fence"
+    },
+    {
+      "model_actions": ["FinishWrite", "Acquire"],
+      "implementation_test": "tests/test_git_authority_mutation.py::test_independent_process_death_after_effect_requires_fresh_capability"
     }
   ],
   "refinement_boundary": {
