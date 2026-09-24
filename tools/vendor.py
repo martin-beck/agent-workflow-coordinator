@@ -21,6 +21,7 @@ SOURCE_FILES: tuple[tuple[str, str], ...] = (
     ("tools/oracle_lifecycle.py", "tools/oracle_lifecycle.py"),
     ("tools/sqlite_storage.py", "tools/sqlite_storage.py"),
     ("tools/session_records.py", "tools/session_records.py"),
+    ("tools/checkpoint_records.py", "tools/checkpoint_records.py"),
     ("tools/status_renderer.py", "tools/status_renderer.py"),
     ("tools/task_spec.py", "tools/task_spec.py"),
     ("tools/upgrade_commands.py", "tools/upgrade_commands.py"),
@@ -29,6 +30,7 @@ SOURCE_FILES: tuple[tuple[str, str], ...] = (
     ("tests/test_handoffctl.py", "tests/test_handoffctl.py"),
     ("tests/test_sqlite_storage.py", "tests/test_sqlite_storage.py"),
     ("tests/test_session_records.py", "tests/test_session_records.py"),
+    ("tests/test_checkpoint_records.py", "tests/test_checkpoint_records.py"),
     (
         "schema/project-config.schema.json",
         "schema/handoffctl-project-config.schema.json",
@@ -46,6 +48,10 @@ SOURCE_FILES: tuple[tuple[str, str], ...] = (
         "schema/handoffctl-upgrade-contract.schema.json",
     ),
     ("schema/session-record.schema.json", "schema/handoffctl-session-record.schema.json"),
+    (
+        "schema/checkpoint-record.schema.json",
+        "schema/handoffctl-checkpoint-record.schema.json",
+    ),
     ("formal/handoffctl/Handoffctl.tla", "formal/handoffctl/Handoffctl.tla"),
     ("formal/handoffctl/Handoffctl.cfg", "formal/handoffctl/Handoffctl.cfg"),
     (

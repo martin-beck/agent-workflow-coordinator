@@ -2358,6 +2358,42 @@ class HandoffTest(unittest.TestCase):
         ):
             CORE.cmd_snapshot("AR-9999")
 
+    def test_checkpoint_captures_source_state_before_task_mutation(self) -> None:
+        self.make_task(
+            status="in_progress",
+            owner="worker-a",
+            claim_expires="2099-01-01T00:00:00+00:00",
+        )
+        args = argparse.Namespace(
+            task="AR-0001",
+            owner="worker-a",
+            expected_revision=1,
+            source_commit="c" * 40,
+        )
+        with patch.object(CORE, "commit", return_value=True):
+            CORE.mutate(args, "checkpoint")
+        record = CORE.load_checkpoints(CORE.ROOT, "AR-0001")
+        self.assertEqual(1, len(record))
+        self.assertEqual("c" * 40, record[0]["source_commit"])
+        self.assertEqual(2, record[0]["task_revision"])
+        _, meta, _ = CORE.locate("AR-0001")
+        self.assertEqual("c" * 40, meta["checkpoint_commit"])
+
+    def test_checkpoint_command_uses_product_head_when_called_from_worktree(self) -> None:
+        args = argparse.Namespace(task="AR-0001", owner="worker-a", expected_revision=1)
+        with (
+            patch.object(CORE, "invocation_worktree", return_value=("worktree", "branch")),
+            patch.object(
+                CORE,
+                "run",
+                return_value=subprocess.CompletedProcess(["git"], 0, stdout="e" * 40 + "\n"),
+            ),
+            patch.object(CORE, "mutate") as mutate,
+        ):
+            CORE.cmd_checkpoint(args)
+        self.assertEqual("e" * 40, args.source_commit)
+        mutate.assert_called_once_with(args, "checkpoint")
+
     def test_explicit_status_render_and_stale_check(self) -> None:
         self.make_task()
         CORE.cmd_render_status(check=True)
