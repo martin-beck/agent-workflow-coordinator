@@ -471,6 +471,39 @@ class GitCommitCapabilityTests(unittest.TestCase):
             capability.commit("op-1 authority commit")
         self.assertEqual("", _git(self.root, "status", "--porcelain=v1"))
 
+    def test_classifies_malformed_post_commit_head_as_ambiguous(self) -> None:
+        (self.root / "state").write_text("new\n", encoding="utf-8")
+        _git(self.root, "add", "state")
+        committed = False
+        committed_head = ""
+
+        def malformed_after(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
+            nonlocal committed, committed_head
+            command = cast(list[str], args[0])
+            if committed and command[3:5] == ["rev-parse", "--verify"]:
+                return subprocess.CompletedProcess(
+                    command, 0, stdout=f"{committed_head}invalid\n", stderr=""
+                )
+            result = cast(
+                subprocess.CompletedProcess[str],
+                subprocess.run(command, **cast(Any, kwargs)),
+            )
+            if command[3:4] == ["commit"] and result.returncode == 0:
+                committed = True
+                committed_head = result.stdout.split()[1]
+            return result
+
+        with self.assertRaisesRegex(GitMutationAmbiguousError, "postcondition is ambiguous"):
+            GitCommitCapability(
+                self.root,
+                admission=self._admission(),
+                admission_reread=lambda: self._admission().__dict__,
+                expected_branch="main",
+                expected_head=self._capability()._expected_head,
+                runner=malformed_after,
+            ).commit("op-1 authority commit")
+        self.assertEqual("", _git(self.root, "status", "--porcelain=v1"))
+
     def test_classifies_termination_admission_reread_as_rejected(self) -> None:
         (self.root / "state").write_text("new\n", encoding="utf-8")
         _git(self.root, "add", "state")
