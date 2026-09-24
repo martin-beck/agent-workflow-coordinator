@@ -596,14 +596,14 @@ class LockDomainScopeTests(unittest.TestCase):
             (root / "formal/upgrade/UpgradeRecovery.tla").write_text(
                 "Preflight(op) == TRUE\n", encoding="utf-8"
             )
-            with self.assertRaisesRegex(ValueError, "model actions are missing"):
+            with self.assertRaisesRegex(ValueError, "model actions"):
                 validate_model_action_contract(root)
             with self.assertRaisesRegex(ValueError, "model is unavailable"):
                 validate_model_action_contract(root / "missing")
             event = _issue_event(
                 object(), "acquire", 1, "owner-1", "authority", PROJECT, "digest", "fence"
             )
-            with self.assertRaisesRegex(ValueError, "model actions are missing"):
+            with self.assertRaisesRegex(ValueError, "model actions"):
                 validate_model_trace((event,), model_root=root)
             (root / "formal/upgrade/UpgradeRecovery.tla").write_text(
                 "Preflight(op) == TRUE\nBackupGit(op) == TRUE\n", encoding="utf-8"
@@ -624,6 +624,39 @@ class LockDomainScopeTests(unittest.TestCase):
                     "StartRollback",
                     "VerifyRollback",
                     "ReleaseRollback",
+                )
+            )
+            all_actions += "\n" + "\n".join(
+                (
+                    'phase[op] = "discover"',
+                    'phase\' = [phase EXCEPT ![op] = "preflight"]',
+                    "fence' = [fence EXCEPT ![op] = @ + 1]",
+                    'phase[op] = "preflight"',
+                    'barrier\' = [barrier EXCEPT ![op] = "held"]',
+                    'phase\' = [phase EXCEPT ![op] = "quiesce"]',
+                    'phase[op] = "quiesce" /\\ barrier[op] = "held"',
+                    "backup' = [backup EXCEPT ![op] = TRUE]",
+                    'phase\' = [phase EXCEPT ![op] = "backup"]',
+                    'phase[op] = "backup" /\\ backup[op]',
+                    'phase\' = [phase EXCEPT ![op] = "stage"]',
+                    'phase[op] = "stage" /\\ backup[op] /\\ barrier[op] = "held"',
+                    'phase\' = [phase EXCEPT ![op] = "commit"]',
+                    'runtime\' = [runtime EXCEPT ![op] = "new"]',
+                    'phase[op] = "commit" /\\ runtime[op] = "new"',
+                    'phase\' = [phase EXCEPT ![op] = "validate"]',
+                    'phase[op] = "validate" /\\ barrier[op] = "held"',
+                    'phase\' = [phase EXCEPT ![op] = "reopen"]',
+                    'barrier\' = [barrier EXCEPT ![op] = "released"]',
+                    'journal\' = [journal EXCEPT ![op] = "completed"]',
+                    'journal[op] \\in {"running", "safe_mode"}',
+                    'backup[op] /\\ barrier[op] = "held"',
+                    'target\' = [target EXCEPT ![op] = "rollback"]',
+                    'journal\' = [journal EXCEPT ![op] = "rollback_started"]',
+                    'journal[op] = "rollback_started" /\\ target[op] = "rollback"',
+                    'journal\' = [journal EXCEPT ![op] = "rollback_verified"]',
+                    'journal[op] = "rollback_verified" /\\ barrier[op] = "held"',
+                    'journal\' = [journal EXCEPT ![op] = "rolled_back"]',
+                    'runtime\' = [runtime EXCEPT ![op] = "old"]',
                 )
             )
             (root / "formal/upgrade/UpgradeRecovery.tla").write_text(all_actions, encoding="utf-8")
@@ -663,6 +696,24 @@ class LockDomainScopeTests(unittest.TestCase):
                 complete_without_backup_theorem, encoding="utf-8"
             )
             with self.assertRaisesRegex(ValueError, "theorem NoReplacementBeforeBackup"):
+                validate_model_action_contract(root)
+
+    def test_model_action_contract_rejects_wrong_reopen_transition(self) -> None:
+        model = Path(__file__).resolve().parents[1] / "formal/upgrade/UpgradeRecovery.tla"
+        original = model.read_text(encoding="utf-8")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            model_copy = root / "formal/upgrade/UpgradeRecovery.tla"
+            model_copy.parent.mkdir(parents=True)
+            model_copy.write_text(
+                original.replace(
+                    'journal\' = [journal EXCEPT ![op] = "completed"]',
+                    'journal\' = [journal EXCEPT ![op] = "running"]',
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "Reopen transition"):
                 validate_model_action_contract(root)
 
     def test_terminal_recovery_contract_binds_barrier_model(self) -> None:

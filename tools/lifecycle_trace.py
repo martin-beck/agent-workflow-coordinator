@@ -33,6 +33,58 @@ MODEL_TRANSITIONS = {
     "rollback_verified": frozenset({"rollback_released"}),
     "rollback_released": frozenset(),
 }
+MODEL_ACTION_TRANSITIONS = {
+    "Preflight": (
+        'phase[op] = "discover"',
+        'phase\' = [phase EXCEPT ![op] = "preflight"]',
+        "fence' = [fence EXCEPT ![op] = @ + 1]",
+    ),
+    "Quiesce": (
+        'phase[op] = "preflight"',
+        'barrier\' = [barrier EXCEPT ![op] = "held"]',
+        'phase\' = [phase EXCEPT ![op] = "quiesce"]',
+    ),
+    "Backup": (
+        'phase[op] = "quiesce" /\\ barrier[op] = "held"',
+        "backup' = [backup EXCEPT ![op] = TRUE]",
+        'phase\' = [phase EXCEPT ![op] = "backup"]',
+    ),
+    "Stage": (
+        'phase[op] = "backup" /\\ backup[op]',
+        'phase\' = [phase EXCEPT ![op] = "stage"]',
+    ),
+    "Commit": (
+        'phase[op] = "stage" /\\ backup[op] /\\ barrier[op] = "held"',
+        'phase\' = [phase EXCEPT ![op] = "commit"]',
+        'runtime\' = [runtime EXCEPT ![op] = "new"]',
+    ),
+    "Validate": (
+        'phase[op] = "commit" /\\ runtime[op] = "new"',
+        'phase\' = [phase EXCEPT ![op] = "validate"]',
+    ),
+    "Reopen": (
+        'phase[op] = "validate" /\\ barrier[op] = "held"',
+        'phase\' = [phase EXCEPT ![op] = "reopen"]',
+        'barrier\' = [barrier EXCEPT ![op] = "released"]',
+        'journal\' = [journal EXCEPT ![op] = "completed"]',
+    ),
+    "StartRollback": (
+        'journal[op] \\in {"running", "safe_mode"}',
+        'backup[op] /\\ barrier[op] = "held"',
+        'target\' = [target EXCEPT ![op] = "rollback"]',
+        'journal\' = [journal EXCEPT ![op] = "rollback_started"]',
+    ),
+    "VerifyRollback": (
+        'journal[op] = "rollback_started" /\\ target[op] = "rollback"',
+        'journal\' = [journal EXCEPT ![op] = "rollback_verified"]',
+    ),
+    "ReleaseRollback": (
+        'journal[op] = "rollback_verified" /\\ barrier[op] = "held"',
+        'barrier\' = [barrier EXCEPT ![op] = "released"]',
+        'journal\' = [journal EXCEPT ![op] = "rolled_back"]',
+        'runtime\' = [runtime EXCEPT ![op] = "old"]',
+    ),
+}
 
 
 def validate_model_action_contract(root: Path) -> None:
@@ -76,8 +128,14 @@ def validate_model_action_contract(root: Path) -> None:
         missing.append("theorem FunctionalAvailability")
     if "THEOREM Spec => []NoReplacementBeforeBackup" not in text:
         missing.append("theorem NoReplacementBeforeBackup")
+    missing.extend(
+        f"{action} transition {fragment}"
+        for action, fragments in MODEL_ACTION_TRANSITIONS.items()
+        for fragment in fragments
+        if fragment not in text
+    )
     if missing:
-        raise ValueError(f"model actions are missing: {', '.join(missing)}")
+        raise ValueError(f"model actions or transitions are missing: {', '.join(missing)}")
 
 
 def validate_terminal_recovery_contract(root: Path) -> None:
