@@ -87,6 +87,20 @@ class AuthorityEffectCorrespondenceTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "FreshRuntimeRead transition"):
                 validate_authority_effect_model_contract(temporary_root)
 
+    def test_model_contract_requires_forward_transition_semantics(self) -> None:
+        model = ROOT / "formal/upgrade/HandoffctlUpgradeBarrier.tla"
+        original = model.read_text(encoding="utf-8")
+        with tempfile.TemporaryDirectory() as directory:
+            temporary_root = Path(directory)
+            temporary_model = temporary_root / "formal/upgrade/HandoffctlUpgradeBarrier.tla"
+            temporary_model.parent.mkdir(parents=True)
+            temporary_model.write_text(
+                original.replace("forwardChild' = ForwardId(p)", "forwardChild' = NoChild", 1),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "BindForward transition"):
+                validate_authority_effect_model_contract(temporary_root)
+
     def test_model_contract_requires_effect_transition_semantics(self) -> None:
         model = ROOT / "formal/upgrade/HandoffctlUpgradeBarrier.tla"
         original = model.read_text(encoding="utf-8")
