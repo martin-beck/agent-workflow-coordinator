@@ -261,6 +261,7 @@ class UpgradeFormalEvidenceTests(unittest.TestCase):
         )
         self.assertEqual(
             [
+                "RequestWrite",
                 "AcceptWrite",
                 "FinishWrite",
                 "MarkAmbiguous",

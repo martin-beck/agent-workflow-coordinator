@@ -57,6 +57,20 @@ class AuthorityEffectCorrespondenceTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "ObserveAuthority"):
                 validate_authority_effect_model_contract(temporary_root)
 
+    def test_model_contract_requires_request_transition_semantics(self) -> None:
+        model = ROOT / "formal/upgrade/HandoffctlUpgradeBarrier.tla"
+        original = model.read_text(encoding="utf-8")
+        with tempfile.TemporaryDirectory() as directory:
+            temporary_root = Path(directory)
+            temporary_model = temporary_root / "formal/upgrade/HandoffctlUpgradeBarrier.tla"
+            temporary_model.parent.mkdir(parents=True)
+            temporary_model.write_text(
+                original.replace('writerPhase[p] = "idle"', 'writerPhase[p] = "requested"', 1),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "RequestWrite transition"):
+                validate_authority_effect_model_contract(temporary_root)
+
     def test_model_contract_requires_effect_transition_semantics(self) -> None:
         model = ROOT / "formal/upgrade/HandoffctlUpgradeBarrier.tla"
         original = model.read_text(encoding="utf-8")
@@ -92,7 +106,7 @@ class AuthorityEffectCorrespondenceTests(unittest.TestCase):
 
     def test_verified_committed_receipt_maps_to_finish_write(self) -> None:
         self.assertEqual(
-            ("AcceptWrite", "FinishWrite"),
+            ("RequestWrite", "AcceptWrite", "FinishWrite"),
             authority_effect_actions("committed", receipt_valid=True),
         )
 
@@ -106,18 +120,18 @@ class AuthorityEffectCorrespondenceTests(unittest.TestCase):
 
     def test_ambiguous_outcome_maps_to_write_closed_marking(self) -> None:
         self.assertEqual(
-            ("AcceptWrite", "MarkAmbiguous"),
+            ("RequestWrite", "AcceptWrite", "MarkAmbiguous"),
             authority_effect_actions("ambiguous"),
         )
 
     def test_ambiguous_newer_fence_recovery_maps_to_acquire(self) -> None:
         self.assertEqual(
-            ("AcceptWrite", "MarkAmbiguous", "Acquire"),
+            ("RequestWrite", "AcceptWrite", "MarkAmbiguous", "Acquire"),
             authority_effect_actions("ambiguous", recovered_with_new_fence=True),
         )
 
     def test_rejected_effect_maps_to_reject_write(self) -> None:
-        self.assertEqual(("RejectWrite",), authority_effect_actions("rejected"))
+        self.assertEqual(("RequestWrite", "RejectWrite"), authority_effect_actions("rejected"))
 
     def test_rejected_receipt_verdict_is_rejected(self) -> None:
         with self.assertRaisesRegex(ValueError, "receipt verdict"):
@@ -125,7 +139,7 @@ class AuthorityEffectCorrespondenceTests(unittest.TestCase):
 
     def test_stale_fence_rejection_maps_before_new_fence_recovery(self) -> None:
         self.assertEqual(
-            ("AcceptWrite", "MarkAmbiguous", "RejectStaleCAS", "Acquire"),
+            ("RequestWrite", "AcceptWrite", "MarkAmbiguous", "RejectStaleCAS", "Acquire"),
             authority_effect_actions(
                 "ambiguous", stale_fence_rejected=True, recovered_with_new_fence=True
             ),
