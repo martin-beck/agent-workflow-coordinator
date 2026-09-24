@@ -144,6 +144,17 @@ class SQLiteCommitCapabilityTests(unittest.TestCase):
         with sqlite3.connect(self.db) as connection:
             self.assertEqual(("second",), connection.execute("SELECT value FROM state").fetchone())
 
+    def test_rejects_termination_during_initial_authority_ancestor_identity(self) -> None:
+        with (
+            patch.object(
+                SQLiteCommitCapability,
+                "_ancestor_identities_for",
+                side_effect=KeyboardInterrupt("injected termination"),
+            ),
+            self.assertRaisesRegex(SQLiteMutationRejectedError, "identity capture was rejected"),
+        ):
+            self._capability()
+
     def test_rejects_sidecar_identity_drift_before_effect(self) -> None:
         capability = self._capability()
         wal = self.db.with_name("authority.sqlite-wal")

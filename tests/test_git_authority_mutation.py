@@ -139,6 +139,28 @@ class GitCommitCapabilityTests(unittest.TestCase):
         self.assertEqual("fence-2", result.fencing_token)
         self.assertEqual("second\n", (self.root / "state").read_text(encoding="utf-8"))
 
+    def test_rejects_termination_during_initial_repository_identity(self) -> None:
+        with (
+            patch.object(
+                GitCommitCapability,
+                "_read_repository_identity",
+                side_effect=KeyboardInterrupt("injected termination"),
+            ),
+            self.assertRaisesRegex(GitMutationError, "identity capture was rejected"),
+        ):
+            self._capability()
+
+    def test_rejects_termination_during_initial_repository_ancestor_identity(self) -> None:
+        with (
+            patch.object(
+                GitCommitCapability,
+                "_read_ancestor_identities",
+                side_effect=KeyboardInterrupt("injected termination"),
+            ),
+            self.assertRaisesRegex(GitMutationError, "identity capture was rejected"),
+        ):
+            self._capability()
+
     def test_rejects_unstaged_or_empty_changes(self) -> None:
         with self.assertRaisesRegex(GitMutationError, "no staged"):
             self._capability().commit("op-1 authority commit")

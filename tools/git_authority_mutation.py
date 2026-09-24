@@ -76,8 +76,13 @@ class GitCommitCapability:
         runner: _Runner = subprocess.run,
     ) -> None:
         self._repository = repository.absolute()
-        self._ancestor_identities = self._read_ancestor_identities(self._repository)
-        self._repository_identity = self._read_repository_identity(self._repository)
+        try:
+            self._ancestor_identities = self._read_ancestor_identities(self._repository)
+            self._repository_identity = self._read_repository_identity(self._repository)
+        except GitMutationError:
+            raise
+        except BaseException as error:
+            raise GitMutationError("Git authority identity capture was rejected") from error
         if admission.backend != "git" or admission.target != "new":
             raise GitMutationError("Git mutation admission identity is invalid")
         self._admission = admission
@@ -103,6 +108,10 @@ class GitCommitCapability:
                 raise GitMutationError(
                     "Git authority repository ancestor is unavailable"
                 ) from error
+            except BaseException as error:
+                raise GitMutationError(
+                    "Git authority repository ancestor is unavailable"
+                ) from error
             if not stat.S_ISDIR(status.st_mode):
                 raise GitMutationError("Git authority repository ancestor is not a directory")
             identities.append((str(current), status.st_dev, status.st_ino))
@@ -113,6 +122,8 @@ class GitCommitCapability:
         try:
             status = repository.lstat()
         except OSError as error:
+            raise GitMutationError("Git authority repository is unavailable") from error
+        except BaseException as error:
             raise GitMutationError("Git authority repository is unavailable") from error
         if not stat.S_ISDIR(status.st_mode):
             raise GitMutationError("Git authority repository is not a regular directory")
