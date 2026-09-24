@@ -681,23 +681,32 @@ class LockDomainScopeTests(unittest.TestCase):
                 + "\n"
                 + "\n".join(
                     (
-                        "NoReplacementBeforeBackup == TRUE",
-                        "ReleaseOrder == TRUE",
-                        "RollbackProof == TRUE",
-                        "RollbackRequiresBackup == TRUE",
+                        r"FunctionalAvailability == \A op \in Operations: available[op]",
+                        'NoReplacementBeforeBackup == runtime[op] = "new" => backup[op]',
+                        (
+                            'ReleaseOrder == barrier[op] = "released" => '
+                            'journal[op] \\in {"completed", "rolled_back"}'
+                        ),
+                        (
+                            'RollbackProof == journal[op] = "rolled_back" => '
+                            'target[op] = "rollback" /\\ runtime[op] = "old"'
+                        ),
+                        'RollbackRequiresBackup == journal[op] = "rolled_back" => backup[op]',
                         "THEOREM Spec => []TypeInvariant",
                     )
                 )
             )
             (root / "formal/upgrade/UpgradeRecovery.tla").write_text(
-                all_but_availability, encoding="utf-8"
+                all_but_availability.replace(
+                    r"FunctionalAvailability == \A op \in Operations: available[op]",
+                    "",
+                    1,
+                ),
+                encoding="utf-8",
             )
             with self.assertRaisesRegex(ValueError, "invariant FunctionalAvailability"):
                 validate_model_action_contract(root)
-            complete_without_availability_theorem = all_but_availability.replace(
-                "NoReplacementBeforeBackup == TRUE",
-                "FunctionalAvailability == TRUE\nNoReplacementBeforeBackup == TRUE",
-            )
+            complete_without_availability_theorem = all_but_availability
             (root / "formal/upgrade/UpgradeRecovery.tla").write_text(
                 complete_without_availability_theorem, encoding="utf-8"
             )
@@ -710,6 +719,24 @@ class LockDomainScopeTests(unittest.TestCase):
                 complete_without_backup_theorem, encoding="utf-8"
             )
             with self.assertRaisesRegex(ValueError, "theorem NoReplacementBeforeBackup"):
+                validate_model_action_contract(root)
+
+    def test_model_action_contract_rejects_weakened_invariant(self) -> None:
+        model = Path(__file__).resolve().parents[1] / "formal/upgrade/UpgradeRecovery.tla"
+        original = model.read_text(encoding="utf-8")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            model_copy = root / "formal/upgrade/UpgradeRecovery.tla"
+            model_copy.parent.mkdir(parents=True)
+            model_copy.write_text(
+                original.replace(
+                    'runtime[op] = "new" => backup[op]',
+                    'runtime[op] = "new" => ~backup[op]',
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "NoReplacementBeforeBackup semantics"):
                 validate_model_action_contract(root)
 
     def test_model_action_contract_rejects_wrong_reopen_transition(self) -> None:
