@@ -31,6 +31,38 @@ MODEL_ACTION_SIGNATURES = {
     "RecheckHeld": "RecheckHeld(p) ==",
 }
 
+MODEL_ACTION_TRANSITIONS = {
+    "AcceptWrite": (
+        'writerPhase[p] = "requested"',
+        'writerPhase\' = [writerPhase EXCEPT ![p] = "accepted"]',
+        "writerMutations' = writerMutations + 1",
+    ),
+    "RejectWrite": (
+        'writerPhase[p] = "requested"',
+        "sessionStatus \\in UnsafeStatuses",
+        'writerPhase\' = [writerPhase EXCEPT ![p] = "rejected"]',
+    ),
+    "FinishWrite": (
+        'writerPhase[p] \\in {"accepted", "rejected"}',
+        'writerPhase\' = [writerPhase EXCEPT ![p] = "done"]',
+    ),
+    "MarkAmbiguous": (
+        'sessionStatus \\in {"held", "releasing"}',
+        'sessionStatus\' = "ambiguous"',
+        "controlRevision' = controlRevision + 1",
+    ),
+    "RejectStaleCAS": (
+        "expected # controlRevision",
+        'casResult\' = [casResult EXCEPT ![p] = "rejected"]',
+    ),
+    "Acquire": (
+        'sessionStatus \\in {"absent", "released"}',
+        'sessionStatus\' = "held"',
+        "fence' = fence + 1",
+        "authorityRevision' = fence + 1",
+    ),
+}
+
 
 def validate_authority_effect_model_contract(root: Path) -> None:
     """Require the abstract actions and safety invariants used by this mapper."""
@@ -51,6 +83,16 @@ def validate_authority_effect_model_contract(root: Path) -> None:
     )
     if missing:
         raise ValueError(f"authority-effect model contract is incomplete: {', '.join(missing)}")
+    transition_missing = [
+        f"{action} transition {fragment}"
+        for action, fragments in MODEL_ACTION_TRANSITIONS.items()
+        for fragment in fragments
+        if fragment not in text
+    ]
+    if transition_missing:
+        raise ValueError(
+            "authority-effect model transitions are incomplete: " + ", ".join(transition_missing)
+        )
 
 
 def _base_authority_effect_actions(outcome: str, receipt_valid: bool | None) -> tuple[str, ...]:
