@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from typing import Any, Protocol
 
 from tools.authority_neutral_commit import CommitAdmissionBundle
+from tools.rollback_control_store import ControlStoreAmbiguousError
 
 
 class AuthorityMutationError(RuntimeError):
@@ -156,9 +157,7 @@ class DurableBoundAuthorityMutation:
         self._session_revision = session_revision
         self._capability = BoundAuthorityMutation(admission)
 
-    def execute(self, effect: Callable[[], object]) -> MutationReceipt:
-        if not callable(effect):
-            raise AuthorityMutationError("authority mutation effect is invalid")
+    def _prepare(self) -> Any:
         try:
             intent = self._journal.prepare_authority_effect(
                 self._session_revision,
@@ -172,7 +171,7 @@ class DurableBoundAuthorityMutation:
                 expected_selector_identity=self._admission.selector_identity,
                 expected_runtime_identity=self._admission.runtime_identity,
             )
-        except (OSError, sqlite3.Error) as error:
+        except (OSError, sqlite3.Error, ControlStoreAmbiguousError) as error:
             # Low-level journal I/O may have persisted the intent before
             # reporting an error.  Do not invoke the external effect or turn
             # the boundary into a retryable rejection; recovery must fence the
@@ -185,6 +184,12 @@ class DurableBoundAuthorityMutation:
             raise AuthorityMutationAmbiguousError(
                 "authority mutation journal preparation returned no intent"
             )
+        return intent
+
+    def execute(self, effect: Callable[[], object]) -> MutationReceipt:
+        if not callable(effect):
+            raise AuthorityMutationError("authority mutation effect is invalid")
+        intent = self._prepare()
         try:
             receipt = self._capability.execute(self._admission.backend, effect)
         except AuthorityMutationRejectedError:
