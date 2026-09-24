@@ -14,17 +14,18 @@ dependency condition, failure choice, and process interleaving in the scope
 declared by Handoffctl.cfg.
 *)
 
-CONSTANTS Processes, Tasks, Actors, NoProcess, NoActor, MaxRevision
+CONSTANTS Processes, Tasks, Actors, NoProcess, NoActor, NoTask, MaxRevision
 
 ASSUME /\ Processes # {}
        /\ Tasks # {}
        /\ Actors # {}
        /\ NoProcess \notin Processes
        /\ NoActor \notin Actors
+       /\ NoTask \notin Tasks
        /\ MaxRevision >= Cardinality(Processes)
 
 Statuses ==
-    {"planned", "open", "in_progress", "blocked", "done"}
+    {"planned", "open", "in_progress", "blocked", "done", "cancelled", "superseded"}
 
 ReleaseOperations ==
     {"release_planned", "release_open", "release_blocked", "release_done"}
@@ -35,6 +36,14 @@ Operations ==
 
 Phases == {"waiting", "holding", "releasing", "done"}
 Results == {"pending", "accepted", "rejected", "rolled_back", "lock_timeout"}
+
+ParentMap == [t \in Tasks |-> IF t = "t1" THEN NoTask ELSE "t1"]
+ChildrenMap == [t \in Tasks |-> IF t = "t1" THEN {"t2"} ELSE {}]
+
+HierarchyCoherent ==
+    /\ \A t \in Tasks: ParentMap[t] = NoTask <=> t \notin UNION {ChildrenMap[p] : p \in Tasks}
+    /\ \A t \in Tasks: ParentMap[t] # NoTask => t \in ChildrenMap[ParentMap[t]]
+    /\ \A t \in Tasks: IF ParentMap[t] = NoTask THEN TRUE ELSE ParentMap[ParentMap[t]] = NoTask \/ ParentMap[ParentMap[t]] # t
 
 VARIABLES
     status,
@@ -52,6 +61,10 @@ VARIABLES
     lockOwner,
     result,
     successCount
+
+ChildrenOpen(t) ==
+    \E child \in ChildrenMap[t]:
+        status[child] # "done" /\ status[child] # "cancelled" /\ status[child] # "superseded"
 
 vars ==
     <<status, owner, revision, initialRevision, projectionRevision,
@@ -119,6 +132,7 @@ EnabledOperation(p) ==
       [] operation[p] \in ReleaseOperations ->
             /\ status[t] = "in_progress"
             /\ owner[t] = actor[p]
+            /\ operation[p] # "release_done" \/ ~ChildrenOpen(t)
 
 StatusAfter(p) ==
     CASE operation[p] \in {"promote", "resume"} -> "open"
