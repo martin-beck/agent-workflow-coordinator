@@ -24,6 +24,8 @@ from pathlib import Path
 from typing import Any, cast
 
 if __package__:
+    from .board_metrics import build_metrics
+    from .board_metrics import encode as encode_metrics
     from .checkpoint_records import (
         append_checkpoint,
         build_checkpoint,
@@ -80,6 +82,19 @@ if __package__:
     )
     from .task_spec import done_admission_error, task_spec_errors
 else:  # pragma: no cover - direct script execution
+    try:
+        from board_metrics import build_metrics  # type: ignore[import-not-found,no-redef]  # noqa: I001
+        from board_metrics import encode as encode_metrics  # type: ignore[no-redef]
+    except ModuleNotFoundError:  # pragma: no cover - standalone vendored bootstrap
+
+        def build_metrics(tasks: list[tuple[Any, dict[str, Any], str]]) -> dict[str, Any]:
+            del tasks
+            raise RuntimeError("board metrics module is unavailable in this vendored bootstrap")
+
+        def encode_metrics(metrics: dict[str, Any]) -> str:
+            del metrics
+            raise RuntimeError("board metrics module is unavailable in this vendored bootstrap")
+
     from checkpoint_records import (  # type: ignore[import-not-found,no-redef]
         append_checkpoint,
         build_checkpoint,
@@ -2330,6 +2345,22 @@ def cmd_snapshot(task_id: str | None = None) -> None:
             print("SESSION_SNAPSHOT=" + json.dumps(record, sort_keys=True, separators=(",", ":")))
 
 
+def cmd_board() -> None:
+    """Print the privacy-safe company board from the SQLite authority."""
+    if backend_selection()["backend"] != "sqlite":
+        raise RuntimeError("board requires the SQLite authority")
+    with locked(exclusive=False):
+        print(encode_metrics(build_metrics(all_tasks())), end="")
+
+
+def cmd_metrics() -> None:
+    """Print the deterministic metrics projection from the SQLite authority."""
+    if backend_selection()["backend"] != "sqlite":
+        raise RuntimeError("metrics requires the SQLite authority")
+    with locked(exclusive=False):
+        print(encode_metrics(build_metrics(all_tasks())), end="")
+
+
 def cmd_checkpoint(args: argparse.Namespace) -> None:
     """Capture a bounded task checkpoint before mutating task authority."""
     if invocation_worktree() is not None:
@@ -3030,6 +3061,10 @@ def dispatch_bound_command(args: argparse.Namespace) -> int:  # noqa: C901
         return dispatch_roles_command(args)
     elif args.cmd == "snapshot":
         cmd_snapshot(args.task)
+    elif args.cmd == "board":
+        cmd_board()
+    elif args.cmd == "metrics":
+        cmd_metrics()
     elif args.cmd == "checkpoint":
         cmd_checkpoint(args)
     elif args.cmd == "rollback":
@@ -3103,6 +3138,8 @@ def main() -> int:
     role.add_argument("--assignment-id", required=True)
     item = commands.add_parser("snapshot")
     item.add_argument("--task")
+    commands.add_parser("board")
+    commands.add_parser("metrics")
     item = commands.add_parser("checkpoint")
     item.add_argument("task")
     item.add_argument("--owner", required=True)

@@ -20,6 +20,9 @@
 - `render-status`: render/check the optional complete status view.
 - `doctor`: validate structure; `--live` also checks Git/GitHub observations.
 - `migrate --to sqlite|git`: explicitly switch authority after an equivalence-checked export/import.
+- `board` and `metrics`: read-only, byte-stable JSON projections from SQLite containing role
+  progress, decision backlog, gate failures, blocked tasks, and evidence coverage. They do not
+  contact GitHub, include task bodies, or expose credentials, and refuse Git authority mode.
 
 Generic stage gates are selected by using a generic stage on the first event, for example
 `--stage role`; subsequent events must advance through `spec` and `decision` in order. Unknown
