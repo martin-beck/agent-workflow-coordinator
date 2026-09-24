@@ -198,12 +198,18 @@ class SQLiteCommitCapability:
             raise SQLiteMutationAmbiguousError(
                 "SQLite connection close outcome is ambiguous"
             ) from error
+        except BaseException as error:
+            raise SQLiteMutationAmbiguousError(
+                "SQLite connection close outcome is ambiguous"
+            ) from error
 
     @staticmethod
     def _rollback_connection(connection: sqlite3.Connection) -> None:
         try:
             connection.rollback()
         except (OSError, sqlite3.Error) as error:
+            raise SQLiteMutationAmbiguousError("SQLite rollback outcome is ambiguous") from error
+        except BaseException as error:
             raise SQLiteMutationAmbiguousError("SQLite rollback outcome is ambiguous") from error
 
     def _classify_oserror(

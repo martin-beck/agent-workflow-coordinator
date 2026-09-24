@@ -630,6 +630,39 @@ class SQLiteCommitCapabilityTests(unittest.TestCase):
                 connector=connector,
             ).commit(update)
 
+    def test_classifies_termination_connection_close_failure_as_ambiguous(self) -> None:
+        real_connect = sqlite3.connect
+
+        class CloseFailingConnection:
+            def __init__(self, connection: sqlite3.Connection) -> None:
+                self._connection = connection
+
+            def __getattr__(self, name: str) -> object:
+                return getattr(self._connection, name)
+
+            def close(self) -> None:
+                self._connection.close()
+                raise KeyboardInterrupt("injected termination")
+
+        def connector(*args: Any, **kwargs: Any) -> sqlite3.Connection:
+            return cast(sqlite3.Connection, CloseFailingConnection(real_connect(*args, **kwargs)))
+
+        def update(connection: sqlite3.Connection) -> None:
+            connection.execute("UPDATE state SET value='new'")
+
+        with self.assertRaisesRegex(
+            SQLiteMutationAmbiguousError, "connection close outcome is ambiguous"
+        ):
+            SQLiteCommitCapability(
+                self.db,
+                admission=self._admission,
+                admission_reread=lambda: self._admission.__dict__,
+                expected_db_identity=self._capability()._db_identity,
+                expected_wal_identity=self._capability()._wal_identity,
+                expected_shm_identity=self._capability()._shm_identity,
+                connector=connector,
+            ).commit(update)
+
     def test_classifies_rollback_failure_as_ambiguous(self) -> None:
         real_connect = sqlite3.connect
 
@@ -680,6 +713,39 @@ class SQLiteCommitCapabilityTests(unittest.TestCase):
         def connector(*args: Any, **kwargs: Any) -> sqlite3.Connection:
             return cast(
                 sqlite3.Connection, RollbackFailingConnection(real_connect(*args, **kwargs))
+            )
+
+        def invalid(connection: sqlite3.Connection) -> None:
+            connection.execute("UPDATE missing SET x=1")
+
+        with self.assertRaisesRegex(SQLiteMutationAmbiguousError, "rollback outcome is ambiguous"):
+            SQLiteCommitCapability(
+                self.db,
+                admission=self._admission,
+                admission_reread=lambda: self._admission.__dict__,
+                expected_db_identity=self._capability()._db_identity,
+                expected_wal_identity=self._capability()._wal_identity,
+                expected_shm_identity=self._capability()._shm_identity,
+                connector=connector,
+            ).commit(invalid)
+
+    def test_classifies_termination_rollback_failure_as_ambiguous(self) -> None:
+        real_connect = sqlite3.connect
+
+        class RollbackFailingConnection:
+            def __init__(self, connection: sqlite3.Connection) -> None:
+                self._connection = connection
+
+            def __getattr__(self, name: str) -> object:
+                return getattr(self._connection, name)
+
+            def rollback(self) -> None:
+                raise KeyboardInterrupt("injected termination")
+
+        def connector(*args: Any, **kwargs: Any) -> sqlite3.Connection:
+            return cast(
+                sqlite3.Connection,
+                RollbackFailingConnection(real_connect(*args, **kwargs)),
             )
 
         def invalid(connection: sqlite3.Connection) -> None:
