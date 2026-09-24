@@ -276,6 +276,7 @@ class GitCommitCapability:
         try:
             # A replacement after Git returns cannot be reported as a receipt
             # for the authority admitted before the effect.
+            self._assert_admission_current()
             self._assert_repository_identity()
             after_branch = self._git("symbolic-ref", "--short", "-q", "HEAD")
             after = self._git("rev-parse", "--verify", "HEAD^{commit}")

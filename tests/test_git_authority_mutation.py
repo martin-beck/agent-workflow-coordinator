@@ -550,6 +550,31 @@ class GitCommitCapabilityTests(unittest.TestCase):
             capability.commit("op-1 authority commit")
         self.assertEqual("", _git(self.root, "status", "--porcelain=v1"))
 
+    def test_classifies_post_commit_admission_drift_as_ambiguous(self) -> None:
+        (self.root / "state").write_text("new\n", encoding="utf-8")
+        _git(self.root, "add", "state")
+        admission = self._admission()
+        stale = dict(admission.__dict__)
+        stale["fencing_token"] = "replaced-owner"  # noqa: S105
+        reads = 0
+
+        def reread() -> dict[str, object]:
+            nonlocal reads
+            reads += 1
+            return admission.__dict__ if reads == 1 else stale
+
+        capability = GitCommitCapability(
+            self.root,
+            admission=admission,
+            admission_reread=reread,
+            expected_branch="main",
+            expected_head=_git(self.root, "rev-parse", "HEAD"),
+        )
+        with self.assertRaisesRegex(GitMutationAmbiguousError, "postcondition"):
+            capability.commit("op-1 authority commit")
+        self.assertEqual(2, reads)
+        self.assertEqual("", _git(self.root, "status", "--porcelain=v1"))
+
     def test_classifies_malformed_post_commit_head_as_ambiguous(self) -> None:
         (self.root / "state").write_text("new\n", encoding="utf-8")
         _git(self.root, "add", "state")

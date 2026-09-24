@@ -655,6 +655,34 @@ class SQLiteCommitCapabilityTests(unittest.TestCase):
         ):
             self._capability().commit(update)
 
+    def test_classifies_post_commit_admission_drift_as_ambiguous(self) -> None:
+        admission = self._admission
+        stale = dict(admission.__dict__)
+        stale["fencing_token"] = "replaced-owner"  # noqa: S105
+        reads = 0
+
+        def reread() -> dict[str, object]:
+            nonlocal reads
+            reads += 1
+            return admission.__dict__ if reads == 1 else stale
+
+        def update(connection: sqlite3.Connection) -> None:
+            connection.execute("UPDATE state SET value='new' WHERE id=1")
+
+        capability = SQLiteCommitCapability(
+            self.db,
+            admission=admission,
+            admission_reread=reread,
+            expected_db_identity=self._capability()._db_identity,
+            expected_wal_identity=self._capability()._wal_identity,
+            expected_shm_identity=self._capability()._shm_identity,
+        )
+        with self.assertRaisesRegex(SQLiteMutationAmbiguousError, "post-commit admission"):
+            capability.commit(update)
+        self.assertEqual(2, reads)
+        with sqlite3.connect(self.db) as connection:
+            self.assertEqual(("new",), connection.execute("SELECT value FROM state").fetchone())
+
     def test_classifies_post_commit_integrity_failure_as_ambiguous(self) -> None:  # noqa: C901
         real_connect = sqlite3.connect
 
