@@ -37,6 +37,8 @@ rewrites the coordinator source, Git history, and binding files.
   artifact references, a body digest and the signed source commit; raw command output is never
   retained. Create one with `tools/handoffctl checkpoint AR-#### --owner OWNER
   --expected-revision REV`.
+- `rollbacks/operations.jsonl`: bounded rollback journal. Planned, restore-started, completed and
+  ambiguous states are durable; an ambiguous operation must be reconciled before retrying.
 
 ## Initialize exactly once
 
@@ -88,6 +90,19 @@ tools/handoffctl release AR-0001 --owner worker-unique --status done \
 tools/handoffctl reconcile --commit --push
 tools/handoffctl doctor --live
 ```
+
+Restore a verified checkpoint only from a clean descendant product checkout:
+
+```sh
+tools/handoffctl rollback --checkpoint AR-####-r####
+tools/handoffctl rollback --checkpoint AR-####-r####
+tools/handoffctl rollback --checkpoint AR-####-r#### --reconcile
+```
+
+`--reconcile` is required only after a rollback is recorded as `restore_started`
+or `ambiguous`. It may continue only when the product checkout is at the exact
+durable rollback head (or at the previously recorded pre-rollback head when no
+product commit was published); otherwise the operation remains fail-closed.
 
 Use `promote` only for `planned -> open` after dependencies complete. Use `resume` only for
 `blocked -> open` after independently verifying the external blocker. Both require the exact
