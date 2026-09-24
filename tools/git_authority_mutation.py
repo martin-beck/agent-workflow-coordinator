@@ -204,6 +204,20 @@ class GitCommitCapability:
         if not isinstance(current, Mapping) or not self._admission.matches(current):
             raise GitMutationRejectedError("Git admission identity changed before commit")
 
+    @staticmethod
+    def _decode_commit_result(result: subprocess.CompletedProcess[str]) -> str:
+        try:
+            if result.returncode != 0:
+                # A nonzero exit does not prove that Git made no ref update.
+                # The caller must fence the operation and recover/reconcile
+                # before a fresh capability can be issued.
+                raise GitMutationAmbiguousError("Git commit outcome is ambiguous")
+            return GitCommitCapability._commit_head(result)
+        except GitMutationAmbiguousError:
+            raise
+        except BaseException as error:
+            raise GitMutationAmbiguousError("Git commit outcome is ambiguous") from error
+
     def commit(self, message: str) -> GitCommitResult:
         if self._consumed:
             raise GitMutationError("Git mutation capability already consumed")
@@ -223,12 +237,7 @@ class GitCommitCapability:
             raise GitMutationAmbiguousError("Git commit outcome is ambiguous") from error
         except BaseException as error:
             raise GitMutationAmbiguousError("Git commit outcome is ambiguous") from error
-        if result.returncode != 0:
-            # A nonzero exit does not prove that Git made no ref update.  The
-            # caller must fence the operation and recover/reconcile before a
-            # fresh capability can be issued.
-            raise GitMutationAmbiguousError("Git commit outcome is ambiguous")
-        committed_head = self._commit_head(result)
+        committed_head = self._decode_commit_result(result)
         try:
             # A replacement after Git returns cannot be reported as a receipt
             # for the authority admitted before the effect.
