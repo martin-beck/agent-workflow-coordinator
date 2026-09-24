@@ -126,6 +126,10 @@ class GitCommitCapability:
             raise GitMutationRejectedError(
                 "Git authority repository identity changed before commit"
             ) from error
+        except BaseException as error:
+            raise GitMutationRejectedError(
+                "Git authority repository identity reread was rejected"
+            ) from error
         if ancestors != self._ancestor_identities or current != self._repository_identity:
             raise GitMutationRejectedError(
                 "Git authority repository identity changed before commit"

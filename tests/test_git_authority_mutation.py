@@ -12,6 +12,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from typing import Any, cast
+from unittest.mock import patch
 
 from tools.authority_mutation import AuthorityMutationRejectedError, DurableBoundAuthorityMutation
 from tools.authority_neutral_commit import CommitAdmissionBundle
@@ -422,6 +423,23 @@ class GitCommitCapabilityTests(unittest.TestCase):
             expected_head=_git(self.root, "rev-parse", "HEAD"),
         )
         with self.assertRaisesRegex(GitMutationRejectedError, "admission reread was rejected"):
+            capability.commit("op-1 authority commit")
+        self.assertEqual("M  state", _git(self.root, "status", "--porcelain=v1"))
+
+    def test_classifies_termination_repository_identity_reread_as_rejected(self) -> None:
+        (self.root / "state").write_text("new\n", encoding="utf-8")
+        _git(self.root, "add", "state")
+        capability = self._capability()
+        with (
+            patch.object(
+                GitCommitCapability,
+                "_read_repository_identity",
+                side_effect=KeyboardInterrupt("injected termination"),
+            ),
+            self.assertRaisesRegex(
+                GitMutationRejectedError, "repository identity reread was rejected"
+            ),
+        ):
             capability.commit("op-1 authority commit")
         self.assertEqual("M  state", _git(self.root, "status", "--porcelain=v1"))
 

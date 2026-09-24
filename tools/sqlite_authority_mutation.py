@@ -141,6 +141,16 @@ class SQLiteCommitCapability:
 
     def _assert_filesystem_identity(self) -> None:
         try:
+            self._assert_filesystem_identity_impl()
+        except SQLiteMutationRejectedError:
+            raise
+        except BaseException as error:
+            raise SQLiteMutationRejectedError(
+                "SQLite filesystem identity reread was rejected"
+            ) from error
+
+    def _assert_filesystem_identity_impl(self) -> None:
+        try:
             ancestors = self._ancestor_identities_for(self._authority)
         except SQLiteMutationRejectedError as error:
             if "ancestor is unavailable" in str(error) or "ancestor is not a directory" in str(
