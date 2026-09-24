@@ -291,6 +291,33 @@ class GitAuthorityAdapterTests(unittest.TestCase):
         with self.assertRaisesRegex(GitAuthorityError, "not implemented"):
             self.adapter.execute("commit", CONTEXT)
 
+    def test_adapter_classifies_termination_during_commit_binding_as_rejected(self) -> None:
+        admission = CommitAdmissionBundle(
+            backend="git",
+            target="new",
+            operation_id="op-1:commit",
+            fencing_token="fence",  # noqa: S106
+            state_revision=1,
+            barrier_id="barrier",
+            artifact_identity="artifact",
+            manifest_identity="manifest",
+            selector_identity="selector",
+            runtime_identity="runtime",
+        )
+        with (
+            patch(
+                "tools.git_authority_mutation.GitCommitCapability",
+                side_effect=KeyboardInterrupt("injected termination"),
+            ),
+            self.assertRaisesRegex(GitAuthorityError, "commit capability binding was rejected"),
+        ):
+            self.adapter.bind_commit_capability(
+                admission,
+                admission_reread=lambda: admission.__dict__,
+                expected_branch=self.adapter._git("symbolic-ref", "--short", "-q", "HEAD"),
+                expected_head=self.adapter._git("rev-parse", "HEAD"),
+            )
+
     def test_git_backup_observation_rejects_foreign_adapter_and_path(self) -> None:
         session = GitRollbackSessionState(
             PROJECT, "authority", 1, "fence", "owner", "barrier", "a" * 40, "main"

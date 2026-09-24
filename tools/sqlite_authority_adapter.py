@@ -751,6 +751,8 @@ class SQLiteAuthorityAdapter:
             )
         except (SQLiteAuthorityError, SQLiteMutationError) as error:
             raise SQLiteAuthorityError("SQLite commit capability binding was rejected") from error
+        except BaseException as error:
+            raise SQLiteAuthorityError("SQLite commit capability binding was rejected") from error
 
     def bind_durable_commit_capability(
         self,

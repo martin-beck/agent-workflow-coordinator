@@ -191,6 +191,8 @@ class GitAuthorityAdapter:
             )
         except GitMutationError as error:
             raise GitAuthorityError("Git commit capability binding was rejected") from error
+        except BaseException as error:
+            raise GitAuthorityError("Git commit capability binding was rejected") from error
 
     def bind_durable_commit_capability(
         self,
