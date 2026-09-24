@@ -85,6 +85,24 @@ MODEL_ACTION_TRANSITIONS = {
         'runtime\' = [runtime EXCEPT ![op] = "old"]',
     ),
 }
+MODEL_RECOVERY_TRANSITIONS = {
+    "Crash": (
+        'barrier[op] = "held"',
+        'journal[op] \\in {"running", "rollback_verified"}',
+        'barrier\' = [barrier EXCEPT ![op] = "ambiguous"]',
+        'IF journal[op] = "running"',
+        'journal\' = [journal EXCEPT ![op] = "safe_mode"]',
+    ),
+    "Recover": (
+        'journal[op] = "rollback_verified" /\\ barrier[op] = "released"',
+        'journal\' = [journal EXCEPT ![op] = "rolled_back"]',
+        'runtime\' = [runtime EXCEPT ![op] = "old"]',
+        'journal[op] = "safe_mode" /\\ barrier[op] = "ambiguous" /\\ backup[op]',
+        'target\' = [target EXCEPT ![op] = "rollback"]',
+        'barrier\' = [barrier EXCEPT ![op] = "held"]',
+        'journal\' = [journal EXCEPT ![op] = "rollback_started"]',
+    ),
+}
 
 
 def validate_model_action_contract(root: Path) -> None:
@@ -131,6 +149,12 @@ def validate_model_action_contract(root: Path) -> None:
     missing.extend(
         f"{action} transition {fragment}"
         for action, fragments in MODEL_ACTION_TRANSITIONS.items()
+        for fragment in fragments
+        if fragment not in text
+    )
+    missing.extend(
+        f"{action} transition {fragment}"
+        for action, fragments in MODEL_RECOVERY_TRANSITIONS.items()
         for fragment in fragments
         if fragment not in text
     )

@@ -111,6 +111,7 @@
       "evidence": [
         "tests/test_lock_domain_scope.py::LockDomainScopeTests.test_model_action_contract_binds_authoritative_upgrade_model",
         "tests/test_lock_domain_scope.py::LockDomainScopeTests.test_model_action_contract_rejects_wrong_reopen_transition",
+        "tests/test_lock_domain_scope.py::LockDomainScopeTests.test_model_action_contract_rejects_wrong_crash_transition",
         "tests/test_upgrade_engine.py::UpgradeEngineTests.test_commit_validate_and_reopen_require_safety_evidence",
         "tests/test_upgrade_admission.py::UpgradeAdmissionTests.test_reopen_requires_explicit_functional_availability",
         "tests/test_upgrade_engine.py::UpgradeEngineTests.test_loaded_rollback_requires_authority_and_runtime_revalidation",
