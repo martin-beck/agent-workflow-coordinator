@@ -782,6 +782,10 @@ class SQLiteAuthorityAdapter:
             raise SQLiteAuthorityError(
                 "SQLite durable commit capability binding was rejected"
             ) from error
+        except BaseException as error:
+            raise SQLiteAuthorityError(
+                "SQLite durable commit capability binding was rejected"
+            ) from error
 
     @staticmethod
     def observe_backup_identity(

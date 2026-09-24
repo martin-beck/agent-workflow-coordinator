@@ -2,7 +2,7 @@
   "schema_version": 1,
   "kind": "implementation-refinement-obligation-matrix",
   "contract": "formal/upgrade/v10-refinement-contract.json",
-  "contract_sha256": "828072c4ab67b0bfe1af7ff29f37fddad75a729a7a20acaf8e22ec60c1b72257",
+  "contract_sha256": "804468e38196c9a22441c088a9bb4f4291d59423a7267a35676d8467211b2cb0",
   "decision": "deny",
   "decision_rule": "deny unless every obligation is proven at the exact implementation revision and independently reviewed",
   "obligations": [
@@ -64,6 +64,7 @@
         "tests/test_sqlite_mutation_barrier.py::SQLiteMutationBarrierProcessTests.test_bound_fence_rejects_identity_change_after_admission",
         "tests/test_sqlite_authority_mutation.py::SQLiteCommitCapabilityTests.test_rejects_authority_replacement_after_connect_before_effect",
         "tests/test_sqlite_authority_adapter.py::SQLiteAuthorityAdapterTests.test_adapter_classifies_termination_during_commit_binding_identity_as_rejected",
+        "tests/test_sqlite_authority_adapter.py::SQLiteAuthorityAdapterTests.test_durable_commit_factory_classifies_termination_as_rejected",
         "tests/test_sqlite_authority_adapter.py::SQLiteAuthorityAdapterTests.test_adapter_classifies_termination_during_commit_binding_as_rejected"
       ],
       "status": "not-proven"
@@ -161,6 +162,7 @@
         "tests/test_git_authority_mutation.py::GitCommitCapabilityTests.test_classifies_termination_commit_runner_as_ambiguous",
         "tests/test_git_authority_mutation.py::GitCommitCapabilityTests.test_classifies_post_commit_verification_termination_as_ambiguous",
         "tests/test_git_authority_adapter.py::GitAuthorityAdapterTests.test_adapter_classifies_termination_during_commit_binding_as_rejected",
+        "tests/test_git_authority_adapter.py::GitAuthorityAdapterTests.test_durable_commit_factory_classifies_termination_as_rejected",
         "tests/test_git_authority_mutation.py::GitCommitCapabilityTests.test_classifies_nonzero_commit_after_ref_update_as_ambiguous",
         "tests/test_git_authority_mutation.py::GitCommitCapabilityTests.test_classifies_post_commit_identity_reread_failure_as_ambiguous",
         "tests/test_git_authority_adapter.py::GitAuthorityAdapterTests.test_rollback_recheck_never_authorizes_mutation",
