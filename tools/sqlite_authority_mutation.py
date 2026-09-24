@@ -275,6 +275,20 @@ class SQLiteCommitCapability:
             ) from error
         return integrity, violations
 
+    def _assert_post_commit_admission(self) -> None:
+        try:
+            # A replacement owner/session after SQLite returns cannot receive
+            # a receipt for the admission that authorized the effect.
+            self._assert_admission_current()
+        except SQLiteMutationError as error:
+            raise SQLiteMutationAmbiguousError(
+                "SQLite post-commit admission is ambiguous"
+            ) from error
+        except BaseException as error:
+            raise SQLiteMutationAmbiguousError(
+                "SQLite post-commit admission is ambiguous"
+            ) from error
+
     def commit(self, effect: _Commit) -> SQLiteCommitResult:
         self._consume(effect)
         self._assert_filesystem_identity()
@@ -309,6 +323,7 @@ class SQLiteCommitCapability:
         finally:
             if connection is not None:
                 self._close_connection(connection)
+        self._assert_post_commit_admission()
         integrity, violations = self._verify_post_commit()
         if integrity != "ok" or violations:
             raise SQLiteMutationAmbiguousError(
