@@ -679,7 +679,7 @@ class GitCommitCapabilityTests(unittest.TestCase):
             capability.commit("op-1 authority commit")
         self.assertEqual("", _git(self.root, "status", "--porcelain=v1"))
 
-    def test_classifies_post_commit_admission_drift_as_ambiguous(self) -> None:
+    def test_post_commit_admission_drift_requires_fresh_capability(self) -> None:
         (self.root / "state").write_text("new\n", encoding="utf-8")
         _git(self.root, "add", "state")
         admission = self._admission()
