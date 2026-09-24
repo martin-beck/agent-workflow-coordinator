@@ -932,7 +932,15 @@ class HandoffTest(unittest.TestCase):
 
     def test_resume_reopens_only_exact_blocked_revision(self) -> None:
         target = self.make_task("AR-0001", status="blocked")
-        args = argparse.Namespace(task="AR-0001", expected_revision=0, note="blocker cleared")
+        CORE.append_session_record(
+            CORE.ROOT,
+            CORE.build_session_record(
+                CORE.read_task(target)[0], "pause", "2026-09-24T12:00:00+00:00"
+            ),
+        )
+        args = argparse.Namespace(
+            task="AR-0001", expected_revision=0, session="AR-0001@1", note="blocker cleared"
+        )
         with (
             patch.object(CORE, "dirty_state_paths", return_value=[]),
             self.assertRaisesRegex(RuntimeError, "stale revision"),
@@ -964,9 +972,124 @@ class HandoffTest(unittest.TestCase):
             self.assertRaisesRegex(RuntimeError, "not blocked"),
         ):
             CORE.mutate(
-                argparse.Namespace(task="AR-0001", expected_revision=2, note="again"),
+                argparse.Namespace(
+                    task="AR-0001", expected_revision=2, session="AR-0001@1", note="again"
+                ),
                 "resume",
             )
+
+    def test_pause_freezes_lease_and_resume_reloads_exact_snapshot(self) -> None:
+        target = self.make_task(
+            status="in_progress",
+            owner="worker-a",
+            claim_expires="2099-01-01T00:00:00+00:00",
+            next_action="Continue the verified step.",
+        )
+        pause = argparse.Namespace(
+            task="AR-0001",
+            owner="worker-a",
+            expected_revision=1,
+            note="operator pause",
+        )
+        with patch.object(CORE, "commit", return_value=True):
+            CORE.mutate(pause, "pause")
+        paused, _ = CORE.read_task(target)
+        self.assertEqual(
+            ("blocked", "", ""), (paused["status"], paused["owner"], paused["claim_expires"])
+        )
+        self.assertEqual(2, paused["task_revision"])
+        snapshot = CORE.latest_session(CORE.ROOT, "AR-0001")
+        self.assertIsNotNone(snapshot)
+        assert snapshot is not None
+        self.assertEqual(
+            ("pause", "blocked", 2),
+            (snapshot["trigger"], snapshot["status"], snapshot["task_revision"]),
+        )
+
+        resume = argparse.Namespace(
+            task="AR-0001", expected_revision=2, session="AR-0001@2", note="continue"
+        )
+        with (
+            patch.object(CORE, "commit", return_value=True),
+            patch.object(CORE, "dirty_state_paths", return_value=[]),
+        ):
+            CORE.mutate(resume, "resume")
+        resumed, _ = CORE.read_task(target)
+        self.assertEqual("open", resumed["status"])
+        self.assertEqual("Continue the verified step.", resumed["next_action"])
+
+    def test_pause_failure_restores_authority_and_session(self) -> None:
+        target = self.make_task(
+            status="in_progress",
+            owner="worker-a",
+            claim_expires="2099-01-01T00:00:00+00:00",
+        )
+        before = target.read_text()
+        pause = argparse.Namespace(
+            task="AR-0001", owner="worker-a", expected_revision=1, note="pause"
+        )
+        real_atomic = CORE.atomic
+
+        failed = False
+
+        def fail_task_once(path: Path, text: str) -> None:
+            nonlocal failed
+            if path == target and not failed:
+                failed = True
+                raise OSError("injected pause failure")
+            real_atomic(path, text)
+
+        with (
+            patch.object(CORE, "atomic", side_effect=fail_task_once),
+            self.assertRaisesRegex(OSError, "injected pause failure"),
+        ):
+            CORE.mutate(pause, "pause")
+        self.assertEqual(before, target.read_text())
+        self.assertIsNone(CORE.latest_session(CORE.ROOT, "AR-0001"))
+
+    def test_pause_and_resume_reject_invalid_authority_and_references(self) -> None:
+        target = self.make_task(
+            status="in_progress",
+            owner="worker-a",
+            claim_expires="2099-01-01T00:00:00+00:00",
+        )
+        meta, _ = CORE.read_task(target)
+        args = argparse.Namespace(
+            task="AR-0001", owner="worker-b", expected_revision=1, note="pause"
+        )
+        with self.assertRaisesRegex(RuntimeError, "owned by worker-a"):
+            CORE.apply_pause(args, meta)
+        args.owner = "worker-a"
+        args.expected_revision = 0
+        with self.assertRaisesRegex(RuntimeError, "stale revision"):
+            CORE.apply_pause(args, meta)
+        args.expected_revision = 1
+        meta["status"] = "open"
+        with self.assertRaisesRegex(RuntimeError, "not in progress"):
+            CORE.apply_pause(args, meta)
+        meta["status"] = "in_progress"
+        args.note = ""
+        with self.assertRaisesRegex(RuntimeError, "must not be empty"):
+            CORE.apply_pause(args, meta)
+
+        with self.assertRaisesRegex(RuntimeError, "TASK@REVISION"):
+            CORE._session_for_reference("AR-0001", "AR-0002@1")
+        with self.assertRaisesRegex(RuntimeError, "no session snapshot"):
+            CORE._session_for_reference("AR-0001", "AR-0001@9")
+
+        CORE.append_session_record(
+            CORE.ROOT,
+            CORE.build_session_record(meta, "update", "2026-09-24T12:00:00+00:00"),
+        )
+        with self.assertRaisesRegex(RuntimeError, "not a paused snapshot"):
+            CORE._session_for_reference("AR-0001", "AR-0001@1")
+
+        resume_meta = dict(meta, status="blocked", owner="worker-a", claim_expires="later")
+        resume = argparse.Namespace(
+            task="AR-0001", expected_revision=1, session="AR-0001@1", note="resume"
+        )
+        with self.assertRaisesRegex(RuntimeError, "active claim metadata"):
+            CORE.apply_resume(resume, resume_meta, [])
 
     def test_promote_failure_restores_task_and_generated_views(self) -> None:
         path = self.make_task(status="planned")
@@ -2478,8 +2601,25 @@ class HandoffTest(unittest.TestCase):
                     "AR-0001",
                     "--expected-revision",
                     "1",
+                    "--session",
+                    "AR-0001@1",
                     "--note",
                     "ready",
+                ],
+                "mutate",
+                None,
+            ),
+            (
+                [
+                    "handoffctl",
+                    "pause",
+                    "AR-0001",
+                    "--owner",
+                    "worker-a",
+                    "--expected-revision",
+                    "1",
+                    "--note",
+                    "pause",
                 ],
                 "mutate",
                 None,

@@ -8,8 +8,9 @@
 - `heartbeat`: renew the current owner's lease.
 - `update`: exact-revision update of an actively owned task.
 - `release`: clear ownership and move to a non-active status.
+- `pause`: exact-revision freeze of an owned task, lease, and bounded session snapshot.
 - `promote`: exact-revision `planned -> open` after dependencies complete.
-- `resume`: exact-revision `blocked -> open` after external resolution is confirmed.
+- `resume`: exact-revision `blocked -> open` by an explicit `TASK@REVISION` paused-session reference.
 - `recover-expired`: exact-revision recovery of an in-progress task only after its UTC lease
   deadline has passed.
 - `run`: execute a bounded command outside the lock, then record its classified result.

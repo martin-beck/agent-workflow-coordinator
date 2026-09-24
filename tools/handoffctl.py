@@ -166,6 +166,7 @@ SUBPROCESS_TIMEOUT_SECONDS = 30.0
 COMMAND_TIMEOUT_SECONDS = 1800.0
 OBSERVATION_ATTEMPTS = 3
 OBSERVATION_RETRY_SECONDS = 0.25
+SESSION_REFERENCE = re.compile(r"^(AR-[0-9]{4})@([1-9][0-9]*)$")
 STATUSES = (
     "in_progress",
     "open",
@@ -1707,7 +1708,7 @@ def require_role_admission(owner_id: str, required_role: str = "implementer") ->
 
 
 def require_update_role_admission(kind: str, owner_id: str) -> None:
-    if kind == "update":
+    if kind in {"update", "pause"}:
         require_role_admission(owner_id)
 
 
@@ -1800,8 +1801,42 @@ def apply_promote(args: argparse.Namespace, meta: Meta, tasks: list[Task]) -> st
     return str(args.note)
 
 
+def _session_for_reference(task_id: str, reference: str) -> Meta:
+    match = SESSION_REFERENCE.fullmatch(reference)
+    if match is None or match.group(1) != task_id:
+        raise RuntimeError("session reference must use TASK@REVISION for the target task")
+    revision = int(match.group(2))
+    records = storage_backend().load_session_records(task_id)
+    record = next((item for item in records if item.get("task_revision") == revision), None)
+    if record is None:
+        raise RuntimeError(f"no session snapshot for {reference}")
+    validate_session_record(record)
+    if record.get("trigger") != "pause" or record.get("status") != "blocked":
+        raise RuntimeError("session reference is not a paused snapshot")
+    return record
+
+
+def apply_pause(args: argparse.Namespace, meta: Meta) -> str:
+    """Freeze an owned task and its lease at one exact revision."""
+    if meta.get("owner") != args.owner:
+        raise RuntimeError(f"{args.task} is owned by {meta.get('owner') or 'nobody'}")
+    require_role_admission(str(args.owner))
+    if args.expected_revision != meta["task_revision"]:
+        raise RuntimeError(
+            f"stale revision: expected {args.expected_revision}, current {meta['task_revision']}"
+        )
+    if meta.get("status") != "in_progress":
+        raise RuntimeError(f"{args.task} is not in progress")
+    if not args.note.strip():
+        raise RuntimeError("pause note must not be empty")
+    meta["status"] = "blocked"
+    meta["owner"] = ""
+    meta["claim_expires"] = ""
+    return str(args.note)
+
+
 def apply_resume(args: argparse.Namespace, meta: Meta, _tasks: list[Task]) -> str:
-    """Reopen a blocked task after an explicit coordinator review."""
+    """Reopen one exact paused snapshot after an exact-revision CAS."""
     if args.expected_revision != meta["task_revision"]:
         raise RuntimeError(
             f"stale revision: expected {args.expected_revision}, current {meta['task_revision']}"
@@ -1810,8 +1845,12 @@ def apply_resume(args: argparse.Namespace, meta: Meta, _tasks: list[Task]) -> st
         raise RuntimeError(f"{args.task} is not blocked")
     if meta.get("owner") or meta.get("claim_expires"):
         raise RuntimeError(f"{args.task} has active claim metadata")
+    record = _session_for_reference(args.task, args.session)
+    if record["task_revision"] != args.expected_revision:
+        raise RuntimeError("session snapshot revision does not match expected revision")
     if not args.note.strip():
         raise RuntimeError("resume note must not be empty")
+    meta["next_action"] = str(record["next_action"])
     meta["status"] = "open"
     return str(args.note)
 
@@ -1976,6 +2015,8 @@ def apply_transition(args: argparse.Namespace, kind: str, meta: Meta, tasks: lis
         return apply_claim(args, meta, tasks)
     if kind == "promote":
         return apply_promote(args, meta, tasks)
+    if kind == "pause":
+        return apply_pause(args, meta)
     if kind == "resume":
         return apply_resume(args, meta, tasks)
     if kind == "recover-expired":
@@ -2032,7 +2073,10 @@ def git_session_record(
 ) -> Meta | None:
     """Prepare a Git-backed session record and its rollback path."""
     trigger = str(getattr(args, "_session_trigger", kind))
-    if kind != "update" or trigger not in {"update", "run"}:
+    if not (
+        (kind == "update" and trigger in {"update", "run"})
+        or (kind == "pause" and trigger == "pause")
+    ):
         return None
     try:
         record = build_session_record(meta, trigger, str(meta["updated_at"]))
@@ -2157,7 +2201,9 @@ def mutate_sqlite(args: argparse.Namespace, kind: str) -> None:
 
     trigger = str(getattr(args, "_session_trigger", kind))
     session_factory = None
-    if kind == "update" and trigger in {"update", "run"}:
+    if (kind == "update" and trigger in {"update", "run"}) or (
+        kind == "pause" and trigger == "pause"
+    ):
 
         def make_session_record(updated: Meta) -> Meta:
             return build_session_record(updated, trigger, at)
@@ -2989,6 +3035,7 @@ def dispatch_bound_command(args: argparse.Namespace) -> int:  # noqa: C901
         "heartbeat",
         "release",
         "promote",
+        "pause",
         "resume",
         "recover-expired",
         "update",
@@ -3099,6 +3146,12 @@ def main() -> int:
     item.add_argument("--note", required=True)
     item = commands.add_parser("resume")
     item.add_argument("task")
+    item.add_argument("--expected-revision", type=int, required=True)
+    item.add_argument("--session", required=True)
+    item.add_argument("--note", required=True)
+    item = commands.add_parser("pause")
+    item.add_argument("task")
+    item.add_argument("--owner", required=True)
     item.add_argument("--expected-revision", type=int, required=True)
     item.add_argument("--note", required=True)
     item = commands.add_parser("recover-expired")
