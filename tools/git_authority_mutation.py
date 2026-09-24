@@ -204,6 +204,8 @@ class GitCommitCapability:
             )
         except (OSError, subprocess.TimeoutExpired) as error:
             raise GitMutationAmbiguousError("Git commit outcome is ambiguous") from error
+        except BaseException as error:
+            raise GitMutationAmbiguousError("Git commit outcome is ambiguous") from error
         if result.returncode != 0:
             # A nonzero exit does not prove that Git made no ref update.  The
             # caller must fence the operation and recover/reconcile before a
@@ -220,6 +222,8 @@ class GitCommitCapability:
         except GitMutationAmbiguousError:
             raise
         except GitMutationError as error:
+            raise GitMutationAmbiguousError("Git commit postcondition is ambiguous") from error
+        except BaseException as error:
             raise GitMutationAmbiguousError("Git commit postcondition is ambiguous") from error
         if (
             after_branch != branch
