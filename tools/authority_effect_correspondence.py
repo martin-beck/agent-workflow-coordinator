@@ -132,6 +132,26 @@ MODEL_ACTION_TRANSITIONS = {
     ),
 }
 MODEL_INVARIANT_FRAGMENTS = {
+    "OneActiveSession": (
+        r"Cardinality({p \in Processes:",
+        r"sessionStatus \in UnsafeStatuses /\ activeAttempt = p}) <= 1",
+    ),
+    "IdentityStable": (
+        'sessionStatus # "absent" =>',
+        "activeAttempt # NoProcess",
+        "fence > 0",
+        "attemptGeneration > 0",
+    ),
+    "ChildIdentityStable": (
+        r"forwardChild # NoChild => forwardChild \in {ForwardId(p): p \in Processes}",
+        r"rollbackChild # NoChild => rollbackChild \in {RollbackId(p): p \in Processes}",
+        r"(forwardChild # NoChild /\ rollbackChild # NoChild) =>",
+        "forwardChild # rollbackChild",
+    ),
+    "NoUnheldRollbackGap": (
+        r"rollbackChild # NoChild => sessionStatus \in "
+        r'{"held", "releasing", "released", "ambiguous"}',
+    ),
     "ReleaseEvidence": ('sessionStatus = "released" => terminalVerified /\\ freshRuntimeVerified',),
     "WriteFence": (
         r"\A p \in Processes:",
@@ -157,6 +177,32 @@ MODEL_INVARIANT_FRAGMENTS = {
     ),
     "CasBounded": ("controlRevision <= MaxRevision /\\ fence <= MaxRevision",),
 }
+MODEL_TYPEOK_FRAGMENTS = (
+    r"sessionStatus \in Statuses",
+    r"activeAttempt \in Processes \cup {NoProcess}",
+    r"attemptGeneration \in 0..MaxRevision",
+    r"fence \in 0..MaxRevision",
+    r"controlRevision \in 0..MaxRevision",
+    r"forwardChild \in {NoChild} \cup {ForwardId(p): p \in Processes}",
+    r"rollbackChild \in {NoChild} \cup {RollbackId(p): p \in Processes}",
+    r"forwardFailed \in BOOLEAN",
+    r"terminalTarget \in TerminalResults",
+    r"terminalVerified \in BOOLEAN",
+    r"freshRuntimeVerified \in BOOLEAN",
+    r"writerPhase \in [Processes -> WriterPhases]",
+    r'writerAcceptedStatus \in [Processes -> (Statuses \cup {"none"})]',
+    r"writerMutations \in 0..MaxRevision",
+    r'writerTarget \in [Processes -> {"authority"}]',
+    r"lockOwner \in Processes \cup {NoProcess}",
+    r"lockStage \in LockStages",
+    r"authorityRevision \in 0..MaxRevision",
+    r"freshAuthorityRevision \in 0..MaxRevision",
+    r"authorityRechecked \in BOOLEAN",
+    r"casExpected \in [Processes -> 0..MaxRevision]",
+    r"casObserved \in [Processes -> 0..MaxRevision]",
+    r"casBaselineRevision \in [Processes -> 0..MaxRevision]",
+    r"casResult \in [Processes -> CASResults]",
+)
 
 
 def validate_authority_effect_model_contract(root: Path) -> None:
@@ -181,6 +227,9 @@ def validate_authority_effect_model_contract(root: Path) -> None:
         for invariant, fragments in MODEL_INVARIANT_FRAGMENTS.items()
         for fragment in fragments
         if fragment not in text
+    )
+    missing.extend(
+        f"TypeOK field {fragment}" for fragment in MODEL_TYPEOK_FRAGMENTS if fragment not in text
     )
     if missing:
         raise ValueError(f"authority-effect model contract is incomplete: {', '.join(missing)}")
