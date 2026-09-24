@@ -223,6 +223,31 @@ class GitCommitCapability:
         except BaseException as error:
             raise GitMutationAmbiguousError("Git commit outcome is ambiguous") from error
 
+    @classmethod
+    def _validate_postcondition(
+        cls,
+        *,
+        after_branch: str,
+        branch: str,
+        after: str,
+        before: str,
+        committed_head: str,
+        status: str,
+    ) -> str:
+        try:
+            if (
+                after_branch != branch
+                or after == before
+                or not after.startswith(committed_head)
+                or status
+            ):
+                raise GitMutationAmbiguousError("Git commit postcondition is ambiguous")
+            return cls._validate_head(after)
+        except GitMutationAmbiguousError:
+            raise
+        except BaseException as error:
+            raise GitMutationAmbiguousError("Git commit postcondition is ambiguous") from error
+
     def commit(self, message: str) -> GitCommitResult:
         if self._consumed:
             raise GitMutationError("Git mutation capability already consumed")
@@ -256,13 +281,14 @@ class GitCommitCapability:
             raise GitMutationAmbiguousError("Git commit postcondition is ambiguous") from error
         except BaseException as error:
             raise GitMutationAmbiguousError("Git commit postcondition is ambiguous") from error
-        if (
-            after_branch != branch
-            or after == before
-            or not after.startswith(committed_head)
-            or status
-        ):
-            raise GitMutationAmbiguousError("Git commit postcondition is ambiguous")
+        validated_after = self._validate_postcondition(
+            after_branch=after_branch,
+            branch=branch,
+            after=after,
+            before=before,
+            committed_head=committed_head,
+            status=status,
+        )
         return GitCommitResult(
             backend=self._admission.backend,
             target=self._admission.target,
@@ -274,7 +300,7 @@ class GitCommitCapability:
             selector_identity=self._admission.selector_identity,
             runtime_identity=self._admission.runtime_identity,
             before_head=before,
-            after_head=self._validate_head(after),
+            after_head=validated_after,
             branch=branch,
             fencing_token=self._fencing_token,
         )
