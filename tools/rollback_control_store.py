@@ -895,7 +895,16 @@ class SQLiteRollbackControlStore:
                                 "control store WAL sidecar identity changed"
                             )
                 finally:
-                    connection.close()
+                    try:
+                        connection.close()
+                    except (OSError, sqlite3.Error) as error:
+                        raise ControlStoreAmbiguousError(
+                            "control store connection close outcome is ambiguous"
+                        ) from error
+                    except BaseException as error:
+                        raise ControlStoreAmbiguousError(
+                            "control store connection close outcome is ambiguous"
+                        ) from error
                 try:
                     reopened_parent, reopened = self._open_bound_file(
                         self.path, self._parent_identity, self._control_identity
