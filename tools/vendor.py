@@ -21,6 +21,7 @@ SOURCE_FILES: tuple[tuple[str, str], ...] = (
     ("tools/oracle_lifecycle.py", "tools/oracle_lifecycle.py"),
     ("tools/sqlite_storage.py", "tools/sqlite_storage.py"),
     ("tools/status_renderer.py", "tools/status_renderer.py"),
+    ("tools/task_spec.py", "tools/task_spec.py"),
     ("tools/upgrade_commands.py", "tools/upgrade_commands.py"),
     ("tools/upgrade_contract_runtime.py", "tools/upgrade_contract_runtime.py"),
     ("tools/vendor.py", "tools/handoffctl_vendor.py"),
