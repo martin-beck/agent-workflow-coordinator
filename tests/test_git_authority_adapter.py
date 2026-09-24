@@ -268,6 +268,38 @@ class GitAuthorityAdapterTests(unittest.TestCase):
                 expected_head=self.adapter._git("rev-parse", "HEAD"),
             )
 
+    def test_durable_commit_factory_classifies_termination_as_rejected(self) -> None:
+        admission = CommitAdmissionBundle(
+            backend="git",
+            target="new",
+            operation_id="op-1:commit",
+            fencing_token="fence",  # noqa: S106
+            state_revision=1,
+            barrier_id="barrier",
+            artifact_identity="artifact",
+            manifest_identity="manifest",
+            selector_identity="selector",
+            runtime_identity="runtime",
+        )
+        with (
+            patch.object(self.adapter, "bind_commit_capability", return_value=object()),
+            patch(
+                "tools.authority_mutation.DurableBoundBackendMutation",
+                side_effect=KeyboardInterrupt("injected termination"),
+            ),
+            self.assertRaisesRegex(
+                GitAuthorityError, "durable commit capability binding was rejected"
+            ),
+        ):
+            self.adapter.bind_durable_commit_capability(
+                admission,
+                object(),
+                session_revision=1,
+                admission_reread=lambda: admission.__dict__,
+                expected_branch="master",
+                expected_head="a" * 40,
+            )
+
     def test_adapter_binds_isolated_commit_capability_without_enabling_dispatch(self) -> None:
         admission = CommitAdmissionBundle(
             backend="git",
