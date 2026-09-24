@@ -171,9 +171,14 @@ class GitCommitCapability:
             raise GitMutationRejectedError("Git identity reread was rejected") from error
         except BaseException as error:
             raise GitMutationRejectedError("Git identity reread was rejected") from error
-        if result.returncode != 0:
-            raise GitMutationRejectedError("Git identity reread was rejected")
-        return result.stdout.rstrip("\n")
+        try:
+            if result.returncode != 0:
+                raise GitMutationRejectedError("Git identity reread was rejected")
+            return result.stdout.rstrip("\n")
+        except GitMutationRejectedError:
+            raise
+        except BaseException as error:
+            raise GitMutationRejectedError("Git identity reread was rejected") from error
 
     @staticmethod
     def _commit_head(result: subprocess.CompletedProcess[str]) -> str:

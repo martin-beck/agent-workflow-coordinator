@@ -82,6 +82,7 @@
         "tests/test_git_authority_mutation.py::GitCommitCapabilityTests.test_classifies_termination_admission_reread_as_rejected",
         "tests/test_git_authority_mutation.py::GitCommitCapabilityTests.test_classifies_termination_repository_identity_reread_as_rejected",
         "tests/test_git_authority_mutation.py::GitCommitCapabilityTests.test_classifies_termination_git_identity_command_as_rejected",
+        "tests/test_git_authority_mutation.py::GitCommitCapabilityTests.test_classifies_termination_git_identity_result_inspection_as_rejected",
         "tests/test_git_authority_mutation.py::GitCommitCapabilityTests.test_rejects_termination_during_initial_repository_identity",
         "tests/test_git_authority_mutation.py::GitCommitCapabilityTests.test_rejects_termination_during_initial_repository_ancestor_identity",
         "tests/test_git_authority_mutation.py::GitCommitCapabilityTests.test_classifies_repository_replacement_after_effect_as_ambiguous",
