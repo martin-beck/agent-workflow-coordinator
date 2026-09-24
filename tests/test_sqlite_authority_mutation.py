@@ -78,6 +78,60 @@ def _sqlite_commit_then_kill_worker(
     ).commit(cast(Any, update))
 
 
+def _stale_owner_sqlite_worker(
+    db_text: str,
+    expected_db: tuple[int, int],
+    expected_wal: tuple[int, int] | None,
+    expected_shm: tuple[int, int] | None,
+    owner_file_text: str,
+    ready: Any,
+    proceed: Any,
+    result_queue: Any,
+) -> None:
+    db = Path(db_text)
+    owner_file = Path(owner_file_text)
+    admission = CommitAdmissionBundle(
+        backend="sqlite",
+        target="new",
+        operation_id="op-stale-owner:commit",
+        fencing_token="fence-1",  # noqa: S106
+        state_revision=1,
+        barrier_id="barrier-stale-owner",
+        artifact_identity="artifact-1",
+        manifest_identity="manifest-1",
+        selector_identity="selector-1",
+        runtime_identity="runtime-1",
+    )
+
+    def reread() -> dict[str, object]:
+        current = dict(admission.__dict__)
+        current["fencing_token"] = owner_file.read_text(encoding="utf-8")
+        return current
+
+    capability = SQLiteCommitCapability(
+        db,
+        admission=admission,
+        admission_reread=reread,
+        expected_db_identity=expected_db,
+        expected_wal_identity=expected_wal,
+        expected_shm_identity=expected_shm,
+    )
+    ready.set()
+    proceed.wait(5)
+
+    def update(connection: sqlite3.Connection) -> None:
+        connection.execute("UPDATE state SET value='unexpected' WHERE id=1")
+
+    try:
+        capability.commit(update)
+    except SQLiteMutationRejectedError:
+        result_queue.put("rejected")
+    except BaseException as error:
+        result_queue.put(f"unexpected:{type(error).__name__}")
+    else:
+        result_queue.put("committed")
+
+
 class SQLiteCommitCapabilityTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory()
@@ -291,6 +345,37 @@ class SQLiteCommitCapabilityTests(unittest.TestCase):
             self.assertEqual(
                 ("reopened",), connection.execute("SELECT value FROM state").fetchone()
             )
+
+    def test_independent_process_stale_owner_replacement_rejects_before_effect(self) -> None:
+        owner_file = self.root / "owner-fence"
+        owner_file.write_text("fence-1", encoding="utf-8")
+        capability = self._capability()
+        context = multiprocessing.get_context("fork")
+        ready = context.Event()
+        proceed = context.Event()
+        result_queue = context.Queue()
+        worker = context.Process(
+            target=_stale_owner_sqlite_worker,
+            args=(
+                str(self.db),
+                capability._db_identity,
+                capability._wal_identity,
+                capability._shm_identity,
+                str(owner_file),
+                ready,
+                proceed,
+                result_queue,
+            ),
+        )
+        worker.start()
+        self.assertTrue(ready.wait(5))
+        owner_file.write_text("foreign-fence", encoding="utf-8")
+        proceed.set()
+        worker.join(10)
+        self.assertEqual(0, worker.exitcode)
+        self.assertEqual("rejected", result_queue.get(timeout=2))
+        with sqlite3.connect(self.db) as connection:
+            self.assertEqual(("old",), connection.execute("SELECT value FROM state").fetchone())
 
     def test_rejects_termination_during_initial_authority_ancestor_identity(self) -> None:
         with (
