@@ -12,6 +12,8 @@ MODEL_ACTIONS = frozenset(
         "RequestWrite",
         "FreshRuntimeRead",
         "CompleteReopen",
+        "BindForward",
+        "ForwardFailure",
         "AcceptWrite",
         "RejectWrite",
         "FinishWrite",
@@ -24,6 +26,8 @@ MODEL_ACTIONS = frozenset(
 )
 
 MODEL_ACTION_SIGNATURES = {
+    "BindForward": "BindForward(p) ==",
+    "ForwardFailure": "ForwardFailure(p) ==",
     "FreshRuntimeRead": "FreshRuntimeRead(p) ==",
     "CompleteReopen": "CompleteReopen(p) ==",
     "RequestWrite": "RequestWrite(p) ==",
@@ -38,6 +42,18 @@ MODEL_ACTION_SIGNATURES = {
 }
 
 MODEL_ACTION_TRANSITIONS = {
+    "BindForward": (
+        'sessionStatus = "held"',
+        "forwardChild = NoChild",
+        "forwardChild' = ForwardId(p)",
+        "controlRevision' = controlRevision + 1",
+    ),
+    "ForwardFailure": (
+        'sessionStatus = "held"',
+        "forwardChild # NoChild",
+        "forwardFailed = FALSE",
+        "forwardFailed' = TRUE",
+    ),
     "FreshRuntimeRead": (
         'sessionStatus = "releasing"',
         "freshRuntimeVerified' = TRUE",
