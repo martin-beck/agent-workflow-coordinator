@@ -1856,7 +1856,7 @@ def apply_resume(args: argparse.Namespace, meta: Meta, _tasks: list[Task]) -> st
 
 
 def apply_recover_expired(args: argparse.Namespace, meta: Meta, _tasks: list[Task]) -> str:
-    """Reopen an expired claim only after an exact-revision UTC check."""
+    """Reopen an expired claim after restoring its latest bounded session."""
     if args.expected_revision != meta["task_revision"]:
         raise RuntimeError(
             f"stale revision: expected {args.expected_revision}, current {meta['task_revision']}"
@@ -1871,7 +1871,15 @@ def apply_recover_expired(args: argparse.Namespace, meta: Meta, _tasks: list[Tas
         raise RuntimeError(f"{args.task} claim has not expired")
     if not args.note.strip():
         raise RuntimeError("expired-claim recovery note must not be empty")
+    records = storage_backend().load_session_records(args.task)
+    if not records:
+        raise RuntimeError(f"no session snapshot for {args.task}")
+    session = records[-1]
+    validate_session_record(session)
+    if session["task_revision"] > meta["task_revision"]:
+        raise RuntimeError("session snapshot revision is newer than the task")
     previous_owner = str(meta["owner"])
+    meta["next_action"] = str(session["next_action"])
     meta["status"] = "open"
     meta["owner"] = ""
     meta["claim_expires"] = ""

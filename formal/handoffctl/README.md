@@ -40,7 +40,7 @@ authoritative revision, task status and owner unchanged.
 | `heartbeat` | `in_progress` | current owner, positive lease | lease renewed |
 | `update` | `in_progress` | current owner, exact revision | active fields updated |
 | `release` | `in_progress` | current owner | chosen non-active state, owner and lease cleared |
-| `recover-expired` | expired `in_progress` | exact revision | `open`, ownership cleared |
+| `recover-expired` | expired `in_progress` with a valid session | exact revision | `open`, ownership cleared, session restored |
 | `run` record | `in_progress`, unexpired | owner and current revision | bounded result recorded |
 
 `release --status` currently accepts every schema status other than
