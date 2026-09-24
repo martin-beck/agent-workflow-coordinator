@@ -52,3 +52,84 @@ def test_contract_mutation_gate_is_rejection_only_while_matrix_is_unproven() -> 
     contract = json.loads(CONTRACT.read_text(encoding="utf-8"))
     assert matrix["decision"] == "deny"
     assert "rejection-only" in contract["mutation_gate"]
+
+
+def test_git_mutation_boundary_maps_backup_commit_and_rollback_without_authorizing_them() -> None:
+    matrix = json.loads(MATRIX.read_text(encoding="utf-8"))
+    entry = next(item for item in matrix["obligations"] if item["id"] == "git-mutation-boundary")
+    assert entry["model_actions"] == ["Backup", "Commit", "Rollback"]
+    assert entry["status"] == "not-proven"
+    assert len(entry["evidence"]) >= 14
+    assert any("generated_backup_executor" in reference for reference in entry["evidence"])
+    assert any("GitCommitCapabilityTests" in reference for reference in entry["evidence"])
+    assert any("bound_rollback_rejects" in reference for reference in entry["evidence"])
+    assert (
+        "No selector publication, runtime replacement, commit, apply, rollback, or release "
+        "publication is authorized." in matrix["nonclaims"]
+    )
+
+
+def test_sqlite_write_fence_maps_every_route_class_without_authorizing_mutation() -> None:
+    matrix = json.loads(MATRIX.read_text(encoding="utf-8"))
+    entry = next(item for item in matrix["obligations"] if item["id"] == "sqlite-write-fence")
+    assert entry["model_actions"] == ["RequestWrite", "AcceptWrite", "RejectWrite", "FinishWrite"]
+    assert entry["status"] == "not-proven"
+    assert len(entry["evidence"]) >= 12
+    assert any("test_inventory_is_explicit" in reference for reference in entry["evidence"])
+    assert any("every_inventoried_route_rejects" in reference for reference in entry["evidence"])
+    assert any("sigkill_after_route_effects" in reference for reference in entry["evidence"])
+    assert (
+        "Static route coverage does not prove runtime refinement or authorize upgrade mutation."
+        in json.loads(
+            (ROOT / "formal/upgrade/sqlite-route-inventory.json").read_text(encoding="utf-8")
+        )["nonclaims"]
+    )
+
+
+def test_functional_availability_maps_reopen_and_recovery_without_authorizing_mutation() -> None:
+    matrix = json.loads(MATRIX.read_text(encoding="utf-8"))
+    entry = next(item for item in matrix["obligations"] if item["id"] == "functional-availability")
+    assert entry["model_actions"] == ["FunctionalAvailability", "Reopen"]
+    assert entry["status"] == "not-proven"
+    assert len(entry["evidence"]) >= 7
+    assert any(
+        "test_reopen_requires_explicit_functional_availability" in reference
+        for reference in entry["evidence"]
+    )
+    assert any("fresh_capability_reopens" in reference for reference in entry["evidence"])
+    assert any("requires_recovery_and_new_fence" in reference for reference in entry["evidence"])
+
+
+def test_selector_execution_binding_maps_read_only_identity_evidence_without_dispatch() -> None:
+    matrix = json.loads(MATRIX.read_text(encoding="utf-8"))
+    entry = next(
+        item for item in matrix["obligations"] if item["id"] == "selector-to-execution-binding"
+    )
+    assert entry["model_actions"] == ["ObserveSelector", "ValidateRuntime", "Dispatch"]
+    assert entry["status"] == "not-proven"
+    assert len(entry["evidence"]) >= 10
+    assert any("SelectorAdmissionTests" in reference for reference in entry["evidence"])
+    assert any("RuntimeAdmissionTests" in reference for reference in entry["evidence"])
+    assert any(
+        "test_snapshot_bound_rechecks_session" in reference for reference in entry["evidence"]
+    )
+    assert any(
+        "test_snapshot_bound_rejects_non_read_only_backend_result" in reference
+        for reference in entry["evidence"]
+    )
+    assert any(
+        "test_apply_and_rollback_reject_both_backends_without_writes" in reference
+        for reference in entry["evidence"]
+    )
+    assert any(
+        "test_contract_file_and_dispatch_boundaries_fail_closed" in reference
+        for reference in entry["evidence"]
+    )
+    assert any(
+        "test_prepare_dispatch_rejects_mutating_command_arguments" in reference
+        for reference in entry["evidence"]
+    )
+    assert any(
+        "test_run_admitted_runtime_rejects_mutating_command_before_spawn" in reference
+        for reference in entry["evidence"]
+    )

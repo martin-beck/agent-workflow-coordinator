@@ -8,6 +8,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import subprocess
 import time
 from pathlib import Path
@@ -38,6 +39,18 @@ MODEL_SOURCE = {
     "OracleInteractionGates": "../oracle/OracleInteractionGates",
 }
 MODEL_CONFIG = {"OracleInteractionGates": "../oracle/OracleInteractionGates"}
+
+
+def effective_bound(name: str, default: str, boundary: str) -> str:
+    """Return a validated memory bound, requiring explicit values when required."""
+    value = os.environ.get(name)
+    if value is None:
+        if boundary == "required":
+            raise ValueError(f"required attestation needs {name}")
+        value = default
+    if re.fullmatch(r"[1-9][0-9]*[MG]", value) is None:
+        raise ValueError(f"{name} must be a positive MiB/GiB bound")
+    return value
 
 
 def digest(path: Path) -> str:
@@ -107,6 +120,11 @@ def main() -> int:
     formal_hash = hashlib.sha256(
         json.dumps({"models": models, "configs": configs}, sort_keys=True).encode()
     ).hexdigest()
+    try:
+        memory_max = effective_bound("TLC_MEMORY_MAX", "3G", boundary)
+        swap_max = effective_bound("TLC_SWAP_MAX", "3G", boundary)
+    except ValueError as error:
+        parser.error(str(error))
     result = {
         "schema_version": 1,
         "profile": args.tier,
@@ -122,8 +140,8 @@ def main() -> int:
         "resource_bounds": {
             "workers": 2,
             "heap": os.environ.get("TLC_HEAP", "2048m"),
-            "memory_max": os.environ.get("TLC_MEMORY_MAX", "3G"),
-            "swap_max": os.environ.get("TLC_SWAP_MAX", "3G"),
+            "memory_max": memory_max,
+            "swap_max": swap_max,
             "timeout_seconds": int(os.environ.get("TLC_TIMEOUT_SECONDS", "1800")),
             "admission": (
                 "systemd-run-user-cgroup" if boundary == "required" else "portable-timeout-prlimit"

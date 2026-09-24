@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -278,6 +279,22 @@ class TLCAdmissionTests(unittest.TestCase):
             ]
         )
         self.assertEqual(args.admission_lock, isolated_lock)
+
+    def test_parser_accepts_an_isolated_lock_from_environment(self) -> None:
+        with patch.dict(os.environ, {"TLC_ADMISSION_LOCK": "environment.lock"}):
+            args = parser().parse_args(
+                [
+                    "--jar",
+                    "tla.jar",
+                    "--model",
+                    "Model.tla",
+                    "--config",
+                    "Model.cfg",
+                    "--metadir",
+                    "states",
+                ]
+            )
+        self.assertEqual(args.admission_lock, "environment.lock")
 
     def test_stale_queue_records_are_pruned(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

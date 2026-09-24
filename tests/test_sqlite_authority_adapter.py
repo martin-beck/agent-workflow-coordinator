@@ -19,6 +19,7 @@ from typing import Any, cast
 from unittest.mock import patch
 
 from tools.admission_lease import AdmissionLease, validate_recheck
+from tools.authority_neutral_commit import CommitAdmissionBundle
 from tools.generate_upgrade_contract import generate
 from tools.handoffctl import locked
 from tools.lock_domain_scope import LockDomainScope
@@ -34,6 +35,7 @@ from tools.sqlite_authority_adapter import (
     SQLiteAuthorityError,
     SQLiteLifecycleExecutor,
 )
+from tools.sqlite_authority_mutation import SQLiteCommitCapability
 from tools.upgrade_authority import commit_runtime_selector
 from tools.upgrade_engine import BoundRollbackCapability, PhaseContext, UpgradeEngine
 from tools.upgrade_identity import (
@@ -100,7 +102,6 @@ def _bound_snapshot_worker(root_text: str, mode: str, result: Any, rollback: boo
         durable_barrier_id=lease.durable_barrier_id,
         revision=lease.revision,
     )
-    scope = LockDomainScope.bind(session, fence, lease, recheck, locked)
 
     class CountingAdapter(SQLiteAuthorityAdapter):
         calls = 0
@@ -127,6 +128,7 @@ def _bound_snapshot_worker(root_text: str, mode: str, result: Any, rollback: boo
         "state_revision": lease.revision,
     }
     try:
+        scope = LockDomainScope.bind(session, fence, lease, recheck, locked)
         if rollback:
             value = adapter.verify_rollback_context_bound(
                 context, scope, lease=lease, admission_recheck=recheck
@@ -183,6 +185,93 @@ class Scope:
 
 
 class SQLiteAuthorityAdapterTests(unittest.TestCase):
+    def test_adapter_durable_commit_factory_journals_real_sqlite_receipt(self) -> None:
+        admission = CommitAdmissionBundle(
+            backend="sqlite",
+            target="new",
+            operation_id="op-1:commit",
+            fencing_token="fence",  # noqa: S106
+            state_revision=1,
+            barrier_id="barrier",
+            artifact_identity="artifact",
+            manifest_identity="manifest",
+            selector_identity="selector",
+            runtime_identity="runtime",
+        )
+        journal: list[tuple[str, object | None]] = []
+
+        class Journal:
+            def prepare_authority_effect(self, *_args: object, **_kwargs: object) -> str:
+                journal.append(("prepared", None))
+                return "intent"
+
+            def finish_authority_effect(
+                self, _intent: object, outcome: str, receipt: object | None = None
+            ) -> None:
+                journal.append((outcome, receipt))
+
+        capability = self.adapter.bind_durable_commit_capability(
+            admission,
+            Journal(),
+            session_revision=1,
+            admission_reread=lambda: admission.__dict__,
+        )
+        receipt = capability.execute(
+            lambda connection: connection.execute(
+                "UPDATE records SET body = 'durable' WHERE id = 1"
+            )
+        )
+
+        self.assertEqual("sqlite", receipt.backend)
+        with sqlite3.connect(self.authority) as connection:
+            self.assertEqual(
+                "durable", connection.execute("SELECT body FROM records").fetchone()[0]
+            )
+        self.assertEqual(["prepared", "committed"], [item[0] for item in journal])
+        self.assertEqual(receipt, journal[1][1])
+
+    def test_durable_commit_factory_normalizes_invalid_session_revision(self) -> None:
+        admission = CommitAdmissionBundle(
+            backend="sqlite",
+            target="new",
+            operation_id="op-1:commit",
+            fencing_token="fence",  # noqa: S106
+            state_revision=1,
+            barrier_id="barrier",
+            artifact_identity="artifact",
+            manifest_identity="manifest",
+            selector_identity="selector",
+            runtime_identity="runtime",
+        )
+        with self.assertRaisesRegex(SQLiteAuthorityError, "durable commit capability binding"):
+            self.adapter.bind_durable_commit_capability(
+                admission,
+                object(),
+                session_revision=2,
+                admission_reread=lambda: admission.__dict__,
+            )
+
+    def test_adapter_binds_isolated_commit_capability_without_enabling_dispatch(self) -> None:
+        admission = CommitAdmissionBundle(
+            backend="sqlite",
+            target="new",
+            operation_id="op-1:commit",
+            fencing_token="fence",  # noqa: S106
+            state_revision=1,
+            barrier_id="barrier",
+            artifact_identity="artifact",
+            manifest_identity="manifest",
+            selector_identity="selector",
+            runtime_identity="runtime",
+        )
+        capability = self.adapter.bind_commit_capability(
+            admission,
+            admission_reread=lambda: admission.__dict__,
+        )
+        self.assertIsInstance(capability, SQLiteCommitCapability)
+        with self.assertRaisesRegex(SQLiteAuthorityError, "not implemented"):
+            self.adapter.execute("commit", CONTEXT)
+
     def _durable_state(self) -> tuple[bytes, object]:
         return self.authority.read_bytes(), self.session.snapshot()
 
@@ -2608,9 +2697,10 @@ class SQLiteAuthorityAdapterTests(unittest.TestCase):
         stale.start()
         stale.join(5)
         self.assertEqual(0, stale.exitcode)
-        self.assertEqual(
-            ("rejected", "SQLiteAuthorityError", 0, False), stale_result.get(timeout=1)
-        )
+        stale_outcome = stale_result.get(timeout=1)
+        self.assertEqual("rejected", stale_outcome[0])
+        self.assertIn(stale_outcome[1], {"SQLiteAuthorityError", "LockDomainError"})
+        self.assertEqual((0, False), stale_outcome[2:])
         replacement_result = context.Queue()
         fresh = context.Process(
             target=_bound_snapshot_worker,

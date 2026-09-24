@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "kind": "bounded-backend-fence-correspondence",
+  "model": {
+    "path": "formal/upgrade/UpgradeRecovery.tla",
+    "sha256": "616d53832ac5ec18bf3242d47b2412195eb64adb2b1035235514e06cc3edf2ba",
+    "config": "formal/upgrade/UpgradeRecovery.cfg",
+    "config_sha256": "47425af53affd104aa5e30d7434cf3e71e3c7b69bccb9b05fbd749d3285991a2",
+    "backend_constant": "Backends",
+    "backend_domain": ["git", "sqlite"],
+    "backend_variable": "backend",
+    "fence_variable": "fence",
+    "fence_domain": "Nat",
+    "fence_transition": "Preflight",
+    "fence_transition_effect": "increments fence[op] by one before quiesce"
+  },
+  "implementation": {
+    "revision": "7cf76b725e957de91be6bb5930454a2d001a5abc",
+    "backend_routes": {
+      "git": [
+        "tests/test_upgrade_campaign.py::UpgradeCampaignTests.test_git_campaign_reopens_functional_old_or_new_runtime_after_each_failure",
+        "tests/test_git_authority_mutation.py::GitCommitCapabilityTests.test_capability_is_single_use_but_fresh_capability_reopens"
+      ],
+      "sqlite": [
+        "tests/test_upgrade_campaign.py::UpgradeCampaignTests.test_sqlite_campaign_reopens_functional_old_or_new_runtime_after_each_failure",
+        "tests/test_sqlite_authority_mutation.py::SQLiteCommitCapabilityTests.test_capability_is_single_use_but_fresh_capability_reopens"
+      ]
+    },
+    "fence_routes": [
+      "tests/test_sqlite_mutation_barrier.py::SQLiteMutationBarrierProcessTests.test_bound_fence_rejects_identity_change_after_admission",
+      "tests/test_sqlite_mutation_barrier.py::test_sigkill_after_authority_effect_requires_recovery_and_new_fence",
+      "tests/test_sqlite_mutation_barrier.py::test_sigkill_after_git_authority_effect_requires_recovery_and_new_fence",
+      "tests/test_git_authority_mutation.py::GitCommitCapabilityTests.test_rejects_stale_admission_reread_before_effect",
+      "tests/test_sqlite_authority_mutation.py::SQLiteCommitCapabilityTests.test_rejects_stale_admission_reread_before_effect"
+    ],
+    "mutation_gate": "rejection-only"
+  },
+  "evidence": {
+    "status": "bounded-concrete-binding-only",
+    "correspondence_claim": "not-proven",
+    "nonclaims": [
+      "The backend domain is bound to the two exercised route families, not to a trace-preserving implementation refinement.",
+      "The concrete fence tests establish rejection and recovery evidence, not equality with the model's abstract Preflight counter.",
+      "This artifact does not authorize Dispatch, mutation, rollback, release, or outcome publication."
+    ]
+  }
+}

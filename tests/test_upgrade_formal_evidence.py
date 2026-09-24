@@ -183,6 +183,8 @@ class UpgradeFormalEvidenceTests(unittest.TestCase):
             entry["status"],
         )
         for reference in entry["evidence_required"]:
+            if "::" not in reference:
+                continue
             path, selector = reference.split("::", 1)
             self.assertTrue((ROOT / path).exists(), path)
             self.assertIn(selector, (ROOT / path).read_text(encoding="utf-8"), selector)
@@ -247,6 +249,122 @@ class UpgradeFormalEvidenceTests(unittest.TestCase):
             path, selector = reference.split("::", 1)
             self.assertTrue((ROOT / path).exists(), path)
             self.assertIn(selector, (ROOT / path).read_text(encoding="utf-8"), selector)
+
+    def test_authority_effect_journal_binds_finish_and_ambiguity_correspondence(self) -> None:
+        contract = json.loads(CONTRACT.read_text(encoding="utf-8"))
+        entry = next(
+            value
+            for value in contract["correspondence"]
+            if value["implementation_obligation"].startswith(
+                "The isolated authority effect journal"
+            )
+        )
+        self.assertEqual(
+            [
+                "AcceptWrite",
+                "FinishWrite",
+                "MarkAmbiguous",
+                "RejectWrite",
+                "RejectStaleCAS",
+                "Acquire",
+            ],
+            entry["model_actions"],
+        )
+        self.assertEqual(
+            "bounded executable durable external-effect recovery evidence; "
+            "implementation refinement pending and public dispatch disabled",
+            entry["status"],
+        )
+        for reference in entry["evidence_required"]:
+            path, selector = reference.split("::", 1)
+            self.assertTrue((ROOT / path).exists(), path)
+            self.assertIn(
+                selector.rsplit(".", 1)[-1], (ROOT / path).read_text(encoding="utf-8"), selector
+            )
+
+    def test_barrier_recheck_binds_stale_cas_correspondence(self) -> None:
+        contract = json.loads(CONTRACT.read_text(encoding="utf-8"))
+        entry = next(
+            value
+            for value in contract["correspondence"]
+            if value["implementation_obligation"].startswith(
+                "A writer rereads the durable control barrier"
+            )
+        )
+        self.assertEqual(
+            ["ObserveAuthority", "RecheckHeld", "RejectStaleCAS"], entry["model_actions"]
+        )
+        for reference in entry["evidence_required"]:
+            if "::" not in reference:
+                continue
+            path, selector = reference.split("::", 1)
+            self.assertTrue((ROOT / path).exists(), path)
+            self.assertIn(
+                selector.rsplit(".", 1)[-1],
+                (ROOT / path).read_text(encoding="utf-8"),
+                selector,
+            )
+
+    def test_lock_domain_contract_binds_exact_hostile_evidence(self) -> None:
+        contract = json.loads(CONTRACT.read_text(encoding="utf-8"))
+        entry = next(
+            value
+            for value in contract["correspondence"]
+            if value["implementation_obligation"].startswith("One non-reentrant operation scope")
+        )
+        self.assertEqual(
+            [
+                "AcquireCommon",
+                "AcquireControl",
+                "AcquireAuthority",
+                "ReleaseAuthority",
+                "ReleaseControl",
+                "ReleaseCommon",
+            ],
+            entry["model_actions"],
+        )
+        self.assertEqual(
+            "bounded executable lock-domain and identity evidence; "
+            "implementation refinement pending",
+            entry["status"],
+        )
+        for reference in entry["evidence_required"]:
+            path, selector = reference.split("::", 1)
+            self.assertTrue((ROOT / path).exists(), path)
+            self.assertIn(selector.rsplit(".", 1)[-1], (ROOT / path).read_text(), selector)
+
+    def test_barrier_recheck_contract_binds_exact_identity_and_stale_fence_evidence(self) -> None:
+        contract = json.loads(CONTRACT.read_text(encoding="utf-8"))
+        entry = next(
+            value
+            for value in contract["correspondence"]
+            if value["implementation_obligation"].startswith(
+                "A writer rereads the durable control barrier"
+            )
+        )
+        self.assertEqual(
+            "bounded executable barrier identity and stale-fence evidence; "
+            "implementation refinement pending",
+            entry["status"],
+        )
+        self.assertGreaterEqual(len(entry["evidence_required"]), 10)
+        for reference in entry["evidence_required"]:
+            path, selector = reference.split("::", 1)
+            self.assertTrue((ROOT / path).exists(), path)
+            self.assertIn(selector.rsplit(".", 1)[-1], (ROOT / path).read_text(), selector)
+
+    def test_correspondence_evidence_has_no_descriptive_placeholders(self) -> None:
+        contract = json.loads(CONTRACT.read_text(encoding="utf-8"))
+        placeholders = {
+            "binding rename/swap tests",
+            "control-store identity tests",
+            "stale revision tests",
+            "lock-order tests",
+            "re-entry rejection",
+            "descriptor identity checks",
+        }
+        for entry in contract["correspondence"]:
+            self.assertTrue(placeholders.isdisjoint(entry["evidence_required"]))
 
     def test_recovery_evidence_is_mapped_without_authorization_overclaim(self) -> None:
         contract = json.loads(CONTRACT.read_text(encoding="utf-8"))

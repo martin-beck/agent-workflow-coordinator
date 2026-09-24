@@ -93,6 +93,14 @@ class ControlStoreError(RuntimeError):
     """Control-store data is unavailable or failed validation."""
 
 
+class ControlStoreAmbiguousError(ControlStoreError):
+    """A durable control-store boundary may have committed before failing."""
+
+
+class RecoveryRejectedError(ControlStoreError):
+    """Recovery admission was rejected without changing durable state."""
+
+
 class UpgradeAdapter(Protocol):
     """Minimal engine adapter surface wrapped by the control store."""
 
@@ -159,6 +167,10 @@ class AuthorityEffectIntent:
     identity_digest: str
     fencing_token: str
     session_revision: int
+    artifact_identity: str | None = None
+    manifest_identity: str | None = None
+    selector_identity: str | None = None
+    runtime_identity: str | None = None
 
     def __post_init__(self) -> None:
         if not all(
@@ -178,6 +190,47 @@ class AuthorityEffectIntent:
             raise ControlStoreError("authority effect intent backend or target is invalid")
         if type(self.session_revision) is not int or self.session_revision < 1:
             raise ControlStoreError("authority effect intent session revision is invalid")
+        admission_identities = (
+            self.artifact_identity,
+            self.manifest_identity,
+            self.selector_identity,
+            self.runtime_identity,
+        )
+        if any(
+            value is not None and (not isinstance(value, str) or not value)
+            for value in admission_identities
+        ):
+            raise ControlStoreError("authority effect admission identity is invalid")
+        if any(value is None for value in admission_identities) and any(
+            value is not None for value in admission_identities
+        ):
+            raise ControlStoreError("authority effect admission identity is incomplete")
+
+
+def _validate_authority_effect_receipt(
+    intent: AuthorityEffectIntent, receipt: object | None
+) -> None:
+    """Require a committed receipt to match every persisted admission field."""
+
+    def receipt_field(name: str) -> object:
+        if isinstance(receipt, Mapping):
+            return receipt.get(name)
+        return getattr(receipt, name, None)
+
+    expected = {
+        "backend": intent.backend,
+        "target": intent.target,
+        "operation_id": intent.operation_id,
+        "state_revision": intent.session_revision,
+        "artifact_identity": intent.artifact_identity,
+        "manifest_identity": intent.manifest_identity,
+        "selector_identity": intent.selector_identity,
+        "runtime_identity": intent.runtime_identity,
+        "fencing_token": intent.fencing_token,
+        "mutates_authority": True,
+    }
+    if any(receipt_field(name) != value for name, value in expected.items()):
+        raise ControlStoreError("authority effect receipt identity mismatch")
 
 
 class BarrierSessionContract:
@@ -838,15 +891,27 @@ class SQLiteRollbackControlStore:
                             parent, self.path.name, required=True
                         )
                         if current_sidecars != bound_sidecars:
-                            raise ControlStoreError("control store WAL sidecar identity changed")
+                            raise ControlStoreAmbiguousError(
+                                "control store WAL sidecar identity changed"
+                            )
                 finally:
                     connection.close()
-                reopened_parent, reopened = self._open_bound_file(
-                    self.path, self._parent_identity, self._control_identity
-                )
+                try:
+                    reopened_parent, reopened = self._open_bound_file(
+                        self.path, self._parent_identity, self._control_identity
+                    )
+                except ControlStoreError as error:
+                    raise ControlStoreAmbiguousError(
+                        "control store reopen identity became uncertain"
+                    ) from error
                 os.close(reopened)
                 os.close(reopened_parent)
-                self._recheck_authority()
+                try:
+                    self._recheck_authority()
+                except ControlStoreError as error:
+                    raise ControlStoreAmbiguousError(
+                        "control store authority identity became uncertain"
+                    ) from error
             finally:
                 os.close(descriptor)
                 os.close(parent)
@@ -1358,11 +1423,26 @@ class SQLiteBarrierSessionStore:
                     identity_digest TEXT NOT NULL,
                     fencing_token TEXT NOT NULL,
                     session_revision INTEGER NOT NULL,
+                    artifact_identity TEXT,
+                    manifest_identity TEXT,
+                    selector_identity TEXT,
+                    runtime_identity TEXT,
                     outcome TEXT NOT NULL,
                     cause_code TEXT,
                     FOREIGN KEY(project_id) REFERENCES barrier_session(project_id)
                 )"""
         )
+        pragma_result = connection.execute("PRAGMA table_info(authority_effect_intent)")
+        pragma_rows = pragma_result.fetchall() if hasattr(pragma_result, "fetchall") else []
+        columns = {str(row[1]) for row in pragma_rows}
+        for name in (
+            "artifact_identity",
+            "manifest_identity",
+            "selector_identity",
+            "runtime_identity",
+        ):
+            if name not in columns:
+                connection.execute(f"ALTER TABLE authority_effect_intent ADD COLUMN {name} TEXT")
 
     def _prepared_intents_locked(
         self, connection: sqlite3.Connection
@@ -1410,7 +1490,8 @@ class SQLiteBarrierSessionStore:
         self._control._require_operation_lock()
         rows = connection.execute(
             "SELECT intent_id,operation_id,backend,target,attempt_id,identity_digest,"
-            "fencing_token,session_revision FROM authority_effect_intent "
+            "fencing_token,session_revision,artifact_identity,manifest_identity,"
+            "selector_identity,runtime_identity FROM authority_effect_intent "
             "WHERE project_id=? AND outcome='prepared' ORDER BY rowid",
             (self.project_id,),
         ).fetchall()
@@ -1426,7 +1507,7 @@ class SQLiteBarrierSessionStore:
         outcome: str,
         cause_code: str | None = None,
     ) -> None:
-        if outcome not in {"committed", "ambiguous"}:
+        if outcome not in {"committed", "rejected", "ambiguous"}:
             raise ControlStoreError("authority effect intent outcome is invalid")
         cursor = connection.execute(
             "UPDATE authority_effect_intent SET outcome=?,cause_code=? "
@@ -2009,14 +2090,19 @@ class SQLiteBarrierSessionStore:
             try:
                 connection.execute("BEGIN IMMEDIATE")
                 self._mark_intent_locked(connection, intent_id, "committed")
-                connection.commit()
             except Exception as error:
                 raise ControlStoreError(
                     "barrier session outcome publication is ambiguous; recovery is required"
                 ) from error
+            try:
+                connection.commit()
+            except Exception as error:
+                raise ControlStoreError(
+                    "barrier session outcome publication is ambiguous; recovery is required"
+                ) from self._mark_recovery_ambiguous_after_commit_failure(connection, error)
             return supplied
 
-    def _recover_prepared_locked(
+    def _recover_prepared_locked(  # noqa: C901
         self,
         connection: sqlite3.Connection,
         prepared: list[tuple[str, str, int, int, str, str]],
@@ -2036,7 +2122,12 @@ class SQLiteBarrierSessionStore:
             connection.execute("BEGIN IMMEDIATE")
             for intent_id, *_ in prepared:
                 self._mark_intent_locked(connection, intent_id, "reconciled")
-            connection.commit()
+            try:
+                connection.commit()
+            except Exception as error:
+                raise ControlStoreError(
+                    "recovery commit outcome is ambiguous; durable state must be rechecked"
+                ) from self._mark_recovery_ambiguous_after_commit_failure(connection, error)
             return current
         if current.status != "ambiguous":
             connection.execute("BEGIN IMMEDIATE")
@@ -2055,12 +2146,68 @@ class SQLiteBarrierSessionStore:
                 current.forward_child,
                 current.rollback_child,
             )
-            connection.commit()
+            try:
+                connection.commit()
+            except Exception as error:
+                raise ControlStoreError(
+                    "recovery commit outcome is ambiguous; durable state must be rechecked"
+                ) from self._mark_recovery_ambiguous_after_commit_failure(connection, error)
         connection.execute("BEGIN IMMEDIATE")
         for intent_id, _attempt_id, _expected, _proposed, _digest, _status in prepared:
             self._mark_intent_locked(connection, intent_id, "ambiguous", "process-death")
-        connection.commit()
+        try:
+            connection.commit()
+        except Exception as error:
+            raise ControlStoreError(
+                "recovery commit outcome is ambiguous; durable state must be rechecked"
+            ) from self._mark_recovery_ambiguous_after_commit_failure(connection, error)
         return current
+
+    def _mark_recovery_ambiguous_after_commit_failure(
+        self,
+        connection: sqlite3.Connection,
+        commit_error: Exception,
+    ) -> Exception:
+        """Fence uncertain recovery progress into a durable ambiguous session."""
+        try:
+            connection.rollback()
+            connection.execute("BEGIN IMMEDIATE")
+            latest_row = connection.execute(self._SELECT, (self.project_id,)).fetchone()
+            if latest_row is None:
+                raise ControlStoreError("recovery ambiguity fencing found no session")
+            latest = self._row_state(latest_row)
+            if latest.status in {"held", "releasing"}:
+                cursor = connection.execute(
+                    "UPDATE barrier_session SET status='ambiguous',revision=? "
+                    "WHERE project_id=? AND revision=?",
+                    (latest.revision + 1, self.project_id, latest.revision),
+                )
+                if cursor.rowcount != 1:
+                    raise ControlStoreError("recovery ambiguity fencing lost its row fence")
+            for intent_id, *_ in self._prepared_intents_locked(connection):
+                cursor = connection.execute(
+                    "UPDATE barrier_session_intent SET outcome='ambiguous',"
+                    "cause_code='commit-uncertain' WHERE project_id=? AND intent_id=? "
+                    "AND outcome='prepared'",
+                    (self.project_id, intent_id),
+                )
+                if cursor.rowcount != 1:
+                    raise ControlStoreError("recovery session intent fence was lost")
+            for intent in self._prepared_effect_intents_locked(connection):
+                cursor = connection.execute(
+                    "UPDATE authority_effect_intent SET outcome='ambiguous',"
+                    "cause_code='commit-uncertain' WHERE project_id=? AND intent_id=? "
+                    "AND outcome='prepared'",
+                    (self.project_id, intent.intent_id),
+                )
+                if cursor.rowcount != 1:
+                    raise ControlStoreError("recovery effect intent fence was lost")
+            connection.commit()
+        except Exception as recovery_error:
+            raise ControlStoreError(
+                "recovery commit outcome is ambiguous and could not be durably fenced"
+            ) from recovery_error
+        return commit_error
 
     def prepare_authority_effect(  # noqa: C901
         self,
@@ -2071,6 +2218,10 @@ class SQLiteBarrierSessionStore:
         *,
         expected_fencing_token: str | None = None,
         expected_barrier_id: str | None = None,
+        expected_artifact_identity: str | None = None,
+        expected_manifest_identity: str | None = None,
+        expected_selector_identity: str | None = None,
+        expected_runtime_identity: str | None = None,
     ) -> AuthorityEffectIntent:
         """Durably fence one external authority effect before invoking it.
 
@@ -2090,6 +2241,21 @@ class SQLiteBarrierSessionStore:
         ):
             if value is not None and (not isinstance(value, str) or not value):
                 raise ControlStoreError(f"authority effect {label} is invalid")
+        admission_identities = (
+            expected_artifact_identity,
+            expected_manifest_identity,
+            expected_selector_identity,
+            expected_runtime_identity,
+        )
+        if any(
+            value is not None and (not isinstance(value, str) or not value)
+            for value in admission_identities
+        ):
+            raise ControlStoreError("authority effect admission identity is invalid")
+        if any(value is None for value in admission_identities) and any(
+            value is not None for value in admission_identities
+        ):
+            raise ControlStoreError("authority effect admission identity is incomplete")
         if self.operation_owned_by_current_thread:
             raise ControlStoreError("control store lock is non-reentrant")
         with self.operation_lock(), self._control._connection() as connection:
@@ -2132,13 +2298,18 @@ class SQLiteBarrierSessionStore:
                 current.identity.identity_digest,
                 current.identity.fencing_token,
                 current.revision,
+                expected_artifact_identity,
+                expected_manifest_identity,
+                expected_selector_identity,
+                expected_runtime_identity,
             )
             connection.execute("BEGIN IMMEDIATE")
             connection.execute(
                 "INSERT INTO authority_effect_intent "
                 "(project_id,intent_id,operation_id,backend,target,attempt_id,"
-                "identity_digest,fencing_token,session_revision,outcome,cause_code) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                "identity_digest,fencing_token,session_revision,artifact_identity,"
+                "manifest_identity,selector_identity,runtime_identity,outcome,cause_code) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     self.project_id,
                     intent.intent_id,
@@ -2149,6 +2320,10 @@ class SQLiteBarrierSessionStore:
                     intent.identity_digest,
                     intent.fencing_token,
                     intent.session_revision,
+                    intent.artifact_identity,
+                    intent.manifest_identity,
+                    intent.selector_identity,
+                    intent.runtime_identity,
                     "prepared",
                     None,
                 ),
@@ -2156,14 +2331,19 @@ class SQLiteBarrierSessionStore:
             connection.commit()
             return intent
 
-    def finish_authority_effect(
-        self, intent: AuthorityEffectIntent, outcome: str
+    def finish_authority_effect(  # noqa: C901
+        self,
+        intent: AuthorityEffectIntent,
+        outcome: str,
+        receipt: object | None = None,
     ) -> BarrierSessionState:
         """Publish an effect result, fencing ambiguity instead of retrying it."""
         if not isinstance(intent, AuthorityEffectIntent):
             raise ControlStoreError("authority effect intent is required")
-        if outcome not in {"committed", "ambiguous"}:
+        if outcome not in {"committed", "rejected", "ambiguous"}:
             raise ControlStoreError("authority effect outcome is invalid")
+        if outcome == "committed" and intent.artifact_identity is not None:
+            _validate_authority_effect_receipt(intent, receipt)
         if self.operation_owned_by_current_thread:
             raise ControlStoreError("control store lock is non-reentrant")
         with self.operation_lock(), self._control._connection() as connection:
@@ -2193,7 +2373,12 @@ class SQLiteBarrierSessionStore:
                     current.forward_child,
                     current.rollback_child,
                 )
-            connection.commit()
+            try:
+                connection.commit()
+            except Exception as error:
+                raise ControlStoreError(
+                    "authority effect outcome publication is ambiguous; recovery is required"
+                ) from self._mark_recovery_ambiguous_after_commit_failure(connection, error)
             return current
 
     def _recover_prepared_effects_locked(
@@ -2233,7 +2418,12 @@ class SQLiteBarrierSessionStore:
             self._mark_effect_intent_locked(
                 connection, intent.intent_id, "ambiguous", "process-death"
             )
-        connection.commit()
+        try:
+            connection.commit()
+        except Exception as error:
+            raise ControlStoreError(
+                "recovery commit outcome is ambiguous; durable state must be rechecked"
+            ) from self._mark_recovery_ambiguous_after_commit_failure(connection, error)
         return current
 
     def recover_unknown(self) -> BarrierSessionState | None:
@@ -2259,43 +2449,45 @@ class SQLiteBarrierSessionStore:
     ) -> BarrierSessionState:
         """Replace an ambiguous session only with a distinct newer fence."""
         if type(expected_revision) is not int or expected_revision < 1:
-            raise ControlStoreError("barrier session expected revision is invalid")
+            raise RecoveryRejectedError("barrier session expected revision is invalid")
         if (
             replacement.status != "held"
             or replacement.revision != 1
             or replacement.identity.project_id != self.project_id
         ):
-            raise ControlStoreError("ambiguous reconciliation requires a new held session")
+            raise RecoveryRejectedError("ambiguous reconciliation requires a new held session")
         if self.operation_owned_by_current_thread:
-            raise ControlStoreError("control store lock is non-reentrant")
+            raise RecoveryRejectedError("control store lock is non-reentrant")
         with self.operation_lock(), self._control._connection() as connection:
             self._ensure_table(connection)
             current = self._snapshot_locked()
             if current is None or current.status != "ambiguous":
-                raise ControlStoreError("only ambiguous sessions require reconciliation")
+                raise RecoveryRejectedError("only ambiguous sessions require reconciliation")
             if current.revision != expected_revision:
-                raise ControlStoreError("barrier session CAS conflict")
+                raise RecoveryRejectedError("barrier session CAS conflict")
             if (
                 replacement.identity.attempt_id == current.identity.attempt_id
                 or replacement.identity.state_revision <= current.identity.state_revision
                 or replacement.identity.durable_barrier_id == current.identity.durable_barrier_id
                 or replacement.identity.fencing_token == current.identity.fencing_token
             ):
-                raise ControlStoreError("ambiguous reconciliation requires a distinct newer fence")
+                raise RecoveryRejectedError(
+                    "ambiguous reconciliation requires a distinct newer fence"
+                )
             if self._prepared_intents_locked(connection) or self._prepared_effect_intents_locked(
                 connection
             ):
-                raise ControlStoreError("ambiguous reconciliation has unresolved intent")
+                raise RecoveryRejectedError("ambiguous reconciliation has unresolved intent")
             if self._authority_revision_reader is None:
-                raise ControlStoreError("fresh authority rereader is required")
+                raise RecoveryRejectedError("fresh authority rereader is required")
             try:
                 fresh_authority_revision = self._authority_revision_reader()
             except Exception as error:
-                raise ControlStoreError("fresh authority reread failed") from error
+                raise RecoveryRejectedError("fresh authority reread failed") from error
             if not isinstance(fresh_authority_revision, str) or not fresh_authority_revision:
-                raise ControlStoreError("fresh authority revision is invalid")
+                raise RecoveryRejectedError("fresh authority revision is invalid")
             if fresh_authority_revision != replacement.identity.authority_revision_at_acquire:
-                raise ControlStoreError("replacement authority revision changed")
+                raise RecoveryRejectedError("replacement authority revision changed")
             intent_id = uuid.uuid4().hex
             connection.execute("BEGIN IMMEDIATE")
             connection.execute(
@@ -2349,7 +2541,15 @@ class SQLiteBarrierSessionStore:
                 "forward_child,rollback_child) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 values,
             )
-            connection.commit()
+            try:
+                connection.commit()
+            except Exception as error:
+                raise ControlStoreError(
+                    "barrier session reconciliation commit outcome is ambiguous; "
+                    "recovery is required"
+                ) from self._mark_ambiguous_after_commit_failure(
+                    connection, replacement, expected_revision, error
+                )
             try:
                 connection.execute("BEGIN IMMEDIATE")
                 self._mark_intent_locked(connection, intent_id, "reconciled")

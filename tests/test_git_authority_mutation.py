@@ -13,11 +13,13 @@ import unittest
 from pathlib import Path
 from typing import Any, cast
 
+from tools.authority_mutation import AuthorityMutationRejectedError, DurableBoundAuthorityMutation
 from tools.authority_neutral_commit import CommitAdmissionBundle
 from tools.git_authority_mutation import (
     GitCommitCapability,
     GitMutationAmbiguousError,
     GitMutationError,
+    GitMutationRejectedError,
 )
 
 
@@ -59,9 +61,11 @@ class GitCommitCapabilityTests(unittest.TestCase):
         )
 
     def _capability(self) -> GitCommitCapability:
+        admission = self._admission()
         return GitCommitCapability(
             self.root,
-            admission=self._admission(),
+            admission=admission,
+            admission_reread=lambda: admission.__dict__,
             expected_branch="main",
             expected_head=_git(self.root, "rev-parse", "HEAD"),
         )
@@ -70,6 +74,32 @@ class GitCommitCapabilityTests(unittest.TestCase):
         (self.root / "state").write_text("new\n", encoding="utf-8")
         _git(self.root, "add", "state")
         result = self._capability().commit("op-1 authority commit")
+        self.assertEqual(
+            (
+                "git",
+                "new",
+                "op-1:commit",
+                1,
+                "barrier-1",
+                "artifact-1",
+                "manifest-1",
+                "selector-1",
+                "runtime-1",
+                "fence-1",
+            ),
+            (
+                result.backend,
+                result.target,
+                result.operation_id,
+                result.state_revision,
+                result.barrier_id,
+                result.artifact_identity,
+                result.manifest_identity,
+                result.selector_identity,
+                result.runtime_identity,
+                result.fencing_token,
+            ),
+        )
         self.assertEqual("main", result.branch)
         self.assertNotEqual(result.before_head, result.after_head)
         self.assertTrue(result.mutates_authority)
@@ -101,6 +131,7 @@ class GitCommitCapabilityTests(unittest.TestCase):
         result = GitCommitCapability(
             self.root,
             admission=reopened_admission,
+            admission_reread=lambda: reopened_admission.__dict__,
             expected_branch="main",
             expected_head=_git(self.root, "rev-parse", "HEAD"),
         ).commit("op-2 authority commit")
@@ -120,6 +151,7 @@ class GitCommitCapabilityTests(unittest.TestCase):
         stale = GitCommitCapability(
             self.root,
             admission=self._admission(),
+            admission_reread=lambda: self._admission().__dict__,
             expected_branch="main",
             expected_head="0" * 40,
         )
@@ -142,10 +174,267 @@ class GitCommitCapabilityTests(unittest.TestCase):
             GitCommitCapability(
                 self.root,
                 admission=self._admission(),
+                admission_reread=lambda: self._admission().__dict__,
                 expected_branch="main",
                 expected_head=self._capability()._expected_head,
                 runner=timeout_runner,
             ).commit("op-1 authority commit")
+
+    def test_rejects_identity_runner_oserror_before_effect(self) -> None:
+        (self.root / "state").write_text("new\n", encoding="utf-8")
+        _git(self.root, "add", "state")
+
+        def failing_runner(*_args: object, **_kwargs: object) -> subprocess.CompletedProcess[str]:
+            raise OSError("injected identity read failure")
+
+        with self.assertRaisesRegex(GitMutationRejectedError, "identity reread was rejected"):
+            GitCommitCapability(
+                self.root,
+                admission=self._admission(),
+                admission_reread=lambda: self._admission().__dict__,
+                expected_branch="main",
+                expected_head=self._capability()._expected_head,
+                runner=failing_runner,
+            ).commit("op-1 authority commit")
+        self.assertEqual("M  state", _git(self.root, "status", "--porcelain=v1"))
+
+    def test_rejects_symlinked_repository_path(self) -> None:
+        alias = self.root / "repository-alias"
+        alias.symlink_to(self.root, target_is_directory=True)
+        with self.assertRaisesRegex(GitMutationError, "not a regular directory"):
+            GitCommitCapability(
+                alias,
+                admission=self._admission(),
+                admission_reread=lambda: self._admission().__dict__,
+                expected_branch="main",
+                expected_head=_git(self.root, "rev-parse", "HEAD"),
+            )
+
+    def test_rejects_repository_replacement_before_effect(self) -> None:
+        (self.root / "state").write_text("new\n", encoding="utf-8")
+        _git(self.root, "add", "state")
+        capability = self._capability()
+        replacement = self.root.parent / f"{self.root.name}-replaced"
+        self.root.rename(replacement)
+        self.root.mkdir()
+
+        with self.assertRaisesRegex(GitMutationRejectedError, "repository identity changed"):
+            capability.commit("op-1 authority commit")
+
+    def test_rejects_repository_parent_replacement_before_effect(self) -> None:
+        (self.root / "state").write_text("new\n", encoding="utf-8")
+        _git(self.root, "add", "state")
+        capability = self._capability()
+        original_parent = self.root.parent
+        relocated_parent = original_parent / f"{self.root.name}-parent-replaced"
+        self.root.rename(relocated_parent)
+        self.root.mkdir()
+
+        with self.assertRaisesRegex(GitMutationRejectedError, "repository identity changed"):
+            capability.commit("op-1 authority commit")
+
+    def test_rejects_repository_ancestor_replacement_before_effect(self) -> None:
+        (self.root / "state").write_text("new\n", encoding="utf-8")
+        _git(self.root, "add", "state")
+        outer = self.root.parent / f"{self.root.name}-outer"
+        inner = outer / "inner"
+        inner.mkdir(parents=True)
+        relocated = inner / "repository"
+        self.root.rename(relocated)
+        capability = GitCommitCapability(
+            relocated,
+            admission=self._admission(),
+            admission_reread=lambda: self._admission().__dict__,
+            expected_branch="main",
+            expected_head=_git(relocated, "rev-parse", "HEAD"),
+        )
+        replacement = outer.parent / f"{outer.name}-replaced"
+        outer.rename(replacement)
+        outer.mkdir()
+
+        with self.assertRaisesRegex(GitMutationRejectedError, "repository identity changed"):
+            capability.commit("op-1 authority commit")
+
+    def test_rejects_symlinked_repository_ancestor_before_effect(self) -> None:
+        (self.root / "state").write_text("new\n", encoding="utf-8")
+        _git(self.root, "add", "state")
+        outer = self.root.parent / f"{self.root.name}-symlink-outer"
+        inner = outer / "inner"
+        inner.mkdir(parents=True)
+        relocated = inner / "repository"
+        self.root.rename(relocated)
+        capability = GitCommitCapability(
+            relocated,
+            admission=self._admission(),
+            admission_reread=lambda: self._admission().__dict__,
+            expected_branch="main",
+            expected_head=_git(relocated, "rev-parse", "HEAD"),
+        )
+        replacement = outer.parent / f"{outer.name}-target"
+        outer.rename(replacement)
+        outer.symlink_to(replacement, target_is_directory=True)
+
+        with self.assertRaisesRegex(GitMutationRejectedError, "repository identity changed"):
+            capability.commit("op-1 authority commit")
+
+    def test_classifies_commit_runner_oserror_as_ambiguous(self) -> None:
+        (self.root / "state").write_text("new\n", encoding="utf-8")
+        _git(self.root, "add", "state")
+
+        def failing_runner(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
+            command = cast(list[str], args[0])
+            if command[3:4] == ["commit"]:
+                raise OSError("injected commit failure")
+            return cast(
+                subprocess.CompletedProcess[str],
+                subprocess.run(command, **cast(Any, kwargs)),
+            )
+
+        with self.assertRaisesRegex(GitMutationAmbiguousError, "commit outcome is ambiguous"):
+            GitCommitCapability(
+                self.root,
+                admission=self._admission(),
+                admission_reread=lambda: self._admission().__dict__,
+                expected_branch="main",
+                expected_head=self._capability()._expected_head,
+                runner=failing_runner,
+            ).commit("op-1 authority commit")
+        self.assertEqual("M  state", _git(self.root, "status", "--porcelain=v1"))
+
+    def test_classifies_termination_commit_runner_as_ambiguous(self) -> None:
+        (self.root / "state").write_text("new\n", encoding="utf-8")
+        _git(self.root, "add", "state")
+
+        def terminating_runner(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
+            command = cast(list[str], args[0])
+            if command[3:4] == ["commit"]:
+                raise KeyboardInterrupt("injected termination")
+            return cast(
+                subprocess.CompletedProcess[str],
+                subprocess.run(command, **cast(Any, kwargs)),
+            )
+
+        with self.assertRaisesRegex(GitMutationAmbiguousError, "commit outcome is ambiguous"):
+            GitCommitCapability(
+                self.root,
+                admission=self._admission(),
+                admission_reread=lambda: self._admission().__dict__,
+                expected_branch="main",
+                expected_head=self._capability()._expected_head,
+                runner=terminating_runner,
+            ).commit("op-1 authority commit")
+        self.assertEqual("M  state", _git(self.root, "status", "--porcelain=v1"))
+
+    def test_classifies_post_commit_verification_termination_as_ambiguous(self) -> None:
+        (self.root / "state").write_text("new\n", encoding="utf-8")
+        _git(self.root, "add", "state")
+        committed = False
+
+        def terminating_runner(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
+            nonlocal committed
+            command = cast(list[str], args[0])
+            if committed and command[3:5] == ["rev-parse", "--verify"]:
+                raise KeyboardInterrupt("injected termination")
+            result = subprocess.run(command, **cast(Any, kwargs))
+            if command[3:4] == ["commit"] and result.returncode == 0:
+                committed = True
+            return cast(subprocess.CompletedProcess[str], result)
+
+        with self.assertRaisesRegex(GitMutationAmbiguousError, "postcondition is ambiguous"):
+            GitCommitCapability(
+                self.root,
+                admission=self._admission(),
+                admission_reread=lambda: self._admission().__dict__,
+                expected_branch="main",
+                expected_head=self._capability()._expected_head,
+                runner=terminating_runner,
+            ).commit("op-1 authority commit")
+        self.assertEqual("", _git(self.root, "status", "--porcelain=v1"))
+
+    def test_classifies_nonzero_commit_after_ref_update_as_ambiguous(self) -> None:
+        (self.root / "state").write_text("new\n", encoding="utf-8")
+        _git(self.root, "add", "state")
+
+        def commit_then_fail(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
+            command = cast(list[str], args[0])
+            result = subprocess.run(command, **cast(Any, kwargs))
+            if command[3:4] == ["commit"] and result.returncode == 0:
+                return subprocess.CompletedProcess(
+                    command,
+                    1,
+                    stdout=result.stdout,
+                    stderr="commit result delivery failed",
+                )
+            return result
+
+        capability = GitCommitCapability(
+            self.root,
+            admission=self._admission(),
+            admission_reread=lambda: self._admission().__dict__,
+            expected_branch="main",
+            expected_head=_git(self.root, "rev-parse", "HEAD"),
+            runner=commit_then_fail,
+        )
+        with self.assertRaisesRegex(GitMutationAmbiguousError, "outcome is ambiguous"):
+            capability.commit("op-1 authority commit")
+        self.assertEqual("", _git(self.root, "status", "--porcelain=v1"))
+        self.assertEqual("new\n", (self.root / "state").read_text(encoding="utf-8"))
+
+    def test_classifies_post_commit_identity_reread_failure_as_ambiguous(self) -> None:
+        (self.root / "state").write_text("new\n", encoding="utf-8")
+        _git(self.root, "add", "state")
+        committed = False
+
+        def fail_after_commit(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
+            nonlocal committed
+            command = cast(list[str], args[0])
+            if committed and command[3:5] == ["rev-parse", "--verify"]:
+                return subprocess.CompletedProcess(command, 1, stdout="", stderr="reread failed")
+            result = subprocess.run(command, **cast(Any, kwargs))
+            if command[3:4] == ["commit"] and result.returncode == 0:
+                committed = True
+            return result
+
+        capability = GitCommitCapability(
+            self.root,
+            admission=self._admission(),
+            admission_reread=lambda: self._admission().__dict__,
+            expected_branch="main",
+            expected_head=_git(self.root, "rev-parse", "HEAD"),
+            runner=fail_after_commit,
+        )
+        with self.assertRaisesRegex(GitMutationAmbiguousError, "postcondition"):
+            capability.commit("op-1 authority commit")
+        self.assertEqual("", _git(self.root, "status", "--porcelain=v1"))
+
+    def test_classifies_repository_replacement_after_effect_as_ambiguous(self) -> None:
+        (self.root / "state").write_text("new\n", encoding="utf-8")
+        _git(self.root, "add", "state")
+
+        def replace_after_commit(
+            *args: object, **kwargs: object
+        ) -> subprocess.CompletedProcess[str]:
+            command = cast(list[str], args[0])
+            result = cast(
+                subprocess.CompletedProcess[str],
+                subprocess.run(command, **cast(Any, kwargs)),
+            )
+            if command[3:4] == ["commit"] and result.returncode == 0:
+                replacement = self.root.parent / f"{self.root.name}-post-effect-replaced"
+                self.root.rename(replacement)
+                self.root.mkdir()
+            return result
+
+        capability = GitCommitCapability(
+            self.root,
+            admission=self._admission(),
+            admission_reread=lambda: self._admission().__dict__,
+            expected_branch="main",
+            expected_head=_git(self.root, "rev-parse", "HEAD"),
+            runner=replace_after_commit,
+        )
+        with self.assertRaisesRegex(GitMutationAmbiguousError, "postcondition"):
+            capability.commit("op-1 authority commit")
 
     def test_rejects_a_concurrent_commit_after_the_effect(self) -> None:
         (self.root / "state").write_text("new\n", encoding="utf-8")
@@ -167,10 +456,111 @@ class GitCommitCapabilityTests(unittest.TestCase):
             GitCommitCapability(
                 self.root,
                 admission=self._admission(),
+                admission_reread=lambda: self._admission().__dict__,
                 expected_branch="main",
                 expected_head=self._capability()._expected_head,
                 runner=racing_runner,
             ).commit("op-1 authority commit")
+
+    def test_rejects_stale_admission_reread_before_effect(self) -> None:
+        (self.root / "state").write_text("new\n", encoding="utf-8")
+        _git(self.root, "add", "state")
+        admission = self._admission()
+        stale = dict(admission.__dict__)
+        stale["fencing_token"] = "foreign-fence"  # noqa: S105
+        before = _git(self.root, "rev-parse", "HEAD")
+        capability = GitCommitCapability(
+            self.root,
+            admission=admission,
+            admission_reread=lambda: stale,
+            expected_branch="main",
+            expected_head=_git(self.root, "rev-parse", "HEAD"),
+        )
+        with self.assertRaisesRegex(GitMutationRejectedError, "admission identity changed"):
+            capability.commit("op-1 authority commit")
+        self.assertEqual(before, _git(self.root, "rev-parse", "HEAD"))
+        self.assertEqual("M  state", _git(self.root, "status", "--porcelain=v1"))
+
+    def test_integrated_pre_effect_rejection_is_journaled_without_git_commit(self) -> None:
+        (self.root / "state").write_text("new\n", encoding="utf-8")
+        _git(self.root, "add", "state")
+        admission = self._admission()
+        stale = dict(admission.__dict__)
+        stale["fencing_token"] = "foreign-fence"  # noqa: S105
+        capability = GitCommitCapability(
+            self.root,
+            admission=admission,
+            admission_reread=lambda: stale,
+            expected_branch="main",
+            expected_head=_git(self.root, "rev-parse", "HEAD"),
+        )
+        journal: list[tuple[str, object | None]] = []
+
+        class Journal:
+            def prepare_authority_effect(self, *_args: object, **_kwargs: object) -> str:
+                journal.append(("prepared", None))
+                return "intent-git-rejected"
+
+            def finish_authority_effect(
+                self, _intent: object, outcome: str, receipt: object | None = None
+            ) -> None:
+                journal.append((outcome, receipt))
+
+        with self.assertRaisesRegex(AuthorityMutationRejectedError, "admission identity changed"):
+            DurableBoundAuthorityMutation(admission, Journal(), session_revision=1).execute(
+                lambda: capability.commit("op-1 authority commit")
+            )
+        self.assertEqual([("prepared", None), ("rejected", None)], journal)
+        self.assertEqual("M  state", _git(self.root, "status", "--porcelain=v1"))
+        self.assertEqual(admission.state_revision, 1)
+        self.assertEqual(admission.fencing_token, "fence-1")
+
+    def test_rejects_every_admission_identity_drift_before_effect(self) -> None:
+        (self.root / "state").write_text("new\n", encoding="utf-8")
+        _git(self.root, "add", "state")
+        admission = self._admission()
+        before = _git(self.root, "rev-parse", "HEAD")
+        changes: dict[str, object] = {
+            "backend": "sqlite",
+            "target": "rollback",
+            "operation_id": "foreign-operation",
+            "fencing_token": "foreign-fence",
+            "state_revision": 2,
+            "barrier_id": "foreign-barrier",
+            "artifact_identity": "foreign-artifact",
+            "manifest_identity": "foreign-manifest",
+            "selector_identity": "foreign-selector",
+            "runtime_identity": "foreign-runtime",
+        }
+
+        for field, value in changes.items():
+            stale = dict(admission.__dict__)
+            stale[field] = value
+            called = False
+
+            def effect() -> object:
+                nonlocal called
+                called = True
+                return object()
+
+            def read_stale(value: dict[str, object] = stale) -> dict[str, object]:
+                return value
+
+            capability = GitCommitCapability(
+                self.root,
+                admission=admission,
+                admission_reread=read_stale,
+                expected_branch="main",
+                expected_head=before,
+            )
+            with (
+                self.subTest(field=field),
+                self.assertRaisesRegex(GitMutationRejectedError, "admission identity changed"),
+            ):
+                capability.commit("op-1 authority commit")
+            self.assertFalse(called)
+            self.assertEqual(before, _git(self.root, "rev-parse", "HEAD"))
+            self.assertEqual("M  state", _git(self.root, "status", "--porcelain=v1"))
 
 
 if __name__ == "__main__":

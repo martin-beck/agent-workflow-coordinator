@@ -24,6 +24,7 @@ import tools.mutation_fence as mutation_fence
 from tools.admission_lease import AdmissionLease, validate_recheck
 from tools.authority_mutation import DurableBoundAuthorityMutation
 from tools.authority_neutral_commit import CommitAdmissionBundle
+from tools.git_authority_adapter import GitAuthorityAdapter
 from tools.git_authority_mutation import GitCommitCapability
 from tools.handoffctl import locked
 from tools.lock_domain_scope import LockDomainScope
@@ -40,7 +41,11 @@ from tools.rollback_control_store import (
     SQLiteBarrierSessionStore,
     SQLiteRollbackControlStore,
 )
-from tools.sqlite_authority_mutation import SQLiteCommitCapability
+from tools.sqlite_authority_adapter import SQLiteAuthorityAdapter
+from tools.sqlite_authority_mutation import (
+    SQLiteCommitCapability,
+    SQLiteMutationRejectedError,
+)
 from tools.sqlite_storage import SQLiteBackend, bind_released_sqlite_backend, create_database
 from tools.upgrade_identity import (
     BarrierChildIdentity,
@@ -332,26 +337,16 @@ def _authority_effect_waiting_for_sigkill(root_text: str, ready: Any) -> None:
         selector_identity="selector-1",
         runtime_identity="runtime-1",
     )
-    capability = DurableBoundAuthorityMutation(admission, session, session_revision=1)
-
     keepalive = sqlite3.connect(root / "authority.sqlite")
     keepalive.execute("PRAGMA wal_autocheckpoint=0")
     keepalive.execute("PRAGMA user_version=1")
     keepalive.commit()
 
-    def identity(path: Path) -> tuple[int, int] | None:
-        try:
-            status = path.lstat()
-        except FileNotFoundError:
-            return None
-        return status.st_dev, status.st_ino
-
-    sqlite_capability = SQLiteCommitCapability(
-        root / "authority.sqlite",
-        admission=admission,
-        expected_db_identity=identity(root / "authority.sqlite"),  # type: ignore[arg-type]
-        expected_wal_identity=identity(root / "authority.sqlite-wal"),
-        expected_shm_identity=identity(root / "authority.sqlite-shm"),
+    capability = SQLiteAuthorityAdapter(root / "authority.sqlite").bind_durable_commit_capability(
+        admission,
+        session,
+        session_revision=1,
+        admission_reread=lambda: admission.__dict__,
     )
 
     def effect(connection: sqlite3.Connection) -> None:
@@ -364,7 +359,7 @@ def _authority_effect_waiting_for_sigkill(root_text: str, ready: Any) -> None:
         ready.set()
         os._exit(17)
 
-    capability.execute(lambda: sqlite_capability.commit(effect))
+    capability.execute(effect)
 
 
 def _git_authority_effect_waiting_for_sigkill(root_text: str, ready: Any) -> None:
@@ -388,20 +383,24 @@ def _git_authority_effect_waiting_for_sigkill(root_text: str, ready: Any) -> Non
     git_root = root / "git-authority"
     (git_root / "state").write_text("effect committed before worker death\n", encoding="utf-8")
     _git(git_root, "add", "state")
-    git_capability = GitCommitCapability(
-        git_root,
-        admission=admission,
+    capability = GitAuthorityAdapter(git_root).bind_durable_commit_capability(
+        admission,
+        session,
+        session_revision=1,
+        admission_reread=lambda: admission.__dict__,
         expected_branch="main",
         expected_head=_git(git_root, "rev-parse", "HEAD"),
     )
-    capability = DurableBoundAuthorityMutation(admission, session, session_revision=1)
 
-    def effect() -> NoReturn:
-        git_capability.commit("op-git-1 authority commit")
+    def kill_before_finish(
+        _intent: object, _outcome: str, _receipt: object | None = None
+    ) -> NoReturn:
         ready.set()
         os._exit(17)
 
-    capability.execute(effect)
+    session_any: Any = session
+    session_any.finish_authority_effect = kill_before_finish
+    capability.execute("op-git-1 authority commit")
 
 
 def _session_recovery_waiting_for_sigkill(root_text: str, ready: Any) -> None:
@@ -1325,6 +1324,29 @@ class SQLiteMutationBarrierProcessTests(unittest.TestCase):
                     (PROJECT,),
                 ).fetchall(),
             )
+            self.assertEqual(
+                (
+                    "op-1:commit",
+                    "sqlite",
+                    "new",
+                    "attempt-1",
+                    _identity().identity_digest,
+                    "fence-1",
+                    1,
+                    "artifact-1",
+                    "manifest-1",
+                    "selector-1",
+                    "runtime-1",
+                    "prepared",
+                ),
+                connection.execute(
+                    "SELECT operation_id,backend,target,attempt_id,identity_digest,"
+                    "fencing_token,session_revision,artifact_identity,manifest_identity,"
+                    "selector_identity,runtime_identity,outcome "
+                    "FROM authority_effect_intent WHERE project_id=?",
+                    (PROJECT,),
+                ).fetchone(),
+            )
         self.assertEqual(
             (
                 "rejected",
@@ -1346,6 +1368,29 @@ class SQLiteMutationBarrierProcessTests(unittest.TestCase):
                     "SELECT outcome,cause_code FROM authority_effect_intent WHERE project_id=?",
                     (PROJECT,),
                 ).fetchall(),
+            )
+            self.assertEqual(
+                (
+                    "op-1:commit",
+                    "sqlite",
+                    "new",
+                    "attempt-1",
+                    _identity().identity_digest,
+                    "fence-1",
+                    1,
+                    "artifact-1",
+                    "manifest-1",
+                    "selector-1",
+                    "runtime-1",
+                    "ambiguous",
+                ),
+                connection.execute(
+                    "SELECT operation_id,backend,target,attempt_id,identity_digest,"
+                    "fencing_token,session_revision,artifact_identity,manifest_identity,"
+                    "selector_identity,runtime_identity,outcome "
+                    "FROM authority_effect_intent WHERE project_id=?",
+                    (PROJECT,),
+                ).fetchone(),
             )
         with self.assertRaisesRegex(ControlStoreError, "distinct newer fence"):
             reopened.reconcile_ambiguous(ambiguous.revision, held)
@@ -1421,6 +1466,7 @@ class SQLiteMutationBarrierProcessTests(unittest.TestCase):
         sqlite_capability = SQLiteCommitCapability(
             self.authority,
             admission=new_admission,
+            admission_reread=lambda: new_admission.__dict__,
             expected_db_identity=identity(self.authority),  # type: ignore[arg-type]
             expected_wal_identity=identity(self.authority.with_name("authority.sqlite-wal")),
             expected_shm_identity=identity(self.authority.with_name("authority.sqlite-shm")),
@@ -1439,6 +1485,37 @@ class SQLiteMutationBarrierProcessTests(unittest.TestCase):
             self.assertEqual(
                 "newer fence committed after recovery",
                 connection.execute("SELECT body FROM tasks WHERE id='AR-0001'").fetchone()[0],
+            )
+        recovered_identity = _identity(
+            attempt="attempt-effect-recovered",
+            state_revision=2,
+            barrier="barrier-effect-recovered",
+            fence="fence-effect-recovered",
+            owner="owner-effect-recovered",
+        )
+        with sqlite3.connect(self.control.control_store_path) as connection:
+            self.assertEqual(
+                (
+                    "op-2:commit",
+                    "sqlite",
+                    "new",
+                    recovered_identity.attempt_id,
+                    recovered_identity.identity_digest,
+                    recovered_identity.fencing_token,
+                    1,
+                    "artifact-1",
+                    "manifest-1",
+                    "selector-1",
+                    "runtime-1",
+                    "committed",
+                ),
+                connection.execute(
+                    "SELECT operation_id,backend,target,attempt_id,identity_digest,"
+                    "fencing_token,session_revision,artifact_identity,manifest_identity,"
+                    "selector_identity,runtime_identity,outcome "
+                    "FROM authority_effect_intent WHERE project_id=? AND operation_id=?",
+                    (PROJECT, "op-2:commit"),
+                ).fetchone(),
             )
 
     def test_sigkill_after_git_authority_effect_requires_recovery_and_new_fence(self) -> None:
@@ -1524,6 +1601,7 @@ class SQLiteMutationBarrierProcessTests(unittest.TestCase):
         git_capability = GitCommitCapability(
             self.git_authority,
             admission=new_admission,
+            admission_reread=lambda: new_admission.__dict__,
             expected_branch="main",
             expected_head=_git(self.git_authority, "rev-parse", "HEAD"),
         )
@@ -1540,6 +1618,37 @@ class SQLiteMutationBarrierProcessTests(unittest.TestCase):
                 (PROJECT,),
             ).fetchall()
         self.assertEqual([("ambiguous",), ("committed",)], effect_outcomes)
+        recovered_identity = _identity(
+            attempt="attempt-git-effect-recovered",
+            state_revision=2,
+            barrier="barrier-git-effect-recovered",
+            fence="fence-git-effect-recovered",
+            owner="owner-git-effect-recovered",
+        )
+        with sqlite3.connect(self.control.control_store_path) as connection:
+            self.assertEqual(
+                (
+                    "op-git-2:commit",
+                    "git",
+                    "new",
+                    recovered_identity.attempt_id,
+                    recovered_identity.identity_digest,
+                    recovered_identity.fencing_token,
+                    1,
+                    "artifact-1",
+                    "manifest-1",
+                    "selector-1",
+                    "runtime-1",
+                    "committed",
+                ),
+                connection.execute(
+                    "SELECT operation_id,backend,target,attempt_id,identity_digest,"
+                    "fencing_token,session_revision,artifact_identity,manifest_identity,"
+                    "selector_identity,runtime_identity,outcome "
+                    "FROM authority_effect_intent WHERE project_id=? AND operation_id=?",
+                    (PROJECT, "op-git-2:commit"),
+                ).fetchone(),
+            )
 
     def test_authority_effect_journal_validates_identity_and_single_use(self) -> None:
         with self.assertRaisesRegex(ControlStoreError, "session revision is invalid"):
@@ -1555,6 +1664,47 @@ class SQLiteMutationBarrierProcessTests(unittest.TestCase):
         ):
             with self.assertRaisesRegex(ControlStoreError, "identity|backend|revision"):
                 AuthorityEffectIntent(*values)
+        with self.assertRaisesRegex(ControlStoreError, "admission identity is invalid"):
+            AuthorityEffectIntent(
+                "intent",
+                "op",
+                "sqlite",
+                "new",
+                "attempt",
+                "d" * 64,
+                "fence",
+                1,
+                "",
+                "manifest",
+                "selector",
+                "runtime",
+            )
+        with self.assertRaisesRegex(ControlStoreError, "admission identity is incomplete"):
+            AuthorityEffectIntent(
+                "intent",
+                "op",
+                "sqlite",
+                "new",
+                "attempt",
+                "d" * 64,
+                "fence",
+                1,
+                "artifact",
+            )
+        with self.assertRaisesRegex(ControlStoreError, "admission identity is invalid"):
+            self.session.prepare_authority_effect(
+                1,
+                "op-invalid-admission",
+                "sqlite",
+                expected_artifact_identity="",
+            )
+        with self.assertRaisesRegex(ControlStoreError, "admission identity is incomplete"):
+            self.session.prepare_authority_effect(
+                1,
+                "op-incomplete-admission",
+                "sqlite",
+                expected_artifact_identity="artifact",
+            )
 
         held = self._create_held()
         with self.assertRaisesRegex(ControlStoreError, "fencing token conflict"):
@@ -1571,12 +1721,88 @@ class SQLiteMutationBarrierProcessTests(unittest.TestCase):
                 "sqlite",
                 expected_barrier_id="foreign-barrier",
             )
-        intent = self.session.prepare_authority_effect(held.revision, "op-1", "sqlite")
+        intent = self.session.prepare_authority_effect(
+            held.revision,
+            "op-1",
+            "sqlite",
+            expected_fencing_token=held.identity.fencing_token,
+            expected_barrier_id=held.identity.durable_barrier_id,
+            expected_artifact_identity="artifact-1",
+            expected_manifest_identity="manifest-1",
+            expected_selector_identity="selector-1",
+            expected_runtime_identity="runtime-1",
+        )
+        with sqlite3.connect(self.control.control_store_path) as connection:
+            persisted = connection.execute(
+                "SELECT operation_id,backend,target,attempt_id,identity_digest,"
+                "fencing_token,session_revision,artifact_identity,manifest_identity,"
+                "selector_identity,runtime_identity,outcome "
+                "FROM authority_effect_intent WHERE project_id=? AND intent_id=?",
+                (PROJECT, intent.intent_id),
+            ).fetchone()
+        self.assertEqual(
+            (
+                intent.operation_id,
+                intent.backend,
+                intent.target,
+                held.identity.attempt_id,
+                held.identity.identity_digest,
+                held.identity.fencing_token,
+                held.revision,
+                "artifact-1",
+                "manifest-1",
+                "selector-1",
+                "runtime-1",
+                "prepared",
+            ),
+            persisted,
+        )
         with self.assertRaisesRegex(ControlStoreError, "outcome is invalid"):
             self.session.finish_authority_effect(intent, "unknown")
         with self.assertRaisesRegex(ControlStoreError, "intent is required"):
             self.session.finish_authority_effect(object(), "committed")  # type: ignore[arg-type]
-        completed = self.session.finish_authority_effect(intent, "committed")
+        with self.assertRaisesRegex(ControlStoreError, "receipt identity mismatch"):
+            self.session.finish_authority_effect(intent, "committed")
+        with sqlite3.connect(self.control.control_store_path) as connection:
+            self.assertEqual(
+                ("prepared",),
+                connection.execute(
+                    "SELECT outcome FROM authority_effect_intent "
+                    "WHERE project_id=? AND intent_id=?",
+                    (PROJECT, intent.intent_id),
+                ).fetchone(),
+            )
+        with self.assertRaisesRegex(ControlStoreError, "receipt identity mismatch"):
+            self.session.finish_authority_effect(
+                intent,
+                "committed",
+                {"backend": "git"},
+            )
+        with sqlite3.connect(self.control.control_store_path) as connection:
+            self.assertEqual(
+                ("prepared",),
+                connection.execute(
+                    "SELECT outcome FROM authority_effect_intent "
+                    "WHERE project_id=? AND intent_id=?",
+                    (PROJECT, intent.intent_id),
+                ).fetchone(),
+            )
+        completed = self.session.finish_authority_effect(
+            intent,
+            "committed",
+            {
+                "backend": "sqlite",
+                "target": "new",
+                "operation_id": "op-1",
+                "state_revision": held.revision,
+                "artifact_identity": "artifact-1",
+                "manifest_identity": "manifest-1",
+                "selector_identity": "selector-1",
+                "runtime_identity": "runtime-1",
+                "fencing_token": held.identity.fencing_token,
+                "mutates_authority": True,
+            },
+        )
         self.assertEqual(held, completed)
         with self.assertRaisesRegex(ControlStoreError, "already recorded"):
             self.session.prepare_authority_effect(held.revision, "op-1", "sqlite")
@@ -1584,6 +1810,68 @@ class SQLiteMutationBarrierProcessTests(unittest.TestCase):
         ambiguous_intent = self.session.prepare_authority_effect(held.revision, "op-2", "sqlite")
         ambiguous = self.session.finish_authority_effect(ambiguous_intent, "ambiguous")
         self.assertEqual("ambiguous", ambiguous.status)
+
+    def test_integrated_pre_effect_rejection_is_journaled_without_fencing(self) -> None:
+        held = self._create_held()
+        admission = CommitAdmissionBundle(
+            backend="sqlite",
+            target="new",
+            operation_id="op-integrated-rejected",
+            fencing_token=held.identity.fencing_token,
+            state_revision=held.revision,
+            barrier_id=held.identity.durable_barrier_id,
+            artifact_identity="artifact-1",
+            manifest_identity="manifest-1",
+            selector_identity="selector-1",
+            runtime_identity="runtime-1",
+        )
+
+        def identity(path: Path) -> tuple[int, int] | None:
+            try:
+                status = path.lstat()
+            except FileNotFoundError:
+                return None
+            return status.st_dev, status.st_ino
+
+        stale = dict(admission.__dict__)
+        stale["fencing_token"] = "foreign-fence"  # noqa: S105
+        capability = SQLiteCommitCapability(
+            self.authority,
+            admission=admission,
+            admission_reread=lambda: stale,
+            expected_db_identity=identity(self.authority),  # type: ignore[arg-type]
+            expected_wal_identity=identity(self.authority.with_name("authority.sqlite-wal")),
+            expected_shm_identity=identity(self.authority.with_name("authority.sqlite-shm")),
+        )
+        called = False
+
+        def effect(connection: sqlite3.Connection) -> None:
+            nonlocal called
+            called = True
+            connection.execute("UPDATE tasks SET body='must not publish' WHERE id='AR-0001'")
+
+        with self.assertRaisesRegex(SQLiteMutationRejectedError, "admission identity changed"):
+            DurableBoundAuthorityMutation(
+                admission, self.session, session_revision=held.revision
+            ).execute(lambda: capability.commit(effect))
+        self.assertFalse(called)
+        current = self.session.snapshot()
+        assert current is not None
+        self.assertEqual(("held", held.revision), (current.status, current.revision))
+        with sqlite3.connect(self.authority) as connection:
+            self.assertEqual(
+                "# Authority fixture\n",
+                connection.execute("SELECT body FROM tasks WHERE id='AR-0001'").fetchone()[0],
+            )
+        with sqlite3.connect(self.control.control_store_path) as connection:
+            self.assertEqual(
+                [("rejected",)],
+                connection.execute(
+                    "SELECT outcome FROM authority_effect_intent "
+                    "WHERE project_id=? AND operation_id=?",
+                    (PROJECT, admission.operation_id),
+                ).fetchall(),
+            )
 
     def test_sigkill_during_unknown_recovery_preserves_ambiguity_until_new_fence(self) -> None:
         context = multiprocessing.get_context("fork")

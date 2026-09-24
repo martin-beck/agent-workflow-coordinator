@@ -6,16 +6,24 @@ from __future__ import annotations
 
 import sqlite3
 import stat
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from typing import NoReturn
 
-from tools.authority_mutation import AuthorityMutationAmbiguousError
+from tools.authority_mutation import (
+    AuthorityMutationAmbiguousError,
+    AuthorityMutationRejectedError,
+)
 from tools.authority_neutral_commit import CommitAdmissionBundle
 
 
 class SQLiteMutationError(RuntimeError):
     """A SQLite authority effect was rejected."""
+
+
+class SQLiteMutationRejectedError(SQLiteMutationError, AuthorityMutationRejectedError):
+    """SQLite admission was rejected before opening the effect transaction."""
 
 
 class SQLiteMutationAmbiguousError(SQLiteMutationError, AuthorityMutationAmbiguousError):
@@ -24,8 +32,15 @@ class SQLiteMutationAmbiguousError(SQLiteMutationError, AuthorityMutationAmbiguo
 
 @dataclass(frozen=True)
 class SQLiteCommitResult:
+    backend: str
+    target: str
     operation_id: str
     state_revision: int
+    barrier_id: str
+    artifact_identity: str
+    manifest_identity: str
+    selector_identity: str
+    runtime_identity: str
     fencing_token: str
     integrity_check: str
     foreign_key_violations: int
@@ -34,6 +49,7 @@ class SQLiteCommitResult:
 
 _Commit = Callable[[sqlite3.Connection], None]
 _Connector = Callable[..., sqlite3.Connection]
+_AdmissionReread = Callable[[], Mapping[str, object]]
 
 
 class SQLiteCommitCapability:
@@ -49,6 +65,7 @@ class SQLiteCommitCapability:
         authority: Path,
         *,
         admission: CommitAdmissionBundle,
+        admission_reread: _AdmissionReread,
         expected_db_identity: tuple[int, int],
         expected_wal_identity: tuple[int, int] | None,
         expected_shm_identity: tuple[int, int] | None,
@@ -58,8 +75,14 @@ class SQLiteCommitCapability:
             raise SQLiteMutationError("SQLite mutation admission identity is invalid")
         if type(admission.state_revision) is not int or admission.state_revision < 1:
             raise SQLiteMutationError("SQLite mutation revision is invalid")
-        self._authority = authority.resolve()
+        # Preserve the supplied pathname so the pre-effect lstat fence can
+        # reject a symlinked authority instead of silently following it.
+        self._authority = authority.absolute()
+        self._ancestor_identities = self._ancestor_identities_for(self._authority)
         self._admission = admission
+        if not callable(admission_reread):
+            raise SQLiteMutationError("SQLite admission reread is invalid")
+        self._admission_reread = admission_reread
         self._db_identity = expected_db_identity
         self._wal_identity = expected_wal_identity
         self._shm_identity = expected_shm_identity
@@ -84,30 +107,71 @@ class SQLiteCommitCapability:
             cls._validate_identity(value, label)
 
     @staticmethod
+    def _ancestor_identities_for(path: Path) -> tuple[tuple[str, int, int], ...]:
+        identities: list[tuple[str, int, int]] = []
+        current = Path(path.anchor)
+        for part in path.parent.parts[1:]:
+            current /= part
+            try:
+                status = current.lstat()
+            except FileNotFoundError as error:
+                raise SQLiteMutationRejectedError(
+                    "SQLite authority ancestor is unavailable"
+                ) from error
+            except OSError as error:
+                raise SQLiteMutationRejectedError(
+                    "SQLite sidecar identity is unavailable"
+                ) from error
+            if not stat.S_ISDIR(status.st_mode):
+                raise SQLiteMutationRejectedError("SQLite authority ancestor is not a directory")
+            identities.append((str(current), status.st_dev, status.st_ino))
+        return tuple(identities)
+
+    @staticmethod
     def _identity(path: Path) -> tuple[int, int] | None:
         try:
             status = path.lstat()
         except FileNotFoundError:
             return None
         except OSError as error:
-            raise SQLiteMutationError("SQLite sidecar identity is unavailable") from error
+            raise SQLiteMutationRejectedError("SQLite sidecar identity is unavailable") from error
         if not stat.S_ISREG(status.st_mode) or status.st_nlink != 1:
-            raise SQLiteMutationError("SQLite authority file is not a regular private file")
+            raise SQLiteMutationRejectedError("SQLite authority file is not a regular private file")
         return status.st_dev, status.st_ino
 
     def _assert_filesystem_identity(self) -> None:
+        try:
+            ancestors = self._ancestor_identities_for(self._authority)
+        except SQLiteMutationRejectedError as error:
+            if "ancestor is unavailable" in str(error) or "ancestor is not a directory" in str(
+                error
+            ):
+                raise SQLiteMutationRejectedError(
+                    "SQLite authority ancestor identity changed"
+                ) from error
+            raise
+        if ancestors != self._ancestor_identities:
+            raise SQLiteMutationRejectedError("SQLite authority ancestor identity changed")
         if self._identity(self._authority) != self._db_identity:
-            raise SQLiteMutationError("SQLite database identity changed")
+            raise SQLiteMutationRejectedError("SQLite database identity changed")
         if (
             self._identity(self._authority.with_name(self._authority.name + "-wal"))
             != self._wal_identity
         ):
-            raise SQLiteMutationError("SQLite WAL identity changed")
+            raise SQLiteMutationRejectedError("SQLite WAL identity changed")
         if (
             self._identity(self._authority.with_name(self._authority.name + "-shm"))
             != self._shm_identity
         ):
-            raise SQLiteMutationError("SQLite SHM identity changed")
+            raise SQLiteMutationRejectedError("SQLite SHM identity changed")
+
+    def _assert_admission_current(self) -> None:
+        try:
+            current = self._admission_reread()
+        except Exception as error:
+            raise SQLiteMutationRejectedError("SQLite admission reread was rejected") from error
+        if not isinstance(current, Mapping) or not self._admission.matches(current):
+            raise SQLiteMutationRejectedError("SQLite admission identity changed before commit")
 
     def _consume(self, effect: _Commit) -> None:
         if self._consumed:
@@ -120,7 +184,7 @@ class SQLiteCommitCapability:
     def _close_connection(connection: sqlite3.Connection) -> None:
         try:
             connection.close()
-        except sqlite3.Error as error:
+        except (OSError, sqlite3.Error) as error:
             raise SQLiteMutationAmbiguousError(
                 "SQLite connection close outcome is ambiguous"
             ) from error
@@ -129,46 +193,104 @@ class SQLiteCommitCapability:
     def _rollback_connection(connection: sqlite3.Connection) -> None:
         try:
             connection.rollback()
-        except sqlite3.Error as error:
+        except (OSError, sqlite3.Error) as error:
             raise SQLiteMutationAmbiguousError("SQLite rollback outcome is ambiguous") from error
 
-    def commit(self, effect: _Commit) -> SQLiteCommitResult:
-        self._consume(effect)
-        self._assert_filesystem_identity()
-        connection: sqlite3.Connection | None = None
-        try:
-            connection = self._connector(self._authority, isolation_level=None, timeout=5)
-            connection.execute("PRAGMA foreign_keys=ON")
-            connection.execute("PRAGMA synchronous=FULL")
-            connection.execute("BEGIN IMMEDIATE")
-            effect(connection)
-            connection.commit()
-        except sqlite3.Error as error:
-            if connection is not None:
-                self._rollback_connection(connection)
-            raise SQLiteMutationAmbiguousError("SQLite commit outcome is ambiguous") from error
-        except Exception:
-            if connection is not None:
-                self._rollback_connection(connection)
-            raise
-        finally:
-            if connection is not None:
-                self._close_connection(connection)
+    def _classify_oserror(
+        self,
+        error: OSError,
+        connection: sqlite3.Connection | None,
+        effect_started: bool,
+    ) -> NoReturn:
+        if connection is not None:
+            self._rollback_connection(connection)
+        if not effect_started:
+            raise SQLiteMutationRejectedError(
+                "SQLite authority connection was rejected before effect"
+            ) from error
+        raise SQLiteMutationAmbiguousError("SQLite commit outcome is ambiguous") from error
+
+    def _classify_sqlite_error(
+        self,
+        error: sqlite3.Error,
+        connection: sqlite3.Connection | None,
+        effect_started: bool,
+    ) -> NoReturn:
+        if connection is not None:
+            self._rollback_connection(connection)
+        if not effect_started:
+            raise SQLiteMutationRejectedError(
+                "SQLite authority setup was rejected before effect"
+            ) from error
+        raise SQLiteMutationAmbiguousError("SQLite commit outcome is ambiguous") from error
+
+    def _verify_post_commit(self) -> tuple[str, int]:
         try:
             self._assert_filesystem_identity()
             with sqlite3.connect(self._authority) as verification:
                 verification.execute("PRAGMA foreign_keys=ON")
                 integrity = str(verification.execute("PRAGMA integrity_check").fetchone()[0])
                 violations = len(verification.execute("PRAGMA foreign_key_check").fetchall())
+            self._assert_filesystem_identity()
         except (OSError, SQLiteMutationError, sqlite3.Error) as error:
             raise SQLiteMutationAmbiguousError(
                 "SQLite post-commit verification is ambiguous"
             ) from error
+        except BaseException as error:
+            raise SQLiteMutationAmbiguousError(
+                "SQLite post-commit verification is ambiguous"
+            ) from error
+        return integrity, violations
+
+    def commit(self, effect: _Commit) -> SQLiteCommitResult:
+        self._consume(effect)
+        self._assert_filesystem_identity()
+        self._assert_admission_current()
+        connection: sqlite3.Connection | None = None
+        effect_started = False
+        try:
+            connection = self._connector(self._authority, isolation_level=None, timeout=5)
+            # The pathname may be replaced between the initial admission check
+            # and connect(). Revalidate the opened authority before beginning
+            # any transaction or invoking the caller's effect.
+            self._assert_filesystem_identity()
+            connection.execute("PRAGMA foreign_keys=ON")
+            connection.execute("PRAGMA synchronous=FULL")
+            connection.execute("BEGIN IMMEDIATE")
+            effect_started = True
+            effect(connection)
+            connection.commit()
+        except OSError as error:
+            self._classify_oserror(error, connection, effect_started)
+        except sqlite3.Error as error:
+            self._classify_sqlite_error(error, connection, effect_started)
+        except SQLiteMutationRejectedError:
+            # The second identity check runs after connect but before BEGIN;
+            # it is still a pre-effect rejection and must not be relabeled as
+            # an uncertain authority outcome.
+            raise
+        except BaseException as error:
+            if connection is not None:
+                self._rollback_connection(connection)
+            raise SQLiteMutationAmbiguousError("SQLite commit outcome is ambiguous") from error
+        finally:
+            if connection is not None:
+                self._close_connection(connection)
+        integrity, violations = self._verify_post_commit()
         if integrity != "ok" or violations:
-            raise SQLiteMutationError("SQLite post-commit integrity is invalid")
+            raise SQLiteMutationAmbiguousError(
+                "SQLite post-commit integrity is invalid; recovery is required"
+            )
         return SQLiteCommitResult(
+            backend=self._admission.backend,
+            target=self._admission.target,
             operation_id=self._admission.operation_id,
             state_revision=self._admission.state_revision,
+            barrier_id=self._admission.barrier_id,
+            artifact_identity=self._admission.artifact_identity,
+            manifest_identity=self._admission.manifest_identity,
+            selector_identity=self._admission.selector_identity,
+            runtime_identity=self._admission.runtime_identity,
             fencing_token=self._admission.fencing_token,
             integrity_check=integrity,
             foreign_key_violations=violations,

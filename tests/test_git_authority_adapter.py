@@ -21,6 +21,7 @@ from unittest.mock import MagicMock, patch
 
 import tools.sqlite_storage as sqlite_storage
 from tools.admission_lease import AdmissionLease, validate_recheck
+from tools.authority_neutral_commit import CommitAdmissionBundle
 from tools.git_authority_adapter import (
     GitAuthorityAdapter,
     GitAuthorityError,
@@ -28,6 +29,7 @@ from tools.git_authority_adapter import (
     GitRollbackArtifactBinding,
     GitRollbackSessionState,
 )
+from tools.git_authority_mutation import GitCommitCapability
 from tools.git_backup import BackupError, create_backup
 from tools.handoffctl import locked
 from tools.lock_domain import LockDomainContract
@@ -140,7 +142,6 @@ def _bound_snapshot_process(
         durable_barrier_id=durable_barrier_id,
         revision=state_revision,
     )
-    scope = LockDomainScope.bind(session, fence, lease, recheck, locked)
     adapter = GitAuthorityAdapter(Path(repository_text))
     adapter_any: Any = adapter
 
@@ -170,6 +171,7 @@ def _bound_snapshot_process(
         "state_revision": state_revision,
     }
     try:
+        scope = LockDomainScope.bind(session, fence, lease, recheck, locked)
         if rollback:
             value = adapter.verify_rollback_context_bound(
                 active_context,
@@ -196,6 +198,99 @@ def _bound_snapshot_process(
 
 
 class GitAuthorityAdapterTests(unittest.TestCase):
+    def test_adapter_durable_commit_factory_journals_real_git_receipt(self) -> None:
+        admission = CommitAdmissionBundle(
+            backend="git",
+            target="new",
+            operation_id="op-1:commit",
+            fencing_token="fence",  # noqa: S106
+            state_revision=1,
+            barrier_id="barrier",
+            artifact_identity="artifact",
+            manifest_identity="manifest",
+            selector_identity="selector",
+            runtime_identity="runtime",
+        )
+        subprocess.run(["git", "-C", str(self.root), "config", "user.name", "test"], check=True)
+        subprocess.run(
+            ["git", "-C", str(self.root), "config", "user.email", "test@example"], check=True
+        )
+        (self.root / "state").write_text("durable\n")
+        subprocess.run(["git", "-C", str(self.root), "add", "state"], check=True)
+        expected_head = self.adapter._git("rev-parse", "HEAD")
+        journal: list[tuple[str, object | None]] = []
+
+        class Journal:
+            def prepare_authority_effect(self, *_args: object, **_kwargs: object) -> str:
+                journal.append(("prepared", None))
+                return "intent"
+
+            def finish_authority_effect(
+                self, _intent: object, outcome: str, receipt: object | None = None
+            ) -> None:
+                journal.append((outcome, receipt))
+
+        capability = self.adapter.bind_durable_commit_capability(
+            admission,
+            Journal(),
+            session_revision=1,
+            admission_reread=lambda: admission.__dict__,
+            expected_branch=self.adapter._git("symbolic-ref", "--short", "-q", "HEAD"),
+            expected_head=expected_head,
+        )
+        receipt = capability.execute("durable commit")
+
+        self.assertEqual("git", receipt.backend)
+        self.assertEqual("op-1:commit", receipt.operation_id)
+        self.assertEqual(["prepared", "committed"], [item[0] for item in journal])
+        self.assertEqual(receipt, journal[1][1])
+
+    def test_durable_commit_factory_normalizes_invalid_session_revision(self) -> None:
+        admission = CommitAdmissionBundle(
+            backend="git",
+            target="new",
+            operation_id="op-1:commit",
+            fencing_token="fence",  # noqa: S106
+            state_revision=1,
+            barrier_id="barrier",
+            artifact_identity="artifact",
+            manifest_identity="manifest",
+            selector_identity="selector",
+            runtime_identity="runtime",
+        )
+        with self.assertRaisesRegex(GitAuthorityError, "durable commit capability binding"):
+            self.adapter.bind_durable_commit_capability(
+                admission,
+                object(),
+                session_revision=2,
+                admission_reread=lambda: admission.__dict__,
+                expected_branch=self.adapter._git("symbolic-ref", "--short", "-q", "HEAD"),
+                expected_head=self.adapter._git("rev-parse", "HEAD"),
+            )
+
+    def test_adapter_binds_isolated_commit_capability_without_enabling_dispatch(self) -> None:
+        admission = CommitAdmissionBundle(
+            backend="git",
+            target="new",
+            operation_id="op-1:commit",
+            fencing_token="fence",  # noqa: S106
+            state_revision=1,
+            barrier_id="barrier",
+            artifact_identity="artifact",
+            manifest_identity="manifest",
+            selector_identity="selector",
+            runtime_identity="runtime",
+        )
+        capability = self.adapter.bind_commit_capability(
+            admission,
+            admission_reread=lambda: admission.__dict__,
+            expected_branch="master",
+            expected_head=self.adapter._git("rev-parse", "HEAD"),
+        )
+        self.assertIsInstance(capability, GitCommitCapability)
+        with self.assertRaisesRegex(GitAuthorityError, "not implemented"):
+            self.adapter.execute("commit", CONTEXT)
+
     def test_git_backup_observation_rejects_foreign_adapter_and_path(self) -> None:
         session = GitRollbackSessionState(
             PROJECT, "authority", 1, "fence", "owner", "barrier", "a" * 40, "main"

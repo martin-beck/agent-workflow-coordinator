@@ -13,8 +13,8 @@
     }
   },
   "implementation_snapshot": {
-    "revision": "7f29ef79dc27ae174633e46c00d85149ce03e3ea",
-    "runtime_revision": "7f29ef79dc27ae174633e46c00d85149ce03e3ea",
+    "revision": "7bed7fb328638a53b19c6e486eec878e811905c3",
+    "runtime_revision": "7bed7fb328638a53b19c6e486eec878e811905c3",
     "status": "descriptor-safe control-store and SQLite DB/WAL/SHM rereads plus bounded independent-process barrier/write evidence; executable apply and rollback remain rejection-only"
   },
   "correspondence": [
@@ -34,7 +34,9 @@
       "evidence_required": [
         "tests/test_authority_neutral_selector.py::test_admission_is_read_only_and_bound_to_visibility_scope",
         "tests/test_authority_neutral_selector.py::test_rejects_invalid_identity_and_backend_failures",
-        "tests/test_authority_neutral_selector.py::test_bound_adapter_rejects_phase_and_identity_drift"
+        "tests/test_authority_neutral_selector.py::test_bound_adapter_rejects_phase_and_identity_drift",
+        "tests/test_git_authority_mutation.py::test_rejects_stale_admission_reread_before_effect",
+        "tests/test_sqlite_authority_mutation.py::test_rejects_stale_admission_reread_before_effect"
       ],
       "status": "bounded executable selector admission evidence; implementation refinement pending"
     },
@@ -67,6 +69,16 @@
         "tests/test_git_authority_mutation.py::GitCommitCapabilityTests.test_capability_is_single_use_but_fresh_capability_reopens",
         "tests/test_git_authority_mutation.py::GitCommitCapabilityTests.test_rejects_unstaged_or_empty_changes",
         "tests/test_git_authority_mutation.py::GitCommitCapabilityTests.test_rejects_head_drift_and_ambiguous_runner_outcome",
+        "tests/test_git_authority_mutation.py::GitCommitCapabilityTests.test_rejects_identity_runner_oserror_before_effect",
+        "tests/test_git_authority_mutation.py::GitCommitCapabilityTests.test_rejects_symlinked_repository_path",
+        "tests/test_git_authority_mutation.py::GitCommitCapabilityTests.test_rejects_repository_replacement_before_effect",
+        "tests/test_git_authority_mutation.py::GitCommitCapabilityTests.test_rejects_repository_parent_replacement_before_effect",
+        "tests/test_git_authority_mutation.py::GitCommitCapabilityTests.test_rejects_repository_ancestor_replacement_before_effect",
+        "tests/test_git_authority_mutation.py::GitCommitCapabilityTests.test_rejects_symlinked_repository_ancestor_before_effect",
+        "tests/test_git_authority_mutation.py::GitCommitCapabilityTests.test_classifies_commit_runner_oserror_as_ambiguous",
+        "tests/test_git_authority_mutation.py::GitCommitCapabilityTests.test_classifies_nonzero_commit_after_ref_update_as_ambiguous",
+        "tests/test_git_authority_mutation.py::GitCommitCapabilityTests.test_classifies_post_commit_identity_reread_failure_as_ambiguous",
+        "tests/test_git_authority_mutation.py::GitCommitCapabilityTests.test_classifies_repository_replacement_after_effect_as_ambiguous",
         "tests/test_git_authority_mutation.py::GitCommitCapabilityTests.test_rejects_a_concurrent_commit_after_the_effect"
       ],
       "status": "bounded executable Git effect evidence; implementation refinement pending and public dispatch disabled"
@@ -77,20 +89,39 @@
       "evidence_required": [
         "tests/test_authority_mutation.py::AuthorityMutationTests.test_effect_is_single_use_and_identity_bound",
         "tests/test_authority_mutation.py::AuthorityMutationTests.test_rejects_backend_or_result_identity_drift",
+        "tests/test_authority_mutation.py::AuthorityMutationTests.test_rejects_any_full_receipt_identity_drift",
         "tests/test_authority_mutation.py::AuthorityMutationTests.test_ambiguous_effect_consumes_token_and_cannot_retry",
         "tests/test_authority_mutation.py::AuthorityMutationTests.test_backend_ambiguity_is_normalized_and_cannot_retry",
-        "tests/test_authority_mutation.py::AuthorityMutationTests.test_termination_exception_is_ambiguous_and_cannot_retry"
+        "tests/test_authority_mutation.py::AuthorityMutationTests.test_termination_exception_is_ambiguous_and_cannot_retry",
+        "tests/test_authority_mutation.py::AuthorityMutationTests.test_durable_capability_rejects_admission_session_revision_mismatch",
+        "tests/test_authority_mutation.py::AuthorityMutationTests.test_durable_effect_forwards_exact_admission_identity_to_journal"
       ],
       "status": "bounded executable cross-backend effect evidence; implementation refinement pending and public dispatch disabled"
     },
     {
-      "model_actions": ["AcceptWrite", "FinishWrite", "MarkAmbiguous", "RejectWrite", "Acquire"],
+      "model_actions": ["AcceptWrite", "FinishWrite", "MarkAmbiguous", "RejectWrite", "RejectStaleCAS", "Acquire"],
       "implementation_obligation": "The isolated authority effect journal durably records the bound session and operation before an external effect, publishes a verified outcome only after the effect returns, and converts a worker death with a prepared intent into a write-closed ambiguous session that cannot reuse the operation or fencing token.",
       "evidence_required": [
         "tests/test_authority_mutation.py::AuthorityMutationTests.test_durable_effect_publishes_only_after_verified_receipt",
+        "tests/test_authority_mutation.py::AuthorityMutationTests.test_durable_identity_rejection_is_journaled_ambiguous_without_publication",
+        "tests/test_authority_mutation.py::AuthorityMutationTests.test_durable_pre_effect_rejection_is_journaled_without_fencing_session",
+        "tests/test_sqlite_mutation_barrier.py::SQLiteMutationBarrierProcessTests.test_integrated_pre_effect_rejection_is_journaled_without_fencing",
+        "tests/test_git_authority_mutation.py::GitCommitCapabilityTests.test_integrated_pre_effect_rejection_is_journaled_without_git_commit",
         "tests/test_authority_mutation.py::AuthorityMutationTests.test_durable_ambiguous_effect_is_durably_marked_ambiguous",
         "tests/test_sqlite_mutation_barrier.py::SQLiteMutationBarrierProcessTests.test_authority_effect_journal_validates_identity_and_single_use",
-        "tests/test_sqlite_mutation_barrier.py::test_sigkill_after_authority_effect_requires_recovery_and_new_fence"
+        "tests/test_sqlite_mutation_barrier.py::test_sigkill_after_authority_effect_requires_recovery_and_new_fence",
+        "tests/test_rollback_control_store.py::test_v10_subprocess_death_after_committed_effect_publication_is_reopenable",
+        "tests/test_rollback_control_store.py::test_v10_subprocess_death_after_ambiguous_effect_publication_is_reopenable",
+        "tests/test_rollback_control_store.py::test_v10_integrated_effect_death_after_committed_finish_is_reopenable",
+        "tests/test_rollback_control_store.py::test_v10_integrated_effect_death_after_ambiguous_finish_is_reopenable",
+        "tests/test_authority_effect_correspondence.py::AuthorityEffectCorrespondenceTests.test_model_contract_binds_effect_actions_and_safety_invariants",
+        "tests/test_authority_effect_correspondence.py::AuthorityEffectCorrespondenceTests.test_verified_committed_receipt_maps_to_finish_write",
+        "tests/test_authority_effect_correspondence.py::AuthorityEffectCorrespondenceTests.test_missing_or_invalid_committed_receipt_is_rejected",
+        "tests/test_authority_effect_correspondence.py::AuthorityEffectCorrespondenceTests.test_ambiguous_outcome_maps_to_write_closed_marking",
+        "tests/test_authority_effect_correspondence.py::AuthorityEffectCorrespondenceTests.test_ambiguous_newer_fence_recovery_maps_to_acquire",
+        "tests/test_authority_effect_correspondence.py::AuthorityEffectCorrespondenceTests.test_invalid_recovery_combinations_fail_closed",
+        "tests/test_authority_effect_correspondence.py::AuthorityEffectCorrespondenceTests.test_rejected_effect_maps_to_reject_write",
+        "tests/test_authority_effect_correspondence.py::AuthorityEffectCorrespondenceTests.test_stale_fence_rejection_maps_before_new_fence_recovery"
       ],
       "status": "bounded executable durable external-effect recovery evidence; implementation refinement pending and public dispatch disabled"
     },
@@ -101,8 +132,21 @@
         "tests/test_sqlite_authority_mutation.py::SQLiteCommitCapabilityTests.test_commits_effect_and_verifies_integrity",
         "tests/test_sqlite_authority_mutation.py::SQLiteCommitCapabilityTests.test_capability_is_single_use_but_fresh_capability_reopens",
         "tests/test_sqlite_authority_mutation.py::SQLiteCommitCapabilityTests.test_rejects_sidecar_identity_drift_before_effect",
+        "tests/test_sqlite_authority_mutation.py::SQLiteCommitCapabilityTests.test_rejects_authority_replacement_after_connect_before_effect",
+        "tests/test_sqlite_authority_mutation.py::SQLiteCommitCapabilityTests.test_rejects_sidecar_identity_read_error_before_effect",
+        "tests/test_sqlite_authority_mutation.py::SQLiteCommitCapabilityTests.test_rejects_nonregular_authority_identity_before_effect",
+        "tests/test_sqlite_authority_mutation.py::SQLiteCommitCapabilityTests.test_rejects_symlinked_authority_path_before_effect",
+        "tests/test_sqlite_authority_mutation.py::SQLiteCommitCapabilityTests.test_rejects_authority_parent_replacement_before_effect",
+        "tests/test_sqlite_authority_mutation.py::SQLiteCommitCapabilityTests.test_rejects_authority_ancestor_replacement_before_effect",
+        "tests/test_sqlite_authority_mutation.py::SQLiteCommitCapabilityTests.test_rejects_symlinked_authority_ancestor_before_effect",
+        "tests/test_sqlite_authority_mutation.py::SQLiteCommitCapabilityTests.test_rejects_connector_oserror_before_effect",
+        "tests/test_sqlite_authority_mutation.py::SQLiteCommitCapabilityTests.test_rejects_sqlite_setup_error_before_effect",
+        "tests/test_sqlite_authority_mutation.py::SQLiteCommitCapabilityTests.test_classifies_oserror_connection_close_failure_as_ambiguous",
+        "tests/test_sqlite_authority_mutation.py::SQLiteCommitCapabilityTests.test_classifies_oserror_rollback_failure_as_ambiguous",
         "tests/test_sqlite_authority_mutation.py::SQLiteCommitCapabilityTests.test_classifies_post_commit_identity_drift_as_ambiguous",
+        "tests/test_sqlite_authority_mutation.py::SQLiteCommitCapabilityTests.test_classifies_identity_drift_after_verification_close_as_ambiguous",
         "tests/test_sqlite_authority_mutation.py::SQLiteCommitCapabilityTests.test_classifies_sqlite_errors_as_ambiguous",
+        "tests/test_sqlite_authority_mutation.py::SQLiteCommitCapabilityTests.test_classifies_effect_oserror_as_ambiguous",
         "tests/test_sqlite_authority_mutation.py::SQLiteCommitCapabilityTests.test_classifies_connection_close_failure_as_ambiguous",
         "tests/test_sqlite_authority_mutation.py::SQLiteCommitCapabilityTests.test_classifies_rollback_failure_as_ambiguous"
       ],
@@ -139,6 +183,7 @@
       "evidence_required": [
         "tests/test_upgrade_engine.py::test_engine_binds_verified_stage_capability_to_stage_phase",
         "tests/test_authority_neutral_stage.py::test_bound_adapter_dispatches_stage_and_rejects_drift",
+        "tests/test_authority_neutral_stage.py::test_bound_adapter_rejects_selector_drift_before_runtime_verification",
         "tests/test_authority_neutral_stage.py::test_rejects_artifact_escape_and_bad_digest"
       ],
       "status": "bounded executable stage verification evidence; implementation refinement pending"
@@ -156,14 +201,44 @@
     {
       "model_actions": ["AcquireCommon", "AcquireControl", "AcquireAuthority", "ReleaseAuthority", "ReleaseControl", "ReleaseCommon"],
       "implementation_obligation": "One non-reentrant operation scope acquires repository-common, control-store, and authority locks in that order and releases them in reverse order.",
-      "evidence_required": ["lock-order tests", "re-entry rejection", "descriptor identity checks"],
-      "status": "obligation-only"
+      "evidence_required": [
+        "tests/test_lock_domain_scope.py::test_bind_rejects_nonheld_durable_session_before_returning_scope",
+        "tests/test_lock_domain_scope.py::LockDomainScopeTests.test_scope_proves_durable_session_inside_all_three_locks",
+        "tests/test_lock_domain_scope.py::LockDomainScopeTests.test_scope_lock_trace_matches_model_acquire_release_order",
+        "tests/test_lock_domain_scope.py::LockDomainScopeTests.test_scope_lock_trace_unwinds_after_trusted_reread_failure",
+        "tests/test_lock_domain_scope.py::LockDomainScopeTests.test_hold_releases_locks_when_second_trusted_reread_fails",
+        "tests/test_lock_domain_scope.py::LockDomainScopeTests.test_process_death_releases_scope_for_fresh_recheck",
+        "tests/test_lock_domain_scope.py::LockDomainScopeTests.test_validated_hold_process_death_releases_scope_for_fresh_caller",
+        "tests/test_lock_domain_scope.py::LockDomainScopeTests.test_binding_abort_releases_locks_and_fresh_worker_rejects_replaced_identity",
+        "tests/test_lock_domain_scope.py::LockDomainScopeTests.test_repeated_handoff_rereads_authority_before_rejecting_stale_retry",
+        "tests/test_mutation_fence.py::MutationFenceTests.test_scope_is_nonreentrant_and_sqlite_route_uses_it",
+        "tests/test_rollback_control_store.py::RollbackControlStoreTests.test_operation_lock_is_single_nonreentrant_outer_scope",
+        "tests/test_lock_domain.py::LockDomainTests.test_replaced_descriptor_and_inactive_guard_fail_closed",
+        "tests/test_lock_domain.py::LockDomainTests.test_identity_rejects_nonregular_descriptor_and_symlink"
+      ],
+      "status": "bounded executable lock-domain and identity evidence; implementation refinement pending"
     },
     {
       "model_actions": ["ObserveAuthority", "RecheckHeld", "RejectStaleCAS"],
       "implementation_obligation": "A writer rereads the durable control barrier and authority binding from descriptor-bound state immediately before admission; stale or non-released state rejects without mutation.",
-      "evidence_required": ["binding rename/swap tests", "control-store identity tests", "stale revision tests"],
-      "status": "obligation-only"
+      "evidence_required": [
+        "tests/test_lock_domain_scope.py::LockDomainScopeTests.test_hold_rejects_trusted_authority_drift_between_rereads",
+        "tests/test_lock_domain_scope.py::LockDomainScopeTests.test_abort_then_recheck_rejects_durable_session_state_change",
+        "tests/test_lock_domain_scope.py::LockDomainScopeTests.test_fresh_process_reread_rejects_old_lease_after_durable_retry",
+        "tests/test_git_authority_mutation.py::test_rejects_stale_admission_reread_before_effect",
+        "tests/test_sqlite_authority_mutation.py::test_rejects_stale_admission_reread_before_effect",
+        "tests/test_authority_effect_correspondence.py::AuthorityEffectCorrespondenceTests.test_rechecked_authority_admission_maps_to_model_reread",
+        "tests/test_authority_effect_correspondence.py::AuthorityEffectCorrespondenceTests.test_rechecked_stale_authority_admission_maps_to_rejection",
+        "tests/test_authority_effect_correspondence.py::AuthorityEffectCorrespondenceTests.test_authority_admission_without_reread_fails_closed",
+        "tests/test_rollback_control_store.py::RollbackControlStoreTests.test_control_path_swap_after_binding_fails_without_authority_mutation",
+        "tests/test_rollback_control_store.py::RollbackControlStoreTests.test_control_swap_between_descriptor_validation_and_sqlite_open_fails_closed",
+        "tests/test_rollback_control_store.py::RollbackControlStoreTests.test_bound_parent_authority_and_project_swaps_fail_closed",
+        "tests/test_rollback_control_store.py::RollbackControlStoreTests.test_v10_durable_session_recheck_is_fresh_and_read_only",
+        "tests/test_rollback_control_store.py::RollbackControlStoreTests.test_v10_multiprocess_stale_fence_writer_is_rejected",
+        "tests/test_rollback_control_store.py::RollbackControlStoreTests.test_v10_caller_owned_recheck_rejects_stale_identity_and_authority",
+        "tests/test_rollback_control_store.py::RollbackControlStoreTests.test_cas_conflict_and_binding_mismatch_fail_closed"
+      ],
+      "status": "bounded executable barrier identity and stale-fence evidence; implementation refinement pending"
     },
     {
       "model_actions": ["RequestWrite", "AcceptWrite", "RejectWrite", "FinishWrite"],
@@ -179,13 +254,29 @@
     {
       "model_actions": ["MarkAmbiguous", "Acquire"],
       "implementation_obligation": "Process death or uncertain WAL/control-store outcomes preserve durable write-closed state; recovery must reread and reconcile before a newer fenced session can proceed.",
-      "evidence_required": ["sigkill boundaries", "WAL/SHM fault tests", "new-session CAS tests"],
+      "evidence_required": [
+        "tests/test_lock_domain_scope.py::LockDomainScopeTests.test_process_death_releases_scope_for_fresh_recheck",
+        "tests/test_lock_domain_scope.py::LockDomainScopeTests.test_validated_hold_process_death_releases_scope_for_fresh_caller",
+        "tests/test_lock_domain_scope.py::LockDomainScopeTests.test_binding_abort_allows_fresh_worker_reacquisition_when_identity_is_unchanged",
+        "tests/test_rollback_control_store.py::RollbackControlStoreTests.test_v10_session_intent_recovery_fences_and_requires_newer_fence",
+        "tests/test_rollback_control_store.py::RollbackControlStoreTests.test_v10_process_death_recovery_rejects_missing_or_mismatched_session",
+        "tests/test_rollback_control_store.py::RollbackControlStoreTests.test_v10_session_intent_recovery_rejects_invalid_intent_records",
+        "tests/test_sqlite_mutation_barrier.py::test_sigkill_session_commit_recovers_ambiguous_then_verified_release",
+        "tests/test_sqlite_mutation_barrier.py::test_sigkill_during_unknown_recovery_preserves_ambiguity_until_new_fence",
+        "tests/test_sqlite_mutation_barrier.py::test_sigkill_after_reconciliation_commit_recovers_new_fence_from_history",
+        "tests/test_rollback_control_store.py::test_v10_active_wal_sidecar_replacement_fails_closed_before_recheck"
+      ],
       "status": "bounded executable SIGKILL evidence covers CAS publication and interrupted ambiguous-recovery intent residue in tests/test_sqlite_mutation_barrier.py; implementation refinement pending"
     },
     {
       "model_actions": ["RejectStaleCAS", "AmbiguousIsWriteClosed", "LockOwnership"],
       "implementation_obligation": "Typed recovery rejection paths release the operation lock and preserve the durable ambiguous snapshot across stale-fence, reused-fence, authority-mismatch, reread-failure, invalid-revision, and unresolved-intent failures.",
-      "evidence_required": ["tests/test_rollback_control_store.py::test_v10_session_intent_recovery_fences_and_requires_newer_fence", "tests/test_rollback_control_store.py::test_v10_interrupted_recovery_residue_requires_exact_revision_chain"],
+      "evidence_required": [
+        "tests/test_rollback_control_store.py::RollbackControlStoreTests.test_v10_session_intent_recovery_fences_and_requires_newer_fence",
+        "tests/test_rollback_control_store.py::RollbackControlStoreTests.test_v10_session_intent_recovery_and_reconcile_reject_reentrant_or_invalid_calls",
+        "tests/test_rollback_control_store.py::RollbackControlStoreTests.test_v10_interrupted_recovery_residue_requires_exact_revision_chain",
+        "tests/test_rollback_control_store.py::RollbackControlStoreTests.test_v10_session_intent_recovery_rejects_missing_session"
+      ],
       "status": "bounded executable recovery and hostile revision-chain evidence; implementation refinement pending"
     }
   ],
@@ -249,6 +340,22 @@
     {
       "model_actions": ["AcceptWrite", "FinishWrite", "MarkAmbiguous", "RejectWrite", "Acquire"],
       "implementation_test": "tests/test_sqlite_mutation_barrier.py::test_sigkill_after_authority_effect_requires_recovery_and_new_fence"
+    },
+    {
+      "model_actions": ["FinishWrite", "Acquire"],
+      "implementation_test": "tests/test_rollback_control_store.py::test_v10_subprocess_death_after_committed_effect_publication_is_reopenable"
+    },
+    {
+      "model_actions": ["FinishWrite", "MarkAmbiguous", "Acquire"],
+      "implementation_test": "tests/test_rollback_control_store.py::test_v10_subprocess_death_after_ambiguous_effect_publication_is_reopenable"
+    },
+    {
+      "model_actions": ["FinishWrite", "Acquire"],
+      "implementation_test": "tests/test_rollback_control_store.py::test_v10_integrated_effect_death_after_committed_finish_is_reopenable"
+    },
+    {
+      "model_actions": ["FinishWrite", "MarkAmbiguous", "Acquire"],
+      "implementation_test": "tests/test_rollback_control_store.py::test_v10_integrated_effect_death_after_ambiguous_finish_is_reopenable"
     },
     {
       "model_actions": ["AcceptWrite", "FinishWrite", "MarkAmbiguous", "RejectWrite", "Acquire"],

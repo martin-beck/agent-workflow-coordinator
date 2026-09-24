@@ -90,6 +90,20 @@ class UpgradeAdmissionTests(unittest.TestCase):
             with self.subTest(predicate=predicate), self.assertRaises(AdmissionError):
                 admit_reopen(denied)
 
+    def test_reopen_requires_explicit_functional_availability(self) -> None:
+        snapshot = complete(REOPEN_PREDICATES)
+        snapshot.pop("functional_available")
+        with self.assertRaisesRegex(AdmissionError, "functional_available"):
+            admit_reopen(snapshot)
+        for value in (False, 1, "true"):
+            denied = complete(REOPEN_PREDICATES)
+            denied["functional_available"] = value
+            with (
+                self.subTest(value=value),
+                self.assertRaisesRegex(AdmissionError, "functional_available"),
+            ):
+                admit_reopen(denied)
+
     def test_unknown_and_stale_identity_fail_closed(self) -> None:
         snapshot = complete(PREFLIGHT_PREDICATES)
         snapshot["unexpected"] = True

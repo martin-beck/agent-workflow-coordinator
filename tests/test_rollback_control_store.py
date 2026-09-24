@@ -29,7 +29,9 @@ from tools.rollback_control_store import (
     AuthorityRuntimeRereader,
     BarrierSessionContract,
     BarrierSessionState,
+    ControlStoreAmbiguousError,
     ControlStoreError,
+    RecoveryRejectedError,
     SQLiteAuthorityRuntimeRereader,
     SQLiteAuthorityRuntimeState,
     SQLiteBarrierSessionStore,
@@ -148,7 +150,10 @@ if mode == "probe-after-sidecar":
     raise SystemExit(0)
 
 store.create(identity)
-if mode != "kill-after-ambiguous-replacement-commit":
+if mode not in {
+    "kill-after-ambiguous-replacement-commit",
+    "kill-after-ambiguous-reconciliation-outcome-publication",
+}:
     store.bind_child(1, BarrierChildIdentity.bind(identity, "subprocess-forward", "new"))
 
 if mode == "kill-after-ambiguous-replacement-commit":
@@ -176,6 +181,34 @@ if mode == "kill-after-ambiguous-replacement-commit":
         original_mark_intent(connection, intent_id, outcome, cause_code)
 
     store._mark_intent_locked = kill_before_reconciled
+    store.reconcile_ambiguous(2, replacement)
+
+if mode == "kill-after-ambiguous-reconciliation-outcome-publication":
+    store.mark_ambiguous(1, "seed-ambiguity")
+    replacement_record = dict(identity_record)
+    replacement_record.update(
+        {
+            "attempt_id": "subprocess-replacement",
+            "state_revision": 4,
+            "durable_barrier_id": "barrier-replacement",
+            "fencing_token": "fence-replacement",
+        }
+    )
+    replacement_record["identity_digest"] = canonical_barrier_session_digest(replacement_record)
+    replacement = BarrierSessionState(
+        BarrierSessionIdentity.from_record(replacement_record), "held", 1
+    )
+    original_reconcile = store.reconcile_ambiguous
+
+    def kill_after_reconciled(expected_revision, replacement):
+        result = original_reconcile(expected_revision, replacement)
+        ready_path.write_text("reconciliation-outcome-published\n", encoding="utf-8")
+        with ready_path.open("rb") as ready:
+            os.fsync(ready.fileno())
+        os.kill(os.getpid(), signal.SIGKILL)
+        return result
+
+    store.reconcile_ambiguous = kill_after_reconciled
     store.reconcile_ambiguous(2, replacement)
 
 if mode == "clean":
@@ -248,6 +281,88 @@ if mode == "kill-after-outcome-publication":
 
     store.begin_reopen = kill_after_return
     store.begin_reopen(2, "new")
+
+if mode in {
+    "kill-after-effect-committed-publication",
+    "kill-after-effect-ambiguous-publication",
+    "kill-after-integrated-effect-committed-finish",
+    "kill-after-integrated-effect-ambiguous-finish",
+}:
+    operation_id = (
+        "subprocess-integrated-effect"
+        if mode.startswith("kill-after-integrated")
+        else "subprocess-effect"
+    )
+    outcome = (
+        "committed"
+        if mode.endswith("committed-publication") or mode.endswith("committed-finish")
+        else "ambiguous"
+    )
+    if mode.startswith("kill-after-integrated"):
+        from tools.authority_mutation import DurableBoundAuthorityMutation
+        from tools.authority_neutral_commit import CommitAdmissionBundle
+
+        admission = CommitAdmissionBundle(
+            backend="sqlite",
+            target="new",
+            operation_id=operation_id,
+            fencing_token=identity.fencing_token,
+            state_revision=2,
+            barrier_id=identity.durable_barrier_id,
+            artifact_identity="artifact-subprocess",
+            manifest_identity="manifest-subprocess",
+            selector_identity="selector-subprocess",
+            runtime_identity="runtime-subprocess",
+        )
+        original_finish_effect = store.finish_authority_effect
+
+        def kill_after_effect_return(intent, effect_outcome, receipt=None):
+            result = original_finish_effect(intent, effect_outcome, receipt)
+            ready_path.write_text(
+                f"integrated-effect-{effect_outcome}-after-finish\n", encoding="utf-8"
+            )
+            with ready_path.open("rb") as ready:
+                os.fsync(ready.fileno())
+            os.kill(os.getpid(), signal.SIGKILL)
+            return result
+
+        store.finish_authority_effect = kill_after_effect_return
+        capability = DurableBoundAuthorityMutation(admission, store, session_revision=2)
+
+        def integrated_effect():
+            if outcome == "ambiguous":
+                raise TimeoutError("subprocess effect outcome is unknown")
+            return {
+                "backend": "sqlite",
+                "target": "new",
+                "operation_id": operation_id,
+                "state_revision": 2,
+                "barrier_id": identity.durable_barrier_id,
+                "artifact_identity": "artifact-subprocess",
+                "manifest_identity": "manifest-subprocess",
+                "selector_identity": "selector-subprocess",
+                "runtime_identity": "runtime-subprocess",
+                "fencing_token": identity.fencing_token,
+                "mutates_authority": True,
+            }
+
+        capability.execute(integrated_effect)
+    else:
+        effect = store.prepare_authority_effect(2, operation_id, "sqlite")
+        original_finish_effect = store.finish_authority_effect
+
+        def kill_after_effect_return(intent, effect_outcome, receipt=None):
+            result = original_finish_effect(intent, effect_outcome, receipt)
+            ready_path.write_text(
+                f"effect-{effect_outcome}-after-outcome\n", encoding="utf-8"
+            )
+            with ready_path.open("rb") as ready:
+                os.fsync(ready.fileno())
+            os.kill(os.getpid(), signal.SIGKILL)
+            return result
+
+        store.finish_authority_effect = kill_after_effect_return
+        store.finish_authority_effect(effect, outcome)
 
 if mode != "kill-during-transaction":
     raise SystemExit("unknown test mode")
@@ -359,7 +474,41 @@ def _recover_ambiguous_child(control_text: str, authority_text: str, result_text
     state = store.recover_unknown()
     if state is None:
         raise SystemExit("missing recovery state")
-    Path(result_text).write_text(f"{state.status}:{state.revision}\n", encoding="utf-8")
+    if store.operation_owned_by_current_thread:
+        raise SystemExit("recovery retained the operation lock")
+    with store.operation_lock():
+        pass
+    Path(result_text).write_text(
+        f"{state.status}:{state.revision}:lock-released\n", encoding="utf-8"
+    )
+
+
+def _recover_effect_child(
+    control_text: str,
+    authority_text: str,
+    result_text: str,
+    operation_id: str = "subprocess-effect",
+) -> None:
+    store = SQLiteBarrierSessionStore(
+        SQLiteRollbackControlStore(Path(control_text), PROJECT, Path(authority_text)),
+        lambda: "authority-3",
+    )
+    state = store.recover_unknown()
+    if state is None:
+        raise SystemExit("missing effect recovery state")
+    with store.operation_lock():
+        pass
+    with sqlite3.connect(control_text) as connection:
+        outcome = connection.execute(
+            "SELECT outcome FROM authority_effect_intent WHERE project_id=? AND operation_id=?",
+            (PROJECT, operation_id),
+        ).fetchone()
+    if outcome is None:
+        raise SystemExit("missing effect outcome")
+    Path(result_text).write_text(
+        f"{state.status}:{state.revision}:{outcome[0]}:lock-released\n",
+        encoding="utf-8",
+    )
 
 
 def authority_task() -> tuple[Path, dict[str, object], str]:
@@ -436,6 +585,68 @@ class StaticAuthorityRuntimeRereader:
 
 
 class RollbackControlStoreTests(unittest.TestCase):
+    def test_authority_effect_prepare_reopen_uncertainty_is_ambiguous(self) -> None:
+        class ReopenFailureStore(SQLiteRollbackControlStore):
+            def __init__(self, path: Path) -> None:
+                super().__init__(path, PROJECT)
+                self.open_calls = 0
+                self.fail_reopen = False
+
+            def _open_bound_file(
+                self,
+                path: Path,
+                expected_parent: tuple[int, int],
+                expected_identity: tuple[int, int],
+            ) -> tuple[int, int]:
+                self.open_calls += 1
+                if self.fail_reopen and self.open_calls == 5:
+                    raise ControlStoreError("injected reopen identity failure")
+                return super()._open_bound_file(path, expected_parent, expected_identity)
+
+        with tempfile.TemporaryDirectory() as directory:
+            control = ReopenFailureStore(Path(directory) / "control.sqlite")
+            store = SQLiteBarrierSessionStore(control, lambda: "authority-3")
+            store.create(self._session_identity())
+            control.open_calls = 0
+            control.fail_reopen = True
+
+            with self.assertRaisesRegex(
+                ControlStoreAmbiguousError, "reopen identity became uncertain"
+            ):
+                store.prepare_authority_effect(1, "effect-reopen-uncertain", "sqlite")
+
+            with sqlite3.connect(control.path) as connection:
+                self.assertEqual(
+                    [("prepared",)],
+                    connection.execute(
+                        "SELECT outcome FROM authority_effect_intent "
+                        "WHERE project_id=? AND operation_id=?",
+                        (PROJECT, "effect-reopen-uncertain"),
+                    ).fetchall(),
+                )
+
+    def test_rejected_authority_effect_is_write_closed_without_fencing_session(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            control = SQLiteRollbackControlStore(root / "control.sqlite", PROJECT)
+            store = SQLiteBarrierSessionStore(control, lambda: "authority-3")
+            store.create(self._session_identity())
+            intent = store.prepare_authority_effect(1, "effect-rejected", "sqlite")
+
+            state = store.finish_authority_effect(intent, "rejected")
+
+            self.assertEqual(("held", 1), (state.status, state.revision))
+            self.assertEqual(state, store.snapshot())
+            with sqlite3.connect(control.path) as connection:
+                self.assertEqual(
+                    [("rejected",)],
+                    connection.execute(
+                        "SELECT outcome FROM authority_effect_intent "
+                        "WHERE project_id=? AND operation_id=?",
+                        (PROJECT, "effect-rejected"),
+                    ).fetchall(),
+                )
+
     def test_legacy_barrier_schema_is_rejected_without_mutation(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "control.sqlite"
@@ -903,7 +1114,9 @@ class RollbackControlStoreTests(unittest.TestCase):
             verifier.start()
             verifier.join(timeout=10)
             self.assertEqual(0, verifier.exitcode)
-            self.assertEqual("ambiguous:4\n", child_result.read_text(encoding="utf-8"))
+            self.assertEqual(
+                "ambiguous:4:lock-released\n", child_result.read_text(encoding="utf-8")
+            )
             recovered = store.snapshot()
             self.assertIsNotNone(recovered)
             assert recovered is not None
@@ -967,6 +1180,172 @@ class RollbackControlStoreTests(unittest.TestCase):
                 authority_path.read_bytes(),
             )
 
+    def test_v10_subprocess_death_after_committed_effect_publication_is_reopenable(
+        self,
+    ) -> None:
+        """A death after a committed effect outcome leaves a durable lock-safe journal."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            control_path = root / "control.sqlite"
+            authority_path = root / "authority.sqlite"
+            authority_bytes = b"authority remains untouched after committed effect\n"
+            authority_path.write_bytes(authority_bytes)
+            ready_path = root / "ready"
+            process = self._run_session_process(
+                control_path,
+                authority_path,
+                "kill-after-effect-committed-publication",
+                ready_path,
+            )
+            self._wait_for_file(ready_path, process)
+            self.assertEqual(
+                "effect-committed-after-outcome",
+                ready_path.read_text(encoding="utf-8").strip(),
+            )
+            self.assertEqual(-signal.SIGKILL, process.wait(timeout=10))
+            stdout, stderr = process.communicate()
+            self.assertEqual("", stderr, msg=stdout)
+
+            child_result = root / "child-result"
+            verifier = multiprocessing.get_context("fork").Process(
+                target=_recover_effect_child,
+                args=(str(control_path), str(authority_path), str(child_result)),
+            )
+            verifier.start()
+            verifier.join(timeout=10)
+            self.assertEqual(0, verifier.exitcode)
+            self.assertEqual(
+                "held:2:committed:lock-released\n",
+                child_result.read_text(encoding="utf-8"),
+            )
+            self.assertEqual(authority_bytes, authority_path.read_bytes())
+
+    def test_v10_subprocess_death_after_ambiguous_effect_publication_is_reopenable(
+        self,
+    ) -> None:
+        """A death after an ambiguous effect outcome preserves the durable fence."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            control_path = root / "control.sqlite"
+            authority_path = root / "authority.sqlite"
+            authority_bytes = b"authority remains untouched after ambiguous effect\n"
+            authority_path.write_bytes(authority_bytes)
+            ready_path = root / "ready"
+            process = self._run_session_process(
+                control_path,
+                authority_path,
+                "kill-after-effect-ambiguous-publication",
+                ready_path,
+            )
+            self._wait_for_file(ready_path, process)
+            self.assertEqual(
+                "effect-ambiguous-after-outcome",
+                ready_path.read_text(encoding="utf-8").strip(),
+            )
+            self.assertEqual(-signal.SIGKILL, process.wait(timeout=10))
+            stdout, stderr = process.communicate()
+            self.assertEqual("", stderr, msg=stdout)
+
+            child_result = root / "child-result"
+            verifier = multiprocessing.get_context("fork").Process(
+                target=_recover_effect_child,
+                args=(str(control_path), str(authority_path), str(child_result)),
+            )
+            verifier.start()
+            verifier.join(timeout=10)
+            self.assertEqual(0, verifier.exitcode)
+            self.assertEqual(
+                "ambiguous:3:ambiguous:lock-released\n",
+                child_result.read_text(encoding="utf-8"),
+            )
+            self.assertEqual(authority_bytes, authority_path.read_bytes())
+
+    def test_v10_integrated_effect_death_after_committed_finish_is_reopenable(self) -> None:
+        """The durable mutation wrapper remains recoverable after committed finish returns."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            control_path = root / "control.sqlite"
+            authority_path = root / "authority.sqlite"
+            authority_bytes = b"authority remains untouched after integrated commit\n"
+            authority_path.write_bytes(authority_bytes)
+            ready_path = root / "ready"
+            process = self._run_session_process(
+                control_path,
+                authority_path,
+                "kill-after-integrated-effect-committed-finish",
+                ready_path,
+            )
+            self._wait_for_file(ready_path, process)
+            self.assertEqual(
+                "integrated-effect-committed-after-finish",
+                ready_path.read_text(encoding="utf-8").strip(),
+            )
+            self.assertEqual(-signal.SIGKILL, process.wait(timeout=10))
+            stdout, stderr = process.communicate()
+            self.assertEqual("", stderr, msg=stdout)
+
+            child_result = root / "child-result"
+            verifier = multiprocessing.get_context("fork").Process(
+                target=_recover_effect_child,
+                args=(
+                    str(control_path),
+                    str(authority_path),
+                    str(child_result),
+                    "subprocess-integrated-effect",
+                ),
+            )
+            verifier.start()
+            verifier.join(timeout=10)
+            self.assertEqual(0, verifier.exitcode)
+            self.assertEqual(
+                "held:2:committed:lock-released\n",
+                child_result.read_text(encoding="utf-8"),
+            )
+            self.assertEqual(authority_bytes, authority_path.read_bytes())
+
+    def test_v10_integrated_effect_death_after_ambiguous_finish_is_reopenable(self) -> None:
+        """The durable mutation wrapper preserves an ambiguous finish across process death."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            control_path = root / "control.sqlite"
+            authority_path = root / "authority.sqlite"
+            authority_bytes = b"authority remains untouched after integrated ambiguity\n"
+            authority_path.write_bytes(authority_bytes)
+            ready_path = root / "ready"
+            process = self._run_session_process(
+                control_path,
+                authority_path,
+                "kill-after-integrated-effect-ambiguous-finish",
+                ready_path,
+            )
+            self._wait_for_file(ready_path, process)
+            self.assertEqual(
+                "integrated-effect-ambiguous-after-finish",
+                ready_path.read_text(encoding="utf-8").strip(),
+            )
+            self.assertEqual(-signal.SIGKILL, process.wait(timeout=10))
+            stdout, stderr = process.communicate()
+            self.assertEqual("", stderr, msg=stdout)
+
+            child_result = root / "child-result"
+            verifier = multiprocessing.get_context("fork").Process(
+                target=_recover_effect_child,
+                args=(
+                    str(control_path),
+                    str(authority_path),
+                    str(child_result),
+                    "subprocess-integrated-effect",
+                ),
+            )
+            verifier.start()
+            verifier.join(timeout=10)
+            self.assertEqual(0, verifier.exitcode)
+            self.assertEqual(
+                "ambiguous:3:ambiguous:lock-released\n",
+                child_result.read_text(encoding="utf-8"),
+            )
+            self.assertEqual(authority_bytes, authority_path.read_bytes())
+
     def test_v10_subprocess_death_after_ambiguous_replacement_commit_is_fenced(self) -> None:
         """A fresh process fences an unreported ambiguous-session replacement."""
         with tempfile.TemporaryDirectory() as directory:
@@ -999,7 +1378,7 @@ class RollbackControlStoreTests(unittest.TestCase):
             verifier.start()
             verifier.join(timeout=10)
             self.assertEqual(0, verifier.exitcode)
-            self.assertEqual("held:1\n", verifier_result.read_text(encoding="utf-8"))
+            self.assertEqual("held:1:lock-released\n", verifier_result.read_text(encoding="utf-8"))
 
             reopened = SQLiteBarrierSessionStore(
                 SQLiteRollbackControlStore(control_path, PROJECT, authority_path),
@@ -1010,6 +1389,59 @@ class RollbackControlStoreTests(unittest.TestCase):
             self.assertEqual(("held", 1), (reopened.status, reopened.revision))
             self.assertEqual("subprocess-replacement", reopened.identity.attempt_id)
             self.assertEqual(authority_bytes, authority_path.read_bytes())
+
+    def test_v10_subprocess_death_after_ambiguous_reconciliation_outcome_is_recoverable(
+        self,
+    ) -> None:
+        """A death after reconciliation publication remains reopenable and lock-safe."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            control_path = root / "control.sqlite"
+            authority_path = root / "authority.sqlite"
+            authority_bytes = b"authority remains untouched after reconciliation\n"
+            authority_path.write_bytes(authority_bytes)
+            ready_path = root / "ready"
+            process = self._run_session_process(
+                control_path,
+                authority_path,
+                "kill-after-ambiguous-reconciliation-outcome-publication",
+                ready_path,
+            )
+            self._wait_for_file(ready_path, process)
+            self.assertEqual(
+                "reconciliation-outcome-published",
+                ready_path.read_text(encoding="utf-8").strip(),
+            )
+            self.assertEqual(-signal.SIGKILL, process.wait(timeout=10))
+            stdout, stderr = process.communicate()
+            self.assertEqual("", stderr, msg=stdout)
+
+            verifier_result = root / "recovered-child-result"
+            verifier = multiprocessing.get_context("fork").Process(
+                target=_recover_ambiguous_child,
+                args=(str(control_path), str(authority_path), str(verifier_result)),
+            )
+            verifier.start()
+            verifier.join(timeout=10)
+            self.assertEqual(0, verifier.exitcode)
+            self.assertEqual("held:1:lock-released\n", verifier_result.read_text(encoding="utf-8"))
+
+            reopened = SQLiteBarrierSessionStore(
+                SQLiteRollbackControlStore(control_path, PROJECT, authority_path),
+                lambda: "authority-3",
+            )
+            state = reopened.snapshot()
+            self.assertIsNotNone(state)
+            assert state is not None
+            self.assertEqual(("held", 1), (state.status, state.revision))
+            self.assertEqual("subprocess-replacement", state.identity.attempt_id)
+            self.assertEqual(authority_bytes, authority_path.read_bytes())
+            with sqlite3.connect(control_path) as connection:
+                outcomes = connection.execute(
+                    "SELECT outcome FROM barrier_session_intent WHERE project_id=?",
+                    (PROJECT,),
+                ).fetchall()
+            self.assertEqual([("committed",), ("committed",), ("reconciled",)], outcomes)
 
     def test_v10_durable_session_persists_children_and_reopen(self) -> None:
         from tools.upgrade_identity import BarrierChildIdentity
@@ -1446,7 +1878,7 @@ class RollbackControlStoreTests(unittest.TestCase):
                 ("ambiguous", held.revision + 1), (recovered.status, recovered.revision)
             )
             self.assertEqual(recovered, store.recover_unknown())
-            with self.assertRaisesRegex(ControlStoreError, "distinct newer fence"):
+            with self.assertRaisesRegex(RecoveryRejectedError, "distinct newer fence"):
                 store.reconcile_ambiguous(recovered.revision, held)
             self.assertFalse(store.operation_owned_by_current_thread)
             self.assertEqual(recovered, store.snapshot())
@@ -1473,7 +1905,7 @@ class RollbackControlStoreTests(unittest.TestCase):
             reused_fence = BarrierSessionState(
                 BarrierSessionIdentity.from_record(reused_fence_record), "held", 1
             )
-            with self.assertRaisesRegex(ControlStoreError, "distinct newer fence"):
+            with self.assertRaisesRegex(RecoveryRejectedError, "distinct newer fence"):
                 store.reconcile_ambiguous(recovered.revision, reused_fence)
             self.assertFalse(store.operation_owned_by_current_thread)
             self.assertEqual(recovered, store.snapshot())
@@ -1493,14 +1925,16 @@ class RollbackControlStoreTests(unittest.TestCase):
             failing_store = SQLiteBarrierSessionStore(
                 SQLiteRollbackControlStore(path, PROJECT), fail_authority_read
             )
-            with self.assertRaisesRegex(ControlStoreError, "fresh authority reread failed"):
+            with self.assertRaisesRegex(RecoveryRejectedError, "fresh authority reread failed"):
                 failing_store.reconcile_ambiguous(recovered.revision, replacement)
             self.assertFalse(failing_store.operation_owned_by_current_thread)
             self.assertEqual(recovered, failing_store.snapshot())
             invalid_store = SQLiteBarrierSessionStore(
                 SQLiteRollbackControlStore(path, PROJECT), lambda: ""
             )
-            with self.assertRaisesRegex(ControlStoreError, "fresh authority revision is invalid"):
+            with self.assertRaisesRegex(
+                RecoveryRejectedError, "fresh authority revision is invalid"
+            ):
                 invalid_store.reconcile_ambiguous(recovered.revision, replacement)
             self.assertFalse(invalid_store.operation_owned_by_current_thread)
             self.assertEqual(recovered, invalid_store.snapshot())
@@ -1526,7 +1960,7 @@ class RollbackControlStoreTests(unittest.TestCase):
                 connection.commit()
             finally:
                 connection.close()
-            with self.assertRaisesRegex(ControlStoreError, "unresolved intent"):
+            with self.assertRaisesRegex(RecoveryRejectedError, "unresolved intent"):
                 store.reconcile_ambiguous(recovered.revision, replacement)
             self.assertFalse(store.operation_owned_by_current_thread)
             self.assertEqual(recovered, store.snapshot())
@@ -1726,17 +2160,17 @@ class RollbackControlStoreTests(unittest.TestCase):
             with store.operation_lock():
                 with self.assertRaisesRegex(ControlStoreError, "non-reentrant"):
                     store.recover_unknown()
-                with self.assertRaisesRegex(ControlStoreError, "non-reentrant"):
+                with self.assertRaisesRegex(RecoveryRejectedError, "non-reentrant"):
                     store.reconcile_ambiguous(held.revision, held)
-            with self.assertRaisesRegex(ControlStoreError, "expected revision is invalid"):
+            with self.assertRaisesRegex(RecoveryRejectedError, "expected revision is invalid"):
                 store.reconcile_ambiguous(0, held)
-            with self.assertRaisesRegex(ControlStoreError, "new held session"):
+            with self.assertRaisesRegex(RecoveryRejectedError, "new held session"):
                 store.reconcile_ambiguous(
                     held.revision,
                     BarrierSessionState(identity, "releasing", 1),
                 )
 
-    def test_v10_commit_failure_is_durably_ambiguous(self) -> None:
+    def test_v10_commit_failure_is_durably_ambiguous(self) -> None:  # noqa: C901
         class FlakyConnection:
             def __init__(self, connection: sqlite3.Connection, owner: Any) -> None:
                 self.connection = connection
@@ -1749,6 +2183,11 @@ class RollbackControlStoreTests(unittest.TestCase):
                 if self.owner.fail_next_commit:
                     self.owner.fail_next_commit = False
                     raise sqlite3.OperationalError("injected commit boundary failure")
+                if self.owner.fail_commit_after is not None:
+                    if self.owner.fail_commit_after == 0:
+                        self.owner.fail_commit_after = None
+                        raise sqlite3.OperationalError("injected commit boundary failure")
+                    self.owner.fail_commit_after -= 1
                 self.connection.commit()
 
             def rollback(self) -> None:
@@ -1758,6 +2197,7 @@ class RollbackControlStoreTests(unittest.TestCase):
             def __init__(self, *args: Any) -> None:
                 super().__init__(*args)
                 self.fail_next_commit = True
+                self.fail_commit_after: int | None = None
 
             @contextmanager
             def _connection(self) -> Iterator[Any]:
@@ -1803,6 +2243,167 @@ class RollbackControlStoreTests(unittest.TestCase):
             with self.assertRaisesRegex(ControlStoreError, "commit outcome is ambiguous"):
                 existing_session.mark_ambiguous(1, "io-failure")
             self.assertEqual("ambiguous", existing_session.snapshot().status)  # type: ignore[union-attr]
+
+            reconcile_control = FlakyStore(
+                Path(directory) / "reconcile-session-control.sqlite", PROJECT
+            )
+            reconcile_control.fail_next_commit = False
+            reconcile_session = SQLiteBarrierSessionStore(reconcile_control, lambda: "authority-3")
+            reconcile_session.create(self._session_identity())
+            reconcile_session.mark_ambiguous(1, "seed-ambiguity")
+            replacement_record = dict(self._session_identity().as_record())
+            replacement_record.update(
+                {
+                    "attempt_id": "attempt-replacement",
+                    "state_revision": 4,
+                    "durable_barrier_id": "barrier-replacement",
+                    "fencing_token": "fence-replacement",
+                }
+            )
+            from tools.upgrade_identity import canonical_barrier_session_digest
+
+            replacement_record["identity_digest"] = canonical_barrier_session_digest(
+                replacement_record
+            )
+            replacement = BarrierSessionState(
+                BarrierSessionIdentity.from_record(replacement_record), "held", 1
+            )
+            reconcile_control.fail_next_commit = True
+            with self.assertRaisesRegex(
+                ControlStoreError, "reconciliation commit outcome is ambiguous"
+            ):
+                reconcile_session.reconcile_ambiguous(2, replacement)
+            self.assertFalse(reconcile_session.operation_owned_by_current_thread)
+            ambiguous = reconcile_session.snapshot()
+            self.assertIsNotNone(ambiguous)
+            assert ambiguous is not None
+            self.assertEqual("ambiguous", ambiguous.status)
+            self.assertEqual(ambiguous, reconcile_session.recover_unknown())
+
+            recovery_control = FlakyStore(
+                Path(directory) / "prepared-session-recovery-control.sqlite", PROJECT
+            )
+            recovery_control.fail_next_commit = False
+            recovery_session = SQLiteBarrierSessionStore(recovery_control, lambda: "authority-3")
+            recovery_session.create(self._session_identity())
+            with sqlite3.connect(recovery_control.path) as connection:
+                connection.execute(
+                    "UPDATE barrier_session_intent SET outcome='prepared' WHERE project_id=?",
+                    (PROJECT,),
+                )
+                connection.commit()
+            recovery_control.fail_next_commit = True
+            with self.assertRaisesRegex(ControlStoreError, "recovery commit outcome is ambiguous"):
+                recovery_session.recover_unknown()
+            self.assertFalse(recovery_session.operation_owned_by_current_thread)
+            recovered_session = recovery_session.snapshot()
+            self.assertIsNotNone(recovered_session)
+            assert recovered_session is not None
+            with sqlite3.connect(recovery_control.path) as connection:
+                durable_recovery_row = connection.execute(
+                    "SELECT status,revision FROM barrier_session WHERE project_id=?",
+                    (PROJECT,),
+                ).fetchone()
+            self.assertEqual(("ambiguous", 2), durable_recovery_row)
+            self.assertEqual(
+                ("ambiguous", 2), (recovered_session.status, recovered_session.revision)
+            )
+
+            second_recovery_control = FlakyStore(
+                Path(directory) / "prepared-session-second-recovery-control.sqlite", PROJECT
+            )
+            second_recovery_control.fail_next_commit = False
+            second_recovery_session = SQLiteBarrierSessionStore(
+                second_recovery_control, lambda: "authority-3"
+            )
+            second_recovery_session.create(self._session_identity())
+            with sqlite3.connect(second_recovery_control.path) as connection:
+                connection.execute(
+                    "UPDATE barrier_session_intent SET outcome='prepared' WHERE project_id=?",
+                    (PROJECT,),
+                )
+                connection.commit()
+            second_recovery_control.fail_commit_after = 1
+            with self.assertRaisesRegex(ControlStoreError, "recovery commit outcome is ambiguous"):
+                second_recovery_session.recover_unknown()
+            self.assertFalse(second_recovery_session.operation_owned_by_current_thread)
+            second_recovered = second_recovery_session.snapshot()
+            self.assertIsNotNone(second_recovered)
+            assert second_recovered is not None
+            self.assertEqual(("ambiguous", 2), (second_recovered.status, second_recovered.revision))
+
+            effect_control = FlakyStore(
+                Path(directory) / "prepared-effect-recovery-control.sqlite", PROJECT
+            )
+            effect_control.fail_next_commit = False
+            effect_session = SQLiteBarrierSessionStore(effect_control, lambda: "authority-3")
+            effect_session.create(self._session_identity())
+            effect_session.prepare_authority_effect(1, "effect-recovery", "sqlite")
+            effect_control.fail_next_commit = True
+            with self.assertRaisesRegex(ControlStoreError, "recovery commit outcome is ambiguous"):
+                effect_session.recover_unknown()
+            self.assertFalse(effect_session.operation_owned_by_current_thread)
+            recovered_effect = effect_session.snapshot()
+            self.assertIsNotNone(recovered_effect)
+            assert recovered_effect is not None
+            self.assertEqual(("ambiguous", 2), (recovered_effect.status, recovered_effect.revision))
+            with sqlite3.connect(effect_control.path) as connection:
+                self.assertEqual(
+                    [("ambiguous",)],
+                    connection.execute(
+                        "SELECT outcome FROM authority_effect_intent WHERE project_id=?",
+                        (PROJECT,),
+                    ).fetchall(),
+                )
+
+            finish_control = FlakyStore(Path(directory) / "finish-effect-control.sqlite", PROJECT)
+            finish_control.fail_next_commit = False
+            finish_session = SQLiteBarrierSessionStore(finish_control, lambda: "authority-3")
+            finish_session.create(self._session_identity())
+            finish_intent = finish_session.prepare_authority_effect(1, "effect-finish", "sqlite")
+            finish_control.fail_next_commit = True
+            with self.assertRaisesRegex(
+                ControlStoreError, "authority effect outcome publication is ambiguous"
+            ):
+                finish_session.finish_authority_effect(finish_intent, "committed")
+            self.assertFalse(finish_session.operation_owned_by_current_thread)
+            finished = finish_session.snapshot()
+            self.assertIsNotNone(finished)
+            assert finished is not None
+            self.assertEqual(("ambiguous", 2), (finished.status, finished.revision))
+            with sqlite3.connect(finish_control.path) as connection:
+                self.assertEqual(
+                    [("ambiguous",)],
+                    connection.execute(
+                        "SELECT outcome FROM authority_effect_intent WHERE project_id=?",
+                        (PROJECT,),
+                    ).fetchall(),
+                )
+
+            publication_control = FlakyStore(
+                Path(directory) / "session-publication-control.sqlite", PROJECT
+            )
+            publication_control.fail_next_commit = False
+            publication_session = SQLiteBarrierSessionStore(
+                publication_control, lambda: "authority-3"
+            )
+            publication_identity = self._session_identity()
+            publication_session.create(publication_identity)
+            publication_session.bind_child(
+                1, BarrierChildIdentity.bind(publication_identity, "publication-child", "new")
+            )
+            publication_control.fail_commit_after = 1
+            with self.assertRaisesRegex(
+                ControlStoreError, "barrier session outcome publication is ambiguous"
+            ):
+                publication_session.begin_reopen(2, "new")
+            self.assertFalse(publication_session.operation_owned_by_current_thread)
+            publication_state = publication_session.snapshot()
+            self.assertIsNotNone(publication_state)
+            assert publication_state is not None
+            self.assertEqual(
+                ("ambiguous", 4), (publication_state.status, publication_state.revision)
+            )
 
     def test_v10_cas_fences_verify_affected_rows_and_recovery_errors(self) -> None:
         class Cursor:
