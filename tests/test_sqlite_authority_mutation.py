@@ -552,6 +552,25 @@ class SQLiteCommitCapabilityTests(unittest.TestCase):
         with self.assertRaisesRegex(SQLiteMutationAmbiguousError, "commit outcome is ambiguous"):
             self._capability().commit(failing_effect)
 
+    def test_ambiguous_effect_consumes_capability_and_cannot_retry(self) -> None:
+        capability = self._capability()
+
+        def failing_effect(_connection: sqlite3.Connection) -> None:
+            raise OSError("injected effect uncertainty")
+
+        with self.assertRaisesRegex(SQLiteMutationAmbiguousError, "commit outcome is ambiguous"):
+            capability.commit(failing_effect)
+
+        called = False
+
+        def retry(_connection: sqlite3.Connection) -> None:
+            nonlocal called
+            called = True
+
+        with self.assertRaisesRegex(SQLiteMutationError, "already consumed"):
+            capability.commit(retry)
+        self.assertFalse(called)
+
     def test_classifies_arbitrary_effect_exception_as_ambiguous(self) -> None:
         def failing_effect(_connection: sqlite3.Connection) -> None:
             raise RuntimeError("injected effect failure")
