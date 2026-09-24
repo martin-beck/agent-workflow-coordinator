@@ -10,6 +10,8 @@
   "plan": "../plans/AR-0001.md",
   "priority": "P1",
   "schema_version": 1,
+  "spec_ref": "examples/task-specs/AR-0070.json",
+  "spec_revision": 1,
   "status": "open",
   "summary": "Demonstrate one well-scoped coordinated change.",
   "task_revision": 1,

@@ -45,6 +45,7 @@ if __package__:
         render_status,
         render_status_pages_from_text,
     )
+    from .task_spec import task_spec_errors
 else:  # pragma: no cover - direct script execution
     from oracle_lifecycle import (  # type: ignore[import-not-found,no-redef]
         ArtifactRef,
@@ -67,6 +68,7 @@ else:  # pragma: no cover - direct script execution
         render_status,
         render_status_pages_from_text,
     )
+    from task_spec import task_spec_errors  # type: ignore[import-not-found,no-redef]
 
 ROOT = Path(__file__).resolve().parent.parent
 TASKS = ROOT / "tasks"
@@ -127,6 +129,8 @@ FIELDS = set(REQ) | {
     "observed_dirty",
     "superseded_by",
     "oracle_gate",
+    "spec_ref",
+    "spec_revision",
 }
 type Meta = dict[str, Any]
 type Task = tuple[Path, Meta, str]
@@ -1010,7 +1014,12 @@ def supersession_errors(tasks: list[Task]) -> list[str]:
 
 
 def basic_task_errors(path: Path, meta: Meta) -> list[str]:
-    return [*field_errors(path, meta), *value_errors(path, meta), *reference_errors(path, meta)]
+    return [
+        *field_errors(path, meta),
+        *value_errors(path, meta),
+        *reference_errors(path, meta),
+        *task_spec_errors(ROOT, meta),
+    ]
 
 
 def parse_claim_expiry(expiry: object) -> dt.datetime:
