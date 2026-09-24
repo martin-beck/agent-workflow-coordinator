@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from tools import handoffctl
-from tools.task_spec import spec_errors, task_spec_errors
+from tools.task_spec import done_admission_error, spec_errors, task_spec_errors
 
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURES = ROOT / "examples/task-specs"
@@ -26,6 +26,16 @@ def load(name: str) -> dict[str, Any]:
 
 
 class TaskSpecTests(unittest.TestCase):
+    def _acceptance(self) -> dict[str, Any]:
+        return {
+            "spec_ref": "examples/task-specs/AR-0070.json",
+            "spec_revision": 1,
+            "status": "pass",
+            "evidence_class": "contract-test",
+            "evidence_ref": "awq/evidence/AR-0070",
+            "evidence_digest": "sha256:" + "a" * 64,
+        }
+
     def test_valid_spec_and_optional_metadata_are_accepted(self) -> None:
         value = load("AR-0070.json")
         self.assertEqual([], spec_errors(value))
@@ -38,7 +48,7 @@ class TaskSpecTests(unittest.TestCase):
         )
 
     def test_handoffctl_core_validates_bound_metadata(self) -> None:
-        meta = {
+        meta: dict[str, Any] = {
             "schema_version": 1,
             "id": "AR-0070",
             "title": "Task spec",
@@ -141,6 +151,27 @@ class TaskSpecTests(unittest.TestCase):
                 root, {"id": "AR-0001", "spec_ref": "spec.json", "spec_revision": 1}
             )
             self.assertIn("AR-0001: spec_ref does not match referenced spec", errors)
+
+    def test_done_admission_requires_matching_pass_evidence(self) -> None:
+        acceptance = self._acceptance()
+        meta: dict[str, Any] = {
+            "id": "AR-0070",
+            "spec_ref": "examples/task-specs/AR-0070.json",
+            "spec_revision": 1,
+            "spec_acceptance": acceptance,
+        }
+        self.assertIsNone(done_admission_error(ROOT, meta))
+        for field, value in (("status", "fail"), ("evidence_class", "invented")):
+            rejected = dict(acceptance)
+            rejected[field] = value
+            with self.subTest(field=field):
+                self.assertIn(
+                    "done admission denied",
+                    done_admission_error(ROOT, {**meta, "spec_acceptance": rejected}) or "",
+                )
+        incomplete = dict(meta)
+        incomplete.pop("spec_acceptance")
+        self.assertIn("incomplete", done_admission_error(ROOT, incomplete) or "")
 
 
 if __name__ == "__main__":

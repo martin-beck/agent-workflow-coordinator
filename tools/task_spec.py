@@ -16,6 +16,8 @@ EVIDENCE_CLASSES = frozenset(
 SPEC_REF = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{2,255}$")
 TOOL_REF = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$")
 ID_REF = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{2,63}$")
+EVIDENCE_REF = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{2,255}$")
+DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
 SPEC_FIELDS = {
     "schema_version",
     "spec_ref",
@@ -172,3 +174,38 @@ def task_spec_errors(root: Path, meta: dict[str, Any]) -> list[str]:
     if isinstance(value, dict) and value.get("spec_ref") != spec_ref:
         errors.append(f"{task_id}: spec_ref does not match referenced spec")
     return sorted(set(errors))
+
+
+def done_admission_error(root: Path, meta: dict[str, Any]) -> str | None:
+    """Return a fail-closed error when a new ``done`` transition lacks proof."""
+    errors = task_spec_errors(root, meta)
+    if errors:
+        return "done admission denied: " + "; ".join(errors)
+    acceptance = meta.get("spec_acceptance")
+    required = {
+        "spec_ref",
+        "spec_revision",
+        "status",
+        "evidence_class",
+        "evidence_ref",
+        "evidence_digest",
+    }
+    if not isinstance(acceptance, dict) or set(acceptance) != required:
+        return "done admission denied: spec_acceptance is incomplete or unknown"
+    if acceptance["spec_ref"] != meta.get("spec_ref"):
+        return "done admission denied: acceptance spec_ref does not match task spec"
+    if acceptance["spec_revision"] != meta.get("spec_revision"):
+        return "done admission denied: acceptance spec_revision does not match task spec"
+    if acceptance["status"] != "pass":
+        return "done admission denied: acceptance status is not pass"
+    if acceptance["evidence_class"] not in EVIDENCE_CLASSES:
+        return "done admission denied: acceptance evidence class is unknown"
+    if not isinstance(acceptance["evidence_ref"], str) or not EVIDENCE_REF.fullmatch(
+        acceptance["evidence_ref"]
+    ):
+        return "done admission denied: acceptance evidence ref is invalid"
+    if not isinstance(acceptance["evidence_digest"], str) or not DIGEST.fullmatch(
+        acceptance["evidence_digest"]
+    ):
+        return "done admission denied: acceptance evidence digest is invalid"
+    return None

@@ -45,7 +45,7 @@ if __package__:
         render_status,
         render_status_pages_from_text,
     )
-    from .task_spec import task_spec_errors
+    from .task_spec import done_admission_error, task_spec_errors
 else:  # pragma: no cover - direct script execution
     from oracle_lifecycle import (  # type: ignore[import-not-found,no-redef]
         ArtifactRef,
@@ -68,7 +68,10 @@ else:  # pragma: no cover - direct script execution
         render_status,
         render_status_pages_from_text,
     )
-    from task_spec import task_spec_errors  # type: ignore[import-not-found,no-redef]
+    from task_spec import (  # type: ignore[import-not-found,no-redef]
+        done_admission_error,
+        task_spec_errors,
+    )
 
 ROOT = Path(__file__).resolve().parent.parent
 TASKS = ROOT / "tasks"
@@ -131,6 +134,7 @@ FIELDS = set(REQ) | {
     "oracle_gate",
     "spec_ref",
     "spec_revision",
+    "spec_acceptance",
 }
 type Meta = dict[str, Any]
 type Task = tuple[Path, Meta, str]
@@ -1510,6 +1514,19 @@ def require_update_role_admission(kind: str, owner_id: str) -> None:
         require_role_admission(owner_id)
 
 
+def require_done_admission(meta: Meta) -> None:
+    if meta.get("status") != "in_progress":
+        return
+    error = done_admission_error(ROOT, meta)
+    if error:
+        raise RuntimeError(error)
+
+
+def require_release_admission(kind: str, status: str | None, meta: Meta) -> None:
+    if kind == "release" and status == "done":
+        require_done_admission(meta)
+
+
 def apply_claim(args: argparse.Namespace, meta: Meta, tasks: list[Task]) -> str:
     if args.lease_minutes <= 0:
         raise RuntimeError("lease must be positive")
@@ -1634,6 +1651,7 @@ def apply_owned_change(args: argparse.Namespace, kind: str, meta: Meta) -> str: 
     if meta.get("owner") != args.owner:
         raise RuntimeError(f"{args.task} is owned by {meta.get('owner') or 'nobody'}")
     require_update_role_admission(kind, str(args.owner))
+    require_release_admission(kind, getattr(args, "status", None), meta)
     if kind == "heartbeat":
         if args.lease_minutes <= 0 or meta.get("status") != "in_progress":
             raise RuntimeError("heartbeat requires an active task and positive lease")

@@ -7,7 +7,8 @@
     "TypeOK",
     "NoMutationWithoutRoleAuthorization",
     "ReviewerDistinctFromExecutor",
-    "SecurityTaskRequiresSecurityRole"
+    "SecurityTaskRequiresSecurityRole",
+    "DoneRequiresSpecAcceptance"
   ],
   "implementation_tests": [
     "tests/test_capability_matrix_formal.py",
@@ -15,13 +16,13 @@
   ],
   "runtime_admission": {
     "status": "pending",
-    "next_consumer": "AR-0073"
+    "next_consumer": "AR-0071"
   },
   "evidence_status": "bounded-model-and-hostile-contract",
   "correspondence_claim": "not-proven",
   "nonclaims": [
     "This model does not authorize mutation, release, rollback, or Dispatch.",
     "TLC under finite bounds does not prove Python implementation refinement.",
-    "Runtime admission integration remains pending AR-0073."
+    "Spec-gated completion admission is bounded in the model; Python implementation refinement remains unproven."
   ]
 }
