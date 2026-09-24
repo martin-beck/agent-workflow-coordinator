@@ -739,6 +739,24 @@ class LockDomainScopeTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "NoReplacementBeforeBackup semantics"):
                 validate_model_action_contract(root)
 
+    def test_model_action_contract_rejects_weakened_type_invariant(self) -> None:
+        model = Path(__file__).resolve().parents[1] / "formal/upgrade/UpgradeRecovery.tla"
+        original = model.read_text(encoding="utf-8")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            model_copy = root / "formal/upgrade/UpgradeRecovery.tla"
+            model_copy.parent.mkdir(parents=True)
+            model_copy.write_text(
+                original.replace(
+                    "phase \\in [Operations -> Phases]",
+                    "phase \\in BOOLEAN",
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "TypeInvariant field phase"):
+                validate_model_action_contract(root)
+
     def test_model_action_contract_rejects_wrong_reopen_transition(self) -> None:
         model = Path(__file__).resolve().parents[1] / "formal/upgrade/UpgradeRecovery.tla"
         original = model.read_text(encoding="utf-8")
