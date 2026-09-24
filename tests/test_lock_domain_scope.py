@@ -391,6 +391,25 @@ class LockDomainScopeTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "AcquireAuthority"):
                 validate_lock_domain_model_contract(root)
 
+    def test_model_lock_contract_rejects_wrong_transition(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            model = root / "formal/upgrade/HandoffctlUpgradeBarrier.tla"
+            model.parent.mkdir(parents=True)
+            actions = "\n".join(
+                (
+                    "AcquireCommon(p) ==",
+                    "AcquireControl(p) ==",
+                    "AcquireAuthority(p) ==",
+                    "ReleaseAuthority(p) ==",
+                    "ReleaseControl(p) ==",
+                    "ReleaseCommon(p) ==",
+                )
+            )
+            model.write_text(actions + '\nlockStage\' = "free"\n', encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "transition AcquireCommon"):
+                validate_lock_domain_model_contract(root)
+
     def test_scope_proves_durable_session_inside_all_three_locks(self) -> None:
         scope = LockDomainScope(
             self.domain, self.session, self.fence, self.lease, self.recheck, identity(), locked

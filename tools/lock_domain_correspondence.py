@@ -21,6 +21,14 @@ _MODEL_ACTION_SIGNATURES = {
     "ReleaseControl": "ReleaseControl(p) ==",
     "ReleaseCommon": "ReleaseCommon(p) ==",
 }
+_MODEL_LOCK_TRANSITIONS = {
+    "AcquireCommon": ('lockStage = "free"', 'lockStage\' = "common"'),
+    "AcquireControl": ('lockStage = "common"', 'lockStage\' = "control"'),
+    "AcquireAuthority": ('lockStage = "control"', 'lockStage\' = "authority"'),
+    "ReleaseAuthority": ('lockStage\' = "control"',),
+    "ReleaseControl": ('lockStage\' = "common"',),
+    "ReleaseCommon": ('lockStage\' = "free"',),
+}
 
 
 def validate_lock_domain_model_contract(root: Path) -> None:
@@ -37,6 +45,15 @@ def validate_lock_domain_model_contract(root: Path) -> None:
     ]
     if missing:
         raise ValueError(f"lock-domain model contract is incomplete: {', '.join(missing)}")
+    missing_transitions = [
+        f"transition {action}"
+        for action, fragments in _MODEL_LOCK_TRANSITIONS.items()
+        if not all(fragment in text for fragment in fragments)
+    ]
+    if missing_transitions:
+        raise ValueError(
+            "lock-domain model contract is missing transitions: " + ", ".join(missing_transitions)
+        )
 
 
 def validate_lock_domain_trace(events: Iterable[str]) -> tuple[str, ...]:
