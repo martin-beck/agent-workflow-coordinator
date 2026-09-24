@@ -2147,6 +2147,15 @@ class HandoffTest(unittest.TestCase):
             worktree_key="worktree-b",
             branch="feature/b",
         )
+        for task_id in ("AR-0001", "AR-0002"):
+            CORE.append_session_record(
+                CORE.ROOT,
+                CORE.build_session_record(
+                    CORE.read_task(CORE.locate(task_id)[0])[0],
+                    "update",
+                    "2026-09-24T12:00:00+00:00",
+                ),
+            )
         with patch.object(CORE, "commit", return_value=True):
             for task_id in ("AR-0001", "AR-0002"):
                 CORE.mutate(
@@ -2252,6 +2261,12 @@ class HandoffTest(unittest.TestCase):
             owner="stale-worker",
             claim_expires="2000-01-01T00:00:00+00:00",
         )
+        CORE.append_session_record(
+            CORE.ROOT,
+            CORE.build_session_record(
+                CORE.read_task(expired)[0], "update", "2026-09-24T12:00:00+00:00"
+            ),
+        )
         claimed = self.make_task("AR-0002")
         (self.root / "NOTES.md").write_text("Investigate " + "127." + "0.0.1.")
         (self.root / "archive.txt").write_text("x" * 200001)
@@ -2279,6 +2294,12 @@ class HandoffTest(unittest.TestCase):
             status="in_progress",
             owner="worker-a",
             claim_expires="2099-01-01T00:00:00+00:00",
+        )
+        CORE.append_session_record(
+            CORE.ROOT,
+            CORE.build_session_record(
+                CORE.read_task(path)[0], "update", "2026-09-24T12:00:00+00:00"
+            ),
         )
         owned = (path, self.root / "CURRENT.md", self.root / "STATUS.md")
         before = {candidate: candidate.read_text() for candidate in owned}
@@ -2374,6 +2395,13 @@ class HandoffTest(unittest.TestCase):
             status="in_progress",
             owner="worker-a",
             claim_expires=future,
+            next_action="Resume the verified step.",
+        )
+        CORE.append_session_record(
+            CORE.ROOT,
+            CORE.build_session_record(
+                CORE.read_task(path)[0], "update", "2026-09-24T12:00:00+00:00"
+            ),
         )
         args = argparse.Namespace(
             task="AR-0001",
@@ -2394,12 +2422,30 @@ class HandoffTest(unittest.TestCase):
         recovered, body = CORE.read_task(path)
         self.assertEqual("open", recovered["status"])
         self.assertEqual("", recovered["owner"])
+        self.assertEqual("Resume the verified step.", recovered["next_action"])
         self.assertIn("Recovered expired claim formerly owned by worker-a", body)
         with (
             patch.object(CORE, "commit", return_value=True),
             self.assertRaisesRegex(RuntimeError, "stale revision"),
         ):
             CORE.mutate(args, "recover-expired")
+
+    def test_recover_expired_rejects_missing_session(self) -> None:
+        self.make_task(
+            status="in_progress",
+            owner="worker-a",
+            claim_expires="2000-01-01T00:00:00+00:00",
+        )
+        with (
+            patch.object(CORE, "commit", return_value=True),
+            self.assertRaisesRegex(RuntimeError, "no session snapshot"),
+        ):
+            CORE.mutate(
+                argparse.Namespace(
+                    task="AR-0001", expected_revision=1, note="No live process remains."
+                ),
+                "recover-expired",
+            )
 
     def test_run_preflight_and_durable_journal_precede_reconcile(self) -> None:
         self.make_task(
