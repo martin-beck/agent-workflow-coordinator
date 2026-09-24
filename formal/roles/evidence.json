@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "kind": "bounded-capability-matrix-formal-evidence",
+  "model": "formal/roles/CapabilityMatrix.tla",
+  "config": "formal/roles/CapabilityMatrix.cfg",
+  "invariants": [
+    "TypeOK",
+    "NoMutationWithoutRoleAuthorization",
+    "ReviewerDistinctFromExecutor",
+    "SecurityTaskRequiresSecurityRole"
+  ],
+  "implementation_tests": [
+    "tests/test_capability_matrix_formal.py",
+    "tests/test_role_assignment.py"
+  ],
+  "runtime_admission": {
+    "status": "pending",
+    "next_consumer": "AR-0073"
+  },
+  "evidence_status": "bounded-model-and-hostile-contract",
+  "correspondence_claim": "not-proven",
+  "nonclaims": [
+    "This model does not authorize mutation, release, rollback, or Dispatch.",
+    "TLC under finite bounds does not prove Python implementation refinement.",
+    "Runtime admission integration remains pending AR-0073."
+  ]
+}
