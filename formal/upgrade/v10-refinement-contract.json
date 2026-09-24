@@ -386,6 +386,10 @@
     {
       "model_actions": ["FinishWrite", "Acquire"],
       "implementation_test": "tests/test_git_authority_mutation.py::test_independent_process_death_after_effect_requires_fresh_capability"
+    },
+    {
+      "model_actions": ["FinishWrite", "Acquire"],
+      "implementation_test": "tests/test_sqlite_authority_mutation.py::test_independent_process_death_after_effect_requires_fresh_capability"
     }
   ],
   "refinement_boundary": {
