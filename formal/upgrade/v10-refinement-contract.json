@@ -85,6 +85,7 @@
         "tests/test_git_authority_mutation.py::GitCommitCapabilityTests.test_classifies_termination_git_identity_result_inspection_as_rejected",
         "tests/test_git_authority_mutation.py::GitCommitCapabilityTests.test_rejects_termination_during_initial_repository_identity",
         "tests/test_git_authority_mutation.py::GitCommitCapabilityTests.test_rejects_termination_during_initial_repository_ancestor_identity",
+        "tests/test_git_authority_mutation.py::GitCommitCapabilityTests.test_rejects_termination_during_initial_repository_path_normalization",
         "tests/test_git_authority_mutation.py::GitCommitCapabilityTests.test_classifies_repository_replacement_after_effect_as_ambiguous",
         "tests/test_git_authority_mutation.py::GitCommitCapabilityTests.test_rejects_a_concurrent_commit_after_the_effect"
       ],
@@ -162,7 +163,8 @@
         "tests/test_sqlite_authority_mutation.py::SQLiteCommitCapabilityTests.test_classifies_termination_rollback_failure_as_ambiguous",
         "tests/test_sqlite_authority_mutation.py::SQLiteCommitCapabilityTests.test_classifies_termination_admission_reread_as_rejected",
         "tests/test_sqlite_authority_mutation.py::SQLiteCommitCapabilityTests.test_classifies_termination_filesystem_identity_reread_as_rejected",
-        "tests/test_sqlite_authority_mutation.py::SQLiteCommitCapabilityTests.test_rejects_termination_during_initial_authority_ancestor_identity"
+        "tests/test_sqlite_authority_mutation.py::SQLiteCommitCapabilityTests.test_rejects_termination_during_initial_authority_ancestor_identity",
+        "tests/test_sqlite_authority_mutation.py::SQLiteCommitCapabilityTests.test_rejects_termination_during_initial_authority_path_normalization"
       ],
       "status": "bounded executable SQLite effect evidence; implementation refinement pending and public dispatch disabled"
     },
