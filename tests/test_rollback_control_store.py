@@ -4038,6 +4038,34 @@ class RollbackControlStoreTests(unittest.TestCase):
                 store.snapshot("op-1")
             full_connection.close.assert_called_once_with()
 
+    def test_connection_close_failure_is_classified_as_ambiguous(self) -> None:
+        real_connect = sqlite3.connect
+
+        class CloseFailingConnection:
+            def __init__(self, connection: sqlite3.Connection) -> None:
+                self._connection = connection
+
+            def __getattr__(self, name: str) -> object:
+                return getattr(self._connection, name)
+
+            def close(self) -> None:
+                self._connection.close()
+                raise sqlite3.OperationalError("injected close failure")
+
+        def connector(*args: Any, **kwargs: Any) -> CloseFailingConnection:
+            return CloseFailingConnection(real_connect(*args, **kwargs))
+
+        with tempfile.TemporaryDirectory() as directory:
+            store = SQLiteRollbackControlStore(Path(directory) / "control.sqlite", PROJECT)
+            with (
+                patch("tools.rollback_control_store.sqlite3.connect", side_effect=connector),
+                self.assertRaisesRegex(
+                    ControlStoreAmbiguousError,
+                    "connection close outcome is ambiguous",
+                ),
+            ):
+                store.snapshot("op-1")
+
 
 if __name__ == "__main__":
     unittest.main()
