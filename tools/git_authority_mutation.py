@@ -235,12 +235,7 @@ class GitCommitCapability:
         status: str,
     ) -> str:
         try:
-            if (
-                after_branch != branch
-                or after == before
-                or not after.startswith(committed_head)
-                or status
-            ):
+            if after_branch != branch or after == before or after != committed_head or status:
                 raise GitMutationAmbiguousError("Git commit postcondition is ambiguous")
             return cls._validate_head(after)
         except GitMutationAmbiguousError:
@@ -257,7 +252,17 @@ class GitCommitCapability:
         self._consumed = True
         try:
             result = self._runner(
-                ["git", "-C", str(self._repository), "commit", "--no-verify", "-m", message],
+                [
+                    "git",
+                    "-C",
+                    str(self._repository),
+                    "-c",
+                    "core.abbrev=40",
+                    "commit",
+                    "--no-verify",
+                    "-m",
+                    message,
+                ],
                 check=False,
                 capture_output=True,
                 text=True,
