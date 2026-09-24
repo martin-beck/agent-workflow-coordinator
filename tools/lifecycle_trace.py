@@ -103,6 +103,15 @@ MODEL_RECOVERY_TRANSITIONS = {
         'journal\' = [journal EXCEPT ![op] = "rollback_started"]',
     ),
 }
+MODEL_INVARIANTS = {
+    "FunctionalAvailability": r"\A op \in Operations: available[op]",
+    "NoReplacementBeforeBackup": 'runtime[op] = "new" => backup[op]',
+    "ReleaseOrder": r'barrier[op] = "released" => journal[op] \in {"completed", "rolled_back"}',
+    "RollbackProof": (
+        'journal[op] = "rolled_back" => target[op] = "rollback" /\\ runtime[op] = "old"'
+    ),
+    "RollbackRequiresBackup": 'journal[op] = "rolled_back" => backup[op]',
+}
 
 
 def validate_model_action_contract(root: Path) -> None:
@@ -130,15 +139,14 @@ def validate_model_action_contract(root: Path) -> None:
         if (action == "Backup" and not all(name in text for name in names))
         or (action != "Backup" and not any(name in text for name in names))
     ]
-    required_invariants = (
-        "FunctionalAvailability ==",
-        "NoReplacementBeforeBackup ==",
-        "ReleaseOrder ==",
-        "RollbackProof ==",
-        "RollbackRequiresBackup ==",
-    )
+    required_invariants = tuple(f"{name} ==" for name in MODEL_INVARIANTS)
     missing.extend(
         f"invariant {name.split()[0]}" for name in required_invariants if name not in text
+    )
+    missing.extend(
+        f"invariant {name} semantics"
+        for name, fragment in MODEL_INVARIANTS.items()
+        if fragment not in text
     )
     if "THEOREM Spec => []TypeInvariant" not in text:
         missing.append("theorem TypeInvariant")
