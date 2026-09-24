@@ -158,18 +158,31 @@ class DurableBoundAuthorityMutation:
     def execute(self, effect: Callable[[], object]) -> MutationReceipt:
         if not callable(effect):
             raise AuthorityMutationError("authority mutation effect is invalid")
-        intent = self._journal.prepare_authority_effect(
-            self._session_revision,
-            self._admission.operation_id,
-            self._admission.backend,
-            self._admission.target,
-            expected_fencing_token=self._admission.fencing_token,
-            expected_barrier_id=self._admission.barrier_id,
-            expected_artifact_identity=self._admission.artifact_identity,
-            expected_manifest_identity=self._admission.manifest_identity,
-            expected_selector_identity=self._admission.selector_identity,
-            expected_runtime_identity=self._admission.runtime_identity,
-        )
+        try:
+            intent = self._journal.prepare_authority_effect(
+                self._session_revision,
+                self._admission.operation_id,
+                self._admission.backend,
+                self._admission.target,
+                expected_fencing_token=self._admission.fencing_token,
+                expected_barrier_id=self._admission.barrier_id,
+                expected_artifact_identity=self._admission.artifact_identity,
+                expected_manifest_identity=self._admission.manifest_identity,
+                expected_selector_identity=self._admission.selector_identity,
+                expected_runtime_identity=self._admission.runtime_identity,
+            )
+        except BaseException as error:
+            # A failed prepare may have durably inserted the intent before
+            # reporting an error.  Do not invoke the external effect or turn
+            # the boundary into a retryable rejection; recovery must fence the
+            # uncertain journal state first.
+            raise AuthorityMutationAmbiguousError(
+                "authority mutation journal preparation is ambiguous"
+            ) from error
+        if intent is None:
+            raise AuthorityMutationAmbiguousError(
+                "authority mutation journal preparation returned no intent"
+            )
         try:
             receipt = self._capability.execute(self._admission.backend, effect)
         except AuthorityMutationRejectedError:
