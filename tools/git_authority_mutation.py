@@ -158,6 +158,8 @@ class GitCommitCapability:
             )
         except (OSError, subprocess.TimeoutExpired) as error:
             raise GitMutationRejectedError("Git identity reread was rejected") from error
+        except BaseException as error:
+            raise GitMutationRejectedError("Git identity reread was rejected") from error
         if result.returncode != 0:
             raise GitMutationRejectedError("Git identity reread was rejected")
         return result.stdout.rstrip("\n")

@@ -80,6 +80,7 @@
         "tests/test_git_authority_mutation.py::GitCommitCapabilityTests.test_classifies_post_commit_identity_reread_failure_as_ambiguous",
         "tests/test_git_authority_mutation.py::GitCommitCapabilityTests.test_classifies_termination_admission_reread_as_rejected",
         "tests/test_git_authority_mutation.py::GitCommitCapabilityTests.test_classifies_termination_repository_identity_reread_as_rejected",
+        "tests/test_git_authority_mutation.py::GitCommitCapabilityTests.test_classifies_termination_git_identity_command_as_rejected",
         "tests/test_git_authority_mutation.py::GitCommitCapabilityTests.test_classifies_repository_replacement_after_effect_as_ambiguous",
         "tests/test_git_authority_mutation.py::GitCommitCapabilityTests.test_rejects_a_concurrent_commit_after_the_effect"
       ],
