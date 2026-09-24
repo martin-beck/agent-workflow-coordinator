@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import sqlite3
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any, Protocol
@@ -171,11 +172,12 @@ class DurableBoundAuthorityMutation:
                 expected_selector_identity=self._admission.selector_identity,
                 expected_runtime_identity=self._admission.runtime_identity,
             )
-        except BaseException as error:
-            # A failed prepare may have durably inserted the intent before
+        except (OSError, sqlite3.Error) as error:
+            # Low-level journal I/O may have persisted the intent before
             # reporting an error.  Do not invoke the external effect or turn
             # the boundary into a retryable rejection; recovery must fence the
-            # uncertain journal state first.
+            # uncertain journal state first.  Control-store admission errors
+            # intentionally propagate as typed pre-effect rejections.
             raise AuthorityMutationAmbiguousError(
                 "authority mutation journal preparation is ambiguous"
             ) from error
