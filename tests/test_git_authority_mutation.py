@@ -396,15 +396,19 @@ class GitCommitCapabilityTests(unittest.TestCase):
             )
 
         with self.assertRaisesRegex(GitMutationAmbiguousError, "commit outcome is ambiguous"):
-            GitCommitCapability(
+            capability = GitCommitCapability(
                 self.root,
                 admission=self._admission(),
                 admission_reread=lambda: self._admission().__dict__,
                 expected_branch="main",
                 expected_head=self._capability()._expected_head,
                 runner=failing_runner,
-            ).commit("op-1 authority commit")
+            )
+            capability.commit("op-1 authority commit")
         self.assertEqual("M  state", _git(self.root, "status", "--porcelain=v1"))
+
+        with self.assertRaisesRegex(GitMutationError, "already consumed"):
+            capability.commit("op-1 retry")
 
     def test_classifies_termination_commit_runner_as_ambiguous(self) -> None:
         (self.root / "state").write_text("new\n", encoding="utf-8")
