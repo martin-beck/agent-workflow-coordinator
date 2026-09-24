@@ -57,6 +57,27 @@ class AuthorityEffectCorrespondenceTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "ObserveAuthority"):
                 validate_authority_effect_model_contract(temporary_root)
 
+    def test_model_contract_rejects_weakened_write_safety_invariant(self) -> None:
+        model = ROOT / "formal/upgrade/HandoffctlUpgradeBarrier.tla"
+        original = model.read_text(encoding="utf-8")
+        with tempfile.TemporaryDirectory() as directory:
+            temporary_root = Path(directory)
+            temporary_model = temporary_root / "formal/upgrade/HandoffctlUpgradeBarrier.tla"
+            temporary_model.parent.mkdir(parents=True)
+            temporary_model.write_text(
+                original.replace(
+                    (
+                        'writerPhase[p] = "accepted" => '
+                        'writerAcceptedStatus[p] \\in {"absent", "released"}'
+                    ),
+                    'writerPhase[p] = "accepted" => TRUE',
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "WriteFence semantics"):
+                validate_authority_effect_model_contract(temporary_root)
+
     def test_model_contract_requires_request_transition_semantics(self) -> None:
         model = ROOT / "formal/upgrade/HandoffctlUpgradeBarrier.tla"
         original = model.read_text(encoding="utf-8")

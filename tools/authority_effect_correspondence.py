@@ -131,6 +131,16 @@ MODEL_ACTION_TRANSITIONS = {
         "authorityRevision' = fence + 1",
     ),
 }
+MODEL_INVARIANT_FRAGMENTS = {
+    "WriteFence": (
+        r"\A p \in Processes:",
+        'writerPhase[p] = "accepted" => writerAcceptedStatus[p] \\in {"absent", "released"}',
+    ),
+    "AmbiguousIsWriteClosed": (
+        'sessionStatus = "ambiguous" =>',
+        r'\A p \in Processes: writerPhase[p] \notin {"requested", "accepted"}',
+    ),
+}
 
 
 def validate_authority_effect_model_contract(root: Path) -> None:
@@ -149,6 +159,12 @@ def validate_authority_effect_model_contract(root: Path) -> None:
         f"invariant {invariant}"
         for invariant in ("WriteFence", "AmbiguousIsWriteClosed")
         if f"{invariant} ==" not in text
+    )
+    missing.extend(
+        f"invariant {invariant} semantics {fragment}"
+        for invariant, fragments in MODEL_INVARIANT_FRAGMENTS.items()
+        for fragment in fragments
+        if fragment not in text
     )
     if missing:
         raise ValueError(f"authority-effect model contract is incomplete: {', '.join(missing)}")
