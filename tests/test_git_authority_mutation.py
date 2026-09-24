@@ -67,6 +67,53 @@ def _commit_then_kill_worker(root_text: str, expected_head: str) -> None:
     ).commit("op-process-death authority commit")
 
 
+def _stale_owner_git_worker(
+    root_text: str,
+    expected_head: str,
+    owner_file_text: str,
+    ready: Any,
+    proceed: Any,
+    result_queue: Any,
+) -> None:
+    root = Path(root_text)
+    owner_file = Path(owner_file_text)
+    admission = CommitAdmissionBundle(
+        backend="git",
+        target="new",
+        operation_id="op-stale-owner:commit",
+        fencing_token="fence-1",  # noqa: S106
+        state_revision=1,
+        barrier_id="barrier-stale-owner",
+        artifact_identity="artifact-1",
+        manifest_identity="manifest-1",
+        selector_identity="selector-1",
+        runtime_identity="runtime-1",
+    )
+
+    def reread() -> dict[str, object]:
+        current = dict(admission.__dict__)
+        current["fencing_token"] = owner_file.read_text(encoding="utf-8")
+        return current
+
+    capability = GitCommitCapability(
+        root,
+        admission=admission,
+        admission_reread=reread,
+        expected_branch="main",
+        expected_head=expected_head,
+    )
+    ready.set()
+    proceed.wait(5)
+    try:
+        capability.commit("op-stale-owner authority commit")
+    except GitMutationRejectedError:
+        result_queue.put("rejected")
+    except BaseException as error:
+        result_queue.put(f"unexpected:{type(error).__name__}")
+    else:
+        result_queue.put("committed")
+
+
 class GitCommitCapabilityTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory()
@@ -213,6 +260,31 @@ class GitCommitCapabilityTests(unittest.TestCase):
         ).commit("op-process-death-reopen authority commit")
         self.assertEqual(40, len(result.after_head))
         self.assertNotEqual(after, result.after_head)
+
+    def test_independent_process_stale_owner_replacement_rejects_before_effect(self) -> None:
+        (self.root / "state").write_text("new\n", encoding="utf-8")
+        _git(self.root, "add", "state")
+        before = _git(self.root, "rev-parse", "HEAD")
+        owner_file = self.root / "owner-fence"
+        owner_file.write_text("fence-1", encoding="utf-8")
+        context = multiprocessing.get_context("fork")
+        ready = context.Event()
+        proceed = context.Event()
+        result_queue = context.Queue()
+        worker = context.Process(
+            target=_stale_owner_git_worker,
+            args=(str(self.root), before, str(owner_file), ready, proceed, result_queue),
+        )
+        worker.start()
+        self.assertTrue(ready.wait(5))
+        owner_file.write_text("foreign-fence", encoding="utf-8")
+        proceed.set()
+        worker.join(10)
+        self.assertEqual(0, worker.exitcode)
+        self.assertEqual("rejected", result_queue.get(timeout=2))
+        self.assertEqual(before, _git(self.root, "rev-parse", "HEAD"))
+        owner_file.unlink()
+        self.assertEqual("M  state", _git(self.root, "status", "--porcelain=v1"))
 
     def test_rejects_termination_during_initial_repository_identity(self) -> None:
         with (
