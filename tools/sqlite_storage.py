@@ -455,6 +455,8 @@ class Backend(Protocol):
 
     def load_tasks(self) -> list[Task]: ...
 
+    def load_session_records(self, task_id: str | None = None) -> list[Meta]: ...
+
     def append_command_result(
         self,
         task_id: str,
@@ -692,6 +694,8 @@ class SQLiteBackend:
         kind: str,
         at: str,
         transition: Callable[[Meta, list[Task]], tuple[str, str]],
+        session_record: Meta | None = None,
+        session_factory: Callable[[Meta], Meta] | None = None,
     ) -> None:
         """Apply one transition and CAS the authoritative revision in one transaction."""
         with self.transaction() as connection:
@@ -728,6 +732,8 @@ class SQLiteBackend:
             )
             if cursor.rowcount != 1:
                 raise RuntimeError("SQLITE_CONFLICT: exact-revision update lost its fence")
+            if session_factory is not None:
+                session_record = session_factory(meta)
             connection.execute("DELETE FROM dependencies WHERE task_id=?", (task_id,))
             connection.executemany(
                 "INSERT INTO dependencies(task_id, dependency_id) VALUES (?, ?)",
@@ -738,6 +744,62 @@ class SQLiteBackend:
                    VALUES (?, ?, ?, ?, ?)""",
                 (task_id, meta["task_revision"], kind, at, note),
             )
+            if session_record is not None:
+                connection.execute(
+                    """CREATE TABLE IF NOT EXISTS session_records(
+                       sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+                       task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+                       task_revision INTEGER NOT NULL,
+                       record_json TEXT NOT NULL CHECK(json_valid(record_json)),
+                       recorded_at TEXT NOT NULL,
+                       UNIQUE(task_id, task_revision)) STRICT"""
+                )
+                connection.execute(
+                    """INSERT INTO session_records
+                       (task_id, task_revision, record_json, recorded_at)
+                       VALUES (?, ?, ?, ?)""",
+                    (
+                        task_id,
+                        int(session_record["task_revision"]),
+                        json.dumps(session_record, sort_keys=True, separators=(",", ":")),
+                        str(session_record["recorded_at"]),
+                    ),
+                )
+                connection.execute(
+                    """DELETE FROM session_records
+                       WHERE task_id=? AND sequence NOT IN
+                       (SELECT sequence FROM session_records WHERE task_id=?
+                        ORDER BY sequence DESC LIMIT 32)""",
+                    (task_id, task_id),
+                )
+
+    def load_session_records(self, task_id: str | None = None) -> list[Meta]:
+        """Load bounded session records from the authoritative SQLite store."""
+        connection = self._connect(read_only=True)
+        try:
+            try:
+                rows = connection.execute(
+                    """SELECT record_json FROM session_records
+                       WHERE (? IS NULL OR task_id=?) ORDER BY sequence""",
+                    (task_id, task_id),
+                )
+            except sqlite3.OperationalError as error:
+                if "no such table" not in str(error).lower():
+                    raise
+                return []
+            records: list[Meta] = []
+            for row in rows:
+                value = json.loads(str(row["record_json"]))
+                if not isinstance(value, dict):
+                    raise StorageCorruptionError("SQLITE_CORRUPT: invalid session record")
+                records.append(cast(Meta, value))
+            return records
+        except json.JSONDecodeError as error:
+            raise StorageCorruptionError("SQLITE_CORRUPT: invalid session JSON") from error
+        except sqlite3.Error as error:
+            raise _translate(error) from error
+        finally:
+            connection.close()
 
     def update_observations(self, observations: dict[str, Meta], at: str) -> None:
         """Persist changed live worktree observations in one transaction."""

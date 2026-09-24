@@ -2286,6 +2286,78 @@ class HandoffTest(unittest.TestCase):
         self.assertEqual("AR-0001", journal[-1]["task"])
         self.assertEqual("EXIT", journal[-1]["classification"])
 
+    def test_update_and_run_append_replayable_session_snapshots(self) -> None:
+        self.make_task(
+            status="in_progress",
+            owner="worker-a",
+            claim_expires="2099-01-01T00:00:00+00:00",
+        )
+        update_args = argparse.Namespace(
+            task="AR-0001",
+            owner="worker-a",
+            expected_revision=1,
+            status=None,
+            priority=None,
+            summary=None,
+            next_action="Run the verified command.",
+            note="updated session state",
+        )
+        with patch.object(CORE, "commit", return_value=True):
+            CORE.mutate(update_args, "update")
+        first = CORE.latest_session(CORE.ROOT, "AR-0001")
+        self.assertIsNotNone(first)
+        self.assertEqual("update", first["trigger"])
+        self.assertEqual(2, first["task_revision"])
+
+        CORE.CONFIG.parent.mkdir(exist_ok=True)
+        CORE.CONFIG.write_text("{}")
+        with (
+            patch.object(
+                CORE.subprocess, "run", return_value=subprocess.CompletedProcess(["true"], 0)
+            ),
+            patch.object(CORE, "commit", return_value=True),
+            patch.object(CORE, "reconcile", return_value=True),
+        ):
+            self.assertEqual(
+                0,
+                CORE.cmd_run(
+                    argparse.Namespace(task="AR-0001", owner="worker-a", command=["true"])
+                ),
+            )
+        latest = CORE.latest_session(CORE.ROOT, "AR-0001")
+        self.assertEqual("run", latest["trigger"])
+        self.assertEqual(3, latest["task_revision"])
+        with (
+            patch("builtins.print") as output,
+            patch.object(CORE, "validate", return_value=[]),
+            patch.object(CORE, "run", return_value=SimpleNamespace(stdout="state\n")),
+        ):
+            CORE.cmd_snapshot("AR-0001")
+        self.assertTrue(any("SESSION_SNAPSHOT=" in str(call) for call in output.call_args_list))
+        self.assertNotIn(
+            "updated session state", (self.root / "sessions/AR-0001.jsonl").read_text()
+        )
+
+        empty_note = argparse.Namespace(
+            task="AR-0001",
+            owner="worker-a",
+            expected_revision=3,
+            status=None,
+            priority=None,
+            summary=None,
+            next_action=None,
+            note="",
+        )
+        with patch.object(CORE, "commit", return_value=True):
+            CORE.mutate(empty_note, "update")
+        with (
+            patch("builtins.print"),
+            patch.object(CORE, "validate", return_value=[]),
+            patch.object(CORE, "run", return_value=SimpleNamespace(stdout="state\n")),
+            self.assertRaisesRegex(RuntimeError, "no session snapshot"),
+        ):
+            CORE.cmd_snapshot("AR-9999")
+
     def test_explicit_status_render_and_stale_check(self) -> None:
         self.make_task()
         CORE.cmd_render_status(check=True)

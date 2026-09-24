@@ -679,6 +679,10 @@ class SQLiteStorageTest(unittest.TestCase):
     def test_sqlite_command_journal_snapshot_doctor_and_offline_reconcile(self) -> None:
         self.configure_core(backend="sqlite")
         self.create()
+        self.assertEqual([], CORE.storage_backend().load_session_records())
+        tasks = CORE.all_tasks()
+        with patch.object(CORE, "storage_backend", return_value=CORE.GitBackend()):
+            CORE.write_sqlite_projections(tasks)
         CORE.export_sqlite_projections()
         CORE.append_command_result("AR-0001", "worker", "f" * 64, 0, False)
         with patch("builtins.print") as output:
@@ -697,6 +701,9 @@ class SQLiteStorageTest(unittest.TestCase):
     def test_sqlite_run_needs_no_runtime_or_network_publication(self) -> None:
         self.configure_core(backend="sqlite")
         self.create()
+        stale = self.root / "sessions/AR-9999.jsonl"
+        stale.parent.mkdir()
+        stale.write_text("stale\n")
         CORE.export_sqlite_projections()
         CORE.mutate(argparse.Namespace(task="AR-0001", owner="worker", lease_minutes=10), "claim")
         args = argparse.Namespace(
@@ -709,7 +716,54 @@ class SQLiteStorageTest(unittest.TestCase):
         self.assertEqual(
             1, connection.execute("SELECT count(*) FROM command_results").fetchone()[0]
         )
+        self.assertEqual(
+            (1, "run"),
+            connection.execute(
+                "SELECT count(*), json_extract(record_json, '$.trigger') FROM session_records"
+            ).fetchone(),
+        )
+        self.assertFalse(stale.exists())
+        with patch("builtins.print"):
+            CORE.cmd_snapshot("AR-0001")
         connection.close()
+
+    def test_sqlite_session_record_reader_rejects_corrupt_rows(self) -> None:
+        self.configure_core(backend="sqlite")
+        self.create()
+        connection = sqlite3.connect(self.database)
+        connection.execute(
+            "CREATE TABLE session_records(sequence INTEGER PRIMARY KEY, task_id TEXT, "
+            "task_revision INTEGER, record_json TEXT, recorded_at TEXT)"
+        )
+        connection.execute("INSERT INTO session_records VALUES (1, 'AR-0001', 2, '[]', 'now')")
+        connection.commit()
+        connection.close()
+        with self.assertRaisesRegex(RuntimeError, "invalid session record"):
+            CORE.storage_backend().load_session_records()
+        connection = sqlite3.connect(self.database)
+        connection.execute("UPDATE session_records SET record_json='not-json'")
+        connection.commit()
+        connection.close()
+        with self.assertRaisesRegex(RuntimeError, "invalid session JSON"):
+            CORE.storage_backend().load_session_records()
+
+    def test_sqlite_session_reader_translates_unexpected_database_errors(self) -> None:
+        self.configure_core(backend="sqlite")
+        self.create()
+
+        class BrokenConnection:
+            def execute(self, _query: str, _parameters: tuple[object, ...] = ()) -> Any:
+                raise sqlite3.OperationalError("database unavailable")
+
+            def close(self) -> None:
+                return None
+
+        backend = CORE.storage_backend()
+        with (
+            patch.object(backend, "_connect", return_value=BrokenConnection()),
+            self.assertRaisesRegex(RuntimeError, "database unavailable"),
+        ):
+            backend.load_session_records()
 
     def test_selector_rejects_malformed_unknown_and_mismatched_values(self) -> None:
         self.configure_core()

@@ -33,6 +33,13 @@ if __package__:
         gate_errors,
         transition_allowed,
     )
+    from .session_records import (
+        append_session_record,
+        build_session_record,
+        latest_session,
+        session_path,
+        validate_session_record,
+    )
     from .sqlite_storage import (
         Backend,
         SQLiteBackend,
@@ -55,6 +62,13 @@ else:  # pragma: no cover - direct script execution
         apply_event,
         gate_errors,
         transition_allowed,
+    )
+    from session_records import (  # type: ignore[import-not-found,no-redef]
+        append_session_record,
+        build_session_record,
+        latest_session,
+        session_path,
+        validate_session_record,
     )
     from sqlite_storage import (  # type: ignore[import-not-found,no-redef]
         Backend,
@@ -216,6 +230,9 @@ class GitBackend:
 
     def load_tasks(self) -> list[Task]:
         return git_tasks()
+
+    def load_session_records(self, _task_id: str | None = None) -> list[Meta]:
+        return []
 
     def append_command_result(
         self,
@@ -1399,6 +1416,27 @@ def reconcile(*, do_commit: bool, push: bool = False) -> bool:
             raise
 
 
+def write_session_projections(session_records: list[Meta]) -> list[Path]:
+    """Render bounded session histories from authoritative records."""
+    by_task: dict[str, list[Meta]] = {}
+    for record in session_records:
+        validate_session_record(record)
+        by_task.setdefault(str(record["task"]), []).append(record)
+    sessions_root = ROOT / "sessions"
+    sessions_root.mkdir(mode=0o700, parents=True, exist_ok=True)
+    for task_id, records in by_task.items():
+        atomic(
+            session_path(ROOT, task_id),
+            "".join(
+                json.dumps(item, sort_keys=True, separators=(",", ":")) + "\n" for item in records
+            ),
+        )
+    for path in sessions_root.glob("AR-*.jsonl"):
+        if path.stem not in by_task:
+            path.unlink()
+    return [session_path(ROOT, task_id) for task_id in by_task]
+
+
 def write_sqlite_projections(tasks: list[Task], *, already_locked: bool = False) -> list[Path]:
     """Regenerate byte-stable Markdown projections from one database snapshot."""
     with contextlib.nullcontext() if already_locked else locked():
@@ -1414,7 +1452,14 @@ def write_sqlite_projections(tasks: list[Task], *, already_locked: bool = False)
         errors = validate(live=False)
         if errors:
             raise RuntimeError("projection validation failed:\n" + "\n".join(errors))
-        return [*[path for path, _, _ in tasks], *views]
+        backend = storage_backend()
+        session_records = backend.load_session_records()
+        session_paths = write_session_projections(session_records)
+        return [
+            *[path for path, _, _ in tasks],
+            *views,
+            *session_paths,
+        ]
 
 
 def export_sqlite_projections() -> list[Path]:
@@ -1422,17 +1467,24 @@ def export_sqlite_projections() -> list[Path]:
     return write_sqlite_projections(all_tasks())
 
 
+def refresh_sqlite_live_state() -> State | None:
+    """Refresh live observations when the private runtime is configured."""
+    if not (CONFIG.exists() and config().get("github_repository")):
+        return None
+    state = project_scan()
+    backend = mutating_sqlite_backend()
+    backend.update_observations({item["key"]: item for item in state["worktrees"]}, now())
+    return state
+
+
 def reconcile_sqlite(*, do_commit: bool, push: bool) -> bool:
     """Export local authority; optional Git/GitHub publication is a replica only."""
     if push and not do_commit:
         raise RuntimeError("SQLite publication requires --commit with --push")
     before: dict[Path, str | None] = {path: path.read_text() for path in TASKS.glob("AR-*.md")}
+    before.update({path: path.read_text() for path in (ROOT / "sessions").glob("AR-*.jsonl")})
     before.update({path: path.read_text() if path.exists() else None for path in generated_paths()})
-    state: State | None = None
-    if CONFIG.exists() and config().get("github_repository"):
-        state = project_scan()
-        backend = mutating_sqlite_backend()
-        backend.update_observations({item["key"]: item for item in state["worktrees"]}, now())
+    state = refresh_sqlite_live_state()
     paths = export_sqlite_projections()
     if state is not None:
         project, worktrees = live_docs(state)
@@ -1769,6 +1821,25 @@ def write_rendered_task_views(views: dict[Path, str]) -> None:
             atomic(target, content)
 
 
+def git_session_record(
+    args: argparse.Namespace,
+    kind: str,
+    meta: Meta,
+    before: dict[Path, str | None],
+) -> Meta | None:
+    """Prepare a Git-backed session record and its rollback path."""
+    trigger = str(getattr(args, "_session_trigger", kind))
+    if kind != "update" or trigger not in {"update", "run"}:
+        return None
+    try:
+        record = build_session_record(meta, trigger, str(meta["updated_at"]))
+    except ValueError as error:
+        raise RuntimeError(f"state file exceeds 200 KiB: {error}") from error
+    record_path = session_path(ROOT, str(meta["id"]))
+    before[record_path] = record_path.read_text() if record_path.exists() else None
+    return record
+
+
 def mutate(args: argparse.Namespace, kind: str) -> None:
     if backend_selection()["backend"] == "sqlite":
         mutate_sqlite(args, kind)
@@ -1790,6 +1861,7 @@ def mutate(args: argparse.Namespace, kind: str) -> None:
         note = apply_transition(args, kind, meta, all_tasks())
         meta["task_revision"] += 1
         meta["updated_at"] = now()
+        session_record = git_session_record(args, kind, meta, before)
         if note:
             body += (
                 "\n"
@@ -1804,6 +1876,8 @@ def mutate(args: argparse.Namespace, kind: str) -> None:
                 + "\n"
             )
         try:
+            if session_record is not None:
+                append_session_record(ROOT, session_record)
             write_task(path, meta, body)
             views = rendered_task_views(all_tasks())
             write_rendered_task_views(views)
@@ -1868,7 +1942,22 @@ def mutate_sqlite(args: argparse.Namespace, kind: str) -> None:
             raise RuntimeError("transition validation failed:\n" + "\n".join(errors))
         return note, _transition_note(selected[2], note, at)
 
-    backend.mutate(args.task, expected, kind, at, transition)
+    trigger = str(getattr(args, "_session_trigger", kind))
+    session_factory = None
+    if kind == "update" and trigger in {"update", "run"}:
+
+        def make_session_record(updated: Meta) -> Meta:
+            return build_session_record(updated, trigger, at)
+
+        session_factory = make_session_record
+    backend.mutate(
+        args.task,
+        expected,
+        kind,
+        at,
+        transition,
+        session_factory=session_factory,
+    )
     try:
         export_sqlite_projections()
     except Exception as error:
@@ -1940,7 +2029,7 @@ def cmd_doctor(*, live: bool) -> int:
     return 0
 
 
-def cmd_snapshot() -> None:
+def cmd_snapshot(task_id: str | None = None) -> None:
     with locked(exclusive=False):
         sqlite = backend_selection()["backend"] == "sqlite"
         sqlite_live = CONFIG.exists() and bool(config().get("github_repository"))
@@ -1954,6 +2043,16 @@ def cmd_snapshot() -> None:
                 "STATE_COMMIT=" + run(["git", "-C", str(ROOT), "rev-parse", "HEAD"]).stdout.strip()
             )
         print((ROOT / "CURRENT.md").read_text(), end="")
+        if task_id is not None:
+            if sqlite:
+                records = storage_backend().load_session_records(task_id)
+                record = records[-1] if records else None
+            else:
+                record = latest_session(ROOT, task_id)
+            if record is None:
+                raise RuntimeError(f"no session snapshot for {task_id}")
+            validate_session_record(record)
+            print("SESSION_SNAPSHOT=" + json.dumps(record, sort_keys=True, separators=(",", ":")))
 
 
 def require_active_owner(task_id: str, owner: str) -> None:
@@ -2142,6 +2241,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         summary=None,
         next_action=None,
         note=note,
+        _session_trigger="run",
     )
     mutate(update, "update")
     sqlite = backend_selection()["backend"] == "sqlite"
@@ -2336,7 +2436,7 @@ def dispatch_bound_command(args: argparse.Namespace) -> int:  # noqa: C901
     elif args.cmd == "roles":
         return dispatch_roles_command(args)
     elif args.cmd == "snapshot":
-        cmd_snapshot()
+        cmd_snapshot(args.task)
     elif args.cmd == "doctor":
         return cmd_doctor(live=args.live)
     elif args.cmd == "render-status":
@@ -2403,7 +2503,8 @@ def main() -> int:
     role = role_commands.add_parser("remove")
     role.add_argument("--expected-revision", type=int, required=True)
     role.add_argument("--assignment-id", required=True)
-    commands.add_parser("snapshot")
+    item = commands.add_parser("snapshot")
+    item.add_argument("--task")
     item = commands.add_parser("doctor")
     item.add_argument("--live", action="store_true")
     item = commands.add_parser("render-status")
