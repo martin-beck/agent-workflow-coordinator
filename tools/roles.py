@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import datetime as dt
 import fcntl
 import json
 import os
@@ -172,6 +173,63 @@ def check(state_path: Path, registry_path: Path, owner_id: str) -> dict[str, Any
     if not result["assignments"]:
         raise RolesError(f"no active role assignment for owner: {owner_id}")
     return {"owner_id": owner_id, "revision": result["revision"], "valid": True}
+
+
+def role_admission_error(
+    state_path: Path,
+    registry_path: Path,
+    *,
+    owner_id: str,
+    required_role: str,
+    now: dt.datetime | None = None,
+) -> str | None:
+    """Return a fail-closed admission error for one owner, or ``None``.
+
+    A missing role-state file means the role workstream has not been initialized;
+    existing installations remain compatible until the durable role store exists.
+    Once present, every malformed, unknown, expired, or missing capability fails.
+    """
+    if not state_path.exists():
+        return None
+    try:
+        state = _read_state(state_path)
+        registry = _registry(registry_path)
+        assignments = _assignments(state, registry)
+    except RolesError as error:
+        return f"role admission unavailable: {error}"
+    current = now or dt.datetime.now(dt.UTC)
+    if current.tzinfo is None:
+        return "role admission requires a timezone-aware validation time"
+    owner_assignments = [item for item in assignments if item["owner_id"] == owner_id]
+    if not owner_assignments:
+        return f"role admission denied: owner has no active assignment: {owner_id}"
+    role_ids = {role["role_id"] for item in owner_assignments for role in item["roles"]}
+    if required_role not in role_ids:
+        return f"role admission denied: {owner_id} lacks role: {required_role}"
+    return None
+
+
+def role_admission_errors(
+    state_path: Path,
+    registry_path: Path,
+    owners_and_roles: list[tuple[str, str]],
+) -> list[str]:
+    """Return deterministic admission errors for doctor validation."""
+    if not state_path.exists():
+        return []
+    errors = [
+        error
+        for owner_id, required_role in owners_and_roles
+        if (
+            error := role_admission_error(
+                state_path,
+                registry_path,
+                owner_id=owner_id,
+                required_role=required_role,
+            )
+        )
+    ]
+    return sorted(set(errors))
 
 
 def main(argv: list[str] | None = None) -> int:
