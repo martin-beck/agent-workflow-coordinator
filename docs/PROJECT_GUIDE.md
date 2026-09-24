@@ -33,6 +33,10 @@ rewrites the coordinator source, Git history, and binding files.
   only a context digest, step state, safe artifact references and the next action; raw prompts,
   logs and command output are never retained. The latest record can be replayed with
   `tools/handoffctl snapshot --task AR-####`.
+- `checkpoints/AR-####.jsonl`: bounded task checkpoints. Each record stores task metadata,
+  artifact references, a body digest and the signed source commit; raw command output is never
+  retained. Create one with `tools/handoffctl checkpoint AR-#### --owner OWNER
+  --expected-revision REV`.
 
 ## Initialize exactly once
 

@@ -457,6 +457,8 @@ class Backend(Protocol):
 
     def load_session_records(self, task_id: str | None = None) -> list[Meta]: ...
 
+    def load_checkpoint_records(self, task_id: str | None = None) -> list[Meta]: ...
+
     def append_command_result(
         self,
         task_id: str,
@@ -696,6 +698,7 @@ class SQLiteBackend:
         transition: Callable[[Meta, list[Task]], tuple[str, str]],
         session_record: Meta | None = None,
         session_factory: Callable[[Meta], Meta] | None = None,
+        checkpoint_factory: Callable[[Meta], Meta] | None = None,
     ) -> None:
         """Apply one transition and CAS the authoritative revision in one transaction."""
         with self.transaction() as connection:
@@ -712,6 +715,35 @@ class SQLiteBackend:
             note, body = transition(meta, tasks)
             meta["task_revision"] = current + 1
             meta["updated_at"] = at
+            checkpoint_record = checkpoint_factory(meta) if checkpoint_factory is not None else None
+            if checkpoint_record is not None:
+                connection.execute(
+                    """CREATE TABLE IF NOT EXISTS checkpoint_records(
+                       sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+                       task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+                       task_revision INTEGER NOT NULL,
+                       record_json TEXT NOT NULL CHECK(json_valid(record_json)),
+                       recorded_at TEXT NOT NULL,
+                       UNIQUE(task_id, task_revision)) STRICT"""
+                )
+                connection.execute(
+                    """INSERT INTO checkpoint_records
+                       (task_id, task_revision, record_json, recorded_at)
+                       VALUES (?, ?, ?, ?)""",
+                    (
+                        task_id,
+                        int(checkpoint_record["task_revision"]),
+                        json.dumps(checkpoint_record, sort_keys=True, separators=(",", ":")),
+                        str(checkpoint_record["recorded_at"]),
+                    ),
+                )
+                connection.execute(
+                    """DELETE FROM checkpoint_records
+                       WHERE task_id=? AND sequence NOT IN
+                       (SELECT sequence FROM checkpoint_records WHERE task_id=?
+                        ORDER BY sequence DESC LIMIT 16)""",
+                    (task_id, task_id),
+                )
             cursor = connection.execute(
                 """UPDATE tasks SET meta_json=?, body=?, revision=?, status=?, owner=?,
                    claim_expires=?, branch=?, worktree_key=?, updated_at=?
@@ -796,6 +828,34 @@ class SQLiteBackend:
             return records
         except json.JSONDecodeError as error:
             raise StorageCorruptionError("SQLITE_CORRUPT: invalid session JSON") from error
+        except sqlite3.Error as error:
+            raise _translate(error) from error
+        finally:
+            connection.close()
+
+    def load_checkpoint_records(self, task_id: str | None = None) -> list[Meta]:
+        """Load bounded checkpoint records from the authoritative SQLite store."""
+        connection = self._connect(read_only=True)
+        try:
+            try:
+                rows = connection.execute(
+                    """SELECT record_json FROM checkpoint_records
+                       WHERE (? IS NULL OR task_id=?) ORDER BY sequence""",
+                    (task_id, task_id),
+                )
+            except sqlite3.OperationalError as error:
+                if "no such table" not in str(error).lower():
+                    raise
+                return []
+            records: list[Meta] = []
+            for row in rows:
+                value = json.loads(str(row["record_json"]))
+                if not isinstance(value, dict):
+                    raise StorageCorruptionError("SQLITE_CORRUPT: invalid checkpoint record")
+                records.append(cast(Meta, value))
+            return records
+        except json.JSONDecodeError as error:
+            raise StorageCorruptionError("SQLITE_CORRUPT: invalid checkpoint JSON") from error
         except sqlite3.Error as error:
             raise _translate(error) from error
         finally:

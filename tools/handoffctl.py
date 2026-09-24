@@ -24,6 +24,13 @@ from pathlib import Path
 from typing import Any, cast
 
 if __package__:
+    from .checkpoint_records import (
+        append_checkpoint,
+        build_checkpoint,
+        checkpoint_path,
+        load_checkpoints,
+        validate_checkpoint,
+    )
     from .oracle_lifecycle import (
         ArtifactRef,
         GateError,
@@ -54,6 +61,13 @@ if __package__:
     )
     from .task_spec import done_admission_error, task_spec_errors
 else:  # pragma: no cover - direct script execution
+    from checkpoint_records import (  # type: ignore[import-not-found,no-redef]
+        append_checkpoint,
+        build_checkpoint,
+        checkpoint_path,
+        load_checkpoints,
+        validate_checkpoint,
+    )
     from oracle_lifecycle import (  # type: ignore[import-not-found,no-redef]
         ArtifactRef,
         GateError,
@@ -233,6 +247,9 @@ class GitBackend:
 
     def load_session_records(self, _task_id: str | None = None) -> list[Meta]:
         return []
+
+    def load_checkpoint_records(self, task_id: str | None = None) -> list[Meta]:
+        return load_checkpoints(ROOT, task_id)
 
     def append_command_result(
         self,
@@ -1196,6 +1213,11 @@ def validate(*, live: bool = False) -> list[str]:
     errors.extend(graph_errors(tasks))
     errors.extend(supersession_errors(tasks))
     errors.extend(generated_view_errors(tasks))
+    try:
+        for record in storage_backend().load_checkpoint_records():
+            validate_checkpoint(record)
+    except (OSError, ValueError, RuntimeError) as error:
+        errors.append(f"checkpoint validation failed: {error}")
     errors.extend(privacy_errors())
     if live:
         state = project_scan()
@@ -1437,6 +1459,27 @@ def write_session_projections(session_records: list[Meta]) -> list[Path]:
     return [session_path(ROOT, task_id) for task_id in by_task]
 
 
+def write_checkpoint_projections(checkpoint_records: list[Meta]) -> list[Path]:
+    """Render bounded checkpoint histories from authoritative SQLite records."""
+    by_task: dict[str, list[Meta]] = {}
+    for record in checkpoint_records:
+        validate_checkpoint(record)
+        by_task.setdefault(str(record["task"]), []).append(record)
+    checkpoints_root = ROOT / "checkpoints"
+    checkpoints_root.mkdir(mode=0o700, parents=True, exist_ok=True)
+    for task_id, records in by_task.items():
+        atomic(
+            checkpoint_path(ROOT, task_id),
+            "".join(
+                json.dumps(item, sort_keys=True, separators=(",", ":")) + "\n" for item in records
+            ),
+        )
+    for path in checkpoints_root.glob("AR-*.jsonl"):
+        if path.stem not in by_task:
+            path.unlink()
+    return [checkpoint_path(ROOT, task_id) for task_id in by_task]
+
+
 def write_sqlite_projections(tasks: list[Task], *, already_locked: bool = False) -> list[Path]:
     """Regenerate byte-stable Markdown projections from one database snapshot."""
     with contextlib.nullcontext() if already_locked else locked():
@@ -1455,10 +1498,13 @@ def write_sqlite_projections(tasks: list[Task], *, already_locked: bool = False)
         backend = storage_backend()
         session_records = backend.load_session_records()
         session_paths = write_session_projections(session_records)
+        checkpoint_records = backend.load_checkpoint_records()
+        checkpoint_paths = write_checkpoint_projections(checkpoint_records)
         return [
             *[path for path, _, _ in tasks],
             *views,
             *session_paths,
+            *checkpoint_paths,
         ]
 
 
@@ -1483,6 +1529,7 @@ def reconcile_sqlite(*, do_commit: bool, push: bool) -> bool:
         raise RuntimeError("SQLite publication requires --commit with --push")
     before: dict[Path, str | None] = {path: path.read_text() for path in TASKS.glob("AR-*.md")}
     before.update({path: path.read_text() for path in (ROOT / "sessions").glob("AR-*.jsonl")})
+    before.update({path: path.read_text() for path in (ROOT / "checkpoints").glob("AR-*.jsonl")})
     before.update({path: path.read_text() if path.exists() else None for path in generated_paths()})
     state = refresh_sqlite_live_state()
     paths = export_sqlite_projections()
@@ -1735,6 +1782,19 @@ def apply_owned_change(args: argparse.Namespace, kind: str, meta: Meta) -> str: 
     return str(args.note)
 
 
+def apply_checkpoint(args: argparse.Namespace, meta: Meta) -> str:
+    """Attach the exact source commit to the task before recording its snapshot."""
+    if meta.get("owner") != args.owner:
+        raise RuntimeError(f"{args.task} is owned by {meta.get('owner') or 'nobody'}")
+    if args.expected_revision != meta["task_revision"]:
+        raise RuntimeError(
+            f"stale revision: expected {args.expected_revision}, current {meta['task_revision']}"
+        )
+    require_role_admission(str(args.owner))
+    meta["checkpoint_commit"] = str(args.source_commit)
+    return f"Checkpointed source commit {args.source_commit}."
+
+
 def _artifact_values(values: list[str], label: str) -> tuple[ArtifactRef, ...]:
     result: list[ArtifactRef] = []
     for value in values:
@@ -1783,6 +1843,8 @@ def apply_transition(args: argparse.Namespace, kind: str, meta: Meta, tasks: lis
         return apply_recover_expired(args, meta, tasks)
     if kind == "gate":
         return apply_gate(args, meta)
+    if kind == "checkpoint":
+        return apply_checkpoint(args, meta)
     return apply_owned_change(args, kind, meta)
 
 
@@ -1840,7 +1902,7 @@ def git_session_record(
     return record
 
 
-def mutate(args: argparse.Namespace, kind: str) -> None:
+def mutate(args: argparse.Namespace, kind: str) -> None:  # noqa: C901
     if backend_selection()["backend"] == "sqlite":
         mutate_sqlite(args, kind)
         return
@@ -1862,6 +1924,13 @@ def mutate(args: argparse.Namespace, kind: str) -> None:
         meta["task_revision"] += 1
         meta["updated_at"] = now()
         session_record = git_session_record(args, kind, meta, before)
+        checkpoint_record = None
+        if kind == "checkpoint":
+            checkpoint_record = build_checkpoint(
+                meta, body, str(args.source_commit), str(meta["updated_at"])
+            )
+            record_path = checkpoint_path(ROOT, str(meta["id"]))
+            before[record_path] = record_path.read_text() if record_path.exists() else None
         if note:
             body += (
                 "\n"
@@ -1878,6 +1947,8 @@ def mutate(args: argparse.Namespace, kind: str) -> None:
         try:
             if session_record is not None:
                 append_session_record(ROOT, session_record)
+            if checkpoint_record is not None:
+                append_checkpoint(ROOT, checkpoint_record)
             write_task(path, meta, body)
             views = rendered_task_views(all_tasks())
             write_rendered_task_views(views)
@@ -1950,6 +2021,13 @@ def mutate_sqlite(args: argparse.Namespace, kind: str) -> None:
             return build_session_record(updated, trigger, at)
 
         session_factory = make_session_record
+    checkpoint_factory = None
+    if kind == "checkpoint":
+
+        def make_checkpoint_record(updated: Meta) -> Meta:
+            return build_checkpoint(updated, selected[2], str(args.source_commit), at)
+
+        checkpoint_factory = make_checkpoint_record
     backend.mutate(
         args.task,
         expected,
@@ -1957,6 +2035,7 @@ def mutate_sqlite(args: argparse.Namespace, kind: str) -> None:
         at,
         transition,
         session_factory=session_factory,
+        checkpoint_factory=checkpoint_factory,
     )
     try:
         export_sqlite_projections()
@@ -2053,6 +2132,15 @@ def cmd_snapshot(task_id: str | None = None) -> None:
                 raise RuntimeError(f"no session snapshot for {task_id}")
             validate_session_record(record)
             print("SESSION_SNAPSHOT=" + json.dumps(record, sort_keys=True, separators=(",", ":")))
+
+
+def cmd_checkpoint(args: argparse.Namespace) -> None:
+    """Capture a bounded task checkpoint before mutating task authority."""
+    if invocation_worktree() is not None:
+        args.source_commit = run(["git", "rev-parse", "HEAD"]).stdout.strip()
+    else:
+        args.source_commit = run(["git", "-C", str(ROOT), "rev-parse", "HEAD"]).stdout.strip()
+    mutate(args, "checkpoint")
 
 
 def require_active_owner(task_id: str, owner: str) -> None:
@@ -2437,6 +2525,8 @@ def dispatch_bound_command(args: argparse.Namespace) -> int:  # noqa: C901
         return dispatch_roles_command(args)
     elif args.cmd == "snapshot":
         cmd_snapshot(args.task)
+    elif args.cmd == "checkpoint":
+        cmd_checkpoint(args)
     elif args.cmd == "doctor":
         return cmd_doctor(live=args.live)
     elif args.cmd == "render-status":
@@ -2505,6 +2595,10 @@ def main() -> int:
     role.add_argument("--assignment-id", required=True)
     item = commands.add_parser("snapshot")
     item.add_argument("--task")
+    item = commands.add_parser("checkpoint")
+    item.add_argument("task")
+    item.add_argument("--owner", required=True)
+    item.add_argument("--expected-revision", type=int, required=True)
     item = commands.add_parser("doctor")
     item.add_argument("--live", action="store_true")
     item = commands.add_parser("render-status")

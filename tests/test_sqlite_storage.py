@@ -706,6 +706,15 @@ class SQLiteStorageTest(unittest.TestCase):
         stale.write_text("stale\n")
         CORE.export_sqlite_projections()
         CORE.mutate(argparse.Namespace(task="AR-0001", owner="worker", lease_minutes=10), "claim")
+        CORE.mutate(
+            argparse.Namespace(
+                task="AR-0001",
+                owner="worker",
+                expected_revision=2,
+                source_commit="d" * 40,
+            ),
+            "checkpoint",
+        )
         args = argparse.Namespace(
             task="AR-0001", owner="worker", timeout_seconds=5.0, command=["/bin/true"]
         )
@@ -720,6 +729,13 @@ class SQLiteStorageTest(unittest.TestCase):
             (1, "run"),
             connection.execute(
                 "SELECT count(*), json_extract(record_json, '$.trigger') FROM session_records"
+            ).fetchone(),
+        )
+        self.assertEqual(
+            (1, "d" * 40),
+            connection.execute(
+                "SELECT count(*), json_extract(record_json, '$.source_commit') "
+                "FROM checkpoint_records"
             ).fetchone(),
         )
         self.assertFalse(stale.exists())
