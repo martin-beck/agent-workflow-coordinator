@@ -31,6 +31,14 @@ if __package__:
         load_checkpoints,
         validate_checkpoint,
     )
+    from .directive_records import (
+        append_directive,
+        build_directive,
+        conflicting_directives,
+        directive_path,
+        latest_directives,
+        validate_directive,
+    )
     from .oracle_lifecycle import (
         ArtifactRef,
         GateError,
@@ -75,6 +83,14 @@ else:  # pragma: no cover - direct script execution
         checkpoint_path,
         load_checkpoints,
         validate_checkpoint,
+    )
+    from directive_records import (  # type: ignore[import-not-found,no-redef]
+        append_directive,
+        build_directive,
+        conflicting_directives,
+        directive_path,
+        latest_directives,
+        validate_directive,
     )
     from oracle_lifecycle import (  # type: ignore[import-not-found,no-redef]
         ArtifactRef,
@@ -1222,6 +1238,25 @@ def rollback_validation_errors() -> list[str]:
     return []
 
 
+def directive_validation_errors() -> list[str]:
+    """Validate the bounded directive journal and its active precedence rules."""
+    try:
+        records = latest_directives(ROOT)
+        for record in records:
+            validate_directive(record)
+        active = [record for record in records if record["lifecycle"] == "active"]
+        for index, record in enumerate(active):
+            conflicts = conflicting_directives(active[index + 1 :], record)
+            if conflicts:
+                return [
+                    "directive validation failed: active conflict requires guidance AR-0053: "
+                    + ",".join(str(item["directive_id"]) for item in conflicts)
+                ]
+    except (OSError, ValueError, RuntimeError) as error:
+        return [f"directive validation failed: {error}"]
+    return []
+
+
 def validate(*, live: bool = False) -> list[str]:
     errors: list[str] = []
     tasks = all_tasks()
@@ -1245,6 +1280,7 @@ def validate(*, live: bool = False) -> list[str]:
     except (OSError, ValueError, RuntimeError) as error:
         errors.append(f"checkpoint validation failed: {error}")
     errors.extend(rollback_validation_errors())
+    errors.extend(directive_validation_errors())
     errors.extend(privacy_errors())
     if live:
         state = project_scan()
@@ -2205,6 +2241,111 @@ def cmd_checkpoint(args: argparse.Namespace) -> None:
     mutate(args, "checkpoint")
 
 
+def _directive_claim_expiry(minutes: int) -> str:
+    if minutes <= 0:
+        raise RuntimeError("directive lease must be positive")
+    return (
+        (dt.datetime.now(dt.UTC) + dt.timedelta(minutes=minutes)).replace(microsecond=0).isoformat()
+    )
+
+
+def _directive_claim_is_live(record: Meta, owner: str) -> None:
+    if str(record.get("owner")) != owner:
+        raise RuntimeError(f"directive is owned by {record.get('owner') or 'nobody'}")
+    try:
+        expires = dt.datetime.fromisoformat(str(record["claim_expires"]))
+    except ValueError as error:
+        raise RuntimeError("directive claim expiry is invalid") from error
+    if expires.tzinfo is None or expires <= dt.datetime.now(dt.UTC):
+        raise RuntimeError("directive claim has expired")
+
+
+def _commit_directive(record: Meta) -> None:
+    append_directive(ROOT, record)
+    if not commit(f"chore(state): directive {record['directive_id']}", [directive_path(ROOT)]):
+        raise RuntimeError("directive record was not committed")
+    push_replica()
+
+
+def _create_directive(args: argparse.Namespace, records: list[Meta]) -> Meta:
+    if any(item["directive_id"] == args.directive_id for item in records):
+        raise RuntimeError(f"directive already exists: {args.directive_id}")
+    return build_directive(
+        args.directive_id,
+        authority=args.authority,
+        precedence=args.precedence,
+        scope={"roles": args.role_scope, "tasks": args.task_scope},
+        statement=args.statement,
+        recorded_at=now(),
+        owner=args.owner,
+        claim_expires=_directive_claim_expiry(args.lease_minutes),
+        guidance_ref=args.guidance_ref,
+    )
+
+
+def _transition_directive(args: argparse.Namespace, records: list[Meta]) -> Meta:
+    current = next((item for item in records if item["directive_id"] == args.directive_id), None)
+    if current is None:
+        raise RuntimeError(f"unknown directive: {args.directive_id}")
+    if int(current["revision"]) != args.expected_revision:
+        raise RuntimeError(
+            f"stale directive revision: expected {args.expected_revision}, "
+            f"current {current['revision']}"
+        )
+    _directive_claim_is_live(current, args.owner)
+    candidate = dict(current)
+    candidate["revision"] = int(current["revision"]) + 1
+    candidate["updated_at"] = now()
+    candidate["guidance_ref"] = args.guidance_ref or str(current["guidance_ref"])
+    candidate["lifecycle"] = _directive_lifecycle(args.action, candidate, records)
+    if candidate["lifecycle"] != "active":
+        candidate["owner"] = ""
+        candidate["claim_expires"] = ""
+    return candidate
+
+
+def _directive_lifecycle(action: str, candidate: Meta, records: list[Meta]) -> str:
+    if action == "activate":
+        candidate["lifecycle"] = "active"
+        conflicts = conflicting_directives(records, candidate)
+        if conflicts and candidate["guidance_ref"] != "AR-0053":
+            raise RuntimeError("directive conflict requires guidance escalation AR-0053")
+        return "escalated" if conflicts else "active"
+    if action == "escalate":
+        if candidate["guidance_ref"] != "AR-0053":
+            raise RuntimeError("directive escalation requires guidance AR-0053")
+        return "escalated"
+    if action == "supersede":
+        return "superseded"
+    if action == "revoke":
+        return "revoked"
+    raise RuntimeError("unknown directive action")
+
+
+def cmd_directive(args: argparse.Namespace) -> None:
+    """Create, list and CAS-transition board-authorized directives."""
+    if backend_selection()["backend"] != "git":
+        raise RuntimeError("directive commands currently require the Git authority backend")
+    with locked():
+        sync_replica_before_write()
+        records = latest_directives(ROOT)
+        if args.directive_action == "list":
+            selected = [
+                item
+                for item in records
+                if not args.lifecycle or item["lifecycle"] == args.lifecycle
+            ]
+            print(json.dumps(selected, sort_keys=True, separators=(",", ":")))
+            return
+        record = (
+            _create_directive(args, records)
+            if args.directive_action == "create"
+            else _transition_directive(args, records)
+        )
+        _commit_directive(record)
+        print(json.dumps(record, sort_keys=True, separators=(",", ":")))
+
+
 def _rollback_commit(root: Path, record: Meta, message: str) -> None:
     """Persist one rollback journal state before returning to the caller."""
     del message
@@ -2853,6 +2994,28 @@ def main() -> int:
     item.add_argument("task")
     item.add_argument("--owner", required=True)
     item.add_argument("--expected-revision", type=int, required=True)
+    item = commands.add_parser("directive")
+    directive_commands = item.add_subparsers(dest="directive_action", required=True)
+    directive = directive_commands.add_parser("create")
+    directive.add_argument("--directive-id", required=True)
+    directive.add_argument("--authority", required=True)
+    directive.add_argument("--precedence", type=int, required=True)
+    directive.add_argument("--role-scope", action="append", default=[])
+    directive.add_argument("--task-scope", action="append", default=[])
+    directive.add_argument("--statement", required=True)
+    directive.add_argument("--owner", required=True)
+    directive.add_argument("--lease-minutes", type=int, default=120)
+    directive.add_argument("--guidance-ref", default="")
+    directive = directive_commands.add_parser("list")
+    directive.add_argument(
+        "--lifecycle", choices=["proposed", "active", "superseded", "revoked", "escalated"]
+    )
+    directive = directive_commands.add_parser("transition")
+    directive.add_argument("directive_id")
+    directive.add_argument("action", choices=["activate", "supersede", "revoke", "escalate"])
+    directive.add_argument("--owner", required=True)
+    directive.add_argument("--expected-revision", type=int, required=True)
+    directive.add_argument("--guidance-ref", default="")
     item = commands.add_parser("rollback")
     item.add_argument("--checkpoint", required=True)
     item.add_argument("--reconcile", action="store_true")
@@ -2914,6 +3077,9 @@ def main() -> int:
         cmd_init(args)
         return 0
     assert_project_binding()
+    if args.cmd == "directive":
+        cmd_directive(args)
+        return 0
     return dispatch_bound_command(args)
 
 

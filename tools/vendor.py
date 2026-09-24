@@ -23,6 +23,7 @@ SOURCE_FILES: tuple[tuple[str, str], ...] = (
     ("tools/session_records.py", "tools/session_records.py"),
     ("tools/checkpoint_records.py", "tools/checkpoint_records.py"),
     ("tools/rollback_records.py", "tools/rollback_records.py"),
+    ("tools/directive_records.py", "tools/directive_records.py"),
     ("tools/status_renderer.py", "tools/status_renderer.py"),
     ("tools/task_spec.py", "tools/task_spec.py"),
     ("tools/upgrade_commands.py", "tools/upgrade_commands.py"),
@@ -56,6 +57,10 @@ SOURCE_FILES: tuple[tuple[str, str], ...] = (
     (
         "schema/rollback-record.schema.json",
         "schema/handoffctl-rollback-record.schema.json",
+    ),
+    (
+        "schema/directive-record.schema.json",
+        "schema/handoffctl-directive-record.schema.json",
     ),
     ("formal/handoffctl/Handoffctl.tla", "formal/handoffctl/Handoffctl.tla"),
     ("formal/handoffctl/Handoffctl.cfg", "formal/handoffctl/Handoffctl.cfg"),
