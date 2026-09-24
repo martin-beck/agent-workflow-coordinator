@@ -2358,6 +2358,14 @@ class HandoffTest(unittest.TestCase):
         ):
             CORE.cmd_snapshot("AR-9999")
 
+    def test_doctor_rejects_corrupt_session_record(self) -> None:
+        self.make_task()
+        sessions = self.root / "sessions"
+        sessions.mkdir()
+        (sessions / "AR-0001.jsonl").write_text("{}\n")
+        errors = CORE.validate()
+        self.assertTrue(any("session validation failed" in error for error in errors))
+
     def test_checkpoint_captures_source_state_before_task_mutation(self) -> None:
         self.make_task(
             status="in_progress",

@@ -110,7 +110,10 @@ selector switch leaves Git authoritative. Task IDs, revisions, dependency edges,
 bodies, privacy-safe command results and source commit checkpoint are imported and checked. Until
 migration is accepted, original
 files remain usable; `migrate --to git` explicitly exports current SQLite state and switches
-authority back. Never edit the selector to perform migration.
+authority back. The equivalence check includes task metadata, hierarchy edges, session snapshots,
+and checkpoints. Directives remain in their tracked Git journal and are validated by `doctor`;
+their command path remains Git-authority-only until a separately reviewed SQLite directive backend
+exists. Never edit the selector to perform migration.
 
 After process or host failure:
 

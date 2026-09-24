@@ -10,6 +10,11 @@ mode. Its strict relational schema stores binding metadata, tasks, dependency ed
 constraints, revisions, append-only events, command results, checkpoints and migrations. Short
 `BEGIN IMMEDIATE` transactions and conditional revision updates are the SQLite linearization point.
 Task Markdown and status JSON/Markdown are disposable, byte-stable projections.
+Session and checkpoint records are authoritative in the selected backend: Git stores bounded JSONL
+journals, while SQLite stores equivalent strict JSON records and regenerates those journals as
+projections. Task specifications and hierarchy edges remain part of each task record in both
+backends. Directives remain a Git-authority journal and their command path stays fail-closed under
+SQLite until a dedicated backend is reviewed.
 
 The opt-in Git backend retains the original model: task JSON front matter and Markdown bodies are
 authority, and the repository-common lock serializes linked worktrees through one inode. A tracked

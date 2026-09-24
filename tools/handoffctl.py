@@ -60,6 +60,7 @@ if __package__:
     from .session_records import (
         append_session_record,
         build_session_record,
+        decode_session_lines,
         latest_session,
         session_path,
         validate_session_record,
@@ -117,6 +118,7 @@ else:  # pragma: no cover - direct script execution
     from session_records import (  # type: ignore[import-not-found,no-redef]
         append_session_record,
         build_session_record,
+        decode_session_lines,
         latest_session,
         session_path,
         validate_session_record,
@@ -285,7 +287,16 @@ class GitBackend:
         return git_tasks()
 
     def load_session_records(self, _task_id: str | None = None) -> list[Meta]:
-        return []
+        task_id = _task_id
+        paths = (
+            [session_path(ROOT, task_id)]
+            if task_id is not None
+            else sorted((ROOT / "sessions").glob("AR-*.jsonl"))
+        )
+        records: list[Meta] = []
+        for path in paths:
+            records.extend(decode_session_lines(path))
+        return records
 
     def load_checkpoint_records(self, task_id: str | None = None) -> list[Meta]:
         return load_checkpoints(ROOT, task_id)
@@ -1246,6 +1257,16 @@ def rollback_validation_errors() -> list[str]:
     return []
 
 
+def session_validation_errors() -> list[str]:
+    """Validate every authoritative session record on the selected backend."""
+    try:
+        for record in storage_backend().load_session_records():
+            validate_session_record(record)
+    except (OSError, ValueError, RuntimeError) as error:
+        return [f"session validation failed: {error}"]
+    return []
+
+
 def directive_validation_errors() -> list[str]:
     """Validate the bounded directive journal and its active precedence rules."""
     try:
@@ -1289,6 +1310,7 @@ def validate(*, live: bool = False) -> list[str]:
     except (OSError, ValueError, RuntimeError) as error:
         errors.append(f"checkpoint validation failed: {error}")
     errors.extend(rollback_validation_errors())
+    errors.extend(session_validation_errors())
     errors.extend(directive_validation_errors())
     errors.extend(privacy_errors())
     if live:
@@ -2818,7 +2840,7 @@ def cmd_init(args: argparse.Namespace) -> None:
     print(f"Initialized project binding {project_id} with {selected_backend} backend")
 
 
-def cmd_migrate(args: argparse.Namespace) -> None:
+def cmd_migrate(args: argparse.Namespace) -> None:  # noqa: C901
     """Explicitly and restart-safely switch authority between supported backends."""
     current = str(backend_selection()["backend"])
     if current == args.to:
@@ -2830,6 +2852,8 @@ def cmd_migrate(args: argparse.Namespace) -> None:
             sync_replica_before_write()
             tasks = git_tasks()
             command_results = legacy_command_results()
+            session_records = storage_backend().load_session_records()
+            checkpoint_records = storage_backend().load_checkpoint_records()
             errors = validate(live=False)
             if errors:
                 raise RuntimeError("migration preflight failed:\n" + "\n".join(errors))
@@ -2844,10 +2868,21 @@ def cmd_migrate(args: argparse.Namespace) -> None:
                     source_backend="git",
                     source_checkpoint=checkpoint,
                     command_results=command_results,
+                    session_records=session_records,
+                    checkpoint_records=checkpoint_records,
                 )
                 imported = SQLiteBackend(DATABASE, binding, TASKS).load_tasks()
                 if [(m, b) for _, m, b in tasks] != [(m, b) for _, m, b in imported]:
                     raise RuntimeError("migration equivalence check failed")
+                imported_sessions = SQLiteBackend(DATABASE, binding, TASKS).load_session_records()
+                imported_checkpoints = SQLiteBackend(
+                    DATABASE, binding, TASKS
+                ).load_checkpoint_records()
+                if (
+                    imported_sessions != session_records
+                    or imported_checkpoints != checkpoint_records
+                ):
+                    raise RuntimeError("record migration equivalence check failed")
                 provision_sqlite_barrier()
                 atomic(BACKEND_CONFIG, json.dumps(selection, indent=2, sort_keys=True) + "\n")
             except Exception:
