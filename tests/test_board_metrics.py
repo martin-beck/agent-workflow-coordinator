@@ -5,9 +5,13 @@
 
 import json
 import unittest
+from argparse import Namespace
+from contextlib import nullcontext
 from pathlib import Path
+from unittest.mock import patch
 
-from tools.board_metrics import build_metrics, encode
+import tools.handoffctl as handoffctl
+from tools.board_metrics import _decision_pending, _gate_failure, build_metrics, encode
 
 
 def task(task_id: str, **fields: object) -> tuple[Path, dict[str, object], str]:
@@ -68,6 +72,82 @@ class BoardMetricsTests(unittest.TestCase):
         result = build_metrics(tasks)
         self.assertEqual(0, result["decision_backlog"]["count"])
         self.assertEqual(0, result["gate_failures"]["count"])
+
+    def test_gate_failure_classification_is_fail_closed(self) -> None:
+        self.assertEqual(
+            "reconciliation",
+            _gate_failure(
+                {
+                    "oracle_gate": {
+                        "required": True,
+                        "open_stage": None,
+                        "reconciliation_required": True,
+                    }
+                }
+            ),
+        )
+        self.assertEqual(
+            "intake",
+            _gate_failure(
+                {
+                    "oracle_gate": {
+                        "required": True,
+                        "open_stage": None,
+                        "authorized": False,
+                        "completed": [],
+                    }
+                }
+            ),
+        )
+        self.assertEqual(
+            "authorization",
+            _gate_failure(
+                {
+                    "oracle_gate": {
+                        "required": True,
+                        "open_stage": None,
+                        "authorized": False,
+                        "completed": [
+                            "intake",
+                            "discussion",
+                            "formal_spec_review",
+                            "reconciliation",
+                        ],
+                    }
+                }
+            ),
+        )
+        self.assertFalse(
+            _decision_pending(
+                {
+                    "oracle_gate": {
+                        "required": True,
+                        "stage_sequence": ["role", "spec"],
+                        "completed": ["role"],
+                    }
+                }
+            )
+        )
+
+    def test_cli_projections_are_sqlite_only_and_read_only(self) -> None:
+        with (
+            patch.object(handoffctl, "backend_selection", return_value={"backend": "sqlite"}),
+            patch.object(handoffctl, "all_tasks", return_value=[]),
+            patch.object(handoffctl, "locked", return_value=nullcontext()),
+            patch.object(handoffctl, "encode_metrics", return_value='{"ok":true}\n') as encode,
+            patch("sys.stdout") as stdout,
+        ):
+            handoffctl.cmd_board()
+            handoffctl.cmd_metrics()
+            handoffctl.dispatch_read_only_command(Namespace(cmd="board"))
+            handoffctl.dispatch_read_only_command(Namespace(cmd="metrics"))
+        self.assertEqual(4, encode.call_count)
+        self.assertEqual(8, stdout.write.call_count)
+        with (
+            patch.object(handoffctl, "backend_selection", return_value={"backend": "git"}),
+            self.assertRaisesRegex(RuntimeError, "requires the SQLite authority"),
+        ):
+            handoffctl.cmd_board()
 
 
 if __name__ == "__main__":
