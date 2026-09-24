@@ -12,7 +12,7 @@ from typing import Any
 from unittest.mock import patch
 
 from tools import handoffctl as core
-from tools.checkpoint_records import append_checkpoint, build_checkpoint
+from tools.checkpoint_records import append_checkpoint, build_checkpoint, load_checkpoints
 from tools.rollback_records import append_record, build_record, latest_for_checkpoint
 
 
@@ -219,11 +219,11 @@ class RollbackCommandTests(unittest.TestCase):
             core._start_rollback(arguments, checkpoint, self.product, "c" * 40, previous)
 
     def test_restore_started_requires_explicit_reconcile(self) -> None:
-        checkpoint = core.load_checkpoints(self.root)[0]
+        checkpoint = load_checkpoints(self.root)[0]
         previous = build_record(checkpoint, "b" * 40, "now", status="restore_started")
         append_record(self.root, previous)
         with (
-            patch.object(core, "load_checkpoints", return_value=[checkpoint]),
+            patch("tools.handoffctl.load_checkpoints", return_value=[checkpoint]),
             patch.object(core, "latest_for_checkpoint", return_value=previous),
             patch.object(core, "dirty_state_paths", return_value=[]),
             patch.object(core, "project_binding", return_value={}),
