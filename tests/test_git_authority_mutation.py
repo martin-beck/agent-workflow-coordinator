@@ -704,6 +704,29 @@ class GitCommitCapabilityTests(unittest.TestCase):
         self.assertEqual(2, reads)
         self.assertEqual("", _git(self.root, "status", "--porcelain=v1"))
 
+        (self.root / "state").write_text("recovered\n", encoding="utf-8")
+        _git(self.root, "add", "state")
+        reopened = CommitAdmissionBundle(
+            backend="git",
+            target="new",
+            operation_id="op-recovered:commit",
+            fencing_token="fence-recovered",  # noqa: S106
+            state_revision=2,
+            barrier_id="barrier-recovered",
+            artifact_identity="artifact-1",
+            manifest_identity="manifest-1",
+            selector_identity="selector-1",
+            runtime_identity="runtime-1",
+        )
+        result = GitCommitCapability(
+            self.root,
+            admission=reopened,
+            admission_reread=lambda: reopened.__dict__,
+            expected_branch="main",
+            expected_head=_git(self.root, "rev-parse", "HEAD"),
+        ).commit("op-recovered authority commit")
+        self.assertEqual(40, len(result.after_head))
+
     def test_classifies_malformed_post_commit_head_as_ambiguous(self) -> None:
         (self.root / "state").write_text("new\n", encoding="utf-8")
         _git(self.root, "add", "state")
