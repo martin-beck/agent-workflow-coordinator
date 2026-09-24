@@ -439,6 +439,24 @@ class SQLiteCommitCapabilityTests(unittest.TestCase):
         with self.assertRaisesRegex(SQLiteMutationRejectedError, "admission reread was rejected"):
             capability.commit(update)
 
+    def test_classifies_termination_filesystem_identity_reread_as_rejected(self) -> None:
+        capability = self._capability()
+
+        def update(_connection: sqlite3.Connection) -> None:
+            raise AssertionError("effect must not run")
+
+        with (
+            patch.object(
+                SQLiteCommitCapability,
+                "_identity",
+                side_effect=KeyboardInterrupt("injected termination"),
+            ),
+            self.assertRaisesRegex(
+                SQLiteMutationRejectedError, "filesystem identity reread was rejected"
+            ),
+        ):
+            capability.commit(update)
+
     def test_classifies_post_commit_identity_drift_as_ambiguous(self) -> None:
         replacement = self.root / "replacement.sqlite"
 
