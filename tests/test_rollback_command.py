@@ -13,7 +13,7 @@ from unittest.mock import patch
 
 from tools import handoffctl as core
 from tools.checkpoint_records import append_checkpoint, build_checkpoint
-from tools.rollback_records import build_record, latest_for_checkpoint
+from tools.rollback_records import append_record, build_record, latest_for_checkpoint
 
 
 def task() -> dict[str, object]:
@@ -182,6 +182,58 @@ class RollbackCommandTests(unittest.TestCase):
             self.assertRaisesRegex(RuntimeError, "recovery is required"),
         ):
             core.cmd_rollback(self.args())
+
+    def test_reconcile_authorizes_completion_at_recorded_rollback_head(self) -> None:
+        with (
+            self._entered("c" * 40),
+            patch.object(core, "mutate", side_effect=RuntimeError("state")),
+            self.assertRaisesRegex(RuntimeError, "recovery is required"),
+        ):
+            core.cmd_rollback(self.args())
+        arguments = self.args()
+        arguments.reconcile = True
+        with (
+            self._entered("c" * 40),
+            patch.object(core, "_product_commit_for_checkpoint", return_value="c" * 40),
+        ):
+            core.cmd_rollback(arguments)
+        record = latest_for_checkpoint(self.root, self.checkpoint)
+        self.assertIsNotNone(record)
+        assert record is not None
+        self.assertEqual("rollback_completed", record["status"])
+
+    def test_reconcile_rejects_changed_product_heads(self) -> None:
+        checkpoint = build_checkpoint(task(), "body", "a" * 40, "now")
+        previous = build_record(
+            checkpoint,
+            "b" * 40,
+            "now",
+            status="ambiguous",
+            rollback_commit="c" * 40,
+        )
+        arguments = argparse.Namespace(reconcile=True)
+        with self.assertRaisesRegex(RuntimeError, "does not match rollback commit"):
+            core._start_rollback(arguments, checkpoint, self.product, "b" * 40, previous)
+        previous = build_record(checkpoint, "b" * 40, "now", status="ambiguous")
+        with self.assertRaisesRegex(RuntimeError, "changed during ambiguous"):
+            core._start_rollback(arguments, checkpoint, self.product, "c" * 40, previous)
+
+    def test_restore_started_requires_explicit_reconcile(self) -> None:
+        checkpoint = core.load_checkpoints(self.root)[0]
+        previous = build_record(checkpoint, "b" * 40, "now", status="restore_started")
+        append_record(self.root, previous)
+        with (
+            patch.object(core, "load_checkpoints", return_value=[checkpoint]),
+            patch.object(core, "latest_for_checkpoint", return_value=previous),
+            patch.object(core, "dirty_state_paths", return_value=[]),
+            patch.object(core, "project_binding", return_value={}),
+            patch.object(
+                core, "configured_product_checkout", return_value=(self.root, self.product)
+            ),
+            patch.object(core, "_product_commit_for_checkpoint", return_value="b" * 40),
+            self.assertRaisesRegex(RuntimeError, "explicit ambiguous recovery"),
+        ):
+            core._rollback_target(argparse.Namespace(checkpoint=self.checkpoint))
 
     def test_rollback_rejects_unsupported_backend_dirty_state_and_unknown_ref(self) -> None:
         with (

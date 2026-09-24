@@ -2265,8 +2265,8 @@ def _revert_product(product: Path, source_commit: str, current_commit: str) -> s
     return run(["git", "-C", str(product), "rev-parse", "HEAD"]).stdout.strip()
 
 
-def cmd_rollback(args: argparse.Namespace) -> None:
-    """Restore one checkpoint with a durable journal and coordinated Git revert."""
+def _rollback_target(args: argparse.Namespace) -> tuple[Meta, Path, str, Meta | None]:
+    """Validate the checkpoint, product ancestry and any prior operation."""
     if backend_selection()["backend"] != "git":
         raise RuntimeError("rollback currently requires the Git authority backend")
     with locked():
@@ -2281,10 +2281,50 @@ def cmd_rollback(args: argparse.Namespace) -> None:
         previous = latest_for_checkpoint(ROOT, args.checkpoint)
         if previous is not None and previous["status"] == "rollback_completed":
             raise RuntimeError("checkpoint rollback is already completed")
-        if previous is not None and previous["status"] in {"restore_started", "ambiguous"}:
+        reconcile_requested = bool(getattr(args, "reconcile", False))
+        if (
+            previous is not None
+            and previous["status"] in {"restore_started", "ambiguous"}
+            and not reconcile_requested
+        ):
             raise RuntimeError("checkpoint rollback requires explicit ambiguous recovery")
         _, product = configured_product_checkout(project_binding())
         current_commit = _product_commit_for_checkpoint(product, str(checkpoint["source_commit"]))
+    return checkpoint, product, current_commit, previous
+
+
+def _start_rollback(
+    args: argparse.Namespace,
+    checkpoint: Meta,
+    product: Path,
+    current_commit: str,
+    previous: Meta | None,
+) -> tuple[Meta, bool]:
+    """Durably authorize a fresh restore or an exact-head reconciliation."""
+    del product
+    reconcile_requested = bool(getattr(args, "reconcile", False))
+    skip_product = False
+    if previous is not None and reconcile_requested:
+        if previous["rollback_commit"]:
+            if current_commit != previous["rollback_commit"]:
+                raise RuntimeError("reconcile product head does not match rollback commit")
+            skip_product = True
+        elif current_commit != previous["current_commit"]:
+            raise RuntimeError("reconcile product head changed during ambiguous rollback")
+        started = build_record(
+            checkpoint,
+            current_commit,
+            now(),
+            status="restore_started",
+            operation_id=str(previous["operation_id"]),
+            rollback_commit=str(previous["rollback_commit"]),
+            revision=int(previous["revision"]) + 1,
+        )
+        with locked():
+            _rollback_commit(ROOT, started, "restore_started")
+        return started, skip_product
+    with locked():
+        skip_product = False
         record = build_record(checkpoint, current_commit, now())
         _rollback_commit(ROOT, record, "planned")
         started = build_record(
@@ -2296,16 +2336,27 @@ def cmd_rollback(args: argparse.Namespace) -> None:
             revision=2,
         )
         _rollback_commit(ROOT, started, "restore_started")
+    return started, skip_product
+
+
+def cmd_rollback(args: argparse.Namespace) -> None:
+    """Restore one checkpoint with a durable journal and coordinated Git revert."""
+    checkpoint, product, current_commit, previous = _rollback_target(args)
+    started, skip_product = _start_rollback(args, checkpoint, product, current_commit, previous)
     try:
-        rollback_commit = _revert_product(product, str(checkpoint["source_commit"]), current_commit)
+        rollback_commit = (
+            str(started["rollback_commit"])
+            if skip_product
+            else _revert_product(product, str(checkpoint["source_commit"]), current_commit)
+        )
     except Exception as error:
         ambiguous = build_record(
             checkpoint,
             current_commit,
             now(),
             status="ambiguous",
-            operation_id=str(record["operation_id"]),
-            revision=3,
+            operation_id=str(started["operation_id"]),
+            revision=int(started["revision"]) + 1,
         )
         with locked():
             _rollback_commit(ROOT, ambiguous, "ambiguous")
@@ -2323,9 +2374,9 @@ def cmd_rollback(args: argparse.Namespace) -> None:
             current_commit,
             now(),
             status="ambiguous",
-            operation_id=str(record["operation_id"]),
+            operation_id=str(started["operation_id"]),
             rollback_commit=rollback_commit,
-            revision=3,
+            revision=int(started["revision"]) + 1,
         )
         with locked():
             _rollback_commit(ROOT, ambiguous, "ambiguous")
@@ -2335,9 +2386,9 @@ def cmd_rollback(args: argparse.Namespace) -> None:
         current_commit,
         now(),
         status="rollback_completed",
-        operation_id=str(record["operation_id"]),
+        operation_id=str(started["operation_id"]),
         rollback_commit=rollback_commit,
-        revision=3,
+        revision=int(started["revision"]) + 1,
     )
     with locked():
         _rollback_commit(ROOT, completed, "rollback_completed")
@@ -2804,6 +2855,7 @@ def main() -> int:
     item.add_argument("--expected-revision", type=int, required=True)
     item = commands.add_parser("rollback")
     item.add_argument("--checkpoint", required=True)
+    item.add_argument("--reconcile", action="store_true")
     item = commands.add_parser("doctor")
     item.add_argument("--live", action="store_true")
     item = commands.add_parser("render-status")
