@@ -407,6 +407,24 @@ class GitCommitCapabilityTests(unittest.TestCase):
             capability.commit("op-1 authority commit")
         self.assertEqual("", _git(self.root, "status", "--porcelain=v1"))
 
+    def test_classifies_termination_admission_reread_as_rejected(self) -> None:
+        (self.root / "state").write_text("new\n", encoding="utf-8")
+        _git(self.root, "add", "state")
+
+        def terminating_reread() -> dict[str, object]:
+            raise KeyboardInterrupt("injected termination")
+
+        capability = GitCommitCapability(
+            self.root,
+            admission=self._admission(),
+            admission_reread=terminating_reread,
+            expected_branch="main",
+            expected_head=_git(self.root, "rev-parse", "HEAD"),
+        )
+        with self.assertRaisesRegex(GitMutationRejectedError, "admission reread was rejected"):
+            capability.commit("op-1 authority commit")
+        self.assertEqual("M  state", _git(self.root, "status", "--porcelain=v1"))
+
     def test_classifies_repository_replacement_after_effect_as_ambiguous(self) -> None:
         (self.root / "state").write_text("new\n", encoding="utf-8")
         _git(self.root, "add", "state")

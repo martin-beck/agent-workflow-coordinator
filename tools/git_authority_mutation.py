@@ -182,7 +182,7 @@ class GitCommitCapability:
     def _assert_admission_current(self) -> None:
         try:
             current = self._admission_reread()
-        except Exception as error:
+        except BaseException as error:
             raise GitMutationRejectedError("Git admission reread was rejected") from error
         if not isinstance(current, Mapping) or not self._admission.matches(current):
             raise GitMutationRejectedError("Git admission identity changed before commit")
