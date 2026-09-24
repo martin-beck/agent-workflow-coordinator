@@ -301,6 +301,30 @@ class GitCommitCapabilityTests(unittest.TestCase):
             ).commit("op-1 authority commit")
         self.assertEqual("M  state", _git(self.root, "status", "--porcelain=v1"))
 
+    def test_classifies_termination_commit_runner_as_ambiguous(self) -> None:
+        (self.root / "state").write_text("new\n", encoding="utf-8")
+        _git(self.root, "add", "state")
+
+        def terminating_runner(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
+            command = cast(list[str], args[0])
+            if command[3:4] == ["commit"]:
+                raise KeyboardInterrupt("injected termination")
+            return cast(
+                subprocess.CompletedProcess[str],
+                subprocess.run(command, **cast(Any, kwargs)),
+            )
+
+        with self.assertRaisesRegex(GitMutationAmbiguousError, "commit outcome is ambiguous"):
+            GitCommitCapability(
+                self.root,
+                admission=self._admission(),
+                admission_reread=lambda: self._admission().__dict__,
+                expected_branch="main",
+                expected_head=self._capability()._expected_head,
+                runner=terminating_runner,
+            ).commit("op-1 authority commit")
+        self.assertEqual("M  state", _git(self.root, "status", "--porcelain=v1"))
+
     def test_classifies_nonzero_commit_after_ref_update_as_ambiguous(self) -> None:
         (self.root / "state").write_text("new\n", encoding="utf-8")
         _git(self.root, "add", "state")
