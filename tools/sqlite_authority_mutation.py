@@ -78,7 +78,14 @@ class SQLiteCommitCapability:
         # Preserve the supplied pathname so the pre-effect lstat fence can
         # reject a symlinked authority instead of silently following it.
         self._authority = authority.absolute()
-        self._ancestor_identities = self._ancestor_identities_for(self._authority)
+        try:
+            self._ancestor_identities = self._ancestor_identities_for(self._authority)
+        except SQLiteMutationRejectedError:
+            raise
+        except BaseException as error:
+            raise SQLiteMutationRejectedError(
+                "SQLite authority identity capture was rejected"
+            ) from error
         self._admission = admission
         if not callable(admission_reread):
             raise SQLiteMutationError("SQLite admission reread is invalid")
@@ -122,6 +129,10 @@ class SQLiteCommitCapability:
                 raise SQLiteMutationRejectedError(
                     "SQLite sidecar identity is unavailable"
                 ) from error
+            except BaseException as error:
+                raise SQLiteMutationRejectedError(
+                    "SQLite sidecar identity is unavailable"
+                ) from error
             if not stat.S_ISDIR(status.st_mode):
                 raise SQLiteMutationRejectedError("SQLite authority ancestor is not a directory")
             identities.append((str(current), status.st_dev, status.st_ino))
@@ -134,6 +145,8 @@ class SQLiteCommitCapability:
         except FileNotFoundError:
             return None
         except OSError as error:
+            raise SQLiteMutationRejectedError("SQLite sidecar identity is unavailable") from error
+        except BaseException as error:
             raise SQLiteMutationRejectedError("SQLite sidecar identity is unavailable") from error
         if not stat.S_ISREG(status.st_mode) or status.st_nlink != 1:
             raise SQLiteMutationRejectedError("SQLite authority file is not a regular private file")
