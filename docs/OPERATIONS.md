@@ -13,10 +13,18 @@
 - `recover-expired`: exact-revision recovery of an in-progress task only after its UTC lease
   deadline has passed.
 - `run`: execute a bounded command outside the lock, then record its classified result.
+- `gate`: record a revision-bound gate event. Generic task gates use the ordered `role`, `spec`,
+  and `decision` stages; legacy interaction gates remain compatible.
 - `reconcile`: refresh live observations and optionally commit/fast-forward-push them.
 - `render-status`: render/check the optional complete status view.
 - `doctor`: validate structure; `--live` also checks Git/GitHub observations.
 - `migrate --to sqlite|git`: explicitly switch authority after an equivalence-checked export/import.
+
+Generic stage gates are selected by using a generic stage on the first event, for example
+`--stage role`; subsequent events must advance through `spec` and `decision` in order. Unknown
+stages, skipped stages, duplicate stages, stale revisions, and malformed stage sequences fail
+closed. The legacy `intake`, `discussion`, `formal_spec_review`, and `reconciliation` sequence is
+retained for existing `oracle_gate` records and is not silently converted.
 
 ## Backend selection
 
