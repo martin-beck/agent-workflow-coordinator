@@ -76,6 +76,8 @@
         "tests/test_sqlite_mutation_barrier.py::test_sigkill_after_git_authority_effect_requires_recovery_and_new_fence",
         "tests/test_authority_mutation.py::AuthorityMutationTests.test_durable_ambiguous_effect_is_durably_marked_ambiguous",
         "tests/test_authority_mutation.py::AuthorityMutationTests.test_durable_identity_rejection_is_journaled_ambiguous_without_publication",
+        "tests/test_authority_mutation.py::AuthorityMutationTests.test_durable_capability_fails_closed_if_journal_prepare_is_ambiguous",
+        "tests/test_authority_mutation.py::AuthorityMutationTests.test_durable_capability_fails_closed_if_journal_prepare_returns_no_intent",
         "tests/test_authority_mutation.py::AuthorityMutationTests.test_durable_pre_effect_rejection_is_journaled_without_fencing_session",
         "tests/test_sqlite_mutation_barrier.py::SQLiteMutationBarrierProcessTests.test_integrated_pre_effect_rejection_is_journaled_without_fencing",
         "tests/test_git_authority_mutation.py::GitCommitCapabilityTests.test_integrated_pre_effect_rejection_is_journaled_without_git_commit",
