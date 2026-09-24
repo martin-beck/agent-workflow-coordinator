@@ -267,6 +267,7 @@ class GitAuthorityAdapterTests(unittest.TestCase):
                 expected_branch=self.adapter._git("symbolic-ref", "--short", "-q", "HEAD"),
                 expected_head=self.adapter._git("rev-parse", "HEAD"),
             )
+
     def test_adapter_binds_isolated_commit_capability_without_enabling_dispatch(self) -> None:
         admission = CommitAdmissionBundle(
             backend="git",

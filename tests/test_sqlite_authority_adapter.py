@@ -250,6 +250,7 @@ class SQLiteAuthorityAdapterTests(unittest.TestCase):
                 session_revision=2,
                 admission_reread=lambda: admission.__dict__,
             )
+
     def test_adapter_binds_isolated_commit_capability_without_enabling_dispatch(self) -> None:
         admission = CommitAdmissionBundle(
             backend="sqlite",
