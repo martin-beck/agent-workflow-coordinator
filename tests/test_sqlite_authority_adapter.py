@@ -230,6 +230,26 @@ class SQLiteAuthorityAdapterTests(unittest.TestCase):
         self.assertEqual(["prepared", "committed"], [item[0] for item in journal])
         self.assertEqual(receipt, journal[1][1])
 
+    def test_durable_commit_factory_normalizes_invalid_session_revision(self) -> None:
+        admission = CommitAdmissionBundle(
+            backend="sqlite",
+            target="new",
+            operation_id="op-1:commit",
+            fencing_token="fence",  # noqa: S106
+            state_revision=1,
+            barrier_id="barrier",
+            artifact_identity="artifact",
+            manifest_identity="manifest",
+            selector_identity="selector",
+            runtime_identity="runtime",
+        )
+        with self.assertRaisesRegex(SQLiteAuthorityError, "durable commit capability binding"):
+            self.adapter.bind_durable_commit_capability(
+                admission,
+                object(),
+                session_revision=2,
+                admission_reread=lambda: admission.__dict__,
+            )
     def test_adapter_binds_isolated_commit_capability_without_enabling_dispatch(self) -> None:
         admission = CommitAdmissionBundle(
             backend="sqlite",

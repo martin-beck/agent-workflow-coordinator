@@ -204,7 +204,7 @@ class GitAuthorityAdapter:
         runner: Any = subprocess.run,
     ) -> Any:
         """Bind Git's isolated effect to the durable journal seam."""
-        from tools.authority_mutation import DurableBoundBackendMutation
+        from tools.authority_mutation import AuthorityMutationError, DurableBoundBackendMutation
 
         capability = self.bind_commit_capability(
             admission,
@@ -213,12 +213,15 @@ class GitAuthorityAdapter:
             expected_head=expected_head,
             runner=runner,
         )
-        return DurableBoundBackendMutation(
-            admission,
-            journal,
-            session_revision=session_revision,
-            backend_effect=lambda message: capability.commit(message),
-        )
+        try:
+            return DurableBoundBackendMutation(
+                admission,
+                journal,
+                session_revision=session_revision,
+                backend_effect=lambda message: capability.commit(message),
+            )
+        except AuthorityMutationError as error:
+            raise GitAuthorityError("Git durable commit capability binding was rejected") from error
 
     @staticmethod
     def observe_backup_identity(
