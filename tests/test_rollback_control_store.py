@@ -29,6 +29,7 @@ from tools.rollback_control_store import (
     AuthorityRuntimeRereader,
     BarrierSessionContract,
     BarrierSessionState,
+    ControlStoreAmbiguousError,
     ControlStoreError,
     RecoveryRejectedError,
     SQLiteAuthorityRuntimeRereader,
@@ -584,6 +585,46 @@ class StaticAuthorityRuntimeRereader:
 
 
 class RollbackControlStoreTests(unittest.TestCase):
+    def test_authority_effect_prepare_reopen_uncertainty_is_ambiguous(self) -> None:
+        class ReopenFailureStore(SQLiteRollbackControlStore):
+            def __init__(self, path: Path) -> None:
+                super().__init__(path, PROJECT)
+                self.open_calls = 0
+                self.fail_reopen = False
+
+            def _open_bound_file(
+                self,
+                path: Path,
+                expected_parent: tuple[int, int],
+                expected_identity: tuple[int, int],
+            ) -> tuple[int, int]:
+                self.open_calls += 1
+                if self.fail_reopen and self.open_calls == 5:
+                    raise ControlStoreError("injected reopen identity failure")
+                return super()._open_bound_file(path, expected_parent, expected_identity)
+
+        with tempfile.TemporaryDirectory() as directory:
+            control = ReopenFailureStore(Path(directory) / "control.sqlite")
+            store = SQLiteBarrierSessionStore(control, lambda: "authority-3")
+            store.create(self._session_identity())
+            control.open_calls = 0
+            control.fail_reopen = True
+
+            with self.assertRaisesRegex(
+                ControlStoreAmbiguousError, "reopen identity became uncertain"
+            ):
+                store.prepare_authority_effect(1, "effect-reopen-uncertain", "sqlite")
+
+            with sqlite3.connect(control.path) as connection:
+                self.assertEqual(
+                    [("prepared",)],
+                    connection.execute(
+                        "SELECT outcome FROM authority_effect_intent "
+                        "WHERE project_id=? AND operation_id=?",
+                        (PROJECT, "effect-reopen-uncertain"),
+                    ).fetchall(),
+                )
+
     def test_rejected_authority_effect_is_write_closed_without_fencing_session(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

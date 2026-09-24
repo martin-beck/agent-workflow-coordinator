@@ -896,9 +896,14 @@ class SQLiteRollbackControlStore:
                             )
                 finally:
                     connection.close()
-                reopened_parent, reopened = self._open_bound_file(
-                    self.path, self._parent_identity, self._control_identity
-                )
+                try:
+                    reopened_parent, reopened = self._open_bound_file(
+                        self.path, self._parent_identity, self._control_identity
+                    )
+                except ControlStoreError as error:
+                    raise ControlStoreAmbiguousError(
+                        "control store reopen identity became uncertain"
+                    ) from error
                 os.close(reopened)
                 os.close(reopened_parent)
                 try:
