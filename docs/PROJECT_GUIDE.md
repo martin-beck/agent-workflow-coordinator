@@ -29,6 +29,10 @@ rewrites the coordinator source, Git history, and binding files.
   the complete graph, dependency index and AR inventory.
 - `PROJECT_STATE.md` and `WORKTREES.md`: generated live observations.
 - `coordinator.vendor.json`: upstream version, commit and SHA-256 for every vendored file.
+- `sessions/AR-####.jsonl`: bounded, content-minimized session snapshots. Each record stores
+  only a context digest, step state, safe artifact references and the next action; raw prompts,
+  logs and command output are never retained. The latest record can be replayed with
+  `tools/handoffctl snapshot --task AR-####`.
 
 ## Initialize exactly once
 
