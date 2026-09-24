@@ -23,6 +23,9 @@ of this contract and must remain aligned with the configurations and runner.
 ## Transition contract
 
 Every accepted lifecycle command increments `task_revision` exactly once and validates the result.
+Task hierarchy edges are reciprocal and acyclic; the bounded lifecycle model includes one parent
+with one child and rejects `release --status done` while that child is non-terminal. The Python
+validator additionally checks arbitrary task graphs and migration preservation.
 For Git authority, the task and generated projections update under the same repository lock and a
 detected pre-commit failure restores them. For SQLite authority, one database transaction commits
 the task first and generated projections are recoverable output. A rejected command leaves
@@ -85,6 +88,7 @@ readers, a competing writer, and bounded lock-wait timeout. TLC checks:
 - coherent ownership and at most one active task per actor;
 - no lost or duplicate accepted mutation through exact revision accounting;
 - atomic task/projection revision advancement and rollback;
+- reciprocal, bounded acyclic parent/child edges and done-rollup admission;
 - rejection of invalid source, owner, dependency, and revision combinations;
 - timeout without state mutation when another process holds the lock;
 - acceptance of eligible recovery despite simultaneous expiries and an unrelated repository

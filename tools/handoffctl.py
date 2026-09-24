@@ -39,6 +39,7 @@ if __package__:
         latest_directives,
         validate_directive,
     )
+    from .hierarchy import hierarchy_errors, open_child_error
     from .oracle_lifecycle import (
         ArtifactRef,
         GateError,
@@ -91,6 +92,10 @@ else:  # pragma: no cover - direct script execution
         directive_path,
         latest_directives,
         validate_directive,
+    )
+    from hierarchy import (  # type: ignore[import-not-found,no-redef]
+        hierarchy_errors,
+        open_child_error,
     )
     from oracle_lifecycle import (  # type: ignore[import-not-found,no-redef]
         ArtifactRef,
@@ -195,6 +200,8 @@ FIELDS = set(REQ) | {
     "spec_ref",
     "spec_revision",
     "spec_acceptance",
+    "parent_task_ref",
+    "children",
 }
 type Meta = dict[str, Any]
 type Task = tuple[Path, Meta, str]
@@ -1165,6 +1172,7 @@ def mutation_global_errors(tasks: list[Task]) -> list[str]:
             elif value:
                 seen[value] = task_id
     errors.extend(graph_errors(tasks))
+    errors.extend(hierarchy_errors(tasks))
     errors.extend(supersession_errors(tasks))
     return errors
 
@@ -1272,6 +1280,7 @@ def validate(*, live: bool = False) -> list[str]:
         errors.extend(basic_task_errors(path, meta))
         errors.extend(claim_errors(meta, active_owners, active_worktrees, active_branches))
     errors.extend(graph_errors(tasks))
+    errors.extend(hierarchy_errors(tasks))
     errors.extend(supersession_errors(tasks))
     errors.extend(generated_view_errors(tasks))
     try:
@@ -1676,17 +1685,23 @@ def require_update_role_admission(kind: str, owner_id: str) -> None:
         require_role_admission(owner_id)
 
 
-def require_done_admission(meta: Meta) -> None:
+def require_done_admission(meta: Meta, tasks: list[Task] | None = None) -> None:
     if meta.get("status") != "in_progress":
         return
     error = done_admission_error(ROOT, meta)
     if error:
         raise RuntimeError(error)
+    if tasks is not None:
+        hierarchy_error = open_child_error(meta, tasks)
+        if hierarchy_error:
+            raise RuntimeError(hierarchy_error)
 
 
-def require_release_admission(kind: str, status: str | None, meta: Meta) -> None:
+def require_release_admission(
+    kind: str, status: str | None, meta: Meta, tasks: list[Task] | None = None
+) -> None:
     if kind == "release" and status == "done":
-        require_done_admission(meta)
+        require_done_admission(meta, tasks)
 
 
 def apply_claim(args: argparse.Namespace, meta: Meta, tasks: list[Task]) -> str:
@@ -1809,11 +1824,13 @@ def require_promotion_preflight(kind: str) -> None:
         raise RuntimeError("promotion requires a clean state repository")
 
 
-def apply_owned_change(args: argparse.Namespace, kind: str, meta: Meta) -> str:  # noqa: C901
+def apply_owned_change(  # noqa: C901
+    args: argparse.Namespace, kind: str, meta: Meta, tasks: list[Task] | None = None
+) -> str:
     if meta.get("owner") != args.owner:
         raise RuntimeError(f"{args.task} is owned by {meta.get('owner') or 'nobody'}")
     require_update_role_admission(kind, str(args.owner))
-    require_release_admission(kind, getattr(args, "status", None), meta)
+    require_release_admission(kind, getattr(args, "status", None), meta, tasks)
     if kind == "heartbeat":
         if args.lease_minutes <= 0 or meta.get("status") != "in_progress":
             raise RuntimeError("heartbeat requires an active task and positive lease")
@@ -1943,7 +1960,7 @@ def apply_transition(args: argparse.Namespace, kind: str, meta: Meta, tasks: lis
         return apply_checkpoint(args, meta)
     if kind == "rollback":
         return apply_rollback(args, meta)
-    return apply_owned_change(args, kind, meta)
+    return apply_owned_change(args, kind, meta, tasks)
 
 
 def rendered_task_views(tasks: list[Task]) -> dict[Path, str]:
@@ -2105,6 +2122,7 @@ def mutate_sqlite(args: argparse.Namespace, kind: str) -> None:
         errors = (
             basic_task_errors(selected[0], meta)
             + graph_errors(candidate)
+            + hierarchy_errors(candidate)
             + supersession_errors(candidate)
         )
         if errors:
@@ -2776,6 +2794,7 @@ def cmd_init(args: argparse.Namespace) -> None:
             for path, meta, _ in initial_tasks:
                 initial_errors.extend(basic_task_errors(path, meta))
             initial_errors.extend(graph_errors(initial_tasks))
+            initial_errors.extend(hierarchy_errors(initial_tasks))
             if initial_errors:
                 raise RuntimeError("initial task import failed:\n" + "\n".join(initial_errors))
             create_database(

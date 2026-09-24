@@ -22,6 +22,10 @@ rewrites the coordinator source, Git history, and binding files.
 - `.runtime/config.json`: ignored, mode 0600, with machine-local paths and optional push.
 - `.runtime/coordinator.sqlite3`: ignored SQLite WAL authority for default-backend projects.
 - `tasks/`: Markdown records with strict JSON front matter.
+- Hierarchical task records may set `parent_task_ref` and the reciprocal `children` list. Both
+  sides are required to name existing tasks, edges must be acyclic, and a parent cannot release
+  to `done` while any child is non-terminal. The task-record schema is
+  `schema/task-record.schema.json`.
 - `plans/`: detailed plans referenced by tasks.
 - `CURRENT.md`: deterministic compact queue; never edit directly.
 - `STATUS.md`: optional deterministic portfolio view or, for large projects, a compact index to

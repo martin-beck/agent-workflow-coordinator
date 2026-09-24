@@ -24,6 +24,7 @@ SOURCE_FILES: tuple[tuple[str, str], ...] = (
     ("tools/checkpoint_records.py", "tools/checkpoint_records.py"),
     ("tools/rollback_records.py", "tools/rollback_records.py"),
     ("tools/directive_records.py", "tools/directive_records.py"),
+    ("tools/hierarchy.py", "tools/hierarchy.py"),
     ("tools/status_renderer.py", "tools/status_renderer.py"),
     ("tools/task_spec.py", "tools/task_spec.py"),
     ("tools/upgrade_commands.py", "tools/upgrade_commands.py"),
@@ -33,6 +34,7 @@ SOURCE_FILES: tuple[tuple[str, str], ...] = (
     ("tests/test_sqlite_storage.py", "tests/test_sqlite_storage.py"),
     ("tests/test_session_records.py", "tests/test_session_records.py"),
     ("tests/test_checkpoint_records.py", "tests/test_checkpoint_records.py"),
+    ("tests/test_hierarchy.py", "tests/test_hierarchy.py"),
     (
         "schema/project-config.schema.json",
         "schema/handoffctl-project-config.schema.json",
@@ -62,6 +64,7 @@ SOURCE_FILES: tuple[tuple[str, str], ...] = (
         "schema/directive-record.schema.json",
         "schema/handoffctl-directive-record.schema.json",
     ),
+    ("schema/task-record.schema.json", "schema/handoffctl-task-record.schema.json"),
     ("formal/handoffctl/Handoffctl.tla", "formal/handoffctl/Handoffctl.tla"),
     ("formal/handoffctl/Handoffctl.cfg", "formal/handoffctl/Handoffctl.cfg"),
     (
