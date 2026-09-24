@@ -55,6 +55,15 @@ MODEL_ACTION_TRANSITIONS = {
         "expected # controlRevision",
         'casResult\' = [casResult EXCEPT ![p] = "rejected"]',
     ),
+    "ObserveAuthority": (
+        "revision \\in 0..MaxRevision",
+        "freshAuthorityRevision' = revision",
+    ),
+    "RecheckHeld": (
+        'sessionStatus = "held"',
+        "freshAuthorityRevision = authorityRevision",
+        "authorityRechecked' = TRUE",
+    ),
     "Acquire": (
         'sessionStatus \\in {"absent", "released"}',
         'sessionStatus\' = "held"',
