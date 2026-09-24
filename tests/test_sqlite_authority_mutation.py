@@ -161,6 +161,22 @@ class SQLiteCommitCapabilityTests(unittest.TestCase):
         with sqlite3.connect(self.db) as connection:
             self.assertEqual(("new",), connection.execute("SELECT value FROM state").fetchone())
 
+    def test_effect_runs_with_full_synchronous_durability(self) -> None:
+        observed: list[int] = []
+
+        def update(connection: sqlite3.Connection) -> None:
+            observed.append(int(connection.execute("PRAGMA synchronous").fetchone()[0]))
+            connection.execute("UPDATE state SET value='full-sync' WHERE id=1")
+
+        result = self._capability().commit(update)
+
+        self.assertEqual("ok", result.integrity_check)
+        self.assertEqual([2], observed)
+        with sqlite3.connect(self.db) as connection:
+            self.assertEqual(
+                ("full-sync",), connection.execute("SELECT value FROM state").fetchone()
+            )
+
     def test_post_commit_verification_closes_its_connection(self) -> None:
         real_connect = sqlite3.connect
         closed = False

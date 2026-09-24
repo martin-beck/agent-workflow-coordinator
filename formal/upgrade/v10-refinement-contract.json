@@ -143,6 +143,7 @@
       "implementation_obligation": "The isolated SQLite authority effect accepts one immutable SQLite admission bundle, verifies database/WAL/SHM identities before and after the transaction, uses full synchronous durability, checks integrity and foreign keys, and classifies post-commit identity or verification uncertainty as ambiguous without enabling public upgrade dispatch.",
       "evidence_required": [
         "tests/test_sqlite_authority_mutation.py::SQLiteCommitCapabilityTests.test_commits_effect_and_verifies_integrity",
+        "tests/test_sqlite_authority_mutation.py::SQLiteCommitCapabilityTests.test_effect_runs_with_full_synchronous_durability",
         "tests/test_sqlite_authority_mutation.py::SQLiteCommitCapabilityTests.test_capability_is_single_use_but_fresh_capability_reopens",
         "tests/test_sqlite_authority_mutation.py::SQLiteCommitCapabilityTests.test_rejects_sidecar_identity_drift_before_effect",
         "tests/test_sqlite_authority_mutation.py::SQLiteCommitCapabilityTests.test_rejects_authority_replacement_after_connect_before_effect",
