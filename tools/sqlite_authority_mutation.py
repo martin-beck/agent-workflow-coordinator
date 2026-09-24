@@ -224,6 +224,24 @@ class SQLiteCommitCapability:
             ) from error
         raise SQLiteMutationAmbiguousError("SQLite commit outcome is ambiguous") from error
 
+    def _verify_post_commit(self) -> tuple[str, int]:
+        try:
+            self._assert_filesystem_identity()
+            with sqlite3.connect(self._authority) as verification:
+                verification.execute("PRAGMA foreign_keys=ON")
+                integrity = str(verification.execute("PRAGMA integrity_check").fetchone()[0])
+                violations = len(verification.execute("PRAGMA foreign_key_check").fetchall())
+            self._assert_filesystem_identity()
+        except (OSError, SQLiteMutationError, sqlite3.Error) as error:
+            raise SQLiteMutationAmbiguousError(
+                "SQLite post-commit verification is ambiguous"
+            ) from error
+        except BaseException as error:
+            raise SQLiteMutationAmbiguousError(
+                "SQLite post-commit verification is ambiguous"
+            ) from error
+        return integrity, violations
+
     def commit(self, effect: _Commit) -> SQLiteCommitResult:
         self._consume(effect)
         self._assert_filesystem_identity()
@@ -258,17 +276,7 @@ class SQLiteCommitCapability:
         finally:
             if connection is not None:
                 self._close_connection(connection)
-        try:
-            self._assert_filesystem_identity()
-            with sqlite3.connect(self._authority) as verification:
-                verification.execute("PRAGMA foreign_keys=ON")
-                integrity = str(verification.execute("PRAGMA integrity_check").fetchone()[0])
-                violations = len(verification.execute("PRAGMA foreign_key_check").fetchall())
-            self._assert_filesystem_identity()
-        except (OSError, SQLiteMutationError, sqlite3.Error) as error:
-            raise SQLiteMutationAmbiguousError(
-                "SQLite post-commit verification is ambiguous"
-            ) from error
+        integrity, violations = self._verify_post_commit()
         if integrity != "ok" or violations:
             raise SQLiteMutationAmbiguousError(
                 "SQLite post-commit integrity is invalid; recovery is required"

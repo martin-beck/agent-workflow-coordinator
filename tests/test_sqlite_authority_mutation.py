@@ -400,6 +400,24 @@ class SQLiteCommitCapabilityTests(unittest.TestCase):
         with self.assertRaisesRegex(SQLiteMutationAmbiguousError, "commit outcome is ambiguous"):
             self._capability().commit(terminating_effect)
 
+    def test_classifies_termination_connector_as_ambiguous(self) -> None:
+        def terminating_connector(*_args: Any, **_kwargs: Any) -> sqlite3.Connection:
+            raise KeyboardInterrupt("injected termination")
+
+        def update(_connection: sqlite3.Connection) -> None:
+            raise AssertionError("effect must not run")
+
+        with self.assertRaisesRegex(SQLiteMutationAmbiguousError, "commit outcome is ambiguous"):
+            SQLiteCommitCapability(
+                self.db,
+                admission=self._admission,
+                admission_reread=lambda: self._admission.__dict__,
+                expected_db_identity=self._capability()._db_identity,
+                expected_wal_identity=self._capability()._wal_identity,
+                expected_shm_identity=self._capability()._shm_identity,
+                connector=terminating_connector,
+            ).commit(update)
+
     def test_classifies_post_commit_identity_drift_as_ambiguous(self) -> None:
         replacement = self.root / "replacement.sqlite"
 
@@ -484,6 +502,19 @@ class SQLiteCommitCapabilityTests(unittest.TestCase):
 
         with (
             patch.object(sqlite3, "connect", side_effect=verification_connector),
+            self.assertRaisesRegex(
+                SQLiteMutationAmbiguousError, "post-commit verification is ambiguous"
+            ),
+        ):
+
+            def update(connection: sqlite3.Connection) -> None:
+                connection.execute("UPDATE state SET value='new'")
+
+            self._capability().commit(update)
+
+    def test_classifies_post_commit_verification_termination_as_ambiguous(self) -> None:
+        with (
+            patch.object(sqlite3, "connect", side_effect=KeyboardInterrupt("injected termination")),
             self.assertRaisesRegex(
                 SQLiteMutationAmbiguousError, "post-commit verification is ambiguous"
             ),
