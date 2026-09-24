@@ -132,6 +132,36 @@ def _stale_owner_sqlite_worker(
         result_queue.put("committed")
 
 
+def _pre_effect_sqlite_death_worker(
+    db_text: str,
+    expected_db: tuple[int, int],
+    expected_wal: tuple[int, int] | None,
+    expected_shm: tuple[int, int] | None,
+) -> None:
+    db = Path(db_text)
+    admission = CommitAdmissionBundle(
+        backend="sqlite",
+        target="new",
+        operation_id="op-pre-effect-death:commit",
+        fencing_token="fence-pre-effect-death",  # noqa: S106
+        state_revision=1,
+        barrier_id="barrier-pre-effect-death",
+        artifact_identity="artifact-1",
+        manifest_identity="manifest-1",
+        selector_identity="selector-1",
+        runtime_identity="runtime-1",
+    )
+    SQLiteCommitCapability(
+        db,
+        admission=admission,
+        admission_reread=lambda: admission.__dict__,
+        expected_db_identity=expected_db,
+        expected_wal_identity=expected_wal,
+        expected_shm_identity=expected_shm,
+    )
+    os.kill(os.getpid(), signal.SIGKILL)
+
+
 class SQLiteCommitCapabilityTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory()
@@ -376,6 +406,47 @@ class SQLiteCommitCapabilityTests(unittest.TestCase):
         self.assertEqual("rejected", result_queue.get(timeout=2))
         with sqlite3.connect(self.db) as connection:
             self.assertEqual(("old",), connection.execute("SELECT value FROM state").fetchone())
+
+    def test_independent_process_death_before_effect_allows_fresh_capability(self) -> None:
+        capability = self._capability()
+        context = multiprocessing.get_context("fork")
+        worker = context.Process(
+            target=_pre_effect_sqlite_death_worker,
+            args=(
+                str(self.db),
+                capability._db_identity,
+                capability._wal_identity,
+                capability._shm_identity,
+            ),
+        )
+        worker.start()
+        worker.join(10)
+        self.assertEqual(-signal.SIGKILL, worker.exitcode)
+        with sqlite3.connect(self.db) as connection:
+            self.assertEqual(("old",), connection.execute("SELECT value FROM state").fetchone())
+
+        self._admission = CommitAdmissionBundle(
+            backend="sqlite",
+            target="new",
+            operation_id="op-pre-effect-reopen:commit",
+            fencing_token="fence-pre-effect-reopen",  # noqa: S106
+            state_revision=2,
+            barrier_id="barrier-pre-effect-reopen",
+            artifact_identity="artifact-1",
+            manifest_identity="manifest-1",
+            selector_identity="selector-1",
+            runtime_identity="runtime-1",
+        )
+
+        def reopen(connection: sqlite3.Connection) -> None:
+            connection.execute("UPDATE state SET value='reopened' WHERE id=1")
+
+        result = self._capability().commit(reopen)
+        self.assertEqual("ok", result.integrity_check)
+        with sqlite3.connect(self.db) as connection:
+            self.assertEqual(
+                ("reopened",), connection.execute("SELECT value FROM state").fetchone()
+            )
 
     def test_rejects_termination_during_initial_authority_ancestor_identity(self) -> None:
         with (

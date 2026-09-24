@@ -114,6 +114,31 @@ def _stale_owner_git_worker(
         result_queue.put("committed")
 
 
+def _pre_effect_git_death_worker(root_text: str, expected_head: str) -> None:
+    root = Path(root_text)
+    admission = CommitAdmissionBundle(
+        backend="git",
+        target="new",
+        operation_id="op-pre-effect-death:commit",
+        fencing_token="fence-pre-effect-death",  # noqa: S106
+        state_revision=1,
+        barrier_id="barrier-pre-effect-death",
+        artifact_identity="artifact-1",
+        manifest_identity="manifest-1",
+        selector_identity="selector-1",
+        runtime_identity="runtime-1",
+    )
+    capability = GitCommitCapability(
+        root,
+        admission=admission,
+        admission_reread=lambda: admission.__dict__,
+        expected_branch="main",
+        expected_head=expected_head,
+    )
+    os.kill(os.getpid(), signal.SIGKILL)
+    capability.commit("unreachable")
+
+
 class GitCommitCapabilityTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory()
@@ -285,6 +310,38 @@ class GitCommitCapabilityTests(unittest.TestCase):
         self.assertEqual(before, _git(self.root, "rev-parse", "HEAD"))
         owner_file.unlink()
         self.assertEqual("M  state", _git(self.root, "status", "--porcelain=v1"))
+
+    def test_independent_process_death_before_effect_allows_fresh_capability(self) -> None:
+        (self.root / "state").write_text("new\n", encoding="utf-8")
+        _git(self.root, "add", "state")
+        before = _git(self.root, "rev-parse", "HEAD")
+        context = multiprocessing.get_context("fork")
+        worker = context.Process(target=_pre_effect_git_death_worker, args=(str(self.root), before))
+        worker.start()
+        worker.join(10)
+        self.assertEqual(-signal.SIGKILL, worker.exitcode)
+        self.assertEqual(before, _git(self.root, "rev-parse", "HEAD"))
+
+        admission = CommitAdmissionBundle(
+            backend="git",
+            target="new",
+            operation_id="op-pre-effect-reopen:commit",
+            fencing_token="fence-pre-effect-reopen",  # noqa: S106
+            state_revision=2,
+            barrier_id="barrier-pre-effect-reopen",
+            artifact_identity="artifact-1",
+            manifest_identity="manifest-1",
+            selector_identity="selector-1",
+            runtime_identity="runtime-1",
+        )
+        result = GitCommitCapability(
+            self.root,
+            admission=admission,
+            admission_reread=lambda: admission.__dict__,
+            expected_branch="main",
+            expected_head=before,
+        ).commit("op-pre-effect-reopen authority commit")
+        self.assertNotEqual(before, result.after_head)
 
     def test_rejects_termination_during_initial_repository_identity(self) -> None:
         with (

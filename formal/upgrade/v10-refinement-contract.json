@@ -403,6 +403,14 @@
     {
       "model_actions": ["RejectStaleCAS", "LockOwnership"],
       "implementation_test": "tests/test_sqlite_authority_mutation.py::test_independent_process_stale_owner_replacement_rejects_before_effect"
+    },
+    {
+      "model_actions": ["RejectWrite", "Acquire"],
+      "implementation_test": "tests/test_git_authority_mutation.py::test_independent_process_death_before_effect_allows_fresh_capability"
+    },
+    {
+      "model_actions": ["RejectWrite", "Acquire"],
+      "implementation_test": "tests/test_sqlite_authority_mutation.py::test_independent_process_death_before_effect_allows_fresh_capability"
     }
   ],
   "refinement_boundary": {
