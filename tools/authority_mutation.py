@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from typing import Any, Protocol
 
 from tools.authority_neutral_commit import CommitAdmissionBundle
-from tools.rollback_control_store import ControlStoreAmbiguousError
+from tools.rollback_control_store import ControlStoreAmbiguousError, ControlStoreError
 
 
 class AuthorityMutationError(RuntimeError):
@@ -177,6 +177,14 @@ class DurableBoundAuthorityMutation:
             # the boundary into a retryable rejection; recovery must fence the
             # uncertain journal state first.  Control-store admission errors
             # intentionally propagate as typed pre-effect rejections.
+            raise AuthorityMutationAmbiguousError(
+                "authority mutation journal preparation is ambiguous"
+            ) from error
+        except ControlStoreError:
+            # Ordinary control-store admission failures are typed pre-effect
+            # rejections and must remain visible to the caller.
+            raise
+        except BaseException as error:
             raise AuthorityMutationAmbiguousError(
                 "authority mutation journal preparation is ambiguous"
             ) from error

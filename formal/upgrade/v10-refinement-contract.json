@@ -99,7 +99,8 @@
         "tests/test_authority_mutation.py::AuthorityMutationTests.test_backend_ambiguity_is_normalized_and_cannot_retry",
         "tests/test_authority_mutation.py::AuthorityMutationTests.test_termination_exception_is_ambiguous_and_cannot_retry",
         "tests/test_authority_mutation.py::AuthorityMutationTests.test_durable_capability_rejects_admission_session_revision_mismatch",
-        "tests/test_authority_mutation.py::AuthorityMutationTests.test_durable_effect_forwards_exact_admission_identity_to_journal"
+        "tests/test_authority_mutation.py::AuthorityMutationTests.test_durable_effect_forwards_exact_admission_identity_to_journal",
+        "tests/test_authority_mutation.py::AuthorityMutationTests.test_durable_capability_classifies_termination_during_journal_prepare_as_ambiguous"
       ],
       "status": "bounded executable cross-backend effect evidence; implementation refinement pending and public dispatch disabled"
     },
