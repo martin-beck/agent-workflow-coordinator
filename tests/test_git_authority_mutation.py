@@ -325,6 +325,32 @@ class GitCommitCapabilityTests(unittest.TestCase):
             ).commit("op-1 authority commit")
         self.assertEqual("M  state", _git(self.root, "status", "--porcelain=v1"))
 
+    def test_classifies_post_commit_verification_termination_as_ambiguous(self) -> None:
+        (self.root / "state").write_text("new\n", encoding="utf-8")
+        _git(self.root, "add", "state")
+        committed = False
+
+        def terminating_runner(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
+            nonlocal committed
+            command = cast(list[str], args[0])
+            if committed and command[3:5] == ["rev-parse", "--verify"]:
+                raise KeyboardInterrupt("injected termination")
+            result = subprocess.run(command, **cast(Any, kwargs))
+            if command[3:4] == ["commit"] and result.returncode == 0:
+                committed = True
+            return cast(subprocess.CompletedProcess[str], result)
+
+        with self.assertRaisesRegex(GitMutationAmbiguousError, "postcondition is ambiguous"):
+            GitCommitCapability(
+                self.root,
+                admission=self._admission(),
+                admission_reread=lambda: self._admission().__dict__,
+                expected_branch="main",
+                expected_head=self._capability()._expected_head,
+                runner=terminating_runner,
+            ).commit("op-1 authority commit")
+        self.assertEqual("", _git(self.root, "status", "--porcelain=v1"))
+
     def test_classifies_nonzero_commit_after_ref_update_as_ambiguous(self) -> None:
         (self.root / "state").write_text("new\n", encoding="utf-8")
         _git(self.root, "add", "state")
