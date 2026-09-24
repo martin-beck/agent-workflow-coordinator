@@ -3053,18 +3053,24 @@ def dispatch_roles_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def dispatch_read_only_command(args: argparse.Namespace) -> None:
+    """Dispatch read-only projections without inflating the mutation dispatcher."""
+    if args.cmd == "snapshot":
+        cmd_snapshot(args.task)
+    elif args.cmd == "board":
+        cmd_board()
+    else:
+        cmd_metrics()
+
+
 def dispatch_bound_command(args: argparse.Namespace) -> int:  # noqa: C901
     """Dispatch a command only after the permanent project binding has passed."""
     if args.cmd == "reconcile":
         reconcile(do_commit=args.commit, push=args.push)
     elif args.cmd == "roles":
         return dispatch_roles_command(args)
-    elif args.cmd == "snapshot":
-        cmd_snapshot(args.task)
-    elif args.cmd == "board":
-        cmd_board()
-    elif args.cmd == "metrics":
-        cmd_metrics()
+    elif args.cmd in ("snapshot", "board", "metrics"):
+        dispatch_read_only_command(args)
     elif args.cmd == "checkpoint":
         cmd_checkpoint(args)
     elif args.cmd == "rollback":
