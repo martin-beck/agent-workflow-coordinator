@@ -33,7 +33,7 @@ SESSION_FIELDS = frozenset(
         "next_action",
     }
 )
-TRIGGERS = frozenset({"update", "run"})
+TRIGGERS = frozenset({"update", "run", "pause"})
 TASK_ID = re.compile(r"^AR-[0-9]{4}$")
 DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
 

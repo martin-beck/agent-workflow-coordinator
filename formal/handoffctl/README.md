@@ -34,7 +34,8 @@ authoritative revision, task status and owner unchanged.
 | Command | Required source | Required actor/revision | Result |
 | --- | --- | --- | --- |
 | `promote` | `planned`, unowned, dependencies done | exact revision | `open` |
-| `resume` | `blocked`, unowned | exact revision | `open` |
+| `pause` | `in_progress`, owned | exact revision and owner | `blocked`, ownership and lease cleared |
+| `resume` | `blocked`, unowned, paused session | exact revision and session reference | `open` |
 | `claim` | `open`, dependencies done | owner has no active task | `in_progress`, lease set |
 | `heartbeat` | `in_progress` | current owner, positive lease | lease renewed |
 | `update` | `in_progress` | current owner, exact revision | active fields updated |

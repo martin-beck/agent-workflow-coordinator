@@ -31,7 +31,7 @@ ReleaseOperations ==
     {"release_planned", "release_open", "release_blocked", "release_done"}
 
 Operations ==
-    {"promote", "resume", "claim", "heartbeat", "update", "recover_expired"}
+    {"promote", "resume", "pause", "claim", "heartbeat", "update", "recover_expired"}
         \cup ReleaseOperations
 
 Phases == {"waiting", "holding", "releasing", "done"}
@@ -113,6 +113,10 @@ EnabledOperation(p) ==
             /\ status[t] = "blocked"
             /\ owner[t] = NoActor
             /\ expected[p] = revision[t]
+      [] operation[p] = "pause" ->
+            /\ status[t] = "in_progress"
+            /\ owner[t] = actor[p]
+            /\ expected[p] = revision[t]
       [] operation[p] = "claim" ->
             /\ status[t] = "open"
             /\ dependencyReady[t]
@@ -136,6 +140,7 @@ EnabledOperation(p) ==
 
 StatusAfter(p) ==
     CASE operation[p] \in {"promote", "resume"} -> "open"
+      [] operation[p] = "pause" -> "blocked"
       [] operation[p] = "claim" -> "in_progress"
       [] operation[p] = "recover_expired" -> "open"
       [] operation[p] \in {"heartbeat", "update"} -> status[target[p]]
@@ -147,12 +152,12 @@ StatusAfter(p) ==
 OwnerAfter(p) ==
     IF operation[p] = "claim"
     THEN actor[p]
-    ELSE IF operation[p] \in ReleaseOperations \cup {"recover_expired"}
+    ELSE IF operation[p] \in ReleaseOperations \cup {"recover_expired", "pause"}
          THEN NoActor
          ELSE owner[target[p]]
 
 ExpiryAfter(p) ==
-    IF operation[p] \in ReleaseOperations \cup {"claim", "heartbeat", "recover_expired"}
+    IF operation[p] \in ReleaseOperations \cup {"claim", "heartbeat", "recover_expired", "pause"}
     THEN FALSE
     ELSE leaseExpired[target[p]]
 
