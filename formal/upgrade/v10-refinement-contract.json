@@ -229,6 +229,8 @@
       "model_actions": ["AcquireCommon", "AcquireControl", "AcquireAuthority", "ReleaseAuthority", "ReleaseControl", "ReleaseCommon"],
       "implementation_obligation": "One non-reentrant operation scope acquires repository-common, control-store, and authority locks in that order and releases them in reverse order.",
       "evidence_required": [
+        "tests/test_lock_domain_scope.py::LockDomainScopeTests.test_model_lock_actions_are_available_for_concrete_trace_events",
+        "tests/test_lock_domain_scope.py::LockDomainScopeTests.test_model_lock_contract_rejects_missing_action",
         "tests/test_lock_domain_scope.py::test_bind_rejects_nonheld_durable_session_before_returning_scope",
         "tests/test_lock_domain_scope.py::LockDomainScopeTests.test_scope_proves_durable_session_inside_all_three_locks",
         "tests/test_lock_domain_scope.py::LockDomainScopeTests.test_scope_lock_trace_matches_model_acquire_release_order",

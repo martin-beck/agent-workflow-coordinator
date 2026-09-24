@@ -34,7 +34,10 @@ from tools.lifecycle_trace import (
     validate_terminal_recovery_contract,
 )
 from tools.lock_domain import LockDomainContract, LockDomainError
-from tools.lock_domain_correspondence import validate_lock_domain_trace
+from tools.lock_domain_correspondence import (
+    validate_lock_domain_model_contract,
+    validate_lock_domain_trace,
+)
 from tools.lock_domain_scope import LockDomainScope
 from tools.mutation_fence import MutationFence, provision, provision_control_binding
 from tools.rollback_control_store import (
@@ -45,6 +48,7 @@ from tools.rollback_control_store import (
 from tools.upgrade_identity import BarrierSessionIdentity, canonical_barrier_session_digest
 
 PROJECT = "11111111-1111-4111-8111-111111111111"
+ROOT = Path(__file__).resolve().parents[1]
 
 
 def identity() -> BarrierSessionIdentity:
@@ -363,6 +367,29 @@ class LockDomainScopeTests(unittest.TestCase):
 
     def tearDown(self) -> None:
         self.directory.cleanup()
+
+    def test_model_lock_actions_are_available_for_concrete_trace_events(self) -> None:
+        validate_lock_domain_model_contract(ROOT)
+
+    def test_model_lock_contract_rejects_missing_action(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            model = root / "formal/upgrade/HandoffctlUpgradeBarrier.tla"
+            model.parent.mkdir(parents=True)
+            model.write_text(
+                "\n".join(
+                    (
+                        "AcquireCommon(p) ==",
+                        "AcquireControl(p) ==",
+                        "ReleaseAuthority(p) ==",
+                        "ReleaseControl(p) ==",
+                        "ReleaseCommon(p) ==",
+                    )
+                ),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "AcquireAuthority"):
+                validate_lock_domain_model_contract(root)
 
     def test_scope_proves_durable_session_inside_all_three_locks(self) -> None:
         scope = LockDomainScope(
