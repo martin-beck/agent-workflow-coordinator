@@ -37,6 +37,8 @@ rewrites the coordinator source, Git history, and binding files.
   artifact references, a body digest and the signed source commit; raw command output is never
   retained. Create one with `tools/handoffctl checkpoint AR-#### --owner OWNER
   --expected-revision REV`.
+- `rollbacks/operations.jsonl`: bounded rollback journal. Planned, restore-started, completed and
+  ambiguous states are durable; an ambiguous operation must be reconciled before retrying.
 
 ## Initialize exactly once
 
@@ -87,6 +89,12 @@ tools/handoffctl release AR-0001 --owner worker-unique --status done \
   --note "Integrated and verified"
 tools/handoffctl reconcile --commit --push
 tools/handoffctl doctor --live
+```
+
+Restore a verified checkpoint only from a clean descendant product checkout:
+
+```sh
+tools/handoffctl rollback --checkpoint AR-####-r####
 ```
 
 Use `promote` only for `planned -> open` after dependencies complete. Use `resume` only for
