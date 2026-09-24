@@ -14,6 +14,9 @@ MODEL_ACTIONS = frozenset(
         "CompleteReopen",
         "BindForward",
         "ForwardFailure",
+        "BindRollback",
+        "VerifyTerminal",
+        "BeginReopen",
         "AcceptWrite",
         "RejectWrite",
         "FinishWrite",
@@ -26,6 +29,9 @@ MODEL_ACTIONS = frozenset(
 )
 
 MODEL_ACTION_SIGNATURES = {
+    "BindRollback": "BindRollback(p) ==",
+    "VerifyTerminal": "VerifyTerminal(p, target) ==",
+    "BeginReopen": "BeginReopen(p) ==",
     "BindForward": "BindForward(p) ==",
     "ForwardFailure": "ForwardFailure(p) ==",
     "FreshRuntimeRead": "FreshRuntimeRead(p) ==",
@@ -42,6 +48,24 @@ MODEL_ACTION_SIGNATURES = {
 }
 
 MODEL_ACTION_TRANSITIONS = {
+    "BindRollback": (
+        "forwardFailed",
+        "rollbackChild = NoChild",
+        "rollbackChild' = RollbackId(p)",
+        "controlRevision' = controlRevision + 1",
+    ),
+    "VerifyTerminal": (
+        "target \\in Targets",
+        "terminalTarget' = target",
+        "terminalVerified' = TRUE",
+    ),
+    "BeginReopen": (
+        'sessionStatus = "held"',
+        "terminalVerified",
+        "authorityRechecked",
+        'sessionStatus\' = "releasing"',
+        "controlRevision' = controlRevision + 1",
+    ),
     "BindForward": (
         'sessionStatus = "held"',
         "forwardChild = NoChild",

@@ -136,6 +136,7 @@
         "tests/test_authority_effect_correspondence.py::AuthorityEffectCorrespondenceTests.test_model_contract_requires_request_transition_semantics",
         "tests/test_authority_effect_correspondence.py::AuthorityEffectCorrespondenceTests.test_model_contract_requires_reopen_transition_semantics",
         "tests/test_authority_effect_correspondence.py::AuthorityEffectCorrespondenceTests.test_model_contract_requires_forward_transition_semantics",
+        "tests/test_authority_effect_correspondence.py::AuthorityEffectCorrespondenceTests.test_model_contract_requires_terminal_transition_semantics",
         "tests/test_authority_effect_correspondence.py::AuthorityEffectCorrespondenceTests.test_verified_committed_receipt_maps_to_finish_write",
         "tests/test_authority_effect_correspondence.py::AuthorityEffectCorrespondenceTests.test_missing_or_invalid_committed_receipt_is_rejected",
         "tests/test_authority_effect_correspondence.py::AuthorityEffectCorrespondenceTests.test_ambiguous_outcome_maps_to_write_closed_marking",
@@ -196,7 +197,7 @@
       "status": "bounded executable diagnostic recovery evidence; implementation refinement pending"
     },
     {
-      "model_actions": ["BindForward", "ForwardFailure", "MarkAmbiguous", "FunctionalAvailability"],
+      "model_actions": ["BindForward", "ForwardFailure", "BindRollback", "VerifyTerminal", "BeginReopen", "MarkAmbiguous", "FunctionalAvailability"],
       "implementation_obligation": "The integrated transition rehearsal accepts only the ordered, identity-bound evidence trace and preserves functional, write-closed availability for every failed or ambiguous phase without dispatching mutation.",
       "evidence_required": [
         "tests/test_authority_neutral_rehearsal.py::test_complete_trace_is_functional_and_mutation_free",
