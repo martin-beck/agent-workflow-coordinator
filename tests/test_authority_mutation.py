@@ -470,6 +470,56 @@ class AuthorityMutationTests(unittest.TestCase):
                 lambda: (_ for _ in ()).throw(TimeoutError("unknown"))
             )
 
+    def test_durable_capability_fails_closed_if_journal_prepare_is_ambiguous(self) -> None:
+        class Journal:
+            def prepare_authority_effect(self, *_args: object, **_kwargs: object) -> str:
+                raise OSError("journal prepare uncertain")
+
+            def finish_authority_effect(
+                self, _intent: object, _outcome: str, _receipt: object | None = None
+            ) -> None:
+                return None
+
+        effect_called = False
+
+        def effect() -> dict[str, object]:
+            nonlocal effect_called
+            effect_called = True
+            return self._result()
+
+        with self.assertRaisesRegex(
+            AuthorityMutationAmbiguousError, "journal preparation is ambiguous"
+        ):
+            DurableBoundAuthorityMutation(_admission(), Journal(), session_revision=1).execute(
+                effect
+            )
+        self.assertFalse(effect_called)
+
+    def test_durable_capability_fails_closed_if_journal_prepare_returns_no_intent(self) -> None:
+        class Journal:
+            def prepare_authority_effect(self, *_args: object, **_kwargs: object) -> None:
+                return None
+
+            def finish_authority_effect(
+                self, _intent: object, _outcome: str, _receipt: object | None = None
+            ) -> None:
+                return None
+
+        effect_called = False
+
+        def effect() -> dict[str, object]:
+            nonlocal effect_called
+            effect_called = True
+            return self._result()
+
+        with self.assertRaisesRegex(
+            AuthorityMutationAmbiguousError, "journal preparation returned no intent"
+        ):
+            DurableBoundAuthorityMutation(_admission(), Journal(), session_revision=1).execute(
+                effect
+            )
+        self.assertFalse(effect_called)
+
     def test_durable_capability_fails_closed_if_success_publication_is_uncertain(self) -> None:
         class Journal:
             def prepare_authority_effect(
