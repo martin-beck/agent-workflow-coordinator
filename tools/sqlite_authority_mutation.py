@@ -265,7 +265,9 @@ class SQLiteCommitCapability:
                 "SQLite post-commit verification is ambiguous"
             ) from error
         if integrity != "ok" or violations:
-            raise SQLiteMutationError("SQLite post-commit integrity is invalid")
+            raise SQLiteMutationAmbiguousError(
+                "SQLite post-commit integrity is invalid; recovery is required"
+            )
         return SQLiteCommitResult(
             backend=self._admission.backend,
             target=self._admission.target,

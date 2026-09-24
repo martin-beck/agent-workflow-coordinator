@@ -399,6 +399,50 @@ class SQLiteCommitCapabilityTests(unittest.TestCase):
         ):
             self._capability().commit(update)
 
+    def test_classifies_post_commit_integrity_failure_as_ambiguous(self) -> None:  # noqa: C901
+        real_connect = sqlite3.connect
+
+        class BadIntegrityCursor:
+            def __init__(self, value: object) -> None:
+                self._value = value
+
+            def fetchone(self) -> tuple[object]:
+                return (self._value,)
+
+            def fetchall(self) -> list[object]:
+                return []
+
+        class BadIntegrityConnection:
+            def __init__(self, connection: sqlite3.Connection) -> None:
+                self._connection = connection
+
+            def __enter__(self) -> BadIntegrityConnection:
+                self._connection.__enter__()
+                return self
+
+            def __exit__(self, *args: Any) -> bool | None:
+                return self._connection.__exit__(*args)
+
+            def execute(self, sql: str, *args: Any) -> object:
+                if sql == "PRAGMA integrity_check":
+                    return BadIntegrityCursor("database disk image is malformed")
+                return self._connection.execute(sql, *args)
+
+        def verification_connector(*args: Any, **kwargs: Any) -> BadIntegrityConnection:
+            return BadIntegrityConnection(real_connect(*args, **kwargs))
+
+        with (
+            patch.object(sqlite3, "connect", side_effect=verification_connector),
+            self.assertRaisesRegex(
+                SQLiteMutationAmbiguousError, "post-commit integrity is invalid"
+            ),
+        ):
+
+            def update(connection: sqlite3.Connection) -> None:
+                connection.execute("UPDATE state SET value='new'")
+
+            self._capability().commit(update)
+
     def test_classifies_identity_drift_after_verification_close_as_ambiguous(self) -> None:
         real_connect = sqlite3.connect
         root = self.root
