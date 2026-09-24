@@ -624,6 +624,8 @@ class LockDomainScopeTests(unittest.TestCase):
                     "StartRollback",
                     "VerifyRollback",
                     "ReleaseRollback",
+                    "Crash",
+                    "Recover",
                 )
             )
             all_actions += "\n" + "\n".join(
@@ -657,6 +659,18 @@ class LockDomainScopeTests(unittest.TestCase):
                     'journal[op] = "rollback_verified" /\\ barrier[op] = "held"',
                     'journal\' = [journal EXCEPT ![op] = "rolled_back"]',
                     'runtime\' = [runtime EXCEPT ![op] = "old"]',
+                    'barrier[op] = "held"',
+                    'journal[op] \\in {"running", "rollback_verified"}',
+                    'barrier\' = [barrier EXCEPT ![op] = "ambiguous"]',
+                    'IF journal[op] = "running"',
+                    'journal\' = [journal EXCEPT ![op] = "safe_mode"]',
+                    'journal[op] = "rollback_verified" /\\ barrier[op] = "released"',
+                    'journal\' = [journal EXCEPT ![op] = "rolled_back"]',
+                    'runtime\' = [runtime EXCEPT ![op] = "old"]',
+                    'journal[op] = "safe_mode" /\\ barrier[op] = "ambiguous" /\\ backup[op]',
+                    'target\' = [target EXCEPT ![op] = "rollback"]',
+                    'barrier\' = [barrier EXCEPT ![op] = "held"]',
+                    'journal\' = [journal EXCEPT ![op] = "rollback_started"]',
                 )
             )
             (root / "formal/upgrade/UpgradeRecovery.tla").write_text(all_actions, encoding="utf-8")
@@ -714,6 +728,24 @@ class LockDomainScopeTests(unittest.TestCase):
                 encoding="utf-8",
             )
             with self.assertRaisesRegex(ValueError, "Reopen transition"):
+                validate_model_action_contract(root)
+
+    def test_model_action_contract_rejects_wrong_crash_transition(self) -> None:
+        model = Path(__file__).resolve().parents[1] / "formal/upgrade/UpgradeRecovery.tla"
+        original = model.read_text(encoding="utf-8")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            model_copy = root / "formal/upgrade/UpgradeRecovery.tla"
+            model_copy.parent.mkdir(parents=True)
+            model_copy.write_text(
+                original.replace(
+                    'barrier\' = [barrier EXCEPT ![op] = "ambiguous"]',
+                    'barrier\' = [barrier EXCEPT ![op] = "held"]',
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "Crash transition"):
                 validate_model_action_contract(root)
 
     def test_terminal_recovery_contract_binds_barrier_model(self) -> None:
