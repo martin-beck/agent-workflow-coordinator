@@ -20,7 +20,7 @@ def refresh(root: Path) -> dict[str, object]:
     for relative in files:
         files[relative] = hashlib.sha256((root / relative).read_bytes()).hexdigest()
     try:
-        revision = subprocess.run(  # noqa: S603
+        revision = subprocess.run(
             ["git", "rev-parse", "HEAD"],  # noqa: S607
             cwd=root,
             check=True,
