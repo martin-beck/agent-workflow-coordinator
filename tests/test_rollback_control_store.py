@@ -67,6 +67,21 @@ def _reopen_evidence(state: BarrierSessionState | None, target: str) -> dict[str
     }
 
 
+def _runtime_evidence(state: BarrierSessionState | None, target: str) -> dict[str, object]:
+    assert state is not None
+    return {
+        "authority_revision": state.identity.authority_revision_at_acquire,
+        "backend": "sqlite",
+        "backend_roundtrip": "sqlite",
+        "foreign_key_violations": 0,
+        "fencing_token": state.identity.fencing_token,
+        "integrity_check": "ok",
+        "project_id": state.identity.project_id,
+        "target": target,
+        "verified": True,
+    }
+
+
 PROJECT = "11111111-1111-4111-8111-111111111111"
 RECORD = {
     "schema_version": 2,
@@ -1485,7 +1500,7 @@ class RollbackControlStoreTests(unittest.TestCase):
                 2, BarrierChildIdentity.bind(identity, "rollback-1", "rollback")
             )
             releasing = store.begin_reopen(3, "rollback", _reopen_evidence(held, "rollback"))
-            released = store.complete_reopen(4, True)
+            released = store.complete_reopen(4, _runtime_evidence(releasing, "rollback"))
             self.assertEqual(("released", 5), (released.status, released.revision))
             reread = store.snapshot()
             self.assertIsNotNone(reread)
@@ -2557,7 +2572,7 @@ class RollbackControlStoreTests(unittest.TestCase):
             second = BarrierSessionIdentity.from_record(record)
             store.bind_child(1, BarrierChildIdentity.bind(first, "forward-1", "new"))
             store.begin_reopen(2, "new", _reopen_evidence(store.snapshot(), "new"))
-            store.complete_reopen(3, True)
+            store.complete_reopen(3, _runtime_evidence(store.snapshot(), "new"))
             fresh = store.create(second)
             self.assertEqual(("held", 1), (fresh.status, fresh.revision))
             self.assertEqual(second, store.snapshot().identity)  # type: ignore[union-attr]
@@ -2615,8 +2630,12 @@ class RollbackControlStoreTests(unittest.TestCase):
                     },
                 )
             store.begin_reopen(2, "new", _reopen_evidence(store.snapshot(), "new"))
+            invalid_runtime = _runtime_evidence(store.snapshot(), "new")
+            invalid_runtime["fencing_token"] = "stale-fence"  # noqa: S105
+            with self.assertRaisesRegex(ControlStoreError, "runtime evidence identity"):
+                store.complete_reopen(3, invalid_runtime)
             with self.assertRaisesRegex(ControlStoreError, "runtime evidence"):
-                store.complete_reopen(3, False)
+                store.complete_reopen(3, None)
 
     def test_v10_durable_session_uses_common_then_control_lock(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -2725,7 +2744,9 @@ class RollbackControlStoreTests(unittest.TestCase):
         releasing = contract.begin_reopen(
             held.revision, "rollback", _reopen_evidence(held, "rollback")
         )
-        released = contract.complete_reopen(releasing.revision, True)
+        released = contract.complete_reopen(
+            releasing.revision, _runtime_evidence(releasing, "rollback")
+        )
         self.assertEqual("released", released.status)
         self.assertEqual("fence-1", released.identity.fencing_token)
         with self.assertRaisesRegex(ControlStoreError, "transition"):
@@ -2763,7 +2784,7 @@ class RollbackControlStoreTests(unittest.TestCase):
             releasing = contract.begin_reopen(
                 forward.revision, "new", _reopen_evidence(forward, "new")
             )
-            contract.complete_reopen(releasing.revision, False)
+            contract.complete_reopen(releasing.revision, None)
 
     def test_v10_barrier_session_contract_enters_ambiguous_safe_mode(self) -> None:
         from tools.upgrade_identity import BarrierSessionIdentity, canonical_barrier_session_digest

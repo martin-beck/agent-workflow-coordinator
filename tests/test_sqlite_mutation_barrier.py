@@ -62,6 +62,20 @@ BINDING = {
 }
 
 
+def _runtime_evidence(state: BarrierSessionState, target: str) -> dict[str, object]:
+    return {
+        "authority_revision": state.identity.authority_revision_at_acquire,
+        "backend": "sqlite",
+        "backend_roundtrip": "sqlite",
+        "foreign_key_violations": 0,
+        "fencing_token": state.identity.fencing_token,
+        "integrity_check": "ok",
+        "project_id": state.identity.project_id,
+        "target": target,
+        "verified": True,
+    }
+
+
 def _identity(
     *,
     attempt: str = "attempt-1",
@@ -648,7 +662,7 @@ class SQLiteMutationBarrierProcessTests(unittest.TestCase):
                 "validated": True,
             },
         )
-        return self.session.complete_reopen(releasing.revision, True)
+        return self.session.complete_reopen(releasing.revision, _runtime_evidence(releasing, "new"))
 
     def test_released_writer_factory_cannot_bypass_held_barrier(self) -> None:
         self._create_held()
@@ -819,7 +833,9 @@ class SQLiteMutationBarrierProcessTests(unittest.TestCase):
         )
         self.assertEqual(1, self._authority_revision()[0])
 
-        released = self.session.complete_reopen(releasing.revision, True)
+        released = self.session.complete_reopen(
+            releasing.revision, _runtime_evidence(releasing, "new")
+        )
         self.assertEqual("released", released.status)
         self.assertEqual(("committed",), self._run_writer())
         revision, meta_json = self._authority_revision()
