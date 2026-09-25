@@ -12,7 +12,7 @@ import sqlite3
 import tempfile
 import unittest
 from collections.abc import Iterator, Mapping
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -223,7 +223,7 @@ class SQLiteAuthorityAdapterTests(unittest.TestCase):
         )
 
         self.assertEqual("sqlite", receipt.backend)
-        with sqlite3.connect(self.authority) as connection:
+        with closing(sqlite3.connect(self.authority)) as connection, connection:
             self.assertEqual(
                 "durable", connection.execute("SELECT body FROM records").fetchone()[0]
             )
@@ -374,7 +374,7 @@ class SQLiteAuthorityAdapterTests(unittest.TestCase):
         self.directory = tempfile.TemporaryDirectory()
         self.root = Path(self.directory.name)
         self.authority = self.root / "authority.sqlite"
-        with sqlite3.connect(self.authority) as connection:
+        with closing(sqlite3.connect(self.authority)) as connection, connection:
             connection.execute("CREATE TABLE records (id INTEGER PRIMARY KEY, body TEXT)")
             connection.execute("INSERT INTO records(body) VALUES ('clean')")
         self.authority.chmod(0o600)
@@ -843,7 +843,7 @@ class SQLiteAuthorityAdapterTests(unittest.TestCase):
         self.assertEqual("completed", result["outcome"])
 
     def test_generated_backup_campaign_uses_real_sqlite_backup_and_durable_outcome(self) -> None:
-        with sqlite3.connect(self.authority) as connection:
+        with closing(sqlite3.connect(self.authority)) as connection, connection:
             connection.execute("CREATE TABLE metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
             connection.executemany(
                 "INSERT INTO metadata(key, value) VALUES (?, ?)",
@@ -895,7 +895,7 @@ class SQLiteAuthorityAdapterTests(unittest.TestCase):
         )
         self.assertEqual("completed", result["outcome"])
         self.assertTrue(result["binding_verified"])
-        with sqlite3.connect(destination) as connection:
+        with closing(sqlite3.connect(destination)) as connection, connection:
             self.assertEqual(("clean",), connection.execute("SELECT body FROM records").fetchone())
             self.assertEqual(
                 ("active",),
@@ -908,7 +908,7 @@ class SQLiteAuthorityAdapterTests(unittest.TestCase):
         self.assertFalse(self.session.operation_owned_by_current_thread)
 
     def test_generated_backup_rejects_existing_destination_without_journal_mutation(self) -> None:
-        with sqlite3.connect(self.authority) as connection:
+        with closing(sqlite3.connect(self.authority)) as connection, connection:
             connection.execute("CREATE TABLE metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
             connection.executemany(
                 "INSERT INTO metadata(key, value) VALUES (?, ?)",
@@ -1762,7 +1762,10 @@ class SQLiteAuthorityAdapterTests(unittest.TestCase):
             _binding: dict[str, Any],
         ) -> None:
             # Simulate an external writer changing the barrier during restore.
-            with sqlite3.connect(self.session.control_store_path) as connection:
+            with (
+                closing(sqlite3.connect(self.session.control_store_path)) as connection,
+                connection,
+            ):
                 connection.execute(
                     "UPDATE barrier_session SET status='ambiguous' WHERE project_id=?",
                     (PROJECT,),
@@ -2169,7 +2172,10 @@ class SQLiteAuthorityAdapterTests(unittest.TestCase):
         def mutate_then_fail(_destination: Path, _binding: dict[str, Any]) -> dict[str, Any]:
             # Simulate a hostile external writer changing durable state while
             # the effect is in flight; the executor must detect it on reread.
-            with sqlite3.connect(self.session.control_store_path) as connection:
+            with (
+                closing(sqlite3.connect(self.session.control_store_path)) as connection,
+                connection,
+            ):
                 connection.execute(
                     "UPDATE barrier_session SET status='ambiguous' WHERE project_id=?",
                     (PROJECT,),
@@ -2193,7 +2199,10 @@ class SQLiteAuthorityAdapterTests(unittest.TestCase):
 
         def delete_then_fail(_destination: Path, _binding: dict[str, Any]) -> dict[str, Any]:
             # Simulate loss of the durable session while an effect is in flight.
-            with sqlite3.connect(self.session.control_store_path) as connection:
+            with (
+                closing(sqlite3.connect(self.session.control_store_path)) as connection,
+                connection,
+            ):
                 connection.execute("DELETE FROM barrier_session WHERE project_id=?", (PROJECT,))
             raise RuntimeError("injected control disappearance")
 
@@ -2592,7 +2601,7 @@ class SQLiteAuthorityAdapterTests(unittest.TestCase):
 
     def test_bound_lifecycle_executor_rejects_foreign_authority_store(self) -> None:
         foreign_authority = self.root / "foreign-authority.sqlite"
-        with sqlite3.connect(foreign_authority) as connection:
+        with closing(sqlite3.connect(foreign_authority)) as connection, connection:
             connection.execute("CREATE TABLE records (id INTEGER PRIMARY KEY)")
         foreign_authority.chmod(0o600)
         foreign_control = self.root / "foreign-control.sqlite"
@@ -2613,7 +2622,7 @@ class SQLiteAuthorityAdapterTests(unittest.TestCase):
 
     def test_direct_lifecycle_executor_constructor_rejects_foreign_store(self) -> None:
         foreign_authority = self.root / "foreign-authority-direct.sqlite"
-        with sqlite3.connect(foreign_authority) as connection:
+        with closing(sqlite3.connect(foreign_authority)) as connection, connection:
             connection.execute("CREATE TABLE records (id INTEGER PRIMARY KEY)")
         foreign_authority.chmod(0o600)
         foreign_store = SQLiteBarrierSessionStore(
@@ -3117,7 +3126,7 @@ class SQLiteAuthorityAdapterTests(unittest.TestCase):
                 "sqlite_integrity_verified"
             ]
         )
-        with sqlite3.connect(self.authority) as connection:
+        with closing(sqlite3.connect(self.authority)) as connection, connection:
             self.assertEqual("clean", connection.execute("SELECT body FROM records").fetchone()[0])
 
     def test_new_or_replaced_wal_sidecar_fails_old_reader_closed(self) -> None:

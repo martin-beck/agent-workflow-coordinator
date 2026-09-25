@@ -11,7 +11,7 @@ import tempfile
 import time
 import unittest
 from collections.abc import Iterator, Mapping
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from dataclasses import replace
 from pathlib import Path
 from typing import Any, cast
@@ -1121,7 +1121,7 @@ class LockDomainScopeTests(unittest.TestCase):
             identity(), authority_revision_at_acquire="authority-2", state_revision=2
         ).as_record()
         changed_record["identity_digest"] = canonical_barrier_session_digest(changed_record)
-        with sqlite3.connect(self.store.control_store_path) as connection:
+        with closing(sqlite3.connect(self.store.control_store_path)) as connection, connection:
             connection.execute(
                 "UPDATE barrier_session SET authority_revision_at_acquire=?, "
                 "state_revision=?, identity_digest=?, revision=? WHERE project_id=?",
@@ -1158,7 +1158,7 @@ class LockDomainScopeTests(unittest.TestCase):
             identity(), authority_revision_at_acquire="authority-after-crash", state_revision=2
         ).as_record()
         changed_record["identity_digest"] = canonical_barrier_session_digest(changed_record)
-        with sqlite3.connect(self.store.control_store_path) as connection:
+        with closing(sqlite3.connect(self.store.control_store_path)) as connection, connection:
             connection.execute(
                 "UPDATE barrier_session SET authority_revision_at_acquire=?, "
                 "state_revision=?, identity_digest=?, revision=? WHERE project_id=?",
@@ -1194,7 +1194,7 @@ class LockDomainScopeTests(unittest.TestCase):
             identity(), authority_revision_at_acquire="authority-after-crash", state_revision=2
         ).as_record()
         changed_record["identity_digest"] = canonical_barrier_session_digest(changed_record)
-        with sqlite3.connect(self.store.control_store_path) as connection:
+        with closing(sqlite3.connect(self.store.control_store_path)) as connection, connection:
             connection.execute(
                 "UPDATE barrier_session SET authority_revision_at_acquire=?, "
                 "state_revision=?, identity_digest=?, revision=? WHERE project_id=?",
@@ -1263,7 +1263,7 @@ class LockDomainScopeTests(unittest.TestCase):
             identity(), authority_revision_at_acquire="authority-retry", state_revision=2
         ).as_record()
         changed_record["identity_digest"] = canonical_barrier_session_digest(changed_record)
-        with sqlite3.connect(self.store.control_store_path) as connection:
+        with closing(sqlite3.connect(self.store.control_store_path)) as connection, connection:
             connection.execute(
                 "UPDATE barrier_session SET authority_revision_at_acquire=?, "
                 "state_revision=?, identity_digest=?, revision=? WHERE project_id=?",
@@ -1327,7 +1327,7 @@ class LockDomainScopeTests(unittest.TestCase):
             identity(), authority_revision_at_acquire="authority-retry", state_revision=2
         ).as_record()
         changed_record["identity_digest"] = canonical_barrier_session_digest(changed_record)
-        with sqlite3.connect(self.store.control_store_path) as connection:
+        with closing(sqlite3.connect(self.store.control_store_path)) as connection, connection:
             connection.execute(
                 "UPDATE barrier_session SET authority_revision_at_acquire=?, "
                 "state_revision=?, identity_digest=?, revision=? WHERE project_id=?",
@@ -1380,7 +1380,7 @@ class LockDomainScopeTests(unittest.TestCase):
             identity(), authority_revision_at_acquire="authority-retry", state_revision=2
         ).as_record()
         changed_record["identity_digest"] = canonical_barrier_session_digest(changed_record)
-        with sqlite3.connect(self.store.control_store_path) as connection:
+        with closing(sqlite3.connect(self.store.control_store_path)) as connection, connection:
             connection.execute(
                 "UPDATE barrier_session SET authority_revision_at_acquire=?, "
                 "state_revision=?, identity_digest=?, revision=? WHERE project_id=?",
