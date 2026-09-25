@@ -11,7 +11,7 @@ import tempfile
 import threading
 import unittest
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import AbstractContextManager
+from contextlib import AbstractContextManager, closing
 from pathlib import Path
 from unittest.mock import patch
 
@@ -35,7 +35,7 @@ class DurableBindingTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             authority = root / "authority.sqlite"
-            with sqlite3.connect(authority) as connection:
+            with closing(sqlite3.connect(authority)) as connection, connection:
                 connection.execute("CREATE TABLE records (id INTEGER PRIMARY KEY)")
             authority.chmod(0o600)
             control = root / "control.sqlite"
@@ -65,7 +65,7 @@ class DurableBindingTests(unittest.TestCase):
             git_root = root / "git"
             git_root.mkdir(mode=0o700)
             sqlite_path = root / "authority.sqlite"
-            with sqlite3.connect(sqlite_path) as connection:
+            with closing(sqlite3.connect(sqlite_path)) as connection, connection:
                 connection.execute("CREATE TABLE records (id INTEGER PRIMARY KEY)")
             sqlite_path.chmod(0o600)
             git_binding = FilesystemAuthorityBinding.bind(git_root, "git")
@@ -105,7 +105,7 @@ class DurableBindingTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             authority = root / "authority.sqlite"
-            with sqlite3.connect(authority) as connection:
+            with closing(sqlite3.connect(authority)) as connection, connection:
                 connection.execute("CREATE TABLE records (id INTEGER PRIMARY KEY)")
             authority.chmod(0o600)
             binding = FilesystemAuthorityBinding.bind(authority, "sqlite")
@@ -163,7 +163,7 @@ class DurableBindingTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             authority = root / "authority.sqlite"
-            with sqlite3.connect(authority) as connection:
+            with closing(sqlite3.connect(authority)) as connection, connection:
                 connection.execute("CREATE TABLE records (id INTEGER PRIMARY KEY)")
             authority.chmod(0o600)
             control = root / "control.sqlite"
@@ -213,7 +213,7 @@ class DurableBindingTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             authority = root / "authority.sqlite"
-            with sqlite3.connect(authority) as connection:
+            with closing(sqlite3.connect(authority)) as connection, connection:
                 connection.execute("CREATE TABLE records (id INTEGER PRIMARY KEY)")
             authority.chmod(0o600)
             control = root / "control.sqlite"
@@ -253,7 +253,7 @@ class DurableBindingTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             authority = root / "authority.sqlite"
-            with sqlite3.connect(authority) as connection:
+            with closing(sqlite3.connect(authority)) as connection, connection:
                 connection.execute("CREATE TABLE records (id INTEGER PRIMARY KEY)")
             authority.chmod(0o600)
             control = root / "control.sqlite"
@@ -291,7 +291,7 @@ class DurableBindingTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             authority = root / "authority.sqlite"
-            with sqlite3.connect(authority) as connection:
+            with closing(sqlite3.connect(authority)) as connection, connection:
                 connection.execute("CREATE TABLE records (id INTEGER PRIMARY KEY)")
             authority.chmod(0o600)
             control = root / "control.sqlite"
@@ -340,7 +340,7 @@ class DurableBindingTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             authority = root / "authority.sqlite"
-            with sqlite3.connect(authority) as connection:
+            with closing(sqlite3.connect(authority)) as connection, connection:
                 connection.execute("CREATE TABLE records (id INTEGER PRIMARY KEY)")
             authority.chmod(0o600)
             control = root / "control.sqlite"
@@ -372,7 +372,7 @@ class DurableBindingTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             authority = root / "authority.sqlite"
-            with sqlite3.connect(authority) as connection:
+            with closing(sqlite3.connect(authority)) as connection, connection:
                 connection.execute("CREATE TABLE records (id INTEGER PRIMARY KEY)")
             authority.chmod(0o600)
             control = root / "control.sqlite"

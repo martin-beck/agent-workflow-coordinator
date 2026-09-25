@@ -14,6 +14,7 @@ import sqlite3
 import subprocess
 import tempfile
 import unittest
+from contextlib import closing
 from multiprocessing.process import BaseProcess
 from pathlib import Path
 from typing import Any, NoReturn, cast
@@ -621,7 +622,7 @@ class SQLiteMutationBarrierProcessTests(unittest.TestCase):
         return cast(tuple[str, ...], result.get(timeout=1))
 
     def _authority_revision(self) -> tuple[int, str]:
-        with sqlite3.connect(self.authority) as connection:
+        with closing(sqlite3.connect(self.authority)) as connection, connection:
             row = connection.execute(
                 "SELECT revision, meta_json FROM tasks WHERE id='AR-0001'"
             ).fetchone()
@@ -926,7 +927,7 @@ class SQLiteMutationBarrierProcessTests(unittest.TestCase):
         self.assertEqual(1, revision)
         self.assertIn('"summary": "Ready."', meta_json)
         self.assertNotIn("must roll back after SIGKILL", meta_json)
-        with sqlite3.connect(self.authority) as connection:
+        with closing(sqlite3.connect(self.authority)) as connection, connection:
             events = connection.execute(
                 "SELECT revision, kind FROM events WHERE task_id='AR-0001' ORDER BY revision"
             ).fetchall()
@@ -948,7 +949,7 @@ class SQLiteMutationBarrierProcessTests(unittest.TestCase):
         self._kill(crashed)
         self.assertEqual(released, self.session.snapshot())
         self.assertEqual(1, self._authority_revision()[0])
-        with sqlite3.connect(self.authority) as connection:
+        with closing(sqlite3.connect(self.authority)) as connection, connection:
             self.assertEqual(
                 ("active",),
                 connection.execute("SELECT value FROM metadata WHERE key='state'").fetchone(),
@@ -998,7 +999,7 @@ class SQLiteMutationBarrierProcessTests(unittest.TestCase):
         self.assertEqual(1, revision)
         self.assertIn('"summary": "Ready."', meta_json)
         self.assertNotIn("must roll back after WAL replacement", meta_json)
-        with sqlite3.connect(self.authority) as connection:
+        with closing(sqlite3.connect(self.authority)) as connection, connection:
             self.assertEqual(
                 [(1, "import")],
                 connection.execute(
@@ -1049,7 +1050,7 @@ class SQLiteMutationBarrierProcessTests(unittest.TestCase):
 
     def test_forged_released_row_rejects_before_authority_mutation(self) -> None:
         held = self._create_held()
-        with sqlite3.connect(self.control.control_store_path) as connection:
+        with closing(sqlite3.connect(self.control.control_store_path)) as connection, connection:
             connection.execute(
                 "UPDATE barrier_session SET status='released',revision=?,identity_digest=? "
                 "WHERE project_id=?",
@@ -1069,7 +1070,7 @@ class SQLiteMutationBarrierProcessTests(unittest.TestCase):
         self.assertEqual(1, revision)
         self.assertIn('"summary": "Ready."', meta_json)
         self.assertNotIn("mutated after verified release", meta_json)
-        with sqlite3.connect(self.authority) as connection:
+        with closing(sqlite3.connect(self.authority)) as connection, connection:
             events = connection.execute(
                 "SELECT revision, kind FROM events WHERE task_id='AR-0001' ORDER BY revision"
             ).fetchall()
@@ -1080,7 +1081,7 @@ class SQLiteMutationBarrierProcessTests(unittest.TestCase):
     def test_every_inventoried_route_rejects_forged_released_row(self) -> None:
         """A stale/forged release must fence every SQLite mutation route."""
         held = self._create_held()
-        with sqlite3.connect(self.control.control_store_path) as connection:
+        with closing(sqlite3.connect(self.control.control_store_path)) as connection, connection:
             connection.execute(
                 "UPDATE barrier_session SET status='released',revision=?,identity_digest=? "
                 "WHERE project_id=?",
@@ -1099,7 +1100,7 @@ class SQLiteMutationBarrierProcessTests(unittest.TestCase):
         revision, meta_json = self._authority_revision()
         self.assertEqual(1, revision)
         self.assertIn('"summary": "Ready."', meta_json)
-        with sqlite3.connect(self.authority) as connection:
+        with closing(sqlite3.connect(self.authority)) as connection, connection:
             self.assertEqual(
                 [(1, "import")],
                 connection.execute(
@@ -1132,7 +1133,7 @@ class SQLiteMutationBarrierProcessTests(unittest.TestCase):
             fence="fence-replaced",
             owner="owner-replaced",
         )
-        with sqlite3.connect(self.control.control_store_path) as connection:
+        with closing(sqlite3.connect(self.control.control_store_path)) as connection, connection:
             connection.execute(
                 "UPDATE barrier_session SET attempt_id=?,state_revision=?,"
                 "durable_barrier_id=?,fencing_token=?,fencing_owner=?,identity_digest=?,"
@@ -1182,7 +1183,7 @@ class SQLiteMutationBarrierProcessTests(unittest.TestCase):
             fence="fence-bound-replaced",
             owner="owner-bound-replaced",
         )
-        with sqlite3.connect(self.control.control_store_path) as connection:
+        with closing(sqlite3.connect(self.control.control_store_path)) as connection, connection:
             current_revision = int(
                 connection.execute(
                     "SELECT revision FROM barrier_session WHERE project_id=?", (PROJECT,)
@@ -1311,12 +1312,12 @@ class SQLiteMutationBarrierProcessTests(unittest.TestCase):
         held = reopened.snapshot()
         assert held is not None
         self.assertEqual(("held", 1), (held.status, held.revision))
-        with sqlite3.connect(self.authority) as connection:
+        with closing(sqlite3.connect(self.authority)) as connection, connection:
             self.assertEqual(
                 "effect committed before worker death",
                 connection.execute("SELECT body FROM tasks WHERE id='AR-0001'").fetchone()[0],
             )
-        with sqlite3.connect(self.control.control_store_path) as connection:
+        with closing(sqlite3.connect(self.control.control_store_path)) as connection, connection:
             self.assertEqual(
                 [("prepared",)],
                 connection.execute(
@@ -1361,7 +1362,7 @@ class SQLiteMutationBarrierProcessTests(unittest.TestCase):
         ambiguous = reopened.recover_unknown()
         assert ambiguous is not None
         self.assertEqual(("ambiguous", 2), (ambiguous.status, ambiguous.revision))
-        with sqlite3.connect(self.control.control_store_path) as connection:
+        with closing(sqlite3.connect(self.control.control_store_path)) as connection, connection:
             self.assertEqual(
                 [("ambiguous", "process-death")],
                 connection.execute(
@@ -1481,7 +1482,7 @@ class SQLiteMutationBarrierProcessTests(unittest.TestCase):
             lambda: sqlite_capability.commit(reopened_effect)
         )
         keepalive.close()
-        with sqlite3.connect(self.authority) as connection:
+        with closing(sqlite3.connect(self.authority)) as connection, connection:
             self.assertEqual(
                 "newer fence committed after recovery",
                 connection.execute("SELECT body FROM tasks WHERE id='AR-0001'").fetchone()[0],
@@ -1493,7 +1494,7 @@ class SQLiteMutationBarrierProcessTests(unittest.TestCase):
             fence="fence-effect-recovered",
             owner="owner-effect-recovered",
         )
-        with sqlite3.connect(self.control.control_store_path) as connection:
+        with closing(sqlite3.connect(self.control.control_store_path)) as connection, connection:
             self.assertEqual(
                 (
                     "op-2:commit",
@@ -1538,7 +1539,7 @@ class SQLiteMutationBarrierProcessTests(unittest.TestCase):
         held = reopened.snapshot()
         assert held is not None
         self.assertEqual(("held", 1), (held.status, held.revision))
-        with sqlite3.connect(self.control.control_store_path) as connection:
+        with closing(sqlite3.connect(self.control.control_store_path)) as connection, connection:
             self.assertEqual(
                 [("prepared",)],
                 connection.execute(
@@ -1612,7 +1613,7 @@ class SQLiteMutationBarrierProcessTests(unittest.TestCase):
             "newer fence committed after recovery\n",
             (self.git_authority / "state").read_text(encoding="utf-8"),
         )
-        with sqlite3.connect(self.control.control_store_path) as connection:
+        with closing(sqlite3.connect(self.control.control_store_path)) as connection, connection:
             effect_outcomes = connection.execute(
                 "SELECT outcome FROM authority_effect_intent WHERE project_id=?",
                 (PROJECT,),
@@ -1625,7 +1626,7 @@ class SQLiteMutationBarrierProcessTests(unittest.TestCase):
             fence="fence-git-effect-recovered",
             owner="owner-git-effect-recovered",
         )
-        with sqlite3.connect(self.control.control_store_path) as connection:
+        with closing(sqlite3.connect(self.control.control_store_path)) as connection, connection:
             self.assertEqual(
                 (
                     "op-git-2:commit",
@@ -1732,7 +1733,7 @@ class SQLiteMutationBarrierProcessTests(unittest.TestCase):
             expected_selector_identity="selector-1",
             expected_runtime_identity="runtime-1",
         )
-        with sqlite3.connect(self.control.control_store_path) as connection:
+        with closing(sqlite3.connect(self.control.control_store_path)) as connection, connection:
             persisted = connection.execute(
                 "SELECT operation_id,backend,target,attempt_id,identity_digest,"
                 "fencing_token,session_revision,artifact_identity,manifest_identity,"
@@ -1763,7 +1764,7 @@ class SQLiteMutationBarrierProcessTests(unittest.TestCase):
             self.session.finish_authority_effect(object(), "committed")  # type: ignore[arg-type]
         with self.assertRaisesRegex(ControlStoreError, "receipt identity mismatch"):
             self.session.finish_authority_effect(intent, "committed")
-        with sqlite3.connect(self.control.control_store_path) as connection:
+        with closing(sqlite3.connect(self.control.control_store_path)) as connection, connection:
             self.assertEqual(
                 ("prepared",),
                 connection.execute(
@@ -1778,7 +1779,7 @@ class SQLiteMutationBarrierProcessTests(unittest.TestCase):
                 "committed",
                 {"backend": "git"},
             )
-        with sqlite3.connect(self.control.control_store_path) as connection:
+        with closing(sqlite3.connect(self.control.control_store_path)) as connection, connection:
             self.assertEqual(
                 ("prepared",),
                 connection.execute(
@@ -1858,12 +1859,12 @@ class SQLiteMutationBarrierProcessTests(unittest.TestCase):
         current = self.session.snapshot()
         assert current is not None
         self.assertEqual(("held", held.revision), (current.status, current.revision))
-        with sqlite3.connect(self.authority) as connection:
+        with closing(sqlite3.connect(self.authority)) as connection, connection:
             self.assertEqual(
                 "# Authority fixture\n",
                 connection.execute("SELECT body FROM tasks WHERE id='AR-0001'").fetchone()[0],
             )
-        with sqlite3.connect(self.control.control_store_path) as connection:
+        with closing(sqlite3.connect(self.control.control_store_path)) as connection, connection:
             self.assertEqual(
                 [("rejected",)],
                 connection.execute(
@@ -1901,7 +1902,7 @@ class SQLiteMutationBarrierProcessTests(unittest.TestCase):
         ambiguous = reopened.snapshot()
         assert ambiguous is not None
         self.assertEqual(("ambiguous", 2), (ambiguous.status, ambiguous.revision))
-        with sqlite3.connect(self.control.control_store_path) as connection:
+        with closing(sqlite3.connect(self.control.control_store_path)) as connection, connection:
             self.assertEqual(
                 [("prepared",)],
                 connection.execute(
@@ -1921,7 +1922,7 @@ class SQLiteMutationBarrierProcessTests(unittest.TestCase):
         self.assertEqual(1, self._authority_revision()[0])
 
         self.assertEqual(ambiguous, reopened.recover_unknown())
-        with sqlite3.connect(self.control.control_store_path) as connection:
+        with closing(sqlite3.connect(self.control.control_store_path)) as connection, connection:
             self.assertEqual(
                 [("ambiguous",)],
                 connection.execute(
@@ -1975,7 +1976,7 @@ class SQLiteMutationBarrierProcessTests(unittest.TestCase):
         self.assertEqual("attempt-reconciled", recovered.identity.attempt_id)
         self.assertEqual(2, recovered.identity.state_revision)
         self.assertNotEqual(ambiguous.identity.fencing_token, recovered.identity.fencing_token)
-        with sqlite3.connect(self.control.control_store_path) as connection:
+        with closing(sqlite3.connect(self.control.control_store_path)) as connection, connection:
             history = connection.execute(
                 "SELECT attempt_id,revision,record_json FROM barrier_session_history "
                 "WHERE project_id=?",
@@ -1985,7 +1986,7 @@ class SQLiteMutationBarrierProcessTests(unittest.TestCase):
         self.assertEqual((ambiguous.identity.attempt_id, ambiguous.revision), history[0][:2])
         self.assertIn('"status":"ambiguous"', str(history[0][2]))
 
-        with sqlite3.connect(self.control.control_store_path) as connection:
+        with closing(sqlite3.connect(self.control.control_store_path)) as connection, connection:
             intent_before = connection.execute(
                 "SELECT expected_revision,proposed_revision,outcome "
                 "FROM barrier_session_intent WHERE project_id=?",
@@ -2000,7 +2001,7 @@ class SQLiteMutationBarrierProcessTests(unittest.TestCase):
         with self.assertRaisesRegex(Exception, "prepared session intent identity is invalid"):
             reopened.recover_unknown()
         self.assertEqual(recovered, reopened.snapshot())
-        with sqlite3.connect(self.control.control_store_path) as connection:
+        with closing(sqlite3.connect(self.control.control_store_path)) as connection, connection:
             intent_after_rejected_recovery = connection.execute(
                 "SELECT expected_revision,proposed_revision,outcome "
                 "FROM barrier_session_intent WHERE project_id=?",
@@ -2013,7 +2014,7 @@ class SQLiteMutationBarrierProcessTests(unittest.TestCase):
 
         # Restore the exact predecessor revision only to continue the valid
         # recovery path; the forged attempt above must not mutate any row.
-        with sqlite3.connect(self.control.control_store_path) as connection:
+        with closing(sqlite3.connect(self.control.control_store_path)) as connection, connection:
             connection.execute(
                 "UPDATE barrier_session_intent SET expected_revision=? "
                 "WHERE project_id=? AND outcome='prepared'",
@@ -2065,7 +2066,7 @@ class SQLiteMutationBarrierProcessTests(unittest.TestCase):
         revision, meta_json = self._authority_revision()
         self.assertEqual(2, revision)
         self.assertIn("mutated after verified release", meta_json)
-        with sqlite3.connect(self.authority) as connection:
+        with closing(sqlite3.connect(self.authority)) as connection, connection:
             events = connection.execute(
                 "SELECT revision, kind FROM events WHERE task_id='AR-0001' ORDER BY revision"
             ).fetchall()

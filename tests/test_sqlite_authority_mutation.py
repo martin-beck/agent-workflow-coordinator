@@ -11,6 +11,7 @@ import signal
 import sqlite3
 import tempfile
 import unittest
+from contextlib import closing
 from pathlib import Path
 from typing import Any, cast
 from unittest.mock import patch
@@ -167,7 +168,7 @@ class SQLiteCommitCapabilityTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name)
         self.db = self.root / "authority.sqlite"
-        with sqlite3.connect(self.db) as connection:
+        with closing(sqlite3.connect(self.db)) as connection, connection:
             connection.execute("PRAGMA journal_mode=WAL")
             connection.execute("CREATE TABLE state (id INTEGER PRIMARY KEY, value TEXT NOT NULL)")
             connection.execute("INSERT INTO state VALUES (1, 'old')")
@@ -242,7 +243,7 @@ class SQLiteCommitCapabilityTests(unittest.TestCase):
             ),
         )
         self.assertEqual("ok", result.integrity_check)
-        with sqlite3.connect(self.db) as connection:
+        with closing(sqlite3.connect(self.db)) as connection, connection:
             self.assertEqual(("new",), connection.execute("SELECT value FROM state").fetchone())
 
     def test_effect_runs_with_full_synchronous_durability(self) -> None:
@@ -256,7 +257,7 @@ class SQLiteCommitCapabilityTests(unittest.TestCase):
 
         self.assertEqual("ok", result.integrity_check)
         self.assertEqual([2], observed)
-        with sqlite3.connect(self.db) as connection:
+        with closing(sqlite3.connect(self.db)) as connection, connection:
             self.assertEqual(
                 ("full-sync",), connection.execute("SELECT value FROM state").fetchone()
             )
@@ -331,7 +332,7 @@ class SQLiteCommitCapabilityTests(unittest.TestCase):
             connection.execute("UPDATE state SET value='second'")
 
         self._capability().commit(second_update)
-        with sqlite3.connect(self.db) as connection:
+        with closing(sqlite3.connect(self.db)) as connection, connection:
             self.assertEqual(("second",), connection.execute("SELECT value FROM state").fetchone())
 
     def test_independent_process_death_after_effect_requires_fresh_capability(self) -> None:
@@ -350,7 +351,7 @@ class SQLiteCommitCapabilityTests(unittest.TestCase):
         worker.join(10)
         self.assertEqual(-signal.SIGKILL, worker.exitcode)
 
-        with sqlite3.connect(self.db) as connection:
+        with closing(sqlite3.connect(self.db)) as connection, connection:
             self.assertEqual(("new",), connection.execute("SELECT value FROM state").fetchone())
 
         self._admission = CommitAdmissionBundle(
@@ -371,7 +372,7 @@ class SQLiteCommitCapabilityTests(unittest.TestCase):
 
         result = self._capability().commit(reopen)
         self.assertEqual("ok", result.integrity_check)
-        with sqlite3.connect(self.db) as connection:
+        with closing(sqlite3.connect(self.db)) as connection, connection:
             self.assertEqual(
                 ("reopened",), connection.execute("SELECT value FROM state").fetchone()
             )
@@ -404,7 +405,7 @@ class SQLiteCommitCapabilityTests(unittest.TestCase):
         worker.join(10)
         self.assertEqual(0, worker.exitcode)
         self.assertEqual("rejected", result_queue.get(timeout=2))
-        with sqlite3.connect(self.db) as connection:
+        with closing(sqlite3.connect(self.db)) as connection, connection:
             self.assertEqual(("old",), connection.execute("SELECT value FROM state").fetchone())
 
     def test_independent_process_death_before_effect_allows_fresh_capability(self) -> None:
@@ -422,7 +423,7 @@ class SQLiteCommitCapabilityTests(unittest.TestCase):
         worker.start()
         worker.join(10)
         self.assertEqual(-signal.SIGKILL, worker.exitcode)
-        with sqlite3.connect(self.db) as connection:
+        with closing(sqlite3.connect(self.db)) as connection, connection:
             self.assertEqual(("old",), connection.execute("SELECT value FROM state").fetchone())
 
         self._admission = CommitAdmissionBundle(
@@ -443,7 +444,7 @@ class SQLiteCommitCapabilityTests(unittest.TestCase):
 
         result = self._capability().commit(reopen)
         self.assertEqual("ok", result.integrity_check)
-        with sqlite3.connect(self.db) as connection:
+        with closing(sqlite3.connect(self.db)) as connection, connection:
             self.assertEqual(
                 ("reopened",), connection.execute("SELECT value FROM state").fetchone()
             )
@@ -836,7 +837,7 @@ class SQLiteCommitCapabilityTests(unittest.TestCase):
         with self.assertRaisesRegex(SQLiteMutationAmbiguousError, "post-commit admission"):
             capability.commit(update)
         self.assertEqual(2, reads)
-        with sqlite3.connect(self.db) as connection:
+        with closing(sqlite3.connect(self.db)) as connection, connection:
             self.assertEqual(("new",), connection.execute("SELECT value FROM state").fetchone())
 
         self._admission = CommitAdmissionBundle(
@@ -857,7 +858,7 @@ class SQLiteCommitCapabilityTests(unittest.TestCase):
 
         result = self._capability().commit(recovered)
         self.assertEqual("ok", result.integrity_check)
-        with sqlite3.connect(self.db) as connection:
+        with closing(sqlite3.connect(self.db)) as connection, connection:
             self.assertEqual(
                 ("recovered",), connection.execute("SELECT value FROM state").fetchone()
             )
@@ -1178,7 +1179,7 @@ class SQLiteCommitCapabilityTests(unittest.TestCase):
         with self.assertRaisesRegex(SQLiteMutationRejectedError, "admission identity changed"):
             capability.commit(update)
         self.assertFalse(called)
-        with sqlite3.connect(self.db) as connection:
+        with closing(sqlite3.connect(self.db)) as connection, connection:
             self.assertEqual(("old",), connection.execute("SELECT value FROM state").fetchone())
 
     def test_rejects_every_admission_identity_drift_before_effect(self) -> None:
@@ -1223,7 +1224,7 @@ class SQLiteCommitCapabilityTests(unittest.TestCase):
             ):
                 capability.commit(update)
             self.assertFalse(called)
-            with sqlite3.connect(self.db) as connection:
+            with closing(sqlite3.connect(self.db)) as connection, connection:
                 self.assertEqual(("old",), connection.execute("SELECT value FROM state").fetchone())
 
 
