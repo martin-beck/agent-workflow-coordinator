@@ -107,7 +107,7 @@
       "tests/test_sqlite_mutation_barrier.py": "e94f2af1c89ab96c4813257c8d454c8159e0e72d491fa7a0be9873de5b026957",
       "tests/test_sqlite_storage.py": "851895c7f62925974f2450cb59420ebc8e0721992e5206f8b453953a63077fe5",
       "tests/test_upgrade_admission.py": "4b44bc353a73cf5084514d984adc1c2b82c9a174d175a9b4db86c6e8ff1f8fec",
-      "tests/test_upgrade_binding.py": "7e8be1ebd7ba9cd913b7d3280cc6056c3c79241b57648a8f184827e1512e6faa",
+      "tests/test_upgrade_binding.py": "00dd97324f91bae7454e1441d3f6b8788088df850eaa378714079c8ab109ca67",
       "tests/test_upgrade_commands.py": "94536b40f98bdcd662eb971f8e146b5170df9ad94898351c2eb3932ba8e13ca5",
       "tests/test_upgrade_contract.py": "04434245a70c249b48d206b0d14427b9ef0d182a8085bd35cc3d6621a8c68cee",
       "tests/test_upgrade_identity.py": "d677ab21c8048fdda10e8b302082c05b0aa387a8e0ba1f81e189f84011cc89f3",

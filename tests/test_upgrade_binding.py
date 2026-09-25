@@ -6,9 +6,12 @@ from __future__ import annotations
 import copy
 import unittest
 import uuid
+from dataclasses import replace
 from pathlib import PurePosixPath
 from typing import Any
+from unittest.mock import patch
 
+from tools import upgrade_binding as binding_module
 from tools.generate_upgrade_contract import generate
 from tools.rollback_control_store import BarrierSessionState
 from tools.upgrade_binding import UpgradeBindingError, UpgradeRuntimeBinding
@@ -189,3 +192,165 @@ class UpgradeBindingTests(unittest.TestCase):
                     ),
                 )
             )
+
+    def test_rejects_malformed_binding_records(self) -> None:
+        contract = _contract()
+        binding = UpgradeRuntimeBinding.bind(
+            contract, _envelope(contract), session_identity_digest="a" * 64
+        ).as_mapping()
+        mutations: list[dict[str, object]] = []
+        mutations.append({key: value for key, value in binding.items() if key != "schema_version"})
+        mutations.append({**binding, "schema_version": 2})
+        mutations.append({**binding, "runtime_envelope": {}})
+        mutations.extend(
+            {
+                **binding,
+                field: "",
+            }
+            for field in (
+                "contract_digest",
+                "session_identity_digest",
+                "contract_operation_id",
+                "contract_backend",
+                "contract_selector_ref",
+                "contract_barrier_id",
+                "contract_fencing_token",
+                "contract_backup_operation_id",
+            )
+        )
+        mutations.extend(
+            [
+                {**binding, "contract_digest": "x" * 64},
+                {**binding, "session_identity_digest": "x" * 64},
+                {**binding, "contract_expected_state_revision": 0},
+            ]
+        )
+        for value in mutations:
+            with self.subTest(value=value), self.assertRaises(UpgradeBindingError):
+                UpgradeRuntimeBinding.from_mapping(value)
+
+    def test_rejects_live_session_status_and_identity_drift(self) -> None:
+        contract = _contract()
+        runtime = _envelope(contract)
+        record: dict[str, object] = {
+            "schema_version": 1,
+            "project_id": runtime["project_id"],
+            "attempt_id": "attempt-7",
+            "state_revision": runtime["state_revision"],
+            "authority_revision_at_acquire": runtime["authority_revision"],
+            "durable_barrier_id": runtime["durable_barrier_id"],
+            "fencing_token": runtime["fencing_token"],
+            "fencing_owner": runtime["fencing_owner"],
+        }
+        record["identity_digest"] = canonical_barrier_session_digest(record)
+        identity = BarrierSessionIdentity.from_record(record)
+        binding = UpgradeRuntimeBinding.bind(
+            contract, runtime, session_identity_digest=identity.identity_digest
+        )
+        child = BarrierChildIdentity.bind(identity, str(runtime["operation_id"]), "rollback")
+        cases = [
+            BarrierSessionState(identity, "releasing", 2, rollback_child=child),
+            BarrierSessionState(identity, "held", 2),
+            BarrierSessionState(
+                identity,
+                "held",
+                2,
+                rollback_child=BarrierChildIdentity(
+                    str(runtime["operation_id"]), "new", identity.identity_digest
+                ),
+            ),
+        ]
+        for case in cases:
+            with self.assertRaises(UpgradeBindingError):
+                binding.validate_live_session(case)
+        with self.assertRaises(UpgradeBindingError):
+            binding.validate_live_session(object())
+        for field, value in (
+            ("project_id", str(uuid.uuid4())),
+            ("state_revision", 8),
+            ("authority_revision_at_acquire", "other-authority"),
+            ("durable_barrier_id", "other-barrier"),
+            ("fencing_token", "other-fence"),
+        ):
+            changed = {**record, field: value}
+            changed["identity_digest"] = canonical_barrier_session_digest(changed)
+            changed_identity = BarrierSessionIdentity.from_record(changed)
+            changed_identity = replace(changed_identity, identity_digest=identity.identity_digest)
+            changed_child = BarrierChildIdentity.bind(
+                changed_identity, str(runtime["operation_id"]), "rollback"
+            )
+            with self.subTest(field=field), self.assertRaises(UpgradeBindingError):
+                binding.validate_live_session(
+                    BarrierSessionState(changed_identity, "held", 2, rollback_child=changed_child)
+                )
+
+    def test_covers_strict_binding_defensive_boundaries(self) -> None:
+        contract = _contract()
+        with self.assertRaises(UpgradeBindingError):
+            binding_module.canonical_contract_digest({"value": object()})
+        with self.assertRaises(UpgradeBindingError):
+            binding_module._contract_inputs({"rollback": {"operation": {"inputs": []}}})
+        with self.assertRaises(UpgradeBindingError):
+            binding_module._validated_envelope({})
+
+        inputs = {
+            "backend": "sqlite",
+            "selector_ref": ".runtime/runtime-selector.json",
+            "expected_state_revision": 7,
+            "barrier_id": "barrier-7",
+            "fencing_token": "fence-7",
+            "backup_operation_id": "op:backup",
+        }
+        value: dict[str, Any] = {
+            "operation_id": "op",
+            "backend": "sqlite",
+            "rollback": {"operation": {"operation_id": "op:rollback", "inputs": inputs}},
+            "phases": [{"operation": {"inputs": dict(inputs)}}],
+        }
+        with patch.object(
+            binding_module, "validate_runtime_contract", side_effect=lambda candidate: candidate
+        ):
+            for mutation in (
+                {**inputs, "unexpected": True},
+                {**inputs, "selector_ref": "other"},
+            ):
+                changed = copy.deepcopy(value)
+                changed["rollback"]["operation"]["inputs"] = mutation
+                with self.assertRaises(UpgradeBindingError):
+                    binding_module._validate_contract_identity(changed)
+            changed = copy.deepcopy(value)
+            changed["phases"][0]["operation"]["inputs"]["barrier_id"] = "other"
+            with self.assertRaises(UpgradeBindingError):
+                binding_module._validate_contract_identity(changed)
+            changed = copy.deepcopy(value)
+            changed["backend"] = "git"
+            with self.assertRaises(UpgradeBindingError):
+                binding_module._validate_contract_identity(changed)
+            changed = copy.deepcopy(value)
+            changed["rollback"]["operation"]["inputs"]["backup_operation_id"] = "other"
+            with self.assertRaises(UpgradeBindingError):
+                binding_module._validate_contract_identity(changed)
+            changed = copy.deepcopy(value)
+            changed["rollback"]["operation"]["operation_id"] = "other"
+            with self.assertRaises(UpgradeBindingError):
+                binding_module._validate_contract_identity(changed)
+
+        with self.assertRaises(UpgradeBindingError):
+            UpgradeRuntimeBinding.bind(
+                contract, _envelope(contract), session_identity_digest="bad"
+            )
+        UpgradeRuntimeBinding.bind(
+            contract, _envelope(contract), session_identity_digest="a" * 64
+        )
+        runtime = _envelope(contract)
+        runtime["operation_id"] = "other"
+        runtime["barrier_identity_digest"] = canonical_barrier_digest(runtime)
+        runtime["envelope_digest"] = canonical_envelope_digest(runtime)
+        with self.assertRaises(UpgradeBindingError):
+            UpgradeRuntimeBinding.bind(contract, runtime, session_identity_digest="a" * 64)
+        runtime = _envelope(contract)
+        runtime["backend"] = "git"
+        runtime["barrier_identity_digest"] = canonical_barrier_digest(runtime)
+        runtime["envelope_digest"] = canonical_envelope_digest(runtime)
+        with self.assertRaises(UpgradeBindingError):
+            UpgradeRuntimeBinding.bind(contract, runtime, session_identity_digest="a" * 64)
