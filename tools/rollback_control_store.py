@@ -78,6 +78,12 @@ _RELEASE_EVIDENCE_FIELDS = {
     "backend",
     "fencing_token",
 }
+_REOPEN_EVIDENCE_FIELDS = {
+    "operation_id",
+    "target",
+    "barrier_identity_digest",
+    "validated",
+}
 _CAUSE_CODE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
 
 
@@ -282,7 +288,12 @@ class BarrierSessionContract:
         self._state = updated
         return updated
 
-    def begin_reopen(self, expected_revision: int, child_target: str) -> BarrierSessionState:
+    def begin_reopen(
+        self,
+        expected_revision: int,
+        child_target: str,
+        verified_child_evidence: Mapping[str, object] | None = None,
+    ) -> BarrierSessionState:
         self._expect(expected_revision, {"held"})
         if child_target not in {"new", "rollback"}:
             raise ControlStoreError("reopen child target is invalid")
@@ -291,6 +302,17 @@ class BarrierSessionContract:
         )
         if child is None:
             raise ControlStoreError("reopen child is not bound")
+        if verified_child_evidence is None:
+            raise ControlStoreError("verified child evidence is required to begin reopen")
+        if (
+            set(verified_child_evidence) != _REOPEN_EVIDENCE_FIELDS
+            or verified_child_evidence.get("operation_id") != child.operation_id
+            or verified_child_evidence.get("target") != child.target
+            or verified_child_evidence.get("barrier_identity_digest")
+            != self._state.identity.identity_digest
+            or verified_child_evidence.get("validated") is not True
+        ):
+            raise ControlStoreError("verified child evidence identity is invalid")
         self._state = BarrierSessionState(
             self._state.identity,
             "releasing",
@@ -2633,13 +2655,21 @@ class SQLiteBarrierSessionStore:
         contract._state = current
         return self.cas(expected_revision, contract.bind_child(expected_revision, child))
 
-    def begin_reopen(self, expected_revision: int, target: str) -> BarrierSessionState:
+    def begin_reopen(
+        self,
+        expected_revision: int,
+        target: str,
+        verified_child_evidence: Mapping[str, object] | None = None,
+    ) -> BarrierSessionState:
         current = self.snapshot()
         if current is None:
             raise ControlStoreError("barrier session is absent")
         contract = BarrierSessionContract(current.identity)
         contract._state = current
-        return self.cas(expected_revision, contract.begin_reopen(expected_revision, target))
+        return self.cas(
+            expected_revision,
+            contract.begin_reopen(expected_revision, target, verified_child_evidence),
+        )
 
     def complete_reopen(
         self, expected_revision: int, runtime_verified: bool

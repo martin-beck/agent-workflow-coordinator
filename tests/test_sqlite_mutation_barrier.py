@@ -638,7 +638,16 @@ class SQLiteMutationBarrierProcessTests(unittest.TestCase):
     def _release(self, held: BarrierSessionState) -> BarrierSessionState:
         child = BarrierChildIdentity("forward-1", "new", held.identity.identity_digest)
         bound = self.session.bind_child(held.revision, child)
-        releasing = self.session.begin_reopen(bound.revision, "new")
+        releasing = self.session.begin_reopen(
+            bound.revision,
+            "new",
+            {
+                "operation_id": child.operation_id,
+                "target": child.target,
+                "barrier_identity_digest": bound.identity.identity_digest,
+                "validated": True,
+            },
+        )
         return self.session.complete_reopen(releasing.revision, True)
 
     def test_released_writer_factory_cannot_bypass_held_barrier(self) -> None:
@@ -790,7 +799,16 @@ class SQLiteMutationBarrierProcessTests(unittest.TestCase):
 
         child = BarrierChildIdentity("forward-1", "new", held.identity.identity_digest)
         bound = self.session.bind_child(held.revision, child)
-        releasing = self.session.begin_reopen(bound.revision, "new")
+        releasing = self.session.begin_reopen(
+            bound.revision,
+            "new",
+            {
+                "operation_id": child.operation_id,
+                "target": child.target,
+                "barrier_identity_digest": bound.identity.identity_digest,
+                "validated": True,
+            },
+        )
         self.assertEqual(
             (
                 "rejected",
@@ -889,7 +907,16 @@ class SQLiteMutationBarrierProcessTests(unittest.TestCase):
         held = self._create_held()
         child = BarrierChildIdentity("forward-1", "new", held.identity.identity_digest)
         bound = self.session.bind_child(held.revision, child)
-        self.session.begin_reopen(bound.revision, "new")
+        self.session.begin_reopen(
+            bound.revision,
+            "new",
+            {
+                "operation_id": child.operation_id,
+                "target": child.target,
+                "barrier_identity_digest": bound.identity.identity_digest,
+                "validated": True,
+            },
+        )
         expected = (
             "rejected",
             "MutationFenceError",
