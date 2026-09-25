@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.23
+
+- Bind runtime dispatch to the selected immutable release and retain concrete
+  rollback admission evidence.
+- Include the versioned runtime bootstrap dependency closure in vendor
+  snapshots.
+
 ## 0.3.22
 
 - Carry validated SSH/client capability metadata through UI request envelopes.
