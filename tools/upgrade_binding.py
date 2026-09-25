@@ -289,7 +289,7 @@ class UpgradeRuntimeBinding:
             raise UpgradeBindingError("rollback backend evidence is not read-only")
         return dict(evidence)
 
-    def reread_backend_bound(
+    def reread_backend_bound(  # noqa: C901
         self,
         adapter: object,
         scope: object,
@@ -300,11 +300,22 @@ class UpgradeRuntimeBinding:
         expected_head: str | None = None,
     ) -> dict[str, object]:
         """Reread concrete Git/SQLite evidence through the live bound scope."""
+        from tools.admission_lease import AdmissionLease, AdmissionRecheck
+
         if self.runtime_envelope["backend"] == "git":
             from tools.git_authority_adapter import GitAuthorityAdapter
+            from tools.lock_domain_scope import LockDomainScope
 
             if not isinstance(adapter, GitAuthorityAdapter):
                 raise UpgradeBindingError("Git rollback adapter is not concrete")
+            if not isinstance(scope, LockDomainScope):
+                raise UpgradeBindingError("Git rollback lock-domain scope is not concrete")
+            if not isinstance(lease, AdmissionLease):
+                raise UpgradeBindingError("Git rollback admission lease is not concrete")
+            if not isinstance(admission_recheck, AdmissionRecheck):
+                raise UpgradeBindingError("Git rollback admission recheck is not concrete")
+            if admission_recheck.lease != lease:
+                raise UpgradeBindingError("Git rollback admission recheck does not match lease")
             if not isinstance(expected_branch, str) or not expected_branch:
                 raise UpgradeBindingError("Git rollback branch evidence is required")
             if not isinstance(expected_head, str) or not expected_head:
@@ -323,10 +334,19 @@ class UpgradeRuntimeBinding:
             except Exception as error:
                 raise UpgradeBindingError("bound Git rollback reread was rejected") from error
         else:
+            from tools.lock_domain_scope import LockDomainScope
             from tools.sqlite_authority_adapter import SQLiteAuthorityAdapter
 
             if not isinstance(adapter, SQLiteAuthorityAdapter):
                 raise UpgradeBindingError("SQLite rollback adapter is not concrete")
+            if not isinstance(scope, LockDomainScope):
+                raise UpgradeBindingError("SQLite rollback lock-domain scope is not concrete")
+            if not isinstance(lease, AdmissionLease):
+                raise UpgradeBindingError("SQLite rollback admission lease is not concrete")
+            if not isinstance(admission_recheck, AdmissionRecheck):
+                raise UpgradeBindingError("SQLite rollback admission recheck is not concrete")
+            if admission_recheck.lease != lease:
+                raise UpgradeBindingError("SQLite rollback admission recheck does not match lease")
             adapter_any = cast(Any, adapter)
             try:
                 evidence = adapter_any.snapshot_bound(
