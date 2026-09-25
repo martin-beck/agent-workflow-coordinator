@@ -54,6 +54,18 @@ from tools.upgrade_identity import (
     canonical_envelope_digest,
 )
 
+
+def _reopen_evidence(state: BarrierSessionState, target: str) -> dict[str, object]:
+    child = state.rollback_child if target == "rollback" else state.forward_child
+    assert child is not None
+    return {
+        "operation_id": child.operation_id,
+        "target": child.target,
+        "barrier_identity_digest": state.identity.identity_digest,
+        "validated": True,
+    }
+
+
 PROJECT = "11111111-1111-4111-8111-111111111111"
 RECORD = {
     "schema_version": 2,
@@ -113,6 +125,17 @@ from tools.rollback_control_store import (
     SQLiteRollbackControlStore,
 )
 from tools.upgrade_identity import BarrierChildIdentity, BarrierSessionIdentity
+
+
+def _reopen_evidence(state, target):
+    child = state.rollback_child if target == "rollback" else state.forward_child
+    assert child is not None
+    return {
+        "operation_id": child.operation_id,
+        "target": child.target,
+        "barrier_identity_digest": state.identity.identity_digest,
+        "validated": True,
+    }
 
 
 control_path = Path(sys.argv[1])
@@ -267,13 +290,13 @@ if mode == "kill-after-session-commit":
         original_mark_intent(connection, intent_id, outcome, cause_code)
 
     store._mark_intent_locked = kill_before_outcome
-    store.begin_reopen(2, "new")
+    store.begin_reopen(2, "new", _reopen_evidence(store.snapshot(), "new"))
 
 if mode == "kill-after-outcome-publication":
     original_begin_reopen = store.begin_reopen
 
-    def kill_after_return(expected_revision, target):
-        result = original_begin_reopen(expected_revision, target)
+    def kill_after_return(expected_revision, target, evidence):
+        result = original_begin_reopen(expected_revision, target, evidence)
         ready_path.write_text("committed-after-outcome\n", encoding="utf-8")
         with ready_path.open("rb") as ready:
             os.fsync(ready.fileno())
@@ -281,7 +304,7 @@ if mode == "kill-after-outcome-publication":
         return result
 
     store.begin_reopen = kill_after_return
-    store.begin_reopen(2, "new")
+    store.begin_reopen(2, "new", _reopen_evidence(store.snapshot(), "new"))
 
 if mode in {
     "kill-after-effect-committed-publication",
@@ -1460,7 +1483,7 @@ class RollbackControlStoreTests(unittest.TestCase):
             held = store.bind_child(
                 2, BarrierChildIdentity.bind(identity, "rollback-1", "rollback")
             )
-            releasing = store.begin_reopen(3, "rollback")
+            releasing = store.begin_reopen(3, "rollback", _reopen_evidence(held, "rollback"))
             released = store.complete_reopen(4, True)
             self.assertEqual(("released", 5), (released.status, released.revision))
             reread = store.snapshot()
@@ -1496,7 +1519,7 @@ class RollbackControlStoreTests(unittest.TestCase):
                     BarrierSessionState(BarrierSessionIdentity.from_record(changed), "held", 1)
                 )
             store.bind_child(1, BarrierChildIdentity.bind(identity, "forward-1", "new"))
-            store.begin_reopen(2, "new")
+            store.begin_reopen(2, "new", _reopen_evidence(store.snapshot(), "new"))
             with self.assertRaisesRegex(ControlStoreError, "not held"):
                 store.recheck_held(3)
 
@@ -2401,7 +2424,9 @@ class RollbackControlStoreTests(unittest.TestCase):
             with self.assertRaisesRegex(
                 ControlStoreError, "barrier session outcome publication is ambiguous"
             ):
-                publication_session.begin_reopen(2, "new")
+                publication_session.begin_reopen(
+                    2, "new", _reopen_evidence(publication_session.snapshot(), "new")
+                )
             self.assertFalse(publication_session.operation_owned_by_current_thread)
             publication_state = publication_session.snapshot()
             self.assertIsNotNone(publication_state)
@@ -2530,7 +2555,7 @@ class RollbackControlStoreTests(unittest.TestCase):
             record["identity_digest"] = canonical_barrier_session_digest(record)
             second = BarrierSessionIdentity.from_record(record)
             store.bind_child(1, BarrierChildIdentity.bind(first, "forward-1", "new"))
-            store.begin_reopen(2, "new")
+            store.begin_reopen(2, "new", _reopen_evidence(store.snapshot(), "new"))
             store.complete_reopen(3, True)
             fresh = store.create(second)
             self.assertEqual(("held", 1), (fresh.status, fresh.revision))
@@ -2575,7 +2600,20 @@ class RollbackControlStoreTests(unittest.TestCase):
             from tools.upgrade_identity import BarrierChildIdentity
 
             store.bind_child(1, BarrierChildIdentity.bind(identity, "forward-1", "new"))
-            store.begin_reopen(2, "new")
+            with self.assertRaisesRegex(ControlStoreError, "verified child evidence"):
+                store.begin_reopen(2, "new")
+            with self.assertRaisesRegex(ControlStoreError, "evidence identity"):
+                store.begin_reopen(
+                    2,
+                    "new",
+                    {
+                        "operation_id": "wrong-child",
+                        "target": "new",
+                        "barrier_identity_digest": identity.identity_digest,
+                        "validated": True,
+                    },
+                )
+            store.begin_reopen(2, "new", _reopen_evidence(store.snapshot(), "new"))
             with self.assertRaisesRegex(ControlStoreError, "runtime evidence"):
                 store.complete_reopen(3, False)
 
@@ -2683,7 +2721,9 @@ class RollbackControlStoreTests(unittest.TestCase):
         held = contract.bind_child(1, forward)
         self.assertEqual("held", contract.recheck_held(held.revision).status)
         held = contract.bind_child(held.revision, rollback)
-        releasing = contract.begin_reopen(held.revision, "rollback")
+        releasing = contract.begin_reopen(
+            held.revision, "rollback", _reopen_evidence(held, "rollback")
+        )
         released = contract.complete_reopen(releasing.revision, True)
         self.assertEqual("released", released.status)
         self.assertEqual("fence-1", released.identity.fencing_token)
@@ -2719,7 +2759,9 @@ class RollbackControlStoreTests(unittest.TestCase):
                 forward.revision, BarrierChildIdentity.bind(identity, "forward-2", "new")
             )
         with self.assertRaisesRegex(ControlStoreError, "runtime evidence"):
-            releasing = contract.begin_reopen(forward.revision, "new")
+            releasing = contract.begin_reopen(
+                forward.revision, "new", _reopen_evidence(forward, "new")
+            )
             contract.complete_reopen(releasing.revision, False)
 
     def test_v10_barrier_session_contract_enters_ambiguous_safe_mode(self) -> None:
