@@ -8,12 +8,14 @@ import unittest
 import uuid
 from dataclasses import replace
 from pathlib import PurePosixPath
-from typing import Any
+from typing import Any, cast
 from unittest.mock import MagicMock, patch
 
 from tools import upgrade_binding as binding_module
+from tools.admission_lease import AdmissionLease, AdmissionRecheck
 from tools.generate_upgrade_contract import generate
 from tools.git_authority_adapter import GitAuthorityAdapter
+from tools.lock_domain_scope import LockDomainScope
 from tools.rollback_control_store import BarrierSessionState
 from tools.sqlite_authority_adapter import SQLiteAuthorityAdapter
 from tools.upgrade_binding import UpgradeBindingError, UpgradeRuntimeBinding
@@ -378,16 +380,52 @@ class UpgradeBindingTests(unittest.TestCase):
                 if backend == "git"
                 else object.__new__(SQLiteAuthorityAdapter)
             )
+            scope = object.__new__(LockDomainScope)
+            lease = AdmissionLease(
+                project_id=str(runtime["project_id"]),
+                authority_revision=str(runtime["authority_revision"]),
+                fencing_token=str(runtime["fencing_token"]),
+                fencing_owner=str(runtime["fencing_owner"]),
+                durable_barrier_id=str(runtime["durable_barrier_id"]),
+                revision=cast(int, runtime["state_revision"]),
+            )
+            recheck = AdmissionRecheck(
+                lease=lease,
+                project_id=lease.project_id,
+                authority_revision=lease.authority_revision,
+                fencing_token=lease.fencing_token,
+                fencing_owner=lease.fencing_owner,
+                durable_barrier_id=lease.durable_barrier_id,
+                revision=lease.revision,
+            )
+            foreign_lease = replace(lease, fencing_token="foreign-fence")  # noqa: S106
+            foreign_recheck = AdmissionRecheck(
+                lease=foreign_lease,
+                project_id=foreign_lease.project_id,
+                authority_revision=foreign_lease.authority_revision,
+                fencing_token=foreign_lease.fencing_token,
+                fencing_owner=foreign_lease.fencing_owner,
+                durable_barrier_id=foreign_lease.durable_barrier_id,
+                revision=foreign_lease.revision,
+            )
             adapter_any: Any = adapter
             adapter_any.snapshot_bound = MagicMock(return_value=evidence)
+            with self.assertRaises(UpgradeBindingError):
+                binding.reread_backend_bound(adapter, object(), lease, recheck)
+            with self.assertRaises(UpgradeBindingError):
+                binding.reread_backend_bound(adapter, scope, object(), recheck)
+            with self.assertRaises(UpgradeBindingError):
+                binding.reread_backend_bound(adapter, scope, lease, object())
+            with self.assertRaises(UpgradeBindingError):
+                binding.reread_backend_bound(adapter, scope, lease, foreign_recheck)
             if backend == "git":
                 self.assertEqual(
                     evidence,
                     binding.reread_backend_bound(
                         adapter,
-                        object(),
-                        object(),
-                        object(),
+                        scope,
+                        lease,
+                        recheck,
                         expected_branch="main",
                         expected_head="a" * 40,
                     ),
@@ -396,7 +434,7 @@ class UpgradeBindingTests(unittest.TestCase):
             else:
                 self.assertEqual(
                     evidence,
-                    binding.reread_backend_bound(adapter, object(), object(), object()),
+                    binding.reread_backend_bound(adapter, scope, lease, recheck),
                 )
                 adapter_any.snapshot_bound.assert_called_once()
             for field, value in (
@@ -433,9 +471,9 @@ class UpgradeBindingTests(unittest.TestCase):
                 with self.assertRaises(UpgradeBindingError):
                     binding.reread_backend_bound(
                         concrete,
-                        object(),
-                        object(),
-                        object(),
+                        scope,
+                        lease,
+                        recheck,
                         expected_branch="main",
                         expected_head="a" * 40,
                     )
