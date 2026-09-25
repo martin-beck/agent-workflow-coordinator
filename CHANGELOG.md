@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.24
+
+- Include the complete runtime mutation dependency closure and preserve the
+  canonical task-record schema path in vendored state snapshots.
+
 ## 0.3.23
 
 - Bind runtime dispatch to the selected immutable release and retain concrete
