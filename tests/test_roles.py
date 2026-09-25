@@ -268,7 +268,7 @@ class RoleManagementTests(unittest.TestCase):
                 assignment_id="assignment-worker-005",
                 owner_id="worker-005",
                 role_id="implementer",
-                expires_at="2026-09-25T00:00:00Z",
+                expires_at="2099-01-01T00:00:00Z",
                 evidence_kind="ticket",
                 evidence_ref="AR-0073",
                 evidence_digest=DIGEST,
