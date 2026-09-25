@@ -22,6 +22,7 @@ from unittest.mock import MagicMock, patch
 import tools.sqlite_storage as sqlite_storage
 from tools.admission_lease import AdmissionLease, validate_recheck
 from tools.authority_neutral_commit import CommitAdmissionBundle
+from tools.generate_upgrade_contract import generate
 from tools.git_authority_adapter import (
     GitAuthorityAdapter,
     GitAuthorityError,
@@ -49,6 +50,7 @@ from tools.sqlite_storage import (
     bind_sqlite_backend,
     create_database,
 )
+from tools.upgrade_binding import UpgradeRuntimeBinding
 from tools.upgrade_engine import (
     BoundRollbackCapability,
     GitRollbackObservationCapability,
@@ -1413,6 +1415,69 @@ class GitAuthorityAdapterTests(unittest.TestCase):
         self.assertFalse(self.session.operation_owned_by_current_thread)
         with engine._exclusive():
             pass
+
+    def test_runtime_binding_rereads_real_git_backend_inside_scope(self) -> None:
+        context = {**CONTEXT, "operation_id": "op-real-git-binding", "target": "rollback"}
+        artifact_root = Path(self.coordination.name) / "binding-artifacts"
+        artifact_root.mkdir()
+        context.update(
+            {
+                "artifact_root": str(artifact_root),
+                "destination": str(artifact_root / "destination"),
+                "manifest": str(artifact_root / "manifest.json"),
+            }
+        )
+        context["barrier_identity_digest"] = canonical_barrier_digest(context)
+        context["envelope_digest"] = canonical_envelope_digest(context)
+        contract = generate(
+            {
+                "operation_id": context["operation_id"],
+                "backend": "git",
+                "selector_ref": context["selector_ref"],
+                "expected_state_revision": context["state_revision"],
+                "barrier_id": context["durable_barrier_id"],
+                "fencing_token": context["fencing_token"],
+                "from": {
+                    "version": "v0.3.5",
+                    "source_commit": "a" * 40,
+                    "tag_ref": "refs/tags/v0.3.5",
+                    "tag_object": "b" * 40,
+                    "signature_sha256": "c" * 64,
+                    "trust_policy_sha256": "d" * 64,
+                    "vendor_manifest_sha256": "e" * 64,
+                },
+                "to": {
+                    "version": "v0.3.6",
+                    "source_commit": "f" * 40,
+                    "tag_ref": "refs/tags/v0.3.6",
+                    "tag_object": "0" * 40,
+                    "signature_sha256": "1" * 64,
+                    "trust_policy_sha256": "2" * 64,
+                    "vendor_manifest_sha256": "3" * 64,
+                },
+            }
+        )
+        session_state = self.session.snapshot()
+        assert session_state is not None
+        binding = UpgradeRuntimeBinding.bind(
+            contract,
+            context,
+            session_identity_digest=session_state.identity.identity_digest,
+        )
+        expected_branch = str(self.adapter._git("symbolic-ref", "--short", "-q", "HEAD"))
+        expected_head = str(self.adapter._git("rev-parse", "HEAD"))
+        evidence = binding.reread_backend_bound(
+            self.adapter,
+            self.scope,
+            self.lease,
+            self.recheck,
+            expected_branch=expected_branch,
+            expected_head=expected_head,
+        )
+        self.assertTrue(evidence["backend_identity_verified"])
+        self.assertFalse(evidence["mutates_authority"])
+        self.assertEqual(expected_head, evidence["git_head"])
+        self.assertFalse(self.session.operation_owned_by_current_thread)
 
     def test_clean_snapshot_is_identity_bound_and_nonmutating(self) -> None:
         result = self.adapter.snapshot("discover", CONTEXT)

@@ -37,6 +37,7 @@ from tools.sqlite_authority_adapter import (
 )
 from tools.sqlite_authority_mutation import SQLiteCommitCapability
 from tools.upgrade_authority import commit_runtime_selector
+from tools.upgrade_binding import UpgradeRuntimeBinding
 from tools.upgrade_engine import BoundRollbackCapability, PhaseContext, UpgradeEngine
 from tools.upgrade_identity import (
     BarrierSessionIdentity,
@@ -2669,6 +2670,71 @@ class SQLiteAuthorityAdapterTests(unittest.TestCase):
         self.assertFalse(self.session.operation_owned_by_current_thread)
         with engine._exclusive():
             pass
+
+    def test_runtime_binding_rereads_real_sqlite_backend_inside_scope(self) -> None:
+        context = {
+            **CONTEXT,
+            "operation_id": "op-real-sqlite-binding",
+            "project_id": PROJECT,
+            "target": "rollback",
+        }
+        artifact_root = self.root / "binding-artifacts"
+        artifact_root.mkdir()
+        context.update(
+            {
+                "artifact_root": str(artifact_root),
+                "destination": str(artifact_root / "destination"),
+                "manifest": str(artifact_root / "manifest.json"),
+            }
+        )
+        context["barrier_identity_digest"] = canonical_barrier_digest(context)
+        context["envelope_digest"] = canonical_envelope_digest(context)
+        contract = generate(
+            {
+                "operation_id": context["operation_id"],
+                "backend": "sqlite",
+                "selector_ref": context["selector_ref"],
+                "expected_state_revision": context["state_revision"],
+                "barrier_id": context["durable_barrier_id"],
+                "fencing_token": context["fencing_token"],
+                "from": {
+                    "version": "v0.3.5",
+                    "source_commit": "a" * 40,
+                    "tag_ref": "refs/tags/v0.3.5",
+                    "tag_object": "b" * 40,
+                    "signature_sha256": "c" * 64,
+                    "trust_policy_sha256": "d" * 64,
+                    "vendor_manifest_sha256": "e" * 64,
+                },
+                "to": {
+                    "version": "v0.3.6",
+                    "source_commit": "f" * 40,
+                    "tag_ref": "refs/tags/v0.3.6",
+                    "tag_object": "0" * 40,
+                    "signature_sha256": "1" * 64,
+                    "trust_policy_sha256": "2" * 64,
+                    "vendor_manifest_sha256": "3" * 64,
+                },
+            }
+        )
+        session_state = self.session.snapshot()
+        assert session_state is not None
+        binding = UpgradeRuntimeBinding.bind(
+            contract,
+            context,
+            session_identity_digest=session_state.identity.identity_digest,
+        )
+        evidence = binding.reread_backend_bound(
+            self.adapter,
+            self.scope,
+            self.lease,
+            self.recheck,
+        )
+        self.assertTrue(evidence["backend_identity_verified"])
+        self.assertTrue(evidence["sqlite_integrity_verified"])
+        self.assertTrue(evidence["sqlite_foreign_keys_verified"])
+        self.assertFalse(evidence["mutates_authority"])
+        self.assertFalse(self.session.operation_owned_by_current_thread)
 
     def test_clean_snapshot_is_integrity_bound_and_nonmutating(self) -> None:
         result = self.adapter.snapshot("discover", CONTEXT)
