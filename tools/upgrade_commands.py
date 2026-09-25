@@ -12,8 +12,18 @@ from pathlib import Path
 from typing import Any, NoReturn, cast
 
 if __package__:
+    from .upgrade_binding import (
+        UpgradeBindingError,
+        UpgradeRuntimeBinding,
+        canonical_contract_digest,
+    )
     from .upgrade_contract_runtime import RuntimeContractError, validate_runtime_contract
 else:  # pragma: no cover - direct script execution
+    from upgrade_binding import (  # type: ignore[import-not-found,no-redef]
+        UpgradeBindingError,
+        UpgradeRuntimeBinding,
+        canonical_contract_digest,
+    )
     from upgrade_contract_runtime import (  # type: ignore[import-not-found,no-redef]
         RuntimeContractError,
         validate_runtime_contract,
@@ -68,8 +78,8 @@ def _open_contract(path: Path) -> int:
     return descriptor
 
 
-def _read_contract(path: Path) -> dict[str, Any]:  # noqa: C901
-    """Read one bounded regular contract without following its leaf symlink."""
+def _read_json_object(path: Path, label: str) -> dict[str, Any]:  # noqa: C901
+    """Read one bounded regular JSON object without following its leaf symlink."""
     descriptor = -1
     try:
         descriptor = _open_contract(path)
@@ -100,15 +110,38 @@ def _read_contract(path: Path) -> dict[str, Any]:  # noqa: C901
             parse_constant=_reject_constant,
         )
     except (UnicodeDecodeError, ValueError) as error:
-        raise UpgradeCommandError("upgrade contract is not canonical JSON data") from error
+        raise UpgradeCommandError(f"{label} is not canonical JSON data") from error
     if not isinstance(value, dict):
-        raise UpgradeCommandError("upgrade contract must be an object")
-    document = cast(dict[str, Any], value)
+        raise UpgradeCommandError(f"{label} must be an object")
+    return cast(dict[str, Any], value)
+
+
+def _read_contract(path: Path) -> dict[str, Any]:
+    """Read one bounded regular contract without following its leaf symlink."""
+    document = _read_json_object(path, "upgrade contract")
     try:
         validate_runtime_contract(document)
     except RuntimeContractError as error:
         raise UpgradeCommandError("upgrade contract validation failed") from error
     return document
+
+
+def _read_runtime_binding(
+    path: Path, contract: dict[str, Any], selected_backend: str
+) -> UpgradeRuntimeBinding:
+    document = _read_json_object(path, "upgrade runtime binding")
+    try:
+        binding = UpgradeRuntimeBinding.from_mapping(document)
+        expected = UpgradeRuntimeBinding.bind(contract, binding.runtime_envelope)
+    except UpgradeBindingError as error:
+        raise UpgradeCommandError("upgrade runtime binding validation failed") from error
+    if binding.as_mapping() != expected.as_mapping():
+        raise UpgradeCommandError("upgrade runtime binding does not match contract")
+    if binding.contract_digest != canonical_contract_digest(contract):
+        raise UpgradeCommandError("upgrade runtime binding contract digest is stale")
+    if binding.contract_backend != selected_backend:
+        raise UpgradeCommandError("upgrade runtime binding backend does not match coordinator")
+    return binding
 
 
 def _validate_selected_backend(document: dict[str, Any], selected_backend: str) -> None:
@@ -149,13 +182,25 @@ def _summary(document: dict[str, Any], *, include_plan: bool) -> dict[str, objec
     return result
 
 
-def execute_upgrade_command(action: str, contract_path: Path, selected_backend: str) -> int:
+def execute_upgrade_command(
+    action: str,
+    contract_path: Path,
+    selected_backend: str,
+    binding_path: Path | None = None,
+) -> int:
     """Validate and report, while rejecting every unimplemented mutation path."""
     if action not in READ_ONLY_ACTIONS | MUTATING_ACTIONS:
         raise UpgradeCommandError("unknown upgrade action")
     document = _read_contract(contract_path)
     _validate_selected_backend(document, selected_backend)
     if action in MUTATING_ACTIONS:
+        if action == "rollback":
+            if binding_path is None:
+                raise UpgradeCommandError(
+                    "rollback requires a validated runtime binding; "
+                    "no coordinator state was mutated"
+                )
+            _read_runtime_binding(binding_path, document, selected_backend)
         raise UpgradeCommandError(
             "upgrade execution protocol is incomplete; no coordinator state was mutated"
         )
