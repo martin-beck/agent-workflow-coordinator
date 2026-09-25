@@ -28,6 +28,8 @@ SOURCE_FILES: tuple[tuple[str, str], ...] = (
     ("tools/status_renderer.py", "tools/status_renderer.py"),
     ("tools/task_spec.py", "tools/task_spec.py"),
     ("tools/upgrade_commands.py", "tools/upgrade_commands.py"),
+    ("tools/upgrade_binding.py", "tools/upgrade_binding.py"),
+    ("tools/upgrade_identity.py", "tools/upgrade_identity.py"),
     ("tools/upgrade_contract_runtime.py", "tools/upgrade_contract_runtime.py"),
     ("tools/vendor.py", "tools/handoffctl_vendor.py"),
     ("tests/test_handoffctl.py", "tests/test_handoffctl.py"),

@@ -11,8 +11,19 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, cast
 
-from tools.upgrade_contract_runtime import RuntimeContractError, validate_runtime_contract
-from tools.upgrade_identity import ENVELOPE_FIELDS, UpgradeIdentityError, validate_envelope
+if __package__:
+    from .upgrade_contract_runtime import RuntimeContractError, validate_runtime_contract
+    from .upgrade_identity import ENVELOPE_FIELDS, UpgradeIdentityError, validate_envelope
+else:  # pragma: no cover - direct vendored script imports
+    from upgrade_contract_runtime import (  # type: ignore[import-not-found,no-redef]
+        RuntimeContractError,
+        validate_runtime_contract,
+    )
+    from upgrade_identity import (  # type: ignore[import-not-found,no-redef]
+        ENVELOPE_FIELDS,
+        UpgradeIdentityError,
+        validate_envelope,
+    )
 
 BINDING_SCHEMA_VERSION = 1
 BINDING_FIELDS = (
