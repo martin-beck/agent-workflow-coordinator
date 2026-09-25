@@ -3004,7 +3004,10 @@ def cmd_upgrade(args: argparse.Namespace) -> int:
         )
 
     return execute_upgrade_command(
-        str(args.upgrade_action), Path(args.contract), str(backend_selection()["backend"])
+        str(args.upgrade_action),
+        Path(args.contract),
+        str(backend_selection()["backend"]),
+        Path(args.binding) if args.binding is not None else None,
     )
 
 
@@ -3120,6 +3123,7 @@ def main() -> int:
     for action in ("check", "plan", "apply", "rollback"):
         upgrade_action = upgrade_actions.add_parser(action)
         upgrade_action.add_argument("--contract", type=Path, required=True)
+        upgrade_action.add_argument("--binding", type=Path)
     item = commands.add_parser("reconcile")
     item.add_argument("--commit", action="store_true")
     item.add_argument("--push", action="store_true")

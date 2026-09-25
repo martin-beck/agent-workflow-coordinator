@@ -17,15 +17,19 @@ from typing import Any
 from unittest.mock import patch
 
 from tools.generate_upgrade_contract import generate
+from tools.upgrade_binding import UpgradeRuntimeBinding
 from tools.upgrade_commands import (
     MAX_CONTRACT_BYTES,
     UpgradeCommandError,
     execute_upgrade_command,
 )
 from tools.upgrade_contract_runtime import RuntimeContractError, validate_runtime_contract
+from tools.upgrade_identity import canonical_barrier_digest, canonical_envelope_digest
 
 
-def contract(backend: str = "sqlite") -> dict[str, Any]:
+def contract(
+    backend: str = "sqlite", operation_id: str = "upgrade:v0.3.5-to-v0.3.6:001"
+) -> dict[str, Any]:
     def release(version: str, seed: str) -> dict[str, str]:
         return {
             "version": version,
@@ -39,7 +43,7 @@ def contract(backend: str = "sqlite") -> dict[str, Any]:
 
     return generate(
         {
-            "operation_id": "upgrade:v0.3.5-to-v0.3.6:001",
+            "operation_id": operation_id,
             "backend": backend,
             "selector_ref": ".runtime/runtime-selector.json",
             "expected_state_revision": 7,
@@ -62,6 +66,32 @@ class UpgradeCommandTests(unittest.TestCase):
 
     def write(self, document: object) -> None:
         self.path.write_text(json.dumps(document), encoding="utf-8")
+
+    def write_binding(self, document: dict[str, Any]) -> Path:
+        inputs = document["rollback"]["operation"]["inputs"]
+        envelope: dict[str, object] = {
+            "schema_version": 2,
+            "backend": document["backend"],
+            "project_id": "123e4567-e89b-42d3-a456-426614174000",
+            "operation_id": document["operation_id"],
+            "state_revision": inputs["expected_state_revision"],
+            "authority_revision": "authority-7",
+            "fencing_token": inputs["fencing_token"],
+            "fencing_owner": "worker-7",
+            "durable_barrier_id": inputs["barrier_id"],
+            "artifact_root": "/srv/runtime/artifacts",
+            "source": "/srv/runtime/artifacts/source",
+            "destination": "/srv/runtime/artifacts/destination",
+            "manifest": "/srv/runtime/artifacts/manifest.json",
+            "selector_ref": inputs["selector_ref"],
+            "target": "rollback",
+        }
+        envelope["barrier_identity_digest"] = canonical_barrier_digest(envelope)
+        envelope["envelope_digest"] = canonical_envelope_digest(envelope)
+        binding = UpgradeRuntimeBinding.bind(document, envelope, session_identity_digest="a" * 64)
+        path = self.root / "binding.json"
+        path.write_text(json.dumps(binding.as_mapping()), encoding="utf-8")
+        return path
 
     def test_check_and_plan_emit_only_sanitized_non_executable_data(self) -> None:
         document = contract()
@@ -101,6 +131,20 @@ class UpgradeCommandTests(unittest.TestCase):
                     execute_upgrade_command(action, self.path, backend)
                 self.assertEqual(before, self.path.read_bytes())
                 self.assertEqual([self.path], list(self.root.iterdir()))
+
+    def test_rollback_validates_runtime_binding_before_remaining_fail_closed_boundary(self) -> None:
+        document = contract(operation_id="upgrade-001")
+        self.write(document)
+        binding = self.write_binding(document)
+        with self.assertRaisesRegex(UpgradeCommandError, "execution protocol is incomplete"):
+            execute_upgrade_command("rollback", self.path, "sqlite", binding)
+        changed = json.loads(binding.read_text(encoding="utf-8"))
+        changed["contract_digest"] = "0" * 64
+        binding.write_text(json.dumps(changed), encoding="utf-8")
+        with self.assertRaisesRegex(
+            UpgradeCommandError, "binding validation failed|stale|does not match"
+        ):
+            execute_upgrade_command("rollback", self.path, "sqlite", binding)
 
     def test_contract_file_and_dispatch_boundaries_fail_closed(self) -> None:
         self.write(contract())
