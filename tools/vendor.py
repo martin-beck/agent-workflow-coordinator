@@ -21,6 +21,7 @@ SOURCE_FILES: tuple[tuple[str, str], ...] = (
     ("tools/runtime_bootstrap.py", "tools/runtime_bootstrap.py"),
     ("tools/upgrade_authority.py", "tools/upgrade_authority.py"),
     ("tools/admission_lease.py", "tools/admission_lease.py"),
+    ("tools/board_metrics.py", "tools/board_metrics.py"),
     ("tools/oracle_lifecycle.py", "tools/oracle_lifecycle.py"),
     ("tools/sqlite_storage.py", "tools/sqlite_storage.py"),
     ("tools/lifecycle_trace.py", "tools/lifecycle_trace.py"),

@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.25
+
+- Include the board metrics module required by SQLite initialization and
+  migration in vendored state snapshots.
+
 ## 0.3.24
 
 - Include the complete runtime mutation dependency closure and preserve the

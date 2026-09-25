@@ -59,6 +59,7 @@ class VendorTest(unittest.TestCase):
         self.assertTrue(
             {
                 "tools/lifecycle_trace.py",
+                "tools/board_metrics.py",
                 "tools/lock_domain.py",
                 "tools/lock_domain_scope.py",
                 "tools/mutation_fence.py",
