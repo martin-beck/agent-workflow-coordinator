@@ -104,6 +104,7 @@ import signal
 import sqlite3
 import sys
 import time
+from contextlib import closing
 from pathlib import Path
 
 from tools.rollback_control_store import (
@@ -212,7 +213,7 @@ if mode == "kill-after-ambiguous-reconciliation-outcome-publication":
     store.reconcile_ambiguous(2, replacement)
 
 if mode == "clean":
-    with sqlite3.connect(control_path) as connection:
+    with closing(sqlite3.connect(control_path)) as connection, connection:
         journal_mode = str(connection.execute("PRAGMA journal_mode").fetchone()[0]).lower()
     ready_path.write_text(journal_mode + "\n", encoding="utf-8")
     with ready_path.open("rb") as ready:
@@ -498,7 +499,7 @@ def _recover_effect_child(
         raise SystemExit("missing effect recovery state")
     with store.operation_lock():
         pass
-    with sqlite3.connect(control_text) as connection:
+    with closing(sqlite3.connect(control_text)) as connection, connection:
         outcome = connection.execute(
             "SELECT outcome FROM authority_effect_intent WHERE project_id=? AND operation_id=?",
             (PROJECT, operation_id),
