@@ -155,12 +155,17 @@ class BarrierSessionState:
     revision: int
     forward_child: BarrierChildIdentity | None = None
     rollback_child: BarrierChildIdentity | None = None
+    reopen_target: str | None = None
 
     def __post_init__(self) -> None:
         if self.status not in {"held", "releasing", "released", "ambiguous"}:
             raise ControlStoreError("barrier session status is invalid")
         if type(self.revision) is not int or self.revision < 1:
             raise ControlStoreError("barrier session revision is invalid")
+        if self.reopen_target not in {None, "new", "rollback"}:
+            raise ControlStoreError("barrier reopen target is invalid")
+        if self.status == "held" and self.reopen_target is not None:
+            raise ControlStoreError("held barrier session cannot have a reopen target")
         for child in (self.forward_child, self.rollback_child):
             if child is not None:
                 child.validate_for(self.identity)
@@ -283,6 +288,7 @@ class BarrierSessionContract:
                 self._state.revision + 1,
                 child,
                 self._state.rollback_child,
+                self._state.reopen_target,
             )
         else:
             if self._state.forward_child is None:
@@ -295,6 +301,7 @@ class BarrierSessionContract:
                 self._state.revision + 1,
                 self._state.forward_child,
                 child,
+                self._state.reopen_target,
             )
         self._state = updated
         return updated
@@ -330,6 +337,7 @@ class BarrierSessionContract:
             self._state.revision + 1,
             self._state.forward_child,
             self._state.rollback_child,
+            child_target,
         )
         return self._state
 
@@ -342,6 +350,8 @@ class BarrierSessionContract:
         if not isinstance(fresh_runtime_evidence, Mapping):
             raise ControlStoreError("fresh runtime evidence is required to release barrier")
         target = fresh_runtime_evidence.get("target")
+        if target != self._state.reopen_target:
+            raise ControlStoreError("fresh runtime evidence target does not match reopen target")
         child = self._state.rollback_child if target == "rollback" else self._state.forward_child
         if child is None or (
             set(fresh_runtime_evidence) != _REOPEN_RUNTIME_EVIDENCE_FIELDS
@@ -363,6 +373,7 @@ class BarrierSessionContract:
             self._state.revision + 1,
             self._state.forward_child,
             self._state.rollback_child,
+            self._state.reopen_target,
         )
         return self._state
 
@@ -376,6 +387,7 @@ class BarrierSessionContract:
             self._state.revision + 1,
             self._state.forward_child,
             self._state.rollback_child,
+            self._state.reopen_target,
         )
         return self._state
 
@@ -1367,6 +1379,12 @@ class SQLiteBarrierSessionStore:
     _SELECT = (
         "SELECT schema_version,project_id,attempt_id,state_revision,"
         "authority_revision_at_acquire,durable_barrier_id,fencing_token,fencing_owner,"
+        "identity_digest,status,revision,forward_child,rollback_child,reopen_target "
+        "FROM barrier_session WHERE project_id=?"
+    )
+    _SELECT_LEGACY = (
+        "SELECT schema_version,project_id,attempt_id,state_revision,"
+        "authority_revision_at_acquire,durable_barrier_id,fencing_token,fencing_owner,"
         "identity_digest,status,revision,forward_child,rollback_child "
         "FROM barrier_session WHERE project_id=?"
     )
@@ -1443,9 +1461,15 @@ class SQLiteBarrierSessionStore:
                 status TEXT NOT NULL,
                 revision INTEGER NOT NULL,
                 forward_child TEXT,
-                    rollback_child TEXT
+                rollback_child TEXT,
+                reopen_target TEXT
                 )"""
         )
+        pragma_cursor = connection.execute("PRAGMA table_info(barrier_session)")
+        pragma_rows = pragma_cursor.fetchall() if hasattr(pragma_cursor, "fetchall") else []
+        columns = {str(row[1]) for row in pragma_rows}
+        if "reopen_target" not in columns:
+            connection.execute("ALTER TABLE barrier_session ADD COLUMN reopen_target TEXT")
         # Released sessions are immutable audit records.  The current-row
         # table remains one row per project for cheap admission checks, but
         # a subsequent attempt must not overwrite the released session.
@@ -1628,7 +1652,9 @@ class SQLiteBarrierSessionStore:
 
     @classmethod
     def _decode_observation(cls, project_id: str, row: tuple[object, ...]) -> BarrierSessionState:
-        if len(row) != 13:
+        if len(row) == 13:
+            row = (*row, None)
+        if len(row) != 14:
             raise ControlStoreError("barrier session row is invalid")
         identity_record = dict(
             zip(
@@ -1658,6 +1684,7 @@ class SQLiteBarrierSessionStore:
                 cast(int, row[10]),
                 cls._child(row[11]),
                 cls._child(row[12]),
+                cast(str, row[13]) if row[13] is not None else None,
             )
         except (ControlStoreError, TypeError, ValueError) as error:
             raise ControlStoreError("barrier session state is invalid") from error
@@ -1758,6 +1785,7 @@ class SQLiteBarrierSessionStore:
                         "revision",
                         "forward_child",
                         "rollback_child",
+                        "reopen_target",
                     )
                 ),
             )
@@ -1773,11 +1801,16 @@ class SQLiteBarrierSessionStore:
         )
 
     @classmethod
-    def observe_connection(
+    def observe_connection(  # noqa: C901
         cls, connection: sqlite3.Connection, project_id: str
     ) -> BarrierSessionState | None:
         """Decode one descriptor-bound row without acquiring another lock."""
-        rows = connection.execute(cls._SELECT, (project_id,)).fetchall()
+        try:
+            rows = connection.execute(cls._SELECT, (project_id,)).fetchall()
+        except sqlite3.OperationalError as error:
+            if "no such column: reopen_target" not in str(error).lower():
+                raise
+            rows = connection.execute(cls._SELECT_LEGACY, (project_id,)).fetchall()
         if not rows:
             return None
         if len(rows) != 1:
@@ -2067,6 +2100,7 @@ class SQLiteBarrierSessionStore:
                                     "revision": current.revision,
                                     "forward_child": self._child_json(current.forward_child),
                                     "rollback_child": self._child_json(current.rollback_child),
+                                    "reopen_target": current.reopen_target,
                                 },
                                 sort_keys=True,
                                 separators=(",", ":"),
@@ -2102,14 +2136,15 @@ class SQLiteBarrierSessionStore:
                 supplied.revision,
                 self._child_json(supplied.forward_child),
                 self._child_json(supplied.rollback_child),
+                supplied.reopen_target,
             )
             if current_row is None:
                 cursor = connection.execute(
                     "INSERT INTO barrier_session "
                     "(schema_version,project_id,attempt_id,state_revision,"
                     "authority_revision_at_acquire,durable_barrier_id,fencing_token,"
-                    "fencing_owner,identity_digest,status,revision,forward_child,rollback_child) "
-                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    "fencing_owner,identity_digest,status,revision,forward_child,rollback_child,"
+                    "reopen_target) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     values,
                 )
             else:
@@ -2119,17 +2154,18 @@ class SQLiteBarrierSessionStore:
                         "(schema_version,project_id,attempt_id,state_revision,"
                         "authority_revision_at_acquire,durable_barrier_id,fencing_token,"
                         "fencing_owner,identity_digest,status,revision,forward_child,"
-                        "rollback_child) "
-                        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                        "rollback_child,reopen_target) "
+                        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                         values,
                     )
                 else:
                     cursor = connection.execute(
                         "UPDATE barrier_session SET status=?,revision=?,forward_child=?,"
-                        "rollback_child=? WHERE project_id=? AND revision=?",
+                        "rollback_child=?,reopen_target=? WHERE project_id=? AND revision=?",
                         (
                             supplied.status,
                             supplied.revision,
+                            values[-3],
                             values[-2],
                             values[-1],
                             self.project_id,
@@ -2205,6 +2241,7 @@ class SQLiteBarrierSessionStore:
                 current.revision + 1,
                 current.forward_child,
                 current.rollback_child,
+                current.reopen_target,
             )
             try:
                 connection.commit()
@@ -2432,6 +2469,7 @@ class SQLiteBarrierSessionStore:
                     current.revision + 1,
                     current.forward_child,
                     current.rollback_child,
+                    current.reopen_target,
                 )
             try:
                 connection.commit()
@@ -2473,6 +2511,7 @@ class SQLiteBarrierSessionStore:
                 current.revision + 1,
                 current.forward_child,
                 current.rollback_child,
+                current.reopen_target,
             )
         for intent in prepared:
             self._mark_effect_intent_locked(
@@ -2580,6 +2619,7 @@ class SQLiteBarrierSessionStore:
                             "revision": current.revision,
                             "forward_child": self._child_json(current.forward_child),
                             "rollback_child": self._child_json(current.rollback_child),
+                            "reopen_target": current.reopen_target,
                         },
                         sort_keys=True,
                         separators=(",", ":"),
@@ -2593,12 +2633,13 @@ class SQLiteBarrierSessionStore:
                 replacement.revision,
                 self._child_json(replacement.forward_child),
                 self._child_json(replacement.rollback_child),
+                replacement.reopen_target,
             )
             connection.execute(
                 "INSERT INTO barrier_session "
                 "(schema_version,project_id,attempt_id,state_revision,authority_revision_at_acquire,"
                 "durable_barrier_id,fencing_token,fencing_owner,identity_digest,status,revision,"
-                "forward_child,rollback_child) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "forward_child,rollback_child,reopen_target) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 values,
             )
             try:
@@ -2639,6 +2680,7 @@ class SQLiteBarrierSessionStore:
                     expected_revision + 1,
                     supplied.forward_child,
                     supplied.rollback_child,
+                    supplied.reopen_target,
                 )
                 values = (
                     *ambiguous.identity.as_record().values(),
@@ -2646,13 +2688,14 @@ class SQLiteBarrierSessionStore:
                     ambiguous.revision,
                     self._child_json(ambiguous.forward_child),
                     self._child_json(ambiguous.rollback_child),
+                    ambiguous.reopen_target,
                 )
                 cursor = connection.execute(
                     "INSERT INTO barrier_session "
                     "(schema_version,project_id,attempt_id,state_revision,"
                     "authority_revision_at_acquire,durable_barrier_id,fencing_token,"
-                    "fencing_owner,identity_digest,status,revision,forward_child,rollback_child) "
-                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    "fencing_owner,identity_digest,status,revision,forward_child,rollback_child,"
+                    "reopen_target) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     values,
                 )
             else:
