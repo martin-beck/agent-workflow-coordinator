@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, cast
@@ -29,6 +30,7 @@ BINDING_SCHEMA_VERSION = 1
 BINDING_FIELDS = (
     "schema_version",
     "contract_digest",
+    "session_identity_digest",
     "contract_operation_id",
     "contract_backend",
     "contract_selector_ref",
@@ -38,6 +40,7 @@ BINDING_FIELDS = (
     "contract_backup_operation_id",
     "runtime_envelope",
 )
+_DIGEST = re.compile(r"[0-9a-f]{64}")
 
 
 class UpgradeBindingError(ValueError):
@@ -105,6 +108,7 @@ class UpgradeRuntimeBinding:
 
     schema_version: int
     contract_digest: str
+    session_identity_digest: str
     contract_operation_id: str
     contract_backend: str
     contract_selector_ref: str
@@ -116,11 +120,17 @@ class UpgradeRuntimeBinding:
 
     @classmethod
     def bind(
-        cls, contract: Mapping[str, object], runtime_envelope: Mapping[str, object]
+        cls,
+        contract: Mapping[str, object],
+        runtime_envelope: Mapping[str, object],
+        *,
+        session_identity_digest: str,
     ) -> UpgradeRuntimeBinding:
         value = _validate_contract_identity(contract)
         envelope = _validated_envelope(runtime_envelope)
         inputs = _contract_inputs(value)
+        if _DIGEST.fullmatch(session_identity_digest) is None:
+            raise UpgradeBindingError("runtime barrier session identity digest is invalid")
         if envelope["target"] != "rollback":
             raise UpgradeBindingError("runtime binding target must be rollback")
         if envelope["operation_id"] != value["operation_id"]:
@@ -138,6 +148,7 @@ class UpgradeRuntimeBinding:
         return cls(
             BINDING_SCHEMA_VERSION,
             canonical_contract_digest(value),
+            session_identity_digest,
             value["operation_id"],
             inputs["backend"],
             inputs["selector_ref"],
@@ -159,6 +170,7 @@ class UpgradeRuntimeBinding:
             raise UpgradeBindingError("runtime binding envelope is invalid")
         for field in (
             "contract_digest",
+            "session_identity_digest",
             "contract_operation_id",
             "contract_backend",
             "contract_selector_ref",
@@ -168,6 +180,10 @@ class UpgradeRuntimeBinding:
         ):
             if not isinstance(value[field], str) or not value[field]:
                 raise UpgradeBindingError(f"runtime binding {field} is invalid")
+        if _DIGEST.fullmatch(cast(str, value["contract_digest"])) is None:
+            raise UpgradeBindingError("runtime binding contract digest is invalid")
+        if _DIGEST.fullmatch(cast(str, value["session_identity_digest"])) is None:
+            raise UpgradeBindingError("runtime binding session identity digest is invalid")
         revision = value["contract_expected_state_revision"]
         if type(revision) is not int or revision < 1:
             raise UpgradeBindingError("runtime binding state revision is invalid")
@@ -176,6 +192,7 @@ class UpgradeRuntimeBinding:
             field: cast(str, value[field])
             for field in (
                 "contract_digest",
+                "session_identity_digest",
                 "contract_operation_id",
                 "contract_backend",
                 "contract_selector_ref",
@@ -187,6 +204,7 @@ class UpgradeRuntimeBinding:
         return cls(
             value["schema_version"],
             strings["contract_digest"],
+            strings["session_identity_digest"],
             strings["contract_operation_id"],
             strings["contract_backend"],
             strings["contract_selector_ref"],

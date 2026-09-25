@@ -67,7 +67,9 @@ def _envelope(contract: dict[str, Any]) -> dict[str, object]:
 class UpgradeBindingTests(unittest.TestCase):
     def test_binding_carries_and_validates_contract_and_runtime_identities(self) -> None:
         contract = _contract()
-        binding = UpgradeRuntimeBinding.bind(contract, _envelope(contract))
+        binding = UpgradeRuntimeBinding.bind(
+            contract, _envelope(contract), session_identity_digest="a" * 64
+        )
         self.assertEqual(contract["operation_id"], binding.contract_operation_id)
         self.assertEqual("barrier-7", binding.contract_barrier_id)
         self.assertEqual(
@@ -75,6 +77,7 @@ class UpgradeBindingTests(unittest.TestCase):
             {
                 "schema_version",
                 "contract_digest",
+                "session_identity_digest",
                 "contract_operation_id",
                 "contract_backend",
                 "contract_selector_ref",
@@ -113,7 +116,9 @@ class UpgradeBindingTests(unittest.TestCase):
                 if field == "operation_id":
                     changed["operation_id"] = value
             with self.subTest(field=field), self.assertRaises(UpgradeBindingError):
-                UpgradeRuntimeBinding.bind(changed, _envelope(contract))
+                UpgradeRuntimeBinding.bind(
+                    changed, _envelope(contract), session_identity_digest="a" * 64
+                )
 
     def test_rejects_runtime_identity_drift_and_unknown_binding_fields(self) -> None:
         contract = _contract()
@@ -124,16 +129,18 @@ class UpgradeBindingTests(unittest.TestCase):
             changed["barrier_identity_digest"] = canonical_barrier_digest(changed)
             changed["envelope_digest"] = canonical_envelope_digest(changed)
             with self.subTest(field=field), self.assertRaises(UpgradeBindingError):
-                UpgradeRuntimeBinding.bind(contract, changed)
+                UpgradeRuntimeBinding.bind(contract, changed, session_identity_digest="a" * 64)
         foreign = _envelope(contract)
         foreign["project_id"] = str(uuid.uuid4())
         foreign["barrier_identity_digest"] = canonical_barrier_digest(foreign)
         foreign["envelope_digest"] = canonical_envelope_digest(foreign)
         self.assertNotEqual(
-            UpgradeRuntimeBinding.bind(contract, runtime),
-            UpgradeRuntimeBinding.bind(contract, foreign),
+            UpgradeRuntimeBinding.bind(contract, runtime, session_identity_digest="a" * 64),
+            UpgradeRuntimeBinding.bind(contract, foreign, session_identity_digest="a" * 64),
         )
-        binding = UpgradeRuntimeBinding.bind(contract, runtime).as_mapping()
+        binding = UpgradeRuntimeBinding.bind(
+            contract, runtime, session_identity_digest="a" * 64
+        ).as_mapping()
         binding["unexpected"] = True
         with self.assertRaises(UpgradeBindingError):
             UpgradeRuntimeBinding.from_mapping(binding)

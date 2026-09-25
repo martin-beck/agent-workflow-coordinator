@@ -88,7 +88,7 @@ class UpgradeCommandTests(unittest.TestCase):
         }
         envelope["barrier_identity_digest"] = canonical_barrier_digest(envelope)
         envelope["envelope_digest"] = canonical_envelope_digest(envelope)
-        binding = UpgradeRuntimeBinding.bind(document, envelope)
+        binding = UpgradeRuntimeBinding.bind(document, envelope, session_identity_digest="a" * 64)
         path = self.root / "binding.json"
         path.write_text(json.dumps(binding.as_mapping()), encoding="utf-8")
         return path

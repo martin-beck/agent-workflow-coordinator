@@ -132,7 +132,11 @@ def _read_runtime_binding(
     document = _read_json_object(path, "upgrade runtime binding")
     try:
         binding = UpgradeRuntimeBinding.from_mapping(document)
-        expected = UpgradeRuntimeBinding.bind(contract, binding.runtime_envelope)
+        expected = UpgradeRuntimeBinding.bind(
+            contract,
+            binding.runtime_envelope,
+            session_identity_digest=binding.session_identity_digest,
+        )
     except UpgradeBindingError as error:
         raise UpgradeCommandError("upgrade runtime binding validation failed") from error
     if binding.as_mapping() != expected.as_mapping():
