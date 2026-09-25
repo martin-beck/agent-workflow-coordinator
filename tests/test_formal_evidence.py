@@ -870,7 +870,7 @@ class FormalEvidenceTests(unittest.TestCase):
         self.assertEqual(1, evidence["schema_version"])
         self.assertEqual("bounded-model", evidence["evidence_class"])
         self.assertEqual("handoffctl-coordination-models", evidence["scope"])
-        self.assertEqual("best-effort", evidence["correspondence"])
+        self.assertEqual("bounded-correspondence", evidence["correspondence"])
         for field in ("assumptions", "limitations", "non_claims"):
             values = evidence[field]
             self.assertIsInstance(values, list)
