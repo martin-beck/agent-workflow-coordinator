@@ -21,7 +21,8 @@ class MutationGateTests(unittest.TestCase):
         self.assertFalse(decision["mutation_enabled"])
         self.assertFalse(decision["authority_mutation_dispatched"])
         self.assertNotIn("implementation_refinement_not_proven", decision["reasons"])
-        self.assertIn("operational_obligation_0_incomplete", decision["reasons"])
+        self.assertNotIn("operational_obligation_0_incomplete", decision["reasons"])
+        self.assertIn("mutation_gate_policy_rejection_only", decision["reasons"])
 
     def test_partial_or_malformed_contracts_fail_closed(self) -> None:
         with self.assertRaisesRegex(MutationGateError, "boundary"):
@@ -38,16 +39,34 @@ class MutationGateTests(unittest.TestCase):
                 }
             )
 
-    def test_policy_and_each_unproven_entry_keep_gate_denied(self) -> None:
+    def test_policy_and_missing_operational_evidence_keep_gate_denied(self) -> None:
         contract = {
             "refinement_boundary": {"implementation_refinement": "not-required"},
-            "correspondence": [{"status": "evidence-complete"}, {"status": "best-effort"}],
+            "correspondence": [
+                {"status": "evidence-complete", "evidence_required": ["test_a"]},
+                {"status": "best-effort", "evidence_required": []},
+            ],
             "mutation_gate": "unexpected",
         }
         decision = evaluate_mutation_gate(contract)
         self.assertEqual("deny", decision["decision"])
         self.assertIn("operational_obligation_1_incomplete", decision["reasons"])
         self.assertIn("mutation_gate_policy_not_enabled", decision["reasons"])
+
+    def test_best_effort_correspondence_status_does_not_require_refinement_proof(self) -> None:
+        contract = {
+            "refinement_boundary": {"implementation_refinement": "not-required"},
+            "correspondence": [
+                {
+                    "status": "bounded executable evidence; best-effort model correspondence",
+                    "evidence_required": ["tests/test_gate.py::test_evidence"],
+                }
+            ],
+            "mutation_gate": "upgrade apply remains rejection-only",
+        }
+        decision = evaluate_mutation_gate(contract)
+        self.assertEqual(["mutation_gate_policy_rejection_only"], decision["reasons"])
+        self.assertFalse(decision["mutation_enabled"])
 
 
 if __name__ == "__main__":
