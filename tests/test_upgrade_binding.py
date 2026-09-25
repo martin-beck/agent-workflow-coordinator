@@ -9,11 +9,13 @@ import uuid
 from dataclasses import replace
 from pathlib import PurePosixPath
 from typing import Any
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from tools import upgrade_binding as binding_module
 from tools.generate_upgrade_contract import generate
+from tools.git_authority_adapter import GitAuthorityAdapter
 from tools.rollback_control_store import BarrierSessionState
+from tools.sqlite_authority_adapter import SQLiteAuthorityAdapter
 from tools.upgrade_binding import UpgradeBindingError, UpgradeRuntimeBinding
 from tools.upgrade_identity import (
     BarrierChildIdentity,
@@ -371,6 +373,32 @@ class UpgradeBindingTests(unittest.TestCase):
                 ),
             }
             self.assertEqual(evidence, binding.validate_backend_evidence(evidence))
+            adapter = (
+                object.__new__(GitAuthorityAdapter)
+                if backend == "git"
+                else object.__new__(SQLiteAuthorityAdapter)
+            )
+            adapter_any: Any = adapter
+            adapter_any.snapshot_bound = MagicMock(return_value=evidence)
+            if backend == "git":
+                self.assertEqual(
+                    evidence,
+                    binding.reread_backend_bound(
+                        adapter,
+                        object(),
+                        object(),
+                        object(),
+                        expected_branch="main",
+                        expected_head="a" * 40,
+                    ),
+                )
+                adapter_any.snapshot_bound.assert_called_once()
+            else:
+                self.assertEqual(
+                    evidence,
+                    binding.reread_backend_bound(adapter, object(), object(), object()),
+                )
+                adapter_any.snapshot_bound.assert_called_once()
             for field, value in (
                 ("operation_id", "foreign-operation"),
                 ("mutates_authority", True),
@@ -384,6 +412,71 @@ class UpgradeBindingTests(unittest.TestCase):
                     binding.validate_backend_evidence(changed)
             with self.assertRaises(UpgradeBindingError):
                 binding.validate_backend_evidence({**evidence, "unexpected": True})
+
+            with self.assertRaises(UpgradeBindingError):
+                binding.validate_backend_evidence([])  # type: ignore[arg-type]
+            invalid_evidence = {**evidence}
+            if backend == "git":
+                invalid_evidence["git_head"] = ""
+            else:
+                invalid_evidence["sqlite_integrity_verified"] = False
+            with self.assertRaises(UpgradeBindingError):
+                binding.validate_backend_evidence(invalid_evidence)
+            concrete = (
+                object.__new__(GitAuthorityAdapter)
+                if backend == "git"
+                else object.__new__(SQLiteAuthorityAdapter)
+            )
+            concrete_any: Any = concrete
+            concrete_any.snapshot_bound = MagicMock(side_effect=RuntimeError("stale"))
+            if backend == "git":
+                with self.assertRaises(UpgradeBindingError):
+                    binding.reread_backend_bound(
+                        concrete,
+                        object(),
+                        object(),
+                        object(),
+                        expected_branch="main",
+                        expected_head="a" * 40,
+                    )
+                with self.assertRaises(UpgradeBindingError):
+                    binding.reread_backend_bound(
+                        concrete,
+                        object(),
+                        object(),
+                        object(),
+                        expected_branch="",
+                        expected_head="a" * 40,
+                    )
+                with self.assertRaises(UpgradeBindingError):
+                    binding.reread_backend_bound(
+                        concrete,
+                        object(),
+                        object(),
+                        object(),
+                        expected_branch="main",
+                        expected_head="",
+                    )
+                with self.assertRaises(UpgradeBindingError):
+                    binding.reread_backend_bound(
+                        object(),
+                        object(),
+                        object(),
+                        object(),
+                        expected_branch="main",
+                        expected_head="a" * 40,
+                    )
+            else:
+                with self.assertRaises(UpgradeBindingError):
+                    binding.reread_backend_bound(concrete, object(), object(), object())
+                with self.assertRaises(UpgradeBindingError):
+                    binding.reread_backend_bound(object(), object(), object(), object())
+
+        sqlite_binding = UpgradeRuntimeBinding.bind(
+            _contract("sqlite"), _envelope(_contract("sqlite")), session_identity_digest="a" * 64
+        )
+        with self.assertRaises(UpgradeBindingError):
+            sqlite_binding.reread_backend_bound(object(), object(), object(), object())
         runtime = _envelope(contract)
         runtime["backend"] = "git"
         runtime["barrier_identity_digest"] = canonical_barrier_digest(runtime)

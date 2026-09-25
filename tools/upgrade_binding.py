@@ -288,3 +288,56 @@ class UpgradeRuntimeBinding:
         if evidence.get("mutates_authority") is not False:
             raise UpgradeBindingError("rollback backend evidence is not read-only")
         return dict(evidence)
+
+    def reread_backend_bound(
+        self,
+        adapter: object,
+        scope: object,
+        lease: object,
+        admission_recheck: object,
+        *,
+        expected_branch: str | None = None,
+        expected_head: str | None = None,
+    ) -> dict[str, object]:
+        """Reread concrete Git/SQLite evidence through the live bound scope."""
+        if self.runtime_envelope["backend"] == "git":
+            from tools.git_authority_adapter import GitAuthorityAdapter
+
+            if not isinstance(adapter, GitAuthorityAdapter):
+                raise UpgradeBindingError("Git rollback adapter is not concrete")
+            if not isinstance(expected_branch, str) or not expected_branch:
+                raise UpgradeBindingError("Git rollback branch evidence is required")
+            if not isinstance(expected_head, str) or not expected_head:
+                raise UpgradeBindingError("Git rollback head evidence is required")
+            adapter_any = cast(Any, adapter)
+            try:
+                evidence = adapter_any.snapshot_bound(
+                    "rollback",
+                    self.runtime_envelope,
+                    scope,
+                    lease=lease,
+                    admission_recheck=admission_recheck,
+                    expected_branch=expected_branch,
+                    expected_head=expected_head,
+                )
+            except Exception as error:
+                raise UpgradeBindingError("bound Git rollback reread was rejected") from error
+        else:
+            from tools.sqlite_authority_adapter import SQLiteAuthorityAdapter
+
+            if not isinstance(adapter, SQLiteAuthorityAdapter):
+                raise UpgradeBindingError("SQLite rollback adapter is not concrete")
+            adapter_any = cast(Any, adapter)
+            try:
+                evidence = adapter_any.snapshot_bound(
+                    "rollback",
+                    self.runtime_envelope,
+                    scope,
+                    lease=lease,
+                    admission_recheck=admission_recheck,
+                )
+            except Exception as error:
+                raise UpgradeBindingError("bound SQLite rollback reread was rejected") from error
+        if not isinstance(evidence, Mapping):
+            raise UpgradeBindingError("bound rollback reread returned invalid evidence")
+        return self.validate_backend_evidence(evidence)
