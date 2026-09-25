@@ -76,6 +76,24 @@ class VendorTest(unittest.TestCase):
             )
         with patch("builtins.print"):
             VENDOR.sync(ROOT, self.target, CURRENT_VERSION, "e" * 40)
+        imported = subprocess.run(
+            [
+                sys.executable,
+                "-S",
+                "-c",
+                "from tools.admission_lease import AdmissionLease\n"
+                "from tools.runtime_bootstrap import resolve_selected_runtime_bound\n"
+                "from tools.upgrade_authority import read_runtime_selector\n"
+                "assert (AdmissionLease and resolve_selected_runtime_bound and "
+                "read_runtime_selector)",
+            ],
+            cwd=self.target,
+            check=False,
+            capture_output=True,
+            text=True,
+            env={"PATH": os.environ["PATH"], "PYTHONPATH": str(self.target)},
+        )
+        self.assertEqual(imported.returncode, 0, imported.stdout + imported.stderr)
         initialization_command = [
             sys.executable,
             str(self.target / "tools/handoffctl.py"),
