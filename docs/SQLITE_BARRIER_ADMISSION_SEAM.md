@@ -9,7 +9,8 @@ common-lock, control-store, control-lock, authority, and authority-lock
 descriptor identities. It rejects split paths, duplicate paths, replacement,
 unsafe descriptors, and invalid provisioned bindings. Capturing this identity
 does not acquire a control or authority lock and does not bind any mutation
-caller; formal correspondence remains pending.
+caller. The model is best-effort design guidance; executable admission
+evidence comes from the bounded implementation and hostile-failure tests below.
 
 `LockDomainScope.bind` now requires a concrete `AdmissionLease` and matching
 `AdmissionRecheck`. It captures the durable `BarrierSessionIdentity` while the
@@ -81,6 +82,7 @@ The implementation slice may be promoted only with tests that demonstrate:
 - process termination or uncertain commit entering durable `ambiguous` state;
 - writes resuming only after an independently verified `released` state.
 
-Until this matrix and the corresponding bounded formal refinement exist, the
+Until this matrix and the corresponding bounded executable evidence exist, the
 seam is documentation/test scaffolding only and no mutation route may bind to
-it.
+it. The model may guide implementation and scenario coverage, but a proof that
+the source refines the model is not a release prerequisite.

@@ -34,7 +34,8 @@ Storage implementations conform to the `Backend` protocol in `sqlite_storage.py`
 consistent task snapshot and durably append command evidence. Mutations must preserve the shared
 lifecycle functions, exact-revision semantics, permanent binding and deterministic projection.
 New embedded or server backends require schema migration, crash recovery, independent-process
-stress tests and a formal refinement; executable downstream backend plugins are not supported.
+stress tests and updated best-effort model guidance where useful; executable
+downstream backend plugins are not supported.
 
 ## Compatibility rules
 
