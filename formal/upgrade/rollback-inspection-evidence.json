@@ -2,7 +2,7 @@
   "schema_version": 1,
   "evidence_class": "implementation-test",
   "scope": "bound-rollback-inspection",
-  "implementation_refinement": "not-proven",
+  "implementation_refinement": "not-required",
   "implementation_revision": "fc9a2e29f37d0aa3e0995ba2692a1d22819432c6",
   "implementation_tree": "8ec91b542849f0b990bf430556673ceb216d22a7",
   "formal_obligations": ["FunctionalAvailability", "RollbackProof"],
@@ -29,6 +29,6 @@
   ],
   "non_claims": [
     "No upgrade, rollback, apply, execute, or authority mutation is enabled by this evidence.",
-    "The referenced formal obligations are bounded-model names, not a refinement proof."
+    "The referenced formal obligations are bounded-model names; no refinement proof is required or claimed."
   ]
 }

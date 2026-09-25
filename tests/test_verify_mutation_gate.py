@@ -20,30 +20,33 @@ class MutationGateTests(unittest.TestCase):
         self.assertEqual("deny", decision["decision"])
         self.assertFalse(decision["mutation_enabled"])
         self.assertFalse(decision["authority_mutation_dispatched"])
-        self.assertIn("implementation_refinement_not_proven", decision["reasons"])
+        self.assertNotIn("implementation_refinement_not_proven", decision["reasons"])
+        self.assertIn("operational_obligation_0_incomplete", decision["reasons"])
 
     def test_partial_or_malformed_contracts_fail_closed(self) -> None:
         with self.assertRaisesRegex(MutationGateError, "boundary"):
             evaluate_mutation_gate({})
         with self.assertRaisesRegex(MutationGateError, "correspondence"):
-            evaluate_mutation_gate({"refinement_boundary": {"implementation_refinement": "proven"}})
+            evaluate_mutation_gate(
+                {"refinement_boundary": {"implementation_refinement": "not-required"}}
+            )
         with self.assertRaisesRegex(MutationGateError, "entry 0"):
             evaluate_mutation_gate(
                 {
-                    "refinement_boundary": {"implementation_refinement": "proven"},
+                    "refinement_boundary": {"implementation_refinement": "not-required"},
                     "correspondence": [None],
                 }
             )
 
     def test_policy_and_each_unproven_entry_keep_gate_denied(self) -> None:
         contract = {
-            "refinement_boundary": {"implementation_refinement": "proven"},
-            "correspondence": [{"status": "proven"}, {"status": "pending"}],
+            "refinement_boundary": {"implementation_refinement": "not-required"},
+            "correspondence": [{"status": "evidence-complete"}, {"status": "best-effort"}],
             "mutation_gate": "unexpected",
         }
         decision = evaluate_mutation_gate(contract)
         self.assertEqual("deny", decision["decision"])
-        self.assertIn("correspondence_1_not_proven", decision["reasons"])
+        self.assertIn("operational_obligation_1_incomplete", decision["reasons"])
         self.assertIn("mutation_gate_policy_not_enabled", decision["reasons"])
 
 

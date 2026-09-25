@@ -37,9 +37,9 @@
   },
   "evidence": {
     "status": "bounded-concrete-binding-only",
-    "correspondence_claim": "not-proven",
+    "correspondence_claim": "best-effort",
     "nonclaims": [
-      "The backend domain is bound to the two exercised route families, not to a trace-preserving implementation refinement.",
+      "The backend domain is bound to the two exercised route families as best-effort model correspondence, not as a trace-preserving refinement claim.",
       "The concrete fence tests establish rejection and recovery evidence, not equality with the model's abstract Preflight counter.",
       "This artifact does not authorize Dispatch, mutation, rollback, release, or outcome publication."
     ]

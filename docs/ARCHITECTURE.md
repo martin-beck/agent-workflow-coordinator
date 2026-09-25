@@ -44,7 +44,8 @@ The vendor tool copies an allowlist from one exact tagged upstream commit. A dow
 manifest records each source/destination and SHA-256. The downstream verifier is itself part of the
 manifest. Project profile and binding files are outside the vendor allowlist.
 
-TLA+ models are refinement targets for the implementation, not proofs of the Python interpreter,
+TLA+ models are AI-generated best-effort design guidance for the implementation, not required
+refinement proofs of the Python interpreter,
 operating system, Git, GitHub, or filesystem. Implementation tests connect the abstract contracts to
 real SQLite connections and processes, flock contention for Git/projections, atomic files,
 subprocess failures and project profiles.

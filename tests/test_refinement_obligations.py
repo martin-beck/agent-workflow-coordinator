@@ -29,7 +29,10 @@ def test_matrix_is_bound_to_the_exact_contract_and_fails_closed() -> None:
     assert matrix["contract"] == "formal/upgrade/v10-refinement-contract.json"
     assert matrix["contract_sha256"] == hashlib.sha256(CONTRACT.read_bytes()).hexdigest()
     assert matrix["decision"] == "deny"
-    assert "The matrix is not an implementation-refinement proof." in matrix["nonclaims"]
+    assert (
+        "The matrix is best-effort model correspondence evidence, not an "
+        "implementation-refinement proof or requirement."
+    ) in matrix["nonclaims"]
     assert matrix["obligations"]
     assert all(item["status"] != "proven" for item in matrix["obligations"])
 
@@ -58,7 +61,7 @@ def test_git_mutation_boundary_maps_backup_commit_and_rollback_without_authorizi
     matrix = json.loads(MATRIX.read_text(encoding="utf-8"))
     entry = next(item for item in matrix["obligations"] if item["id"] == "git-mutation-boundary")
     assert entry["model_actions"] == ["Backup", "Commit", "Rollback"]
-    assert entry["status"] == "not-proven"
+    assert entry["status"] == "best-effort"
     assert len(entry["evidence"]) >= 14
     assert any("generated_backup_executor" in reference for reference in entry["evidence"])
     assert any("GitCommitCapabilityTests" in reference for reference in entry["evidence"])
@@ -73,7 +76,7 @@ def test_sqlite_write_fence_maps_every_route_class_without_authorizing_mutation(
     matrix = json.loads(MATRIX.read_text(encoding="utf-8"))
     entry = next(item for item in matrix["obligations"] if item["id"] == "sqlite-write-fence")
     assert entry["model_actions"] == ["RequestWrite", "AcceptWrite", "RejectWrite", "FinishWrite"]
-    assert entry["status"] == "not-proven"
+    assert entry["status"] == "best-effort"
     assert len(entry["evidence"]) >= 12
     assert any("test_inventory_is_explicit" in reference for reference in entry["evidence"])
     assert any("every_inventoried_route_rejects" in reference for reference in entry["evidence"])
@@ -90,7 +93,7 @@ def test_functional_availability_maps_reopen_and_recovery_without_authorizing_mu
     matrix = json.loads(MATRIX.read_text(encoding="utf-8"))
     entry = next(item for item in matrix["obligations"] if item["id"] == "functional-availability")
     assert entry["model_actions"] == ["FunctionalAvailability", "Reopen"]
-    assert entry["status"] == "not-proven"
+    assert entry["status"] == "best-effort"
     assert len(entry["evidence"]) >= 7
     assert any(
         "test_reopen_requires_explicit_functional_availability" in reference
@@ -106,7 +109,7 @@ def test_selector_execution_binding_maps_read_only_identity_evidence_without_dis
         item for item in matrix["obligations"] if item["id"] == "selector-to-execution-binding"
     )
     assert entry["model_actions"] == ["ObserveSelector", "ValidateRuntime", "Dispatch"]
-    assert entry["status"] == "not-proven"
+    assert entry["status"] == "best-effort"
     assert len(entry["evidence"]) >= 10
     assert any("SelectorAdmissionTests" in reference for reference in entry["evidence"])
     assert any("RuntimeAdmissionTests" in reference for reference in entry["evidence"])

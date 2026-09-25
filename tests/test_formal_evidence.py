@@ -76,7 +76,7 @@ class FormalEvidenceTests(unittest.TestCase):
         self.assertEqual("Preflight", artifact["model"]["fence_transition"])
         self.assertEqual("rejection-only", artifact["implementation"]["mutation_gate"])
         self.assertEqual("bounded-concrete-binding-only", artifact["evidence"]["status"])
-        self.assertEqual("not-proven", artifact["evidence"]["correspondence_claim"])
+        self.assertEqual("best-effort", artifact["evidence"]["correspondence_claim"])
         self.assertEqual(3, len(artifact["evidence"]["nonclaims"]))
 
     def test_backend_fence_correspondence_binds_model_and_config_digests(self) -> None:
@@ -135,7 +135,7 @@ class FormalEvidenceTests(unittest.TestCase):
         artifact = json.loads(
             (ROOT / "formal" / "upgrade" / "sqlite-snapshot-correspondence.json").read_text()
         )
-        self.assertEqual(artifact["evidence"]["correspondence_claim"], "not-proven")
+        self.assertEqual(artifact["evidence"]["correspondence_claim"], "best-effort")
 
     def test_sqlite_correspondence_evidence_stays_bounded(self) -> None:
         artifact = json.loads(
@@ -459,7 +459,7 @@ class FormalEvidenceTests(unittest.TestCase):
         claim = artifact["evidence"]["correspondence_claim"]
         self.assertIsInstance(claim, str)
         self.assertTrue(claim)
-        self.assertEqual("not-proven", claim)
+        self.assertEqual("best-effort", claim)
         self.assertEqual("rejection-only", artifact["implementation"]["mutation_gate"])
 
     def test_sqlite_correspondence_nonclaims_cover_limits(self) -> None:
@@ -659,7 +659,7 @@ class FormalEvidenceTests(unittest.TestCase):
         self.assertEqual(1, artifact["schema_version"])
         self.assertEqual("rejection-only", artifact["implementation"]["mutation_gate"])
         self.assertEqual("bounded-trace-map-only", artifact["evidence"]["status"])
-        self.assertEqual("not-proven", artifact["evidence"]["correspondence_claim"])
+        self.assertEqual("best-effort", artifact["evidence"]["correspondence_claim"])
         for transition in artifact["transitions"]:
             self.assertEqual(
                 {"name", "implementation", "model", "postcondition"},
@@ -849,7 +849,7 @@ class FormalEvidenceTests(unittest.TestCase):
         self.assertEqual("ambiguous", uncertainty["barrier_after"])
         self.assertEqual("reject", transitions["ambiguous-fence"]["model"]["result"])
         self.assertEqual("bounded-trace-map-only", value["evidence"]["status"])
-        self.assertEqual("not-proven", value["evidence"]["correspondence_claim"])
+        self.assertEqual("best-effort", value["evidence"]["correspondence_claim"])
         self.assertTrue(value["evidence"]["nonclaims"])
 
     def test_evidence_has_exact_awq_v024_contract_fields(self) -> None:
@@ -870,7 +870,7 @@ class FormalEvidenceTests(unittest.TestCase):
         self.assertEqual(1, evidence["schema_version"])
         self.assertEqual("bounded-model", evidence["evidence_class"])
         self.assertEqual("handoffctl-coordination-models", evidence["scope"])
-        self.assertEqual("not-proven", evidence["correspondence"])
+        self.assertEqual("best-effort", evidence["correspondence"])
         for field in ("assumptions", "limitations", "non_claims"):
             values = evidence[field]
             self.assertIsInstance(values, list)

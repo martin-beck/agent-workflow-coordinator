@@ -12,10 +12,10 @@ records the largest finite process, task, actor, project, worktree, and revision
 their checked configurations. Each `.cfg` file remains authoritative for the exact bound of its
 model.
 
-The correspondence classification is `not-proven`. Passing TLC establishes the invariants and
+The correspondence classification is `best-effort`. Passing TLC establishes the invariants and
 temporal properties below only for the tracked TLA+ specifications under those finite bounds and
 assumptions. The implementation tests are separate evidence that selected Python behavior
-corresponds to the abstractions; neither evidence source proves implementation refinement or the
+corresponds to the abstractions; neither evidence source claims or requires implementation refinement or the
 correctness of Python, Git, SQLite, operating-system, kernel, filesystem, or arbitrary wrapped
 commands. The explicit assumptions, non-claims, and limitations in `formal/evidence.json` are part
 of this contract and must remain aligned with the configurations and runner.

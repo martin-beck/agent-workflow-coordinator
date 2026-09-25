@@ -8,8 +8,9 @@ EXTENDS FiniteSets, Naturals, TLC
 (*                                                                         *)
 (* This model describes the accepted control-plane boundary only.  It does *)
 (* not model SQLite's VFS, WAL fsync, power loss, Python refinement, or the *)
-(* coordinator authority itself.  A writer observes the durable barrier at *)
-(* the abstract linearization point; unsafe states reject the write.       *)
+(* coordinator authority itself. It is best-effort design guidance, and no  *)
+(* Python refinement proof is required. A writer observes the durable barrier *)
+(* at the abstract linearization point; unsafe states reject the write.      *)
 (***************************************************************************)
 
 CONSTANTS Processes, NoProcess, NoChild, MaxRevision

@@ -65,7 +65,7 @@ class UpgradeFormalEvidenceTests(unittest.TestCase):
             )
         )
         self.assertEqual("implementation-test", evidence["evidence_class"])
-        self.assertEqual("not-proven", evidence["implementation_refinement"])
+        self.assertEqual("not-required", evidence["implementation_refinement"])
         self.assertEqual(2, len(evidence["formal_obligations"]))
         revision = subprocess.run(  # noqa: S603
             ["git", "rev-parse", evidence["implementation_revision"]],  # noqa: S607
@@ -139,7 +139,7 @@ class UpgradeFormalEvidenceTests(unittest.TestCase):
         )
         self.assertEqual(["BindForward", "ForwardFailure"], backup["model_actions"])
         self.assertEqual(
-            "bounded executable backup binding evidence; implementation refinement pending",
+            "bounded executable backup binding evidence; best-effort model correspondence",
             backup["status"],
         )
         for reference in backup["evidence_required"]:
@@ -159,7 +159,7 @@ class UpgradeFormalEvidenceTests(unittest.TestCase):
         )
         self.assertEqual(["BindForward", "ForwardFailure"], stage["model_actions"])
         self.assertEqual(
-            "bounded executable stage verification evidence; implementation refinement pending",
+            "bounded executable stage verification evidence; best-effort model correspondence",
             stage["status"],
         )
         for reference in stage["evidence_required"]:
@@ -179,7 +179,7 @@ class UpgradeFormalEvidenceTests(unittest.TestCase):
         self.assertEqual(["FreshRuntimeRead", "CompleteReopen"], entry["model_actions"])
         self.assertEqual(
             "bounded executable selector/runtime readiness evidence; "
-            "implementation refinement pending",
+            "best-effort model correspondence",
             entry["status"],
         )
         for reference in entry["evidence_required"]:
@@ -202,7 +202,7 @@ class UpgradeFormalEvidenceTests(unittest.TestCase):
             ["ObserveAuthority", "RecheckHeld", "RejectStaleCAS"], entry["model_actions"]
         )
         self.assertEqual(
-            "bounded executable selector admission evidence; implementation refinement pending",
+            "bounded executable selector admission evidence; best-effort model correspondence",
             entry["status"],
         )
         for reference in entry["evidence_required"]:
@@ -223,7 +223,7 @@ class UpgradeFormalEvidenceTests(unittest.TestCase):
             ["FreshRuntimeRead", "RecheckHeld", "RejectStaleCAS"], entry["model_actions"]
         )
         self.assertEqual(
-            "bounded executable runtime admission evidence; implementation refinement pending",
+            "bounded executable runtime admission evidence; best-effort model correspondence",
             entry["status"],
         )
         for reference in entry["evidence_required"]:
@@ -242,7 +242,7 @@ class UpgradeFormalEvidenceTests(unittest.TestCase):
         )
         self.assertEqual(["AcceptWrite", "RejectWrite", "FinishWrite"], entry["model_actions"])
         self.assertEqual(
-            "bounded executable commit authorization evidence; implementation refinement pending",
+            "bounded executable commit authorization evidence; best-effort model correspondence",
             entry["status"],
         )
         for reference in entry["evidence_required"]:
@@ -273,7 +273,7 @@ class UpgradeFormalEvidenceTests(unittest.TestCase):
         )
         self.assertEqual(
             "bounded executable durable external-effect recovery evidence; "
-            "implementation refinement pending and public dispatch disabled",
+            "best-effort model correspondence and public dispatch disabled",
             entry["status"],
         )
         for reference in entry["evidence_required"]:
@@ -326,7 +326,7 @@ class UpgradeFormalEvidenceTests(unittest.TestCase):
         )
         self.assertEqual(
             "bounded executable lock-domain and identity evidence; "
-            "implementation refinement pending",
+            "best-effort model correspondence",
             entry["status"],
         )
         for reference in entry["evidence_required"]:
@@ -345,7 +345,7 @@ class UpgradeFormalEvidenceTests(unittest.TestCase):
         )
         self.assertEqual(
             "bounded executable barrier identity and stale-fence evidence; "
-            "implementation refinement pending",
+            "best-effort model correspondence",
             entry["status"],
         )
         self.assertGreaterEqual(len(entry["evidence_required"]), 10)
@@ -378,7 +378,7 @@ class UpgradeFormalEvidenceTests(unittest.TestCase):
             ["MarkAmbiguous", "RejectWrite", "FunctionalAvailability"], entry["model_actions"]
         )
         self.assertEqual(
-            "bounded executable diagnostic recovery evidence; implementation refinement pending",
+            "bounded executable diagnostic recovery evidence; best-effort model correspondence",
             entry["status"],
         )
         for reference in entry["evidence_required"]:
@@ -406,7 +406,7 @@ class UpgradeFormalEvidenceTests(unittest.TestCase):
             entry["model_actions"],
         )
         self.assertEqual(
-            "bounded executable integrated rehearsal evidence; implementation refinement pending",
+            "bounded executable integrated rehearsal evidence; best-effort model correspondence",
             entry["status"],
         )
         for reference in entry["evidence_required"]:
@@ -432,7 +432,9 @@ class UpgradeFormalEvidenceTests(unittest.TestCase):
                 path, selector = entry[field].split("::", 1)
                 self.assertTrue((ROOT / path).exists(), path)
                 self.assertIn(selector, (ROOT / path).read_text(encoding="utf-8"), selector)
-        self.assertEqual("not-proven", contract["refinement_boundary"]["implementation_refinement"])
+        self.assertEqual(
+            "not-required", contract["refinement_boundary"]["implementation_refinement"]
+        )
 
     def test_v10_contract_binds_process_death_evidence_without_refinement_overclaim(self) -> None:
         contract = json.loads(CONTRACT.read_text(encoding="utf-8"))
@@ -452,7 +454,9 @@ class UpgradeFormalEvidenceTests(unittest.TestCase):
             path, selector = entry["implementation_test"].split("::", 1)
             self.assertTrue((ROOT / path).exists(), path)
             self.assertIn(selector, (ROOT / path).read_text(encoding="utf-8"), selector)
-        self.assertEqual("not-proven", contract["refinement_boundary"]["implementation_refinement"])
+        self.assertEqual(
+            "not-required", contract["refinement_boundary"]["implementation_refinement"]
+        )
 
 
 if __name__ == "__main__":

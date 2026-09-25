@@ -1,10 +1,10 @@
 {
   "schema_version": 1,
-  "kind": "implementation-refinement-obligation-matrix",
+  "kind": "best-effort-model-correspondence-matrix",
   "contract": "formal/upgrade/v10-refinement-contract.json",
-  "contract_sha256": "e42854882b7efdb25977a2e3b47940684aa3213807044563d08a53735015e007",
+  "contract_sha256": "f2369f457b11332c8e06de863a1c81b2bb077dca0651ccae76b63ff636395078",
   "decision": "deny",
-  "decision_rule": "deny unless every obligation is proven at the exact implementation revision and independently reviewed",
+  "decision_rule": "deny unless every operational safety obligation is evidenced at the exact implementation revision and independently reviewed; model refinement is not a requirement",
   "obligations": [
     {
       "id": "locks-and-admission",
@@ -22,7 +22,7 @@
         "tests/test_lock_domain_scope.py::LockDomainScopeTests.test_validated_hold_process_death_releases_scope_for_fresh_caller",
         "tests/test_lock_domain_scope.py::LockDomainScopeTests.test_binding_abort_releases_locks_and_fresh_worker_rejects_replaced_identity"
       ],
-      "status": "not-proven"
+      "status": "best-effort"
     },
     {
       "id": "barrier-recheck-and-stale-cas",
@@ -39,7 +39,7 @@
         "tests/test_lock_domain_scope.py::LockDomainScopeTests.test_fresh_process_reread_rejects_old_lease_after_durable_retry",
         "tests/test_authority_effect_correspondence.py::AuthorityEffectCorrespondenceTests.test_rechecked_stale_authority_admission_maps_to_rejection"
       ],
-      "status": "not-proven"
+      "status": "best-effort"
     },
     {
       "id": "sqlite-write-fence",
@@ -67,7 +67,7 @@
         "tests/test_sqlite_authority_adapter.py::SQLiteAuthorityAdapterTests.test_durable_commit_factory_classifies_termination_as_rejected",
         "tests/test_sqlite_authority_adapter.py::SQLiteAuthorityAdapterTests.test_adapter_classifies_termination_during_commit_binding_as_rejected"
       ],
-      "status": "not-proven"
+      "status": "best-effort"
     },
     {
       "id": "ambiguous-recovery",
@@ -102,7 +102,7 @@
         "tests/test_authority_effect_correspondence.py::AuthorityEffectCorrespondenceTests.test_rejected_effect_maps_to_reject_write",
         "tests/test_authority_effect_correspondence.py::AuthorityEffectCorrespondenceTests.test_stale_fence_rejection_maps_before_new_fence_recovery"
       ],
-      "status": "not-proven"
+      "status": "best-effort"
     },
     {
       "id": "functional-availability",
@@ -123,7 +123,7 @@
         "tests/test_sqlite_mutation_barrier.py::SQLiteMutationBarrierProcessTests.test_sigkill_after_authority_effect_requires_recovery_and_new_fence",
         "tests/test_sqlite_mutation_barrier.py::SQLiteMutationBarrierProcessTests.test_sigkill_after_git_authority_effect_requires_recovery_and_new_fence"
       ],
-      "status": "not-proven"
+      "status": "best-effort"
     },
     {
       "id": "selector-to-execution-binding",
@@ -146,7 +146,7 @@
         "tests/test_runtime_bootstrap.py::RuntimeBootstrapTests.test_prepare_dispatch_rejects_mutating_command_arguments",
         "tests/test_runtime_bootstrap.py::RuntimeBootstrapTests.test_run_admitted_runtime_rejects_mutating_command_before_spawn"
       ],
-      "status": "not-proven"
+      "status": "best-effort"
     },
     {
       "id": "git-mutation-boundary",
@@ -176,11 +176,11 @@
         "tests/test_git_authority_adapter.py::GitAuthorityAdapterTests.test_bound_rollback_rejects_authority_and_backend_drift_without_execute",
         "tests/test_git_authority_adapter.py::GitAuthorityAdapterTests.test_bound_rollback_rejects_malformed_admission_before_git"
       ],
-      "status": "not-proven"
+      "status": "best-effort"
     }
   ],
   "nonclaims": [
-    "The matrix is not an implementation-refinement proof.",
+    "The matrix is best-effort model correspondence evidence, not an implementation-refinement proof or requirement.",
     "A passing bounded TLC run does not prove Python correspondence.",
     "No selector publication, runtime replacement, commit, apply, rollback, or release publication is authorized."
   ]

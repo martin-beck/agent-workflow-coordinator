@@ -21,7 +21,7 @@ class CapabilityMatrixFormalTests(unittest.TestCase):
         self.assertEqual(evidence["schema_version"], 1)
         self.assertEqual(evidence["kind"], "bounded-capability-matrix-formal-evidence")
         self.assertEqual(evidence["evidence_status"], "bounded-model-and-hostile-contract")
-        self.assertEqual(evidence["correspondence_claim"], "not-proven")
+        self.assertEqual(evidence["correspondence_claim"], "best-effort")
         self.assertEqual(evidence["runtime_admission"]["status"], "pending")
         self.assertEqual(evidence["runtime_admission"]["next_consumer"], "AR-0071")
         for relative_path in [

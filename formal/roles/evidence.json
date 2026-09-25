@@ -19,10 +19,10 @@
     "next_consumer": "AR-0071"
   },
   "evidence_status": "bounded-model-and-hostile-contract",
-  "correspondence_claim": "not-proven",
+  "correspondence_claim": "best-effort",
   "nonclaims": [
     "This model does not authorize mutation, release, rollback, or Dispatch.",
-    "TLC under finite bounds does not prove Python implementation refinement.",
-    "Spec-gated completion admission is bounded in the model; Python implementation refinement remains unproven."
+    "TLC under finite bounds does not prove Python implementation refinement, and no such proof is required.",
+    "Spec-gated completion admission is bounded in the model; source behavior and executable tests remain authoritative."
   ]
 }

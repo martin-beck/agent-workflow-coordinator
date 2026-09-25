@@ -8,7 +8,8 @@ EXTENDS FiniteSets, Naturals, TLC
 (*                                                                           *)
 (* This model is diagnostic evidence for the durable control-store intent   *)
 (* protocol.  It does not model SQLite VFS/WAL fsync, Python refinement,   *)
-(* authority writes, or a production recovery implementation.               *)
+(* authority writes, or a production recovery implementation. This is      *)
+(* best-effort design guidance; no Python refinement proof is required.    *)
 (***************************************************************************)
 
 CONSTANTS Processes, NoProcess, MaxRevision
