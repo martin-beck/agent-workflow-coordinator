@@ -55,7 +55,8 @@ from tools.upgrade_identity import (
 )
 
 
-def _reopen_evidence(state: BarrierSessionState, target: str) -> dict[str, object]:
+def _reopen_evidence(state: BarrierSessionState | None, target: str) -> dict[str, object]:
+    assert state is not None
     child = state.rollback_child if target == "rollback" else state.forward_child
     assert child is not None
     return {
