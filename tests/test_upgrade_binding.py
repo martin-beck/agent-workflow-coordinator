@@ -336,12 +336,8 @@ class UpgradeBindingTests(unittest.TestCase):
                 binding_module._validate_contract_identity(changed)
 
         with self.assertRaises(UpgradeBindingError):
-            UpgradeRuntimeBinding.bind(
-                contract, _envelope(contract), session_identity_digest="bad"
-            )
-        UpgradeRuntimeBinding.bind(
-            contract, _envelope(contract), session_identity_digest="a" * 64
-        )
+            UpgradeRuntimeBinding.bind(contract, _envelope(contract), session_identity_digest="bad")
+        UpgradeRuntimeBinding.bind(contract, _envelope(contract), session_identity_digest="a" * 64)
         runtime = _envelope(contract)
         runtime["operation_id"] = "other"
         runtime["barrier_identity_digest"] = canonical_barrier_digest(runtime)
