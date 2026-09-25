@@ -10,8 +10,15 @@ from pathlib import PurePosixPath
 from typing import Any
 
 from tools.generate_upgrade_contract import generate
+from tools.rollback_control_store import BarrierSessionState
 from tools.upgrade_binding import UpgradeBindingError, UpgradeRuntimeBinding
-from tools.upgrade_identity import canonical_barrier_digest, canonical_envelope_digest
+from tools.upgrade_identity import (
+    BarrierChildIdentity,
+    BarrierSessionIdentity,
+    canonical_barrier_digest,
+    canonical_barrier_session_digest,
+    canonical_envelope_digest,
+)
 
 
 def _contract() -> dict[str, Any]:
@@ -144,3 +151,41 @@ class UpgradeBindingTests(unittest.TestCase):
         binding["unexpected"] = True
         with self.assertRaises(UpgradeBindingError):
             UpgradeRuntimeBinding.from_mapping(binding)
+
+    def test_validates_observed_held_rollback_session(self) -> None:
+        contract = _contract()
+        runtime = _envelope(contract)
+        session_record: dict[str, object] = {
+            "schema_version": 1,
+            "project_id": runtime["project_id"],
+            "attempt_id": "attempt-7",
+            "state_revision": runtime["state_revision"],
+            "authority_revision_at_acquire": runtime["authority_revision"],
+            "durable_barrier_id": runtime["durable_barrier_id"],
+            "fencing_token": runtime["fencing_token"],
+            "fencing_owner": runtime["fencing_owner"],
+        }
+        session_record["identity_digest"] = canonical_barrier_session_digest(session_record)
+        identity = BarrierSessionIdentity.from_record(session_record)
+        child = BarrierChildIdentity.bind(identity, str(runtime["operation_id"]), "rollback")
+        session = BarrierSessionState(identity, "held", 2, rollback_child=child)
+        binding = UpgradeRuntimeBinding.bind(
+            contract,
+            runtime,
+            session_identity_digest=identity.identity_digest,
+        )
+        binding.validate_live_session(session)
+        with self.assertRaisesRegex(UpgradeBindingError, "session identity digest"):
+            foreign_record = {**session_record, "attempt_id": "attempt-other"}
+            foreign_record["identity_digest"] = canonical_barrier_session_digest(foreign_record)
+            foreign_identity = BarrierSessionIdentity.from_record(foreign_record)
+            binding.validate_live_session(
+                BarrierSessionState(
+                    foreign_identity,
+                    "held",
+                    2,
+                    rollback_child=BarrierChildIdentity.bind(
+                        foreign_identity, str(runtime["operation_id"]), "rollback"
+                    ),
+                )
+            )

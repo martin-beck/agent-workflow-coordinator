@@ -217,3 +217,32 @@ class UpgradeRuntimeBinding:
 
     def as_mapping(self) -> dict[str, object]:
         return {field: getattr(self, field) for field in BINDING_FIELDS}
+
+    def validate_live_session(self, session: object) -> None:
+        """Validate the observed held durable session without changing it."""
+        from tools.rollback_control_store import BarrierSessionState
+
+        if not isinstance(session, BarrierSessionState):
+            raise UpgradeBindingError("live rollback barrier session is invalid")
+        identity = session.identity
+        envelope = self.runtime_envelope
+        if identity.identity_digest != self.session_identity_digest:
+            raise UpgradeBindingError("live barrier session identity digest does not match")
+        for session_field, envelope_field in (
+            ("project_id", "project_id"),
+            ("state_revision", "state_revision"),
+            ("authority_revision_at_acquire", "authority_revision"),
+            ("durable_barrier_id", "durable_barrier_id"),
+            ("fencing_token", "fencing_token"),
+        ):
+            if getattr(identity, session_field) != envelope[envelope_field]:
+                raise UpgradeBindingError(f"live barrier {session_field} does not match")
+        child = session.rollback_child
+        if session.status != "held" or child is None:
+            raise UpgradeBindingError("live rollback barrier is not held with a rollback child")
+        if (
+            child.operation_id != envelope["operation_id"]
+            or child.target != "rollback"
+            or child.barrier_identity_digest != identity.identity_digest
+        ):
+            raise UpgradeBindingError("live rollback child identity does not match")
