@@ -2484,6 +2484,50 @@ class RollbackControlStoreTests(unittest.TestCase):
             self.assertEqual(
                 ("ambiguous", 4), (publication_state.status, publication_state.revision)
             )
+            self.assertEqual("new", publication_state.reopen_target)
+            restarted_publication = SQLiteBarrierSessionStore(
+                SQLiteRollbackControlStore(
+                    publication_control.path,
+                    PROJECT,
+                ),
+                lambda: "authority-3",
+            ).snapshot()
+            self.assertIsNotNone(restarted_publication)
+            assert restarted_publication is not None
+            self.assertEqual("new", restarted_publication.reopen_target)
+
+    def test_v10_reopen_competing_owner_cannot_replace_persisted_target(self) -> None:
+        from tools.upgrade_identity import BarrierChildIdentity
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "control.sqlite"
+            first = SQLiteBarrierSessionStore(
+                SQLiteRollbackControlStore(path, PROJECT), lambda: "authority-3"
+            )
+            second = SQLiteBarrierSessionStore(
+                SQLiteRollbackControlStore(path, PROJECT), lambda: "authority-3"
+            )
+            identity = self._session_identity()
+            held = first.create(identity)
+            held = first.bind_child(1, BarrierChildIdentity.bind(identity, "forward-1", "new"))
+            held = first.bind_child(
+                2, BarrierChildIdentity.bind(identity, "rollback-1", "rollback")
+            )
+            stale_owner = second.snapshot()
+            self.assertIsNotNone(stale_owner)
+            assert stale_owner is not None
+            winner = first.begin_reopen(3, "rollback", _reopen_evidence(held, "rollback"))
+            self.assertEqual("rollback", winner.reopen_target)
+            with self.assertRaisesRegex(ControlStoreError, "revision conflict"):
+                second.begin_reopen(
+                    stale_owner.revision,
+                    "new",
+                    _reopen_evidence(stale_owner, "new"),
+                )
+            persisted = second.snapshot()
+            self.assertIsNotNone(persisted)
+            assert persisted is not None
+            self.assertEqual(("releasing", "rollback"), (persisted.status, persisted.reopen_target))
 
     def test_v10_cas_fences_verify_affected_rows_and_recovery_errors(self) -> None:
         class Cursor:
