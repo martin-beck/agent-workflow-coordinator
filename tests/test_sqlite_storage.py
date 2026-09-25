@@ -15,6 +15,7 @@ import sys
 import time
 import unittest
 from collections.abc import Callable
+from contextlib import closing
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any, Literal
@@ -1010,7 +1011,7 @@ class SQLiteStorageTest(unittest.TestCase):
             backend.retire(lambda _tasks: None, fail_selector)
 
         self.assertEqual("open", backend.load_tasks()[0][1]["status"])
-        with sqlite3.connect(self.database) as connection:
+        with closing(sqlite3.connect(self.database)) as connection, connection:
             self.assertEqual(
                 "active",
                 connection.execute("SELECT value FROM metadata WHERE key='state'").fetchone()[0],

@@ -14,7 +14,7 @@ import subprocess
 import tempfile
 import unittest
 from collections.abc import Mapping
-from contextlib import AbstractContextManager, nullcontext
+from contextlib import AbstractContextManager, closing, nullcontext
 from pathlib import Path
 from typing import Any, cast
 from unittest.mock import MagicMock, patch
@@ -863,7 +863,7 @@ class GitAuthorityAdapterTests(unittest.TestCase):
         self.assertEqual(["retired"], selector_calls)
         self.assertEqual(session_before, self.session.snapshot())
         self.assertFalse(self.session.operation_owned_by_current_thread)
-        with sqlite3.connect(backend.path) as connection:
+        with closing(sqlite3.connect(backend.path)) as connection, connection:
             state = connection.execute("SELECT value FROM metadata WHERE key='state'").fetchone()
             events = connection.execute(
                 "SELECT revision, kind, note FROM events WHERE task_id=? ORDER BY revision",
@@ -934,7 +934,7 @@ class GitAuthorityAdapterTests(unittest.TestCase):
         self.assertEqual("Ready.", tasks[0][1]["summary"])
         self.assertEqual("# Authority fixture\n", tasks[0][2])
         self.assertFalse(self.session.operation_owned_by_current_thread)
-        with sqlite3.connect(authority_path) as connection:
+        with closing(sqlite3.connect(authority_path)) as connection, connection:
             events = connection.execute(
                 "SELECT revision, kind FROM events WHERE task_id=? ORDER BY revision",
                 ("AR-0001",),
@@ -1020,8 +1020,10 @@ class GitAuthorityAdapterTests(unittest.TestCase):
         assert authority_path is not None
         foreign_authority = authority_path.with_name("foreign-valid-authority.sqlite")
         with (
-            sqlite3.connect(authority_path) as source,
-            sqlite3.connect(foreign_authority) as destination,
+            closing(sqlite3.connect(authority_path)) as source,
+            closing(sqlite3.connect(foreign_authority)) as destination,
+            source,
+            destination,
         ):
             source.backup(destination)
 
@@ -1127,7 +1129,7 @@ class GitAuthorityAdapterTests(unittest.TestCase):
 
     def test_bound_backend_rejects_corrupt_rows_and_missing_routes(self) -> None:
         backend = self._bound_authority_backend()
-        with sqlite3.connect(backend.path) as connection:
+        with closing(sqlite3.connect(backend.path)) as connection, connection:
             original_json = connection.execute(
                 "SELECT meta_json FROM tasks WHERE id=?", ("AR-0001",)
             ).fetchone()[0]
@@ -1136,7 +1138,7 @@ class GitAuthorityAdapterTests(unittest.TestCase):
         with self.assertRaisesRegex(sqlite_storage.StorageCorruptionError, "invalid task JSON"):
             backend.load_tasks()
 
-        with sqlite3.connect(backend.path) as connection:
+        with closing(sqlite3.connect(backend.path)) as connection, connection:
             connection.execute(
                 "UPDATE tasks SET meta_json=?, revision=? WHERE id=?",
                 (original_json, 2, "AR-0001"),
@@ -1146,7 +1148,7 @@ class GitAuthorityAdapterTests(unittest.TestCase):
         ):
             backend.load_tasks()
 
-        with sqlite3.connect(backend.path) as connection:
+        with closing(sqlite3.connect(backend.path)) as connection, connection:
             connection.execute("UPDATE tasks SET revision=? WHERE id=?", (1, "AR-0001"))
         with self.assertRaisesRegex(RuntimeError, "unknown task AR-9999"):
             backend.mutate(
@@ -1219,7 +1221,7 @@ class GitAuthorityAdapterTests(unittest.TestCase):
 
     def test_sqlite_bound_routes_reject_conflicts_inactive_and_corrupt_state(self) -> None:
         backend = self._bound_authority_backend()
-        with sqlite3.connect(backend.path) as connection:
+        with closing(sqlite3.connect(backend.path)) as connection, connection:
             connection.execute(
                 "CREATE TRIGGER suppress_task_update BEFORE UPDATE ON tasks "
                 "BEGIN SELECT RAISE(IGNORE); END"
@@ -1238,7 +1240,7 @@ class GitAuthorityAdapterTests(unittest.TestCase):
                 "2026-09-16T00:02:00+00:00",
             )
 
-        with sqlite3.connect(backend.path) as connection:
+        with closing(sqlite3.connect(backend.path)) as connection, connection:
             connection.execute("DROP TRIGGER suppress_task_update")
             connection.execute("PRAGMA foreign_keys=OFF")
             connection.execute(
@@ -1247,7 +1249,7 @@ class GitAuthorityAdapterTests(unittest.TestCase):
             )
         self.assertIn("SQLITE_CORRUPT: foreign-key violations", backend.integrity_errors())
 
-        with sqlite3.connect(backend.path) as connection:
+        with closing(sqlite3.connect(backend.path)) as connection, connection:
             connection.execute(
                 "DELETE FROM dependencies WHERE task_id=? AND dependency_id=?",
                 ("AR-0001", "AR-9999"),
@@ -1258,7 +1260,7 @@ class GitAuthorityAdapterTests(unittest.TestCase):
         ):
             backend.load_tasks()
 
-        with sqlite3.connect(backend.path) as connection:
+        with closing(sqlite3.connect(backend.path)) as connection, connection:
             connection.execute("UPDATE metadata SET value='retired' WHERE key='state'")
         with (
             patch.object(backend, "_verify_binding", return_value=None),
