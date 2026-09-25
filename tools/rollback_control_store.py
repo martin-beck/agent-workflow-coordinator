@@ -84,6 +84,17 @@ _REOPEN_EVIDENCE_FIELDS = {
     "barrier_identity_digest",
     "validated",
 }
+_REOPEN_RUNTIME_EVIDENCE_FIELDS = {
+    "authority_revision",
+    "backend",
+    "backend_roundtrip",
+    "foreign_key_violations",
+    "fencing_token",
+    "integrity_check",
+    "project_id",
+    "target",
+    "verified",
+}
 _CAUSE_CODE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
 
 
@@ -323,11 +334,29 @@ class BarrierSessionContract:
         return self._state
 
     def complete_reopen(
-        self, expected_revision: int, fresh_runtime_verified: bool
+        self,
+        expected_revision: int,
+        fresh_runtime_evidence: Mapping[str, object] | None = None,
     ) -> BarrierSessionState:
         self._expect(expected_revision, {"releasing"})
-        if fresh_runtime_verified is not True:
+        if not isinstance(fresh_runtime_evidence, Mapping):
             raise ControlStoreError("fresh runtime evidence is required to release barrier")
+        target = fresh_runtime_evidence.get("target")
+        child = self._state.rollback_child if target == "rollback" else self._state.forward_child
+        if child is None or (
+            set(fresh_runtime_evidence) != _REOPEN_RUNTIME_EVIDENCE_FIELDS
+            or fresh_runtime_evidence.get("authority_revision")
+            != self._state.identity.authority_revision_at_acquire
+            or fresh_runtime_evidence.get("backend") != "sqlite"
+            or fresh_runtime_evidence.get("backend_roundtrip") != "sqlite"
+            or fresh_runtime_evidence.get("foreign_key_violations") != 0
+            or fresh_runtime_evidence.get("fencing_token") != self._state.identity.fencing_token
+            or fresh_runtime_evidence.get("integrity_check") != "ok"
+            or fresh_runtime_evidence.get("project_id") != self._state.identity.project_id
+            or fresh_runtime_evidence.get("target") != child.target
+            or fresh_runtime_evidence.get("verified") is not True
+        ):
+            raise ControlStoreError("fresh runtime evidence identity is invalid")
         self._state = BarrierSessionState(
             self._state.identity,
             "released",
@@ -2672,7 +2701,9 @@ class SQLiteBarrierSessionStore:
         )
 
     def complete_reopen(
-        self, expected_revision: int, runtime_verified: bool
+        self,
+        expected_revision: int,
+        fresh_runtime_evidence: Mapping[str, object] | None = None,
     ) -> BarrierSessionState:
         current = self.snapshot()
         if current is None:
@@ -2681,7 +2712,7 @@ class SQLiteBarrierSessionStore:
         contract._state = current
         return self.cas(
             expected_revision,
-            contract.complete_reopen(expected_revision, runtime_verified),
+            contract.complete_reopen(expected_revision, fresh_runtime_evidence),
         )
 
     def mark_ambiguous(self, expected_revision: int, cause_code: str) -> BarrierSessionState:
