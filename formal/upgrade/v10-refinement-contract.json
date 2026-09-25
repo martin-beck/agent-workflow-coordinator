@@ -1,6 +1,8 @@
 {
   "schema_version": 1,
-  "kind": "bounded-refinement-contract",
+  "kind": "bounded-model-guidance-contract",
+  "model_role": "ai-generated-best-effort-design-guidance",
+  "refinement_requirement": "not-required",
   "model": {
     "path": "formal/upgrade/HandoffctlUpgradeBarrier.tla",
     "sha256": "2a1a31f530781645f5e8e76f67ca80a8ed59ec5d1f78706ca2a5530ebefa7b92",
@@ -26,7 +28,7 @@
         "tests/test_authority_neutral_validation.py::test_bound_adapter_dispatches_validate_and_rejects_drift",
         "tests/test_authority_neutral_validation.py::test_revalidation_failure_is_write_closed"
       ],
-      "status": "bounded executable selector/runtime readiness evidence; implementation refinement pending"
+      "status": "bounded executable selector/runtime readiness evidence; best-effort model correspondence"
     },
     {
       "model_actions": ["ObserveAuthority", "RecheckHeld", "RejectStaleCAS"],
@@ -38,7 +40,7 @@
         "tests/test_git_authority_mutation.py::test_rejects_stale_admission_reread_before_effect",
         "tests/test_sqlite_authority_mutation.py::test_rejects_stale_admission_reread_before_effect"
       ],
-      "status": "bounded executable selector admission evidence; implementation refinement pending"
+      "status": "bounded executable selector admission evidence; best-effort model correspondence"
     },
     {
       "model_actions": ["FreshRuntimeRead", "RecheckHeld", "RejectStaleCAS"],
@@ -48,7 +50,7 @@
         "tests/test_authority_neutral_runtime.py::test_rejects_forged_context_manifest_selector_and_backend_failures",
         "tests/test_authority_neutral_runtime.py::test_bound_adapter_rejects_phase_and_identity_drift"
       ],
-      "status": "bounded executable runtime admission evidence; implementation refinement pending"
+      "status": "bounded executable runtime admission evidence; best-effort model correspondence"
     },
     {
       "model_actions": ["AcceptWrite", "RejectWrite", "FinishWrite"],
@@ -59,7 +61,7 @@
         "tests/test_authority_neutral_commit.py::test_rejects_forged_or_unverified_prerequisites",
         "tests/test_authority_neutral_commit.py::test_bound_adapter_rejects_phase_and_identity_drift"
       ],
-      "status": "bounded executable commit authorization evidence; implementation refinement pending"
+      "status": "bounded executable commit authorization evidence; best-effort model correspondence"
     },
     {
       "model_actions": ["AcceptWrite", "FinishWrite", "MarkAmbiguous"],
@@ -94,7 +96,7 @@
         "tests/test_git_authority_mutation.py::GitCommitCapabilityTests.test_classifies_repository_replacement_after_effect_as_ambiguous",
         "tests/test_git_authority_mutation.py::GitCommitCapabilityTests.test_rejects_a_concurrent_commit_after_the_effect"
       ],
-      "status": "bounded executable Git effect evidence; implementation refinement pending and public dispatch disabled"
+      "status": "bounded executable Git effect evidence; best-effort model correspondence and public dispatch disabled"
     },
     {
       "model_actions": ["AcceptWrite", "FinishWrite", "MarkAmbiguous"],
@@ -111,7 +113,7 @@
         "tests/test_authority_mutation.py::AuthorityMutationTests.test_durable_effect_forwards_exact_admission_identity_to_journal",
         "tests/test_authority_mutation.py::AuthorityMutationTests.test_durable_capability_classifies_termination_during_journal_prepare_as_ambiguous"
       ],
-      "status": "bounded executable cross-backend effect evidence; implementation refinement pending and public dispatch disabled"
+      "status": "bounded executable cross-backend effect evidence; best-effort model correspondence and public dispatch disabled"
     },
     {
       "model_actions": ["RequestWrite", "AcceptWrite", "FinishWrite", "MarkAmbiguous", "RejectWrite", "RejectStaleCAS", "Acquire"],
@@ -149,7 +151,7 @@
         "tests/test_authority_effect_correspondence.py::AuthorityEffectCorrespondenceTests.test_rejected_effect_maps_to_reject_write",
         "tests/test_authority_effect_correspondence.py::AuthorityEffectCorrespondenceTests.test_stale_fence_rejection_maps_before_new_fence_recovery"
       ],
-      "status": "bounded executable durable external-effect recovery evidence; implementation refinement pending and public dispatch disabled"
+      "status": "bounded executable durable external-effect recovery evidence; best-effort model correspondence and public dispatch disabled"
     },
     {
       "model_actions": ["AcceptWrite", "FinishWrite", "MarkAmbiguous"],
@@ -188,7 +190,7 @@
         "tests/test_sqlite_authority_adapter.py::SQLiteAuthorityAdapterTests.test_durable_commit_factory_classifies_termination_as_rejected",
         "tests/test_sqlite_authority_adapter.py::SQLiteAuthorityAdapterTests.test_adapter_classifies_termination_during_commit_binding_as_rejected"
       ],
-      "status": "bounded executable SQLite effect evidence; implementation refinement pending and public dispatch disabled"
+      "status": "bounded executable SQLite effect evidence; best-effort model correspondence and public dispatch disabled"
     },
     {
       "model_actions": ["MarkAmbiguous", "RejectWrite", "FunctionalAvailability"],
@@ -198,7 +200,7 @@
         "tests/test_authority_neutral_recovery.py::test_rejects_forged_or_unverified_recovery",
         "tests/test_authority_neutral_recovery.py::test_bound_adapter_rejects_phase_and_identity_drift"
       ],
-      "status": "bounded executable diagnostic recovery evidence; implementation refinement pending"
+      "status": "bounded executable diagnostic recovery evidence; best-effort model correspondence"
     },
     {
       "model_actions": ["BindForward", "ForwardFailure", "BindRollback", "VerifyTerminal", "BeginReopen", "MarkAmbiguous", "FunctionalAvailability"],
@@ -213,7 +215,7 @@
         "tests/test_sqlite_mutation_barrier.py::test_sigkill_after_authority_effect_requires_recovery_and_new_fence",
         "tests/test_sqlite_mutation_barrier.py::test_sigkill_after_git_authority_effect_requires_recovery_and_new_fence"
       ],
-      "status": "bounded executable integrated rehearsal evidence; implementation refinement pending"
+      "status": "bounded executable integrated rehearsal evidence; best-effort model correspondence"
     },
     {
       "model_actions": ["BindForward", "ForwardFailure"],
@@ -224,7 +226,7 @@
         "tests/test_authority_neutral_stage.py::test_bound_adapter_rejects_selector_drift_before_runtime_verification",
         "tests/test_authority_neutral_stage.py::test_rejects_artifact_escape_and_bad_digest"
       ],
-      "status": "bounded executable stage verification evidence; implementation refinement pending"
+      "status": "bounded executable stage verification evidence; best-effort model correspondence"
     },
     {
       "model_actions": ["BindForward", "ForwardFailure"],
@@ -234,7 +236,7 @@
         "tests/test_authority_neutral_backup.py::test_bound_phase_adapter_binds_identity_and_dispatches_only_backup",
         "tests/test_authority_neutral_backup.py::test_bound_phase_adapter_rejects_identity_drift_before_dispatch"
       ],
-      "status": "bounded executable backup binding evidence; implementation refinement pending"
+      "status": "bounded executable backup binding evidence; best-effort model correspondence"
     },
     {
       "model_actions": ["AcquireCommon", "AcquireControl", "AcquireAuthority", "ReleaseAuthority", "ReleaseControl", "ReleaseCommon"],
@@ -257,7 +259,7 @@
         "tests/test_lock_domain.py::LockDomainTests.test_replaced_descriptor_and_inactive_guard_fail_closed",
         "tests/test_lock_domain.py::LockDomainTests.test_identity_rejects_nonregular_descriptor_and_symlink"
       ],
-      "status": "bounded executable lock-domain and identity evidence; implementation refinement pending"
+      "status": "bounded executable lock-domain and identity evidence; best-effort model correspondence"
     },
     {
       "model_actions": ["ObserveAuthority", "RecheckHeld", "RejectStaleCAS"],
@@ -279,7 +281,7 @@
         "tests/test_rollback_control_store.py::RollbackControlStoreTests.test_v10_caller_owned_recheck_rejects_stale_identity_and_authority",
         "tests/test_rollback_control_store.py::RollbackControlStoreTests.test_cas_conflict_and_binding_mismatch_fail_closed"
       ],
-      "status": "bounded executable barrier identity and stale-fence evidence; implementation refinement pending"
+      "status": "bounded executable barrier identity and stale-fence evidence; best-effort model correspondence"
     },
     {
       "model_actions": ["RequestWrite", "AcceptWrite", "RejectWrite", "FinishWrite"],
@@ -290,7 +292,7 @@
         "tests/test_sqlite_mutation_barrier.py::test_independent_writer_rejects_until_verified_release",
         "tests/test_sqlite_mutation_barrier.py::test_concurrent_released_writers_serialize_one_exact_revision"
       ],
-      "status": "bounded executable concurrency and DB/WAL/SHM replacement evidence in tests/test_sqlite_mutation_barrier.py; implementation refinement pending"
+      "status": "bounded executable concurrency and DB/WAL/SHM replacement evidence in tests/test_sqlite_mutation_barrier.py; best-effort model correspondence"
     },
     {
       "model_actions": ["MarkAmbiguous", "Acquire"],
@@ -307,7 +309,7 @@
         "tests/test_sqlite_mutation_barrier.py::test_sigkill_after_reconciliation_commit_recovers_new_fence_from_history",
         "tests/test_rollback_control_store.py::test_v10_active_wal_sidecar_replacement_fails_closed_before_recheck"
       ],
-      "status": "bounded executable SIGKILL evidence covers CAS publication and interrupted ambiguous-recovery intent residue in tests/test_sqlite_mutation_barrier.py; implementation refinement pending"
+      "status": "bounded executable SIGKILL evidence covers CAS publication and interrupted ambiguous-recovery intent residue in tests/test_sqlite_mutation_barrier.py; best-effort model correspondence"
     },
     {
       "model_actions": ["RejectStaleCAS", "AmbiguousIsWriteClosed", "LockOwnership"],
@@ -318,7 +320,7 @@
         "tests/test_rollback_control_store.py::RollbackControlStoreTests.test_v10_interrupted_recovery_residue_requires_exact_revision_chain",
         "tests/test_rollback_control_store.py::RollbackControlStoreTests.test_v10_session_intent_recovery_rejects_missing_session"
       ],
-      "status": "bounded executable recovery and hostile revision-chain evidence; implementation refinement pending"
+      "status": "bounded executable recovery and hostile revision-chain evidence; best-effort model correspondence"
     }
   ],
   "sqlite_route_inventory": [
@@ -429,8 +431,8 @@
   ],
   "refinement_boundary": {
     "class": "bounded-executable-correspondence",
-    "implementation_refinement": "not-proven",
-    "claim": "The route inventory and hostile tests are bound to this contract; they do not establish mathematical Python-to-TLA refinement or authorize upgrade apply/rollback."
+    "implementation_refinement": "not-required",
+    "claim": "The route inventory and hostile tests are bound to this contract as best-effort correspondence evidence; no mathematical Python-to-TLA refinement is required or claimed, and they do not authorize upgrade apply/rollback."
   },
   "tlc_result": {
     "status": "bounded-model-only",
@@ -455,10 +457,10 @@
     ]
   },
   "nonclaims": [
-    "This artifact does not prove Python implementation refinement.",
+    "This artifact does not claim or require Python implementation refinement; source code and executable tests are the operational authority.",
     "The model does not model SQLite VFS, WAL/SHM fsync, power loss, or arbitrary process termination.",
     "Descriptor-safe binding rereads and authority write fencing remain executable evidence obligations.",
     "Git authority operations, selector launch, and upgrade mutation are outside this checkpoint."
   ],
-  "mutation_gate": "upgrade apply and upgrade rollback must remain rejection-only until every obligation has exact-head executable evidence and independent review."
+  "mutation_gate": "upgrade apply and upgrade rollback must remain rejection-only until every operational obligation has exact-head executable evidence and independent review; this gate does not require or claim Python-to-TLA refinement."
 }

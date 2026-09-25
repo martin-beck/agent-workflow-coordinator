@@ -36,7 +36,7 @@ is already held.
 The inventory proves admission ordering and row-fence tests only. It does not
 prove that every future authority route is registered here, that SQLite
 WAL/SHM survives arbitrary process death, or that the control-store fence is a
-complete implementation refinement of the formal model. Authority mutation,
+complete operational evidence for the formal model. Authority mutation,
 upgrade apply, and upgrade rollback remain disabled.
 
 ## Constructor binding gap (AR-0007; future adapter owned by AR-0013)

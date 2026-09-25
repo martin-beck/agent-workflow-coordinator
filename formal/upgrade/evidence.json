@@ -23,7 +23,7 @@
         "coordinator authority mutation routes",
         "filesystem descriptor and lock semantics"
       ],
-      "implementation_refinement": "not-proven"
+      "implementation_refinement": "not-required"
     },
     "config": "formal/upgrade/HandoffctlUpgradeBarrier.cfg",
     "config_sha256": "e38502a22e5c73b175c92d152b21f086269c49e9256d2d25fa9209657697e776",
@@ -76,7 +76,7 @@
       "process scheduling and multiprocess locking",
       "external command behavior"
     ],
-    "implementation_refinement": "not-proven",
+    "implementation_refinement": "not-required",
     "model_limitations": [
       "backend backup branches are abstract and do not model Git or SQLite internals",
       "fence acquisition is modeled, but stale-fence/CAS rejection is not modeled"
@@ -90,7 +90,7 @@
       "docs/UPGRADE_PROTOCOL.md": "8b3a1e5600165919e9cf4a3943237abfec064c6cc4286ad727b463cf2ddbfc62"
     },
     "revision": "bbbef2053bad329e85a8d257493cd642e20e06d2",
-    "status": "design-only-v10; no executable refinement"
+    "status": "design-only-v10; best-effort model guidance; no refinement proof required"
   },
   "implementation_snapshot": {
     "files": {

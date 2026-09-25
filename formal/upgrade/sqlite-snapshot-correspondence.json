@@ -30,7 +30,7 @@
       "ambiguous-fence": ["tests/test_durable_binding.py::DurableBindingTests.test_snapshot_read_failure_is_ambiguous_and_outcome_stays_disabled"]
     },
     "status": "bounded-trace-map-only",
-    "correspondence_claim": "not-proven",
-    "nonclaims": ["This map does not prove implementation refinement.", "It does not authorize SQLite mutation or writes, outcome publication, Git dispatch, apply, or rollback.", "The abstract Crash action does not model power loss or SQLite VFS behavior."]
+    "correspondence_claim": "best-effort",
+    "nonclaims": ["This map does not claim or require implementation refinement; source code and executable tests remain authoritative.", "It does not authorize SQLite mutation or writes, outcome publication, Git dispatch, apply, or rollback.", "The abstract Crash action does not model power loss or SQLite VFS behavior."]
   }
 }

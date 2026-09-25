@@ -33,7 +33,7 @@
   },
   "claim_boundary": {
     "class": "bounded-model diagnostic",
-    "implementation_refinement": "not-proven",
+    "implementation_refinement": "not-required",
     "excluded": [
       "SQLite VFS and WAL fsync durability",
       "arbitrary process termination in the Python implementation",

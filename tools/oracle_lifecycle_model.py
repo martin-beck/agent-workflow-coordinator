@@ -5,7 +5,8 @@
 
 This is a finite transition checker for the same ordering contract as
 ``oracle_lifecycle``.  It intentionally makes no claim about AWG/AWQ decision
-semantics or Python implementation refinement.
+semantics or a required Python implementation refinement proof; source and
+executable tests are the operational authority.
 """
 
 from __future__ import annotations

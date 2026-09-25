@@ -27,7 +27,7 @@
     "pr_runtime_max_seconds": 1200,
     "runtime_max_seconds": 6000
   },
-  "correspondence": "not-proven",
+  "correspondence": "bounded-correspondence",
   "evidence_class": "bounded-model",
   "limitations": [
     "TLC explores only the finite constants declared in the six tracked model configurations.",

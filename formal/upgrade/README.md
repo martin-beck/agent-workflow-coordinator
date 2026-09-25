@@ -13,10 +13,11 @@ but does not model backend internals. Fence acquisition is explicit; stale
 fence/CAS rejection remains an implementation/refinement obligation rather
 than a hidden claim.
 
-The model is deliberately not an implementation proof. It abstracts Git,
+The model is AI-generated best-effort design guidance, not an implementation proof or a required
+refinement target. It abstracts Git,
 SQLite, WAL/SHM, filesystem replacement, process scheduling, and external
-commands. The implementation must provide separate public evidence mapped to
-each action and invariant before this model can support publication.
+commands. The implementation and executable tests provide the operational authority; public
+evidence may map concrete behavior to model actions without establishing mathematical refinement.
 
 `HandoffctlUpgradeBarrier.tla` is a separate bounded v10 control-plane model.
 It covers the target-neutral barrier session, immutable forward and rollback
@@ -37,7 +38,7 @@ java -cp tla2tools.jar tlc2.TLC -config formal/upgrade/HandoffctlUpgradeBarrier.
 ```
 
 The model is bounded by the constants in the configuration; no unbounded or
-implementation-refinement claim is made. Exact run metadata is recorded in
+implementation-refinement claim is required or made. Exact run metadata is recorded in
 `evidence.json`; the executable-to-model obligations and their current gaps
 are recorded in `refinement-map.md`.
 
