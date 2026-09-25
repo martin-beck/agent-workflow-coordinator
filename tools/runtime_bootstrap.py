@@ -148,6 +148,7 @@ class AdmittedRuntimeCommand:
     argv: tuple[str, ...]
     pass_fds: tuple[int, ...]
     _entrypoint_descriptor: int
+    environment: dict[str, str]
 
     def close(self) -> None:
         """Release the descriptor retained for the pending dispatch."""
@@ -226,7 +227,11 @@ def prepare_runtime_dispatch(
     try:
         admission.revalidate()
         argv = (sys.executable, f"/proc/self/fd/{entrypoint}", *normalized)
-        return AdmittedRuntimeCommand(argv, (entrypoint,), entrypoint)
+        environment = os.environ.copy()
+        environment["PYTHONPATH"] = os.pathsep.join(
+            (str(admission.runtime.path), str(admission.runtime.path / "tools"))
+        )
+        return AdmittedRuntimeCommand(argv, (entrypoint,), entrypoint, environment)
     except BaseException:
         with suppress(OSError):
             os.close(entrypoint)
@@ -256,6 +261,7 @@ def run_admitted_runtime(
                 text=True,
                 timeout=timeout,
                 pass_fds=command.pass_fds,
+                env=command.environment,
             )
         except subprocess.TimeoutExpired as error:
             raise AuthorityError("admitted runtime dispatch timed out") from error

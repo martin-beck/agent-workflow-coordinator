@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import stat
 import tempfile
 import unittest
@@ -255,6 +256,35 @@ class RuntimeBootstrapTests(unittest.TestCase):
                     self.assertEqual((command._entrypoint_descriptor,), command.pass_fds)
                     self.assertTrue(command.argv[1].startswith("/proc/self/fd/"))
                     self.assertNotIn(str(selected), command.argv[1])
+                    self.assertEqual(
+                        f"{selected}:{selected / 'tools'}",
+                        command.environment["PYTHONPATH"],
+                    )
+
+    def test_prepare_dispatch_overrides_inherited_pythonpath(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            releases = root / "releases"
+            releases.mkdir(mode=0o700)
+            selected = releases / "v1.2.3"
+            selected.mkdir(mode=0o700)
+            self._write_manifest(selected)
+            self._write_entrypoint(selected)
+            selector = root / "runtime-selector.json"
+            commit_runtime_selector(selector, "v1.2.3", "v1.2.2")
+            with (
+                patch.dict(os.environ, {"PYTHONPATH": "/attacker/runtime"}),
+                resolve_selected_runtime_bound(
+                    selector, releases, self._identity_for_release(), self._verifier
+                ) as resolved,
+            ):
+                admission = resolved.admit_for_dispatch()
+                with prepare_runtime_dispatch(admission, ("doctor",)) as command:
+                    self.assertEqual(
+                        f"{selected}:{selected / 'tools'}",
+                        command.environment["PYTHONPATH"],
+                    )
+                admission.close()
 
     def test_prepare_dispatch_rejects_caller_selected_entrypoint(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -388,6 +418,29 @@ class RuntimeBootstrapTests(unittest.TestCase):
                 self.assertEqual("", result.stderr)
                 admission.close()
                 self.assertEqual(-1, resolved.descriptor)
+
+    def test_run_admitted_runtime_executes_real_selected_coordinator_entrypoint(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            releases = root / "releases"
+            releases.mkdir(mode=0o700)
+            selected = releases / "v1.2.3"
+            selected.mkdir(mode=0o700)
+            self._write_manifest(selected)
+            shutil.copytree(Path(__file__).parents[1] / "tools", selected / "tools")
+            (selected / "tools").chmod(0o755)
+            (selected / "tools/handoffctl.py").chmod(0o755)
+            selector = root / "runtime-selector.json"
+            commit_runtime_selector(selector, "v1.2.3", "v1.2.2")
+            with resolve_selected_runtime_bound(
+                selector, releases, self._identity_for_release(), self._verifier
+            ) as resolved:
+                admission = resolved.admit_for_dispatch()
+                result = run_admitted_runtime(admission, ("doctor",), timeout=10)
+                self.assertEqual(1, result.returncode)
+                self.assertIn("coordinator is not initialized", result.stderr)
+                self.assertNotIn("No module named", result.stderr)
+                admission.close()
 
     def test_run_admitted_runtime_closes_entrypoint_on_spawn_failure(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
