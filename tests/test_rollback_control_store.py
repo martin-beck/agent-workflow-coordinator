@@ -1510,6 +1510,40 @@ class RollbackControlStoreTests(unittest.TestCase):
             self.assertEqual("rollback-1", reread.rollback_child.operation_id)
             self.assertEqual(releasing.revision + 1, reread.revision)
 
+    def test_v10_reopen_target_survives_restart_and_cannot_be_substituted(self) -> None:
+        from tools.upgrade_identity import BarrierChildIdentity
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "control.sqlite"
+            store = SQLiteBarrierSessionStore(
+                SQLiteRollbackControlStore(path, PROJECT), lambda: "authority-3"
+            )
+            identity = self._session_identity()
+            held = store.create(identity)
+            held = store.bind_child(1, BarrierChildIdentity.bind(identity, "forward-1", "new"))
+            held = store.bind_child(
+                2, BarrierChildIdentity.bind(identity, "rollback-1", "rollback")
+            )
+            releasing = store.begin_reopen(3, "new", _reopen_evidence(held, "new"))
+            self.assertEqual("new", releasing.reopen_target)
+
+            restarted = SQLiteBarrierSessionStore(
+                SQLiteRollbackControlStore(path, PROJECT), lambda: "authority-3"
+            )
+            recovered = restarted.snapshot()
+            self.assertIsNotNone(recovered)
+            assert recovered is not None
+            self.assertEqual("new", recovered.reopen_target)
+            with self.assertRaisesRegex(ControlStoreError, "does not match reopen target"):
+                restarted.complete_reopen(
+                    recovered.revision, _runtime_evidence(recovered, "rollback")
+                )
+            self.assertEqual("releasing", restarted.snapshot().status)  # type: ignore[union-attr]
+            released = restarted.complete_reopen(
+                recovered.revision, _runtime_evidence(recovered, "new")
+            )
+            self.assertEqual(("released", "new"), (released.status, released.reopen_target))
+
     def test_v10_durable_session_recheck_is_fresh_and_read_only(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             store = SQLiteBarrierSessionStore(
