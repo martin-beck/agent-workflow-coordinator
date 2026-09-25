@@ -27,8 +27,9 @@ record. Only `authority.atomic_replace` maps to the forward commit mutation;
 This typed data contract is necessary but not execution evidence. Git and
 SQLite contracts may both be generated and validated, but neither becomes
 executable until a reviewed backend phase adapter implements every opcode and
-its evidence contract. In particular, generated Git contracts do not enable
-Git upgrade execution.
+its evidence contract. The models are best-effort design guidance and do not
+need a source-to-model refinement proof. In particular, generated Git contracts
+do not enable Git upgrade execution.
 
 `handoffctl upgrade check --contract FILE` and `handoffctl upgrade plan
 --contract FILE` expose only a deterministic, sanitized projection of a valid
@@ -44,8 +45,8 @@ complete acquire/recheck/reopen lifecycle; forward `target=new` and rollback
 `target=rollback` must have a non-conflicting durable identity model; and the
 selected runtime must actually be consumed by a verified launcher. SQLite
 coordination writes must also participate in the upgrade fence. Until those
-contracts, their formal refinement, and hostile tests are reviewed, no typed
-opcode is dispatched to a mutating implementation.
+contracts, their bounded executable evidence, and hostile tests are reviewed,
+no typed opcode is dispatched to a mutating implementation.
 
 The normative redesign needed to close those blockers is specified in
 [Upgrade execution redesign](UPGRADE_EXECUTION_REDESIGN.md). It is a design

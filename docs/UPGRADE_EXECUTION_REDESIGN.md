@@ -242,7 +242,7 @@ restart through the stable bootstrap, and prove either the exact successful
 terminal cross-product or write-closed safe mode. `upgrade apply` and
 `upgrade rollback` stay fail-closed until this entire matrix is green.
 
-## Formal refinement impact
+## Formal-model guidance
 
 The upgrade model must introduce at least `barrierStatus`, `barrierAttempt`,
 `barrierRevision`, `fence`, `forwardPc`, `rollbackPc`, `childTarget`,
@@ -264,8 +264,12 @@ SQLite write, crash, and reconcile. TLC must check:
 Liveness may assume fair scheduling and successful bounded I/O. I/O-fault and
 ambiguous states are intentionally safe-mode terminal until explicit operator
 reconciliation; they must not be hidden by a liveness assumption. The current
-formal evidence does not model this automaton and cannot be cited for V10.
-AR-0008 must provide exact-head model/evidence binding after implementation.
+formal evidence does not model this automaton and cannot be cited as
+implementation proof for V10. Models remain best-effort design guidance;
+AR-0008 may update the model and bind exact-head evidence after implementation,
+but no source-to-model refinement proof is required. The executable gate is the
+independently reviewed implementation, hostile test matrix, and exact-head
+runtime evidence.
 
 ## Ownership and publication gate
 
@@ -274,12 +278,13 @@ AR-0008 must provide exact-head model/evidence binding after implementation.
 - AR-0004 owns quiescence, forward acquire/recheck/reopen, and SQLite write
   fencing/provisioning.
 - AR-0005 and AR-0006 retain Git and SQLite restore-equivalence ownership.
-- AR-0008 owns the new automaton and implementation correspondence evidence.
+- AR-0008 owns the new automaton and any best-effort implementation
+  correspondence evidence; this is guidance, not a source-refinement gate.
 - A new child AR must own the stable selector-aware bootstrap, versioned
   runtime store, release authenticity verifier, and compatible vendor layout.
 - AR-0010 owns the operator reconciliation and safe-mode runbook.
 
 Publication remains blocked until those dependencies, the hostile test matrix,
-the formal refinement, independent exact-head review, and a fresh-clone
+bounded executable evidence, independent exact-head review, and a fresh-clone
 upgrade-and-rollback campaign all pass. This document authorizes design work
 only and does not upgrade any capability claim.
