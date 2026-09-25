@@ -249,14 +249,14 @@ class LifecycleEvent:
     session_digest: str
     fencing_token: str
     terminal_target: str | None
-    _token: object = field(repr=False, compare=False)
+    _scope_proof: object = field(repr=False, compare=False)
 
     def __init__(self, *_args: object, **_kwargs: object) -> None:
         raise TypeError("lifecycle events are scope-issued")
 
 
 def _issue_event(
-    token: object,
+    scope_proof: object,
     phase: str,
     revision: int,
     owner: str,
@@ -276,7 +276,7 @@ def _issue_event(
     object.__setattr__(event, "session_digest", session_digest)
     object.__setattr__(event, "fencing_token", fencing_token)
     object.__setattr__(event, "terminal_target", terminal_target)
-    object.__setattr__(event, "_token", token)
+    object.__setattr__(event, "_scope_proof", scope_proof)
     return event
 
 
@@ -335,8 +335,8 @@ def validate_model_trace(
     contract_root = model_root or Path(__file__).resolve().parents[1]
     validate_model_action_contract(contract_root)
     validate_terminal_recovery_contract(contract_root)
-    token = events[0]._token
-    if any(event._token is not token for event in events):
+    scope_proof = events[0]._scope_proof
+    if any(event._scope_proof is not scope_proof for event in events):
         raise ValueError("lifecycle trace mixes scope-issued events")
     _validate_event_schema(events)
     phases = tuple(event.phase for event in events)

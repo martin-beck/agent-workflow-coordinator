@@ -115,7 +115,7 @@
       "tools/authority_neutral_commit.py": "9a2b153b751a45507da41661d05ec44f0ae7a2b8b41bc17aba350a595cd3964b",
       "tools/generate_upgrade_contract.py": "aa9a2ed072df3937b7799b33559d03b1744d3b9049891180d1a4852531df3ada",
       "tools/git_authority_mutation.py": "3697c69ef78fa4fa5b8f3363d7a534221fe504492e1947114f465888ea8f27a6",
-      "tools/handoffctl.py": "69edceb2bb6c5f42261a09214f3f5566d5bedde62ad2e5ef33eb2358357281d0",
+      "tools/handoffctl.py": "1113abe6d0c5214184ab632d7bd9e67c4ab9ccbee32aa86a7e2fde742ed432b1",
       "tools/lock_domain_correspondence.py": "f028f34edea704701040d59d7e8a00d57d7acde8582eebb7d20bcbe8054905b9",
       "tools/lock_domain_scope.py": "0886eb1d67a2dadfccd770fc2cb94c086000f1f99db95c0473f522bf14d3bc8f",
       "tools/mutation_fence.py": "08ff8993ddc63d7622b2bdc22866f62340dbed6d7d648c845df74b06b28e5a21",

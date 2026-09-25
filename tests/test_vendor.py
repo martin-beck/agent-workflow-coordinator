@@ -54,6 +54,20 @@ def upgrade_contract(backend: str) -> dict[str, Any]:
 
 
 class VendorTest(unittest.TestCase):
+    def test_snapshot_contains_runtime_mutation_dependency_closure(self) -> None:
+        sources = {source for source, _ in VENDOR.SOURCE_FILES}
+        self.assertTrue(
+            {
+                "tools/lifecycle_trace.py",
+                "tools/lock_domain.py",
+                "tools/lock_domain_scope.py",
+                "tools/mutation_fence.py",
+                "tools/rollback_control_store.py",
+                "tools/rollback_evidence.py",
+                "tools/upgrade_identity.py",
+            }.issubset(sources)
+        )
+
     def test_synced_runtime_passes_full_initialized_state_validation(self) -> None:
         product = Path(self.temporary.name) / "product"
         product.mkdir()
