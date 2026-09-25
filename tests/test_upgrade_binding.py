@@ -24,7 +24,7 @@ from tools.upgrade_identity import (
 )
 
 
-def _contract() -> dict[str, Any]:
+def _contract(backend: str = "sqlite") -> dict[str, Any]:
     def release(version: str, seed: str) -> dict[str, str]:
         return {
             "version": version,
@@ -39,7 +39,7 @@ def _contract() -> dict[str, Any]:
     return generate(
         {
             "operation_id": "upgrade-001",
-            "backend": "sqlite",
+            "backend": backend,
             "selector_ref": ".runtime/runtime-selector.json",
             "expected_state_revision": 7,
             "barrier_id": "barrier-7",
@@ -54,7 +54,7 @@ def _envelope(contract: dict[str, Any]) -> dict[str, object]:
     root = PurePosixPath("/srv/runtime/artifacts")
     value: dict[str, object] = {
         "schema_version": 2,
-        "backend": "sqlite",
+        "backend": contract["backend"],
         "project_id": str(uuid.uuid4()),
         "operation_id": contract["operation_id"],
         "state_revision": 7,
@@ -344,6 +344,46 @@ class UpgradeBindingTests(unittest.TestCase):
         runtime["envelope_digest"] = canonical_envelope_digest(runtime)
         with self.assertRaises(UpgradeBindingError):
             UpgradeRuntimeBinding.bind(contract, runtime, session_identity_digest="a" * 64)
+
+    def test_validates_git_and_sqlite_read_only_backend_evidence(self) -> None:
+        for backend in ("git", "sqlite"):
+            contract = _contract(backend)
+            runtime = _envelope(contract)
+            binding = UpgradeRuntimeBinding.bind(
+                contract, runtime, session_identity_digest="a" * 64
+            )
+            evidence = {
+                **runtime,
+                "phase": "rollback",
+                "backend_identity_verified": True,
+                "mutates_authority": False,
+                **(
+                    {
+                        "git_head": "a" * 40,
+                        "git_branch": "main",
+                        "git_clean": True,
+                    }
+                    if backend == "git"
+                    else {
+                        "sqlite_integrity_verified": True,
+                        "sqlite_foreign_keys_verified": True,
+                    }
+                ),
+            }
+            self.assertEqual(evidence, binding.validate_backend_evidence(evidence))
+            for field, value in (
+                ("operation_id", "foreign-operation"),
+                ("mutates_authority", True),
+                ("phase", "validate"),
+            ):
+                changed = {**evidence, field: value}
+                with (
+                    self.subTest(backend=backend, field=field),
+                    self.assertRaises(UpgradeBindingError),
+                ):
+                    binding.validate_backend_evidence(changed)
+            with self.assertRaises(UpgradeBindingError):
+                binding.validate_backend_evidence({**evidence, "unexpected": True})
         runtime = _envelope(contract)
         runtime["backend"] = "git"
         runtime["barrier_identity_digest"] = canonical_barrier_digest(runtime)

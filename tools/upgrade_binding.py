@@ -246,3 +246,45 @@ class UpgradeRuntimeBinding:
             or child.barrier_identity_digest != identity.identity_digest
         ):
             raise UpgradeBindingError("live rollback child identity does not match")
+
+    def validate_backend_evidence(  # noqa: C901
+        self, evidence: Mapping[str, object]
+    ) -> dict[str, object]:
+        """Validate one concrete adapter's read-only rollback observation."""
+        if not isinstance(evidence, Mapping):
+            raise UpgradeBindingError("rollback backend evidence is invalid")
+        backend = self.runtime_envelope["backend"]
+        backend_fields = (
+            {"git_head", "git_branch", "git_clean"}
+            if backend == "git"
+            else {"sqlite_integrity_verified", "sqlite_foreign_keys_verified"}
+        )
+        required = set(self.runtime_envelope) | {
+            "phase",
+            "backend_identity_verified",
+            "mutates_authority",
+            *backend_fields,
+        }
+        if set(evidence) != required:
+            raise UpgradeBindingError("rollback backend evidence schema is invalid")
+        for field, expected in self.runtime_envelope.items():
+            if evidence.get(field) != expected or type(evidence.get(field)) is not type(expected):
+                raise UpgradeBindingError("rollback backend evidence identity does not match")
+        if evidence.get("phase") != "rollback":
+            raise UpgradeBindingError("rollback backend evidence phase is invalid")
+        if evidence.get("backend_identity_verified") is not True:
+            raise UpgradeBindingError("rollback backend evidence is not verified")
+        if backend == "git":
+            if (
+                not isinstance(evidence.get("git_head"), str)
+                or not evidence["git_head"]
+                or not isinstance(evidence.get("git_branch"), str)
+                or not evidence["git_branch"]
+                or evidence.get("git_clean") is not True
+            ):
+                raise UpgradeBindingError("rollback Git evidence is not verified")
+        elif any(evidence.get(field) is not True for field in backend_fields):
+            raise UpgradeBindingError("rollback SQLite evidence is not verified")
+        if evidence.get("mutates_authority") is not False:
+            raise UpgradeBindingError("rollback backend evidence is not read-only")
+        return dict(evidence)
