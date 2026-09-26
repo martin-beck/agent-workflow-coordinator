@@ -15,7 +15,7 @@ from contextlib import closing
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import cast
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from tools.lifecycle_session import _issue
 from tools.sqlite_authority_adapter import SQLiteAuthorityAdapter
@@ -291,6 +291,152 @@ class SQLiteBackupTests(unittest.TestCase):
             restore_database(backup, destination, manifest, BINDING, quiesced=True)
 
         self.assertTrue(sidecar.is_symlink())
+
+    def test_sidecar_cleanup_rejects_identity_and_filesystem_failures(self) -> None:
+        sidecar = self.root / "authority.sqlite3-wal"
+        sidecar.write_bytes(b"")
+        identity = MODULE._sidecar_identity(sidecar, "sidecar")
+        assert identity is not None
+        parent = MODULE._parent_identity(sidecar)
+
+        with self.assertRaisesRegex(BackupError, "parent identity"):
+            MODULE._remove_sidecar(sidecar, identity, (0, 0))
+        with self.assertRaisesRegex(BackupError, "sidecar identity"):
+            MODULE._remove_sidecar(sidecar, (0, 0), parent)
+        with (
+            patch.object(MODULE.os, "open", side_effect=OSError("open failed")),
+            self.assertRaisesRegex(BackupError, "failed to remove"),
+        ):
+            MODULE._remove_sidecar(sidecar, identity, parent)
+        with (
+            patch.object(MODULE.os, "unlink", side_effect=OSError("unlink failed")),
+            self.assertRaisesRegex(BackupError, "failed to remove"),
+        ):
+            MODULE._remove_sidecar(sidecar, identity, parent)
+        with (
+            patch.object(MODULE.os, "unlink", side_effect=FileNotFoundError),
+            self.assertRaisesRegex(BackupError, "disappeared"),
+        ):
+            MODULE._remove_sidecar(sidecar, identity, parent)
+
+    def test_recovery_rejects_checkpoint_errors_and_cleanup_failures(self) -> None:
+        backup = self.root / "backup.sqlite3"
+        backup_database(self.source, backup, BINDING)
+        destination = self.root / "restored.sqlite3"
+        create_database(destination, body="stale")
+        sidecar = Path(str(destination) + "-wal")
+        sidecar.write_bytes(b"")
+
+        with (
+            patch.object(MODULE.sqlite3, "connect", side_effect=sqlite3.Error("open failed")),
+            self.assertRaisesRegex(BackupError, "could not checkpoint"),
+        ):
+            MODULE._recover_checkpointed_sidecars(destination)
+
+        class CheckpointConnection:
+            def execute(self, _statement: str) -> CheckpointConnection:
+                return self
+
+            def fetchone(self) -> tuple[int, int, int]:
+                return (0, 0, 0)
+
+            def close(self) -> None:
+                pass
+
+        with (
+            patch.object(MODULE.sqlite3, "connect", return_value=CheckpointConnection()),
+            patch.object(MODULE, "_remove_sidecar", side_effect=BackupError("cleanup failed")),
+            self.assertRaisesRegex(BackupError, "cleanup failed"),
+        ):
+            MODULE._recover_checkpointed_sidecars(destination)
+
+        with (
+            patch.object(MODULE.sqlite3, "connect", return_value=CheckpointConnection()),
+            patch.object(MODULE, "_remove_sidecar", side_effect=OSError("cleanup failed")),
+            self.assertRaisesRegex(BackupError, "failed to remove checkpointed"),
+        ):
+            MODULE._recover_checkpointed_sidecars(destination)
+
+    def test_sqlite_backup_rejects_path_identity_and_publication_races(self) -> None:
+        unavailable = MagicMock()
+        unavailable.parent.stat.side_effect = OSError("parent unavailable")
+        with self.assertRaisesRegex(BackupError, "parent is unavailable"):
+            MODULE._parent_identity(unavailable)
+
+        source = MagicMock()
+        source.exists.return_value = True
+        source.is_symlink.return_value = False
+        source.is_file.return_value = True
+        source.stat.side_effect = OSError("source disappeared")
+        with self.assertRaisesRegex(BackupError, "source database disappeared"):
+            MODULE._source_identity(source)
+
+        mock_destination = MagicMock()
+        mock_destination.exists.return_value = True
+        mock_destination.is_symlink.return_value = False
+        mock_destination.is_file.return_value = True
+        mock_destination.stat.side_effect = OSError("destination disappeared")
+        with self.assertRaisesRegex(BackupError, "existing destination disappeared"):
+            MODULE._destination_identity(mock_destination)
+
+        manifest = MagicMock()
+        manifest.exists.return_value = True
+        manifest.is_symlink.return_value = False
+        manifest.is_file.return_value = True
+        manifest.stat.side_effect = OSError("manifest disappeared")
+        with self.assertRaisesRegex(BackupError, "existing SQLite manifest disappeared"):
+            MODULE._manifest_identity(manifest)
+
+        sidecar = MagicMock()
+        sidecar.lstat.side_effect = OSError("sidecar unavailable")
+        with self.assertRaisesRegex(BackupError, "sidecar metadata is unavailable"):
+            MODULE._sidecar_identity(sidecar, "sidecar")
+
+        destination = self.root / "destination.sqlite3"
+        destination.write_bytes(b"destination")
+        wal = Path(str(destination) + "-wal")
+        wal.write_bytes(b"")
+
+        with patch.object(MODULE.sqlite3, "connect") as connect:
+            connection = connect.return_value
+            connection.execute.return_value.fetchone.return_value = (1, 0, 0)
+            with self.assertRaisesRegex(BackupError, "checkpointed destination"):
+                MODULE._recover_checkpointed_sidecars(destination)
+
+        destination.unlink()
+        wal.unlink()
+        create_database(destination)
+        wal.write_bytes(b"")
+        with (
+            patch.object(MODULE.sqlite3, "connect") as connect,
+            patch.object(MODULE, "_parent_identity", side_effect=[(1, 1), (2, 2)]),
+            self.assertRaisesRegex(BackupError, "parent identity changed"),
+        ):
+            connect.return_value.execute.return_value.fetchone.return_value = (0, 0, 0)
+            MODULE._recover_checkpointed_sidecars(destination)
+
+    def test_sqlite_backup_rejects_install_and_manifest_races(self) -> None:
+        destination = self.root / "destination.sqlite3"
+        with (
+            patch.object(MODULE.tempfile, "mkstemp", side_effect=OSError("no temp file")),
+            self.assertRaisesRegex(BackupError, "allocate temporary"),
+        ):
+            MODULE._install(self.source, destination, BINDING)
+
+        backup = self.root / "backup.sqlite3"
+        manifest = backup_database(self.source, backup, BINDING)
+        with (
+            patch.object(MODULE, "_backup_identity", side_effect=[(1, 1), (2, 2)]),
+            self.assertRaisesRegex(BackupError, "changed during verification"),
+        ):
+            MODULE.verify_backup(backup, manifest, BINDING)
+
+        manifest_path = self.root / "manifest.json"
+        with (
+            patch.object(MODULE, "_manifest_identity", side_effect=[None, (1, 1)]),
+            self.assertRaisesRegex(BackupError, "manifest changed"),
+        ):
+            write_manifest(manifest_path, manifest)
 
     def test_verify_rejects_live_backup_sidecars(self) -> None:
         backup = self.root / "backup.sqlite3"
