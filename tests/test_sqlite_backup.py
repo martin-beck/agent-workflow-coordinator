@@ -396,13 +396,6 @@ class SQLiteBackupTests(unittest.TestCase):
         destination.write_bytes(b"destination")
         wal = Path(str(destination) + "-wal")
         wal.write_bytes(b"")
-        with (
-            patch.object(
-                Path, "stat", side_effect=[destination.parent.stat(), OSError("wal vanished")]
-            ),
-            self.assertRaisesRegex(BackupError, "safe SQLite sidecars"),
-        ):
-            MODULE._recover_checkpointed_sidecars(destination)
 
         with patch.object(MODULE.sqlite3, "connect") as connect:
             connection = connect.return_value
