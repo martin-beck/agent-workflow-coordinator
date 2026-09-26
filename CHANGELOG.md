@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.26
+
+- Recover checkpointed SQLite sidecars left by a killed writer while rejecting
+  live, aliased, or identity-changing sidecars before restore.
+
 ## 0.3.25
 
 - Include the board metrics module required by SQLite initialization and
