@@ -93,6 +93,18 @@ def _restore_then_crash_after_replace(
         restore_database(Path(backup), Path(destination), manifest, BINDING, quiesced=True)
 
 
+def _write_then_crash_with_wal(path: str, ready: str) -> None:
+    connection = sqlite3.connect(path)
+    try:
+        connection.execute("PRAGMA journal_mode=WAL")
+        connection.execute("BEGIN IMMEDIATE")
+        connection.execute("UPDATE records SET body='uncommitted' WHERE id=1")
+        Path(ready).write_text("ready\n", encoding="utf-8")
+        os.kill(os.getpid(), signal.SIGKILL)
+    finally:  # pragma: no cover - process is deliberately killed
+        connection.close()
+
+
 class SQLiteBackupTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = TemporaryDirectory()
@@ -201,6 +213,84 @@ class SQLiteBackupTests(unittest.TestCase):
             restore_database(
                 backup, self.root / "restored.sqlite3", manifest, BINDING, quiesced=True
             )
+
+    def test_restore_clears_checkpointed_stale_sidecars(self) -> None:
+        backup = self.root / "backup.sqlite3"
+        manifest = backup_database(self.source, backup, BINDING)
+        destination = self.root / "restored.sqlite3"
+        create_database(destination, body="stale")
+        ready = self.root / "writer.ready"
+        process = multiprocessing.get_context("fork").Process(
+            target=_write_then_crash_with_wal,
+            args=(str(destination), str(ready)),
+        )
+        process.start()
+        for _ in range(100):
+            if ready.exists():
+                break
+            process.join(0.05)
+        process.join(timeout=10)
+        self.assertEqual(-signal.SIGKILL, process.exitcode)
+
+        restore_database(backup, destination, manifest, BINDING, quiesced=True)
+
+        self.assertFalse(Path(str(destination) + "-wal").exists())
+        self.assertFalse(Path(str(destination) + "-shm").exists())
+        with closing(sqlite3.connect(destination)) as connection:
+            self.assertEqual("before", connection.execute("SELECT body FROM records").fetchone()[0])
+
+    def test_invalid_restore_does_not_recover_destination_sidecars(self) -> None:
+        backup = self.root / "backup.sqlite3"
+        manifest = backup_database(self.source, backup, BINDING)
+        destination = self.root / "restored.sqlite3"
+        create_database(destination, body="stale")
+        ready = self.root / "writer.ready"
+        process = multiprocessing.get_context("fork").Process(
+            target=_write_then_crash_with_wal,
+            args=(str(destination), str(ready)),
+        )
+        process.start()
+        for _ in range(100):
+            if ready.exists():
+                break
+            process.join(0.05)
+        process.join(timeout=10)
+        self.assertEqual(-signal.SIGKILL, process.exitcode)
+        invalid = dict(manifest)
+        invalid["database_sha256"] = "0" * 64
+
+        with self.assertRaises(BackupError):
+            restore_database(backup, destination, invalid, BINDING, quiesced=True)
+
+        self.assertTrue(Path(str(destination) + "-wal").exists())
+        self.assertTrue(Path(str(destination) + "-shm").exists())
+
+    def test_restore_rejects_hard_linked_sidecar(self) -> None:
+        backup = self.root / "backup.sqlite3"
+        manifest = backup_database(self.source, backup, BINDING)
+        destination = self.root / "restored.sqlite3"
+        create_database(destination, body="stale")
+        sidecar_source = self.root / "sidecar-source"
+        sidecar_source.write_bytes(b"")
+        os.link(sidecar_source, Path(str(destination) + "-wal"))
+
+        with self.assertRaisesRegex(BackupError, "unsafe"):
+            restore_database(backup, destination, manifest, BINDING, quiesced=True)
+
+        self.assertTrue(sidecar_source.exists())
+
+    def test_restore_rejects_broken_symlink_sidecar(self) -> None:
+        backup = self.root / "backup.sqlite3"
+        manifest = backup_database(self.source, backup, BINDING)
+        destination = self.root / "restored.sqlite3"
+        create_database(destination, body="stale")
+        sidecar = Path(str(destination) + "-wal")
+        sidecar.symlink_to(self.root / "missing-sidecar")
+
+        with self.assertRaisesRegex(BackupError, "unsafe"):
+            restore_database(backup, destination, manifest, BINDING, quiesced=True)
+
+        self.assertTrue(sidecar.is_symlink())
 
     def test_verify_rejects_live_backup_sidecars(self) -> None:
         backup = self.root / "backup.sqlite3"
