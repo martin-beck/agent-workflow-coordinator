@@ -232,6 +232,50 @@ def _assert_no_sidecars(destination: Path) -> None:
         raise BackupError("SQLite destination sidecar appeared before publication")
 
 
+def _recover_checkpointed_sidecars(destination: Path) -> None:  # noqa: C901
+    """Checkpoint and remove stale WAL/SHM files left by a dead writer.
+
+    A killed SQLite writer can leave an empty WAL and a stale SHM file even
+    after recovery has completed.  Restore is allowed to clean those files
+    only after SQLite reports a successful zero-frame truncate checkpoint;
+    any live or indeterminate sidecar remains a fail-closed refusal.
+    """
+    wal = Path(str(destination) + "-wal")
+    shm = Path(str(destination) + "-shm")
+    if not wal.exists() and not shm.exists():
+        return
+    if not destination.exists() or destination.is_symlink():
+        raise BackupError("restore requires a checkpointed destination without live WAL sidecars")
+    try:
+        if wal.exists() and (wal.is_symlink() or not wal.is_file() or wal.stat().st_size != 0):
+            raise BackupError(
+                "restore requires a checkpointed destination without live WAL sidecars"
+            )
+    except OSError as error:
+        raise BackupError("restore requires safe SQLite sidecars") from error
+    _regular(destination, "existing destination")
+    try:
+        connection = sqlite3.connect(destination)
+        try:
+            result = connection.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+        finally:
+            connection.close()
+    except sqlite3.Error as error:
+        raise BackupError("restore could not checkpoint destination WAL sidecars") from error
+    if result != (0, 0, 0):
+        raise BackupError("restore requires a checkpointed destination without live WAL sidecars")
+    try:
+        for sidecar in (wal, shm):
+            if sidecar.is_symlink() or (sidecar.exists() and not sidecar.is_file()):
+                raise BackupError("restore requires safe SQLite sidecars")
+            sidecar.unlink(missing_ok=True)
+        _fsync_directory(destination.parent)
+    except (OSError, BackupError) as error:
+        if isinstance(error, BackupError):
+            raise
+        raise BackupError("failed to remove checkpointed SQLite sidecars") from error
+
+
 def _restore_existing(destination: Path, previous: Path | None) -> None:
     try:
         if previous is None:
@@ -350,8 +394,7 @@ def restore_database(
     """Install a verified backup atomically; refuse restore while writers may run."""
     if not quiesced:
         raise BackupError("restore requires a proven quiesced authority")
-    if Path(str(destination) + "-wal").exists() or Path(str(destination) + "-shm").exists():
-        raise BackupError("restore requires a checkpointed destination without live WAL sidecars")
+    _recover_checkpointed_sidecars(destination)
     _regular(backup, "backup database")
     _check_session(session, owner, backup, "SQLite lifecycle session is not bound to backup")
     backup_identity = _backup_identity(backup)
