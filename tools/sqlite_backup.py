@@ -274,7 +274,9 @@ def _recover_checkpointed_sidecars(destination: Path) -> None:  # noqa: C901
     """
     wal = Path(str(destination) + "-wal")
     shm = Path(str(destination) + "-shm")
-    if not wal.exists() and not shm.exists():
+    initial_wal = _sidecar_identity(wal, "SQLite WAL sidecar")
+    initial_shm = _sidecar_identity(shm, "SQLite SHM sidecar")
+    if initial_wal is None and initial_shm is None:
         return
     if not destination.exists() or destination.is_symlink():
         raise BackupError("restore requires a checkpointed destination without live WAL sidecars")
@@ -282,8 +284,6 @@ def _recover_checkpointed_sidecars(destination: Path) -> None:  # noqa: C901
     destination_identity = _sidecar_identity(destination, "existing destination")
     if destination_identity is None:
         raise BackupError("existing destination is unavailable")
-    initial_wal = _sidecar_identity(wal, "SQLite WAL sidecar")
-    initial_shm = _sidecar_identity(shm, "SQLite SHM sidecar")
     try:
         if initial_wal is not None and wal.stat().st_size != 0:
             raise BackupError(

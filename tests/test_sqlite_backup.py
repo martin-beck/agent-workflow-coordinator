@@ -279,6 +279,19 @@ class SQLiteBackupTests(unittest.TestCase):
 
         self.assertTrue(sidecar_source.exists())
 
+    def test_restore_rejects_broken_symlink_sidecar(self) -> None:
+        backup = self.root / "backup.sqlite3"
+        manifest = backup_database(self.source, backup, BINDING)
+        destination = self.root / "restored.sqlite3"
+        create_database(destination, body="stale")
+        sidecar = Path(str(destination) + "-wal")
+        sidecar.symlink_to(self.root / "missing-sidecar")
+
+        with self.assertRaisesRegex(BackupError, "unsafe"):
+            restore_database(backup, destination, manifest, BINDING, quiesced=True)
+
+        self.assertTrue(sidecar.is_symlink())
+
     def test_verify_rejects_live_backup_sidecars(self) -> None:
         backup = self.root / "backup.sqlite3"
         manifest = backup_database(self.source, backup, BINDING)
