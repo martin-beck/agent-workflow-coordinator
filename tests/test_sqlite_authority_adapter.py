@@ -303,6 +303,34 @@ class SQLiteAuthorityAdapterTests(unittest.TestCase):
         with self.assertRaisesRegex(SQLiteAuthorityError, "not implemented"):
             self.adapter.execute("commit", CONTEXT)
 
+    def test_commit_bound_executes_one_identity_bound_effect_without_public_dispatch(self) -> None:
+        admission = CommitAdmissionBundle(
+            backend="sqlite",
+            target="new",
+            operation_id="op-bound:commit",
+            fencing_token="fence",  # noqa: S106
+            state_revision=1,
+            barrier_id="barrier",
+            artifact_identity="artifact",
+            manifest_identity="manifest",
+            selector_identity="selector",
+            runtime_identity="runtime",
+        )
+        result = self.adapter.commit_bound(
+            admission,
+            lambda connection: connection.execute(
+                "UPDATE records SET body = 'bound' WHERE id = 1 AND body = 'clean'"
+            ),
+            admission_reread=lambda: admission.__dict__,
+        )
+        self.assertEqual("sqlite", result.backend)
+        self.assertEqual("op-bound:commit", result.operation_id)
+        self.assertEqual("ok", result.integrity_check)
+        with closing(sqlite3.connect(self.authority)) as connection:
+            self.assertEqual(("bound",), connection.execute("SELECT body FROM records").fetchone())
+        with self.assertRaisesRegex(SQLiteAuthorityError, "not implemented"):
+            self.adapter.execute("commit", CONTEXT)
+
     def test_adapter_classifies_termination_during_commit_binding_identity_as_rejected(
         self,
     ) -> None:
