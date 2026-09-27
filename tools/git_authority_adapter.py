@@ -194,6 +194,36 @@ class GitAuthorityAdapter:
         except BaseException as error:
             raise GitAuthorityError("Git commit capability binding was rejected") from error
 
+    def commit_bound(
+        self,
+        admission: Any,
+        message: str,
+        *,
+        admission_reread: Any,
+        expected_branch: str,
+        expected_head: str,
+        runner: Any = subprocess.run,
+    ) -> Any:
+        """Execute one explicitly bound Git effect outside public dispatch.
+
+        This is an isolated capability entry point for the mutation campaign.
+        It does not accept a phase context, caller command, path, or handler,
+        and it is deliberately not used by ``execute`` or the upgrade CLI.
+        """
+        capability = self.bind_commit_capability(
+            admission,
+            admission_reread=admission_reread,
+            expected_branch=expected_branch,
+            expected_head=expected_head,
+            runner=runner,
+        )
+        try:
+            return capability.commit(message)
+        except GitAuthorityError:
+            raise
+        except BaseException as error:
+            raise GitAuthorityError("bound Git authority effect failed") from error
+
     def bind_durable_commit_capability(
         self,
         admission: Any,

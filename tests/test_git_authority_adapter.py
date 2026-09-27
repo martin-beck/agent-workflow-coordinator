@@ -325,6 +325,37 @@ class GitAuthorityAdapterTests(unittest.TestCase):
         with self.assertRaisesRegex(GitAuthorityError, "not implemented"):
             self.adapter.execute("commit", CONTEXT)
 
+    def test_commit_bound_executes_one_exact_head_effect_without_public_dispatch(self) -> None:
+        admission = CommitAdmissionBundle(
+            backend="git",
+            target="new",
+            operation_id="op-bound:commit",
+            fencing_token="fence",  # noqa: S106
+            state_revision=1,
+            barrier_id="barrier",
+            artifact_identity="artifact",
+            manifest_identity="manifest",
+            selector_identity="selector",
+            runtime_identity="runtime",
+        )
+        (self.root / "state").write_text("bound\n")
+        subprocess.run(["git", "-C", str(self.root), "add", "state"], check=True)
+        before = self.adapter._git("rev-parse", "HEAD")
+        result = self.adapter.commit_bound(
+            admission,
+            "bound Git effect",
+            admission_reread=lambda: admission.__dict__,
+            expected_branch=self.adapter._git("symbolic-ref", "--short", "-q", "HEAD"),
+            expected_head=before,
+        )
+        self.assertEqual("git", result.backend)
+        self.assertEqual("op-bound:commit", result.operation_id)
+        self.assertEqual(before, result.before_head)
+        self.assertEqual(result.after_head, self.adapter._git("rev-parse", "HEAD"))
+        self.assertTrue(result.mutates_authority)
+        with self.assertRaisesRegex(GitAuthorityError, "not implemented"):
+            self.adapter.execute("commit", CONTEXT)
+
     def test_adapter_classifies_termination_during_commit_binding_as_rejected(self) -> None:
         admission = CommitAdmissionBundle(
             backend="git",
