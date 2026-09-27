@@ -754,6 +754,32 @@ class SQLiteAuthorityAdapter:
         except BaseException as error:
             raise SQLiteAuthorityError("SQLite commit capability binding was rejected") from error
 
+    def commit_bound(
+        self,
+        admission: Any,
+        effect: Any,
+        *,
+        admission_reread: Any,
+        connector: Any = sqlite3.connect,
+    ) -> Any:
+        """Execute one explicitly bound SQLite effect outside public dispatch.
+
+        The callback receives only the capability-owned transaction.  This
+        entry point is not reachable through ``execute`` or the upgrade CLI;
+        it exists to make the independently reviewed effect boundary concrete.
+        """
+        capability = self.bind_commit_capability(
+            admission,
+            admission_reread=admission_reread,
+            connector=connector,
+        )
+        try:
+            return capability.commit(effect)
+        except SQLiteAuthorityError:
+            raise
+        except BaseException as error:
+            raise SQLiteAuthorityError("bound SQLite authority effect failed") from error
+
     def bind_durable_commit_capability(
         self,
         admission: Any,
