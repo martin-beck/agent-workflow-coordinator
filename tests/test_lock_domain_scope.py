@@ -1299,6 +1299,115 @@ class LockDomainScopeTests(unittest.TestCase):
         self.assertEqual(replacement, self.session.snapshot())
         self.assertFalse(self.session.operation_owned_by_current_thread)
 
+    def test_fresh_recovery_scope_creates_initial_session(self) -> None:
+        control_path = self.root / "bootstrap-control.sqlite"
+        binding_path = self.root / "bootstrap-control-binding.json"
+        bootstrap_store = SQLiteRollbackControlStore(control_path, PROJECT, self.authority)
+        provision_control_binding(
+            control_path, binding_path, bootstrap_store.control_lock_path, PROJECT
+        )
+        bootstrap_session = SQLiteBarrierSessionStore(bootstrap_store, lambda: "authority-1")
+        bootstrap_fence = MutationFence(
+            self.authority,
+            self.root / "authority-marker.json",
+            self.root / "authority-lifecycle.json",
+            self.root / "authority.lock",
+            control_path,
+            binding_path,
+            bootstrap_store.control_lock_path,
+        )
+        recovery = bind_sqlite_coordination_recovery(bootstrap_session, bootstrap_fence, locked)
+
+        result = recovery.create_session(identity())
+
+        self.assertEqual(BarrierSessionState(identity(), "held", 1), result)
+        self.assertEqual(result, bootstrap_session.snapshot())
+        with self.assertRaisesRegex(ControlStoreError, "CAS conflict"):
+            recovery.create_session(identity())
+        self.assertFalse(bootstrap_store.operation_owned_by_current_thread)
+
+    def test_fresh_recovery_scope_rejects_invalid_creation_identity(self) -> None:
+        control_path = self.root / "bootstrap-invalid-control.sqlite"
+        binding_path = self.root / "bootstrap-invalid-control-binding.json"
+        bootstrap_store = SQLiteRollbackControlStore(control_path, PROJECT, self.authority)
+        provision_control_binding(
+            control_path, binding_path, bootstrap_store.control_lock_path, PROJECT
+        )
+        bootstrap_session = SQLiteBarrierSessionStore(bootstrap_store, lambda: "authority-1")
+        bootstrap_fence = MutationFence(
+            self.authority,
+            self.root / "authority-marker.json",
+            self.root / "authority-lifecycle.json",
+            self.root / "authority.lock",
+            control_path,
+            binding_path,
+            bootstrap_store.control_lock_path,
+        )
+        recovery = bind_sqlite_coordination_recovery(bootstrap_session, bootstrap_fence, locked)
+        with self.assertRaisesRegex(ControlStoreError, "creation identity"):
+            recovery.create_session(cast(Any, object()))
+
+    def test_locked_initial_session_creation_rejects_invalid_fence_inputs(self) -> None:
+        original_reader = self.session._authority_revision_reader
+
+        with self.assertRaisesRegex(LockOwnershipError, "caller-owned coordinator"):
+            self.session.create_locked(cast(Any, object()), identity())
+        with (
+            locked() as common_guard,
+            self.assertRaisesRegex(ControlStoreError, "session identity"),
+        ):
+            self.session.create_locked(common_guard, cast(Any, object()))
+        with locked() as common_guard, self.assertRaisesRegex(ControlStoreError, "project binding"):
+            self.session.create_locked(
+                common_guard,
+                replace(identity(), project_id="22222222-2222-4222-8222-222222222222"),
+            )
+        with (
+            patch(
+                "tools.rollback_control_store.coordinator_lock_path",
+                return_value=self.root / "foreign-coordinator.lock",
+            ),
+            locked() as common_guard,
+            self.assertRaisesRegex(ControlStoreError, "guard path"),
+        ):
+            self.session.create_locked(common_guard, identity())
+
+        self.session._authority_revision_reader = None
+        try:
+            with (
+                locked() as common_guard,
+                self.session.lock_owned_by_caller(common_guard),
+                self.assertRaisesRegex(ControlStoreError, "fresh authority rereader"),
+            ):
+                self.session.create_locked(common_guard, identity())
+        finally:
+            self.session._authority_revision_reader = original_reader
+
+        def fail_reread() -> str:
+            raise RuntimeError("injected authority reread failure")
+
+        self.session._authority_revision_reader = fail_reread
+        try:
+            with (
+                locked() as common_guard,
+                self.session.lock_owned_by_caller(common_guard),
+                self.assertRaisesRegex(ControlStoreError, "fresh authority reread failed"),
+            ):
+                self.session.create_locked(common_guard, identity())
+        finally:
+            self.session._authority_revision_reader = original_reader
+
+        self.session._authority_revision_reader = lambda: "authority-drift"
+        try:
+            with (
+                locked() as common_guard,
+                self.session.lock_owned_by_caller(common_guard),
+                self.assertRaisesRegex(ControlStoreError, "authority revision changed"),
+            ):
+                self.session.create_locked(common_guard, identity())
+        finally:
+            self.session._authority_revision_reader = original_reader
+
     def test_fresh_recovery_scope_reconciles_ambiguous_control_barrier(self) -> None:
         scope = LockDomainScope.bind(self.session, self.fence, self.lease, self.recheck, locked)
         writer = bind_sqlite_coordination_writer(scope, self.store, self.session)

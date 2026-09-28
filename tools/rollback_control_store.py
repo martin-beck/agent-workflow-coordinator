@@ -1925,6 +1925,32 @@ class SQLiteBarrierSessionStore:
         """Persist the initial held state; a second attempt is rejected."""
         return self.cas(0, BarrierSessionState(identity, "held", 1))
 
+    def create_locked(
+        self, common_guard: CoordinatorLockGuard, identity: BarrierSessionIdentity
+    ) -> BarrierSessionState:
+        """Create the initial held session under caller-owned locks."""
+        if not isinstance(common_guard, CoordinatorLockGuard):
+            raise LockOwnershipError("caller-owned coordinator lock guard is required")
+        common_guard.assert_owned()
+        if common_guard.path != coordinator_lock_path().resolve():
+            raise ControlStoreError("coordinator lock guard path mismatch")
+        if not isinstance(identity, BarrierSessionIdentity):
+            raise ControlStoreError("barrier session identity is required")
+        if identity.project_id != self.project_id:
+            raise ControlStoreError("barrier session project binding mismatch")
+        self._control._require_operation_lock()
+        if self._authority_revision_reader is None:
+            raise ControlStoreError("fresh authority rereader is required")
+        try:
+            authority_revision = self._authority_revision_reader()
+        except Exception as error:
+            raise ControlStoreError("fresh authority reread failed") from error
+        if authority_revision != identity.authority_revision_at_acquire:
+            raise ControlStoreError("barrier session authority revision changed")
+        result = self._cas_locked(0, BarrierSessionState(identity, "held", 1))
+        common_guard.assert_owned()
+        return result
+
     def recheck_held(  # noqa: C901
         self,
         expected_revision: int | BarrierSessionState,

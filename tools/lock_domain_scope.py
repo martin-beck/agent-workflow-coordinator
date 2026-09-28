@@ -515,6 +515,18 @@ class SQLiteCoordinationRecoveryAdapter:
                     common_guard.assert_owned()
                     return result
 
+    def create_session(self, identity: BarrierSessionIdentity) -> BarrierSessionState:
+        """Create an initial held session under a fresh ordered fence."""
+        if not isinstance(identity, BarrierSessionIdentity):
+            raise ControlStoreError("session creation identity is invalid")
+        with self._common_lock() as common_guard:
+            domain = LockDomainContract.capture(common_guard, self._session, self._authority_fence)
+            with self._session.lock_owned_by_caller(common_guard), self._authority_fence.locked():
+                domain.assert_current(common_guard, self._session, self._authority_fence)
+                result = self._session.create_locked(common_guard, identity)
+                common_guard.assert_owned()
+                return result
+
     @staticmethod
     def _assert_control_binding(session: BarrierSessionState, record: Mapping[str, object]) -> None:
         identity = session.identity
