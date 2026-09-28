@@ -132,8 +132,8 @@
       "tools/upgrade_identity.py": "80bdd94e461b1ad24078d55e4c69b16fcd9560c641620e703fcf84b0ef9e1798",
       "tools/validate_upgrade_contract.py": "acba22d1b64b62de11c69a2a97a6371a6dbcc4edd2b65145c487675bcb240ac7"
     },
-    "revision": "7bed7fb328638a53b19c6e486eec878e811905c3",
-    "runtime_revision": "7bed7fb328638a53b19c6e486eec878e811905c3"
+    "revision": "ded2504b0936401d1ae896f21bfcf3a518756eff",
+    "runtime_revision": "ded2504b0936401d1ae896f21bfcf3a518756eff"
   },
   "model": "formal/upgrade/UpgradeRecovery.tla",
   "model_sha256": "616d53832ac5ec18bf3242d47b2412195eb64adb2b1035235514e06cc3edf2ba",
