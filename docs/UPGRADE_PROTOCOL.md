@@ -41,7 +41,9 @@ is incomplete. This boundary covers both backends: Git is not accidentally
 enabled, and SQLite is not enabled by fabricated admission evidence.
 
 Production execution remains blocked on four linked corrections: quiescence
-must acquire a barrier before quiesced admission; a forward barrier needs a
+must acquire a barrier before quiesced admission. The admission boundary now
+rejects unless the snapshot records a held durable barrier and an explicit
+barrier-acquired-before-quiescence predicate; a forward barrier still needs a
 complete acquire/recheck/reopen lifecycle; forward `target=new` and rollback
 `target=rollback` must have a non-conflicting durable identity model; and the
 selected runtime must actually be consumed by a verified launcher. SQLite

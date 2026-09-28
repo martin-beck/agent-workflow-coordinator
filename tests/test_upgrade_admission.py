@@ -51,6 +51,7 @@ def complete(names: tuple[str, ...]) -> dict[str, object]:
             "barrier_identity_digest": "0" * 64,
             "target": "new",
             "envelope_digest": "0" * 64,
+            "barrier_status": "held",
         }
     )
     snapshot["barrier_identity_digest"] = canonical_barrier_digest(snapshot)
@@ -79,6 +80,17 @@ class UpgradeAdmissionTests(unittest.TestCase):
             denied = dict(snapshot)
             denied.pop(predicate)
             with self.subTest(predicate=predicate), self.assertRaises(AdmissionError):
+                admit_quiesced(denied)
+
+    def test_quiescence_requires_barrier_acquisition_order_and_held_status(self) -> None:
+        snapshot = complete(QUIESCENCE_PREDICATES)
+        snapshot["barrier_acquired_before_quiescence"] = False
+        with self.assertRaisesRegex(AdmissionError, "barrier_acquired_before_quiescence"):
+            admit_quiesced(snapshot)
+        for status in ("absent", "releasing", "released", "ambiguous", True):
+            denied = complete(QUIESCENCE_PREDICATES)
+            denied["barrier_status"] = status
+            with self.subTest(status=status), self.assertRaisesRegex(AdmissionError, "not held"):
                 admit_quiesced(denied)
 
     def test_reopen_requires_validation_and_fencing(self) -> None:

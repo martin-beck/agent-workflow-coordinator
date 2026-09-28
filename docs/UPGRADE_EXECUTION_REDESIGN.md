@@ -135,7 +135,9 @@ each allowlisted opcode:
 - `release.inspect` and `admission.check` are read-only and precede mutation.
 - `barrier.acquire` first commits the control-store barrier under the common
   lock, then drains/fences work, then obtains and admits a fresh quiescence
-  snapshot.
+  snapshot. That snapshot must report `barrier_status=held` and
+  `barrier_acquired_before_quiescence=true`; a generic maintenance-barrier
+  boolean is insufficient.
 - `backend.backup` and `runtime.stage` recheck the held barrier and authority
   before and after their bounded operation.
 - `authority.atomic_replace` admits exact current quiescence, performs one

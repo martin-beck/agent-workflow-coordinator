@@ -34,6 +34,7 @@ PREFLIGHT_PREDICATES = (
 
 QUIESCENCE_PREDICATES = (
     "maintenance_barrier",
+    "barrier_acquired_before_quiescence",
     "workers_drained",
     "leases_fenced",
     "wrapped_commands_drained",
@@ -54,7 +55,15 @@ REOPEN_PREDICATES = (
 IDENTITY_FIELDS = ENVELOPE_FIELDS
 QUIESCENCE_IDENTITY = "durable_barrier_id"
 KNOWN_FIELDS = set(PREFLIGHT_PREDICATES + QUIESCENCE_PREDICATES + REOPEN_PREDICATES)
-KNOWN_FIELDS.update((*IDENTITY_FIELDS, QUIESCENCE_IDENTITY, "validation_failed", "safe_mode_ready"))
+KNOWN_FIELDS.update(
+    (
+        *IDENTITY_FIELDS,
+        QUIESCENCE_IDENTITY,
+        "barrier_status",
+        "validation_failed",
+        "safe_mode_ready",
+    )
+)
 
 
 def _require(snapshot: Mapping[str, object], predicates: tuple[str, ...], phase: str) -> None:
@@ -76,11 +85,13 @@ def admit_preflight(snapshot: Mapping[str, object]) -> None:
 
 
 def admit_quiesced(snapshot: Mapping[str, object]) -> None:
-    """Allow replacement only while the durable maintenance barrier is held."""
+    """Allow quiescence only after a durably held maintenance barrier."""
     _require(snapshot, QUIESCENCE_PREDICATES, "quiescence")
     barrier = snapshot.get(QUIESCENCE_IDENTITY)
     if not isinstance(barrier, str) or not barrier:
         raise AdmissionError("quiescence denied; durable barrier proof is absent")
+    if snapshot.get("barrier_status") != "held":
+        raise AdmissionError("quiescence denied; durable barrier is not held")
 
 
 def recheck_before_replacement(

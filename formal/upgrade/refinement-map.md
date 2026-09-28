@@ -19,6 +19,7 @@ The following mappings are evidence relationships, not equivalence claims:
 | Model area | Executable evidence | Current interpretation |
 | --- | --- | --- |
 | Upgrade lifecycle ordering and failure recovery | `tests/test_upgrade_engine.py`, `tests/test_upgrade_admission.py`, `tests/test_upgrade_campaign.py` | Best-effort action correspondence; concrete failure handling is authoritative. |
+| Barrier-before-quiescence admission | `tools/upgrade_admission.py`, `tests/test_upgrade_admission.py`, `tests/test_quality_edge_paths.py` | The model's quiescence step is best-effort guidance; executable admission requires held durable barrier status and explicit acquisition ordering evidence. |
 | Lock domain, identity rereads, and stale CAS | `tests/test_lock_domain_scope.py`, `tests/test_mutation_fence.py` | Best-effort correspondence with fail-closed rejection on identity drift. |
 | Git authority effect boundaries | `tests/test_git_authority_mutation.py`, `tests/test_git_authority_adapter.py`, `tests/test_authority_neutral_commit_dispatch.py` | Concrete pre-effect rejection, ambiguity, recovery, fresh-capability, and receipt-checked internal commit-dispatch evidence; public dispatch remains disabled. |
 | SQLite authority effect boundaries | `tests/test_sqlite_authority_mutation.py`, `tests/test_sqlite_authority_adapter.py`, `tests/test_authority_neutral_commit_dispatch.py` | Concrete pre-effect rejection, ambiguity, recovery, fresh-capability, and receipt-checked internal commit-dispatch evidence; public dispatch remains disabled. |
