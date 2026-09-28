@@ -1178,6 +1178,93 @@ def bind_sqlite_backend(
     )
 
 
+class SQLiteAuthorityWriteAdapter:
+    """Typed authority writer bound to one lock-domain scope.
+
+    The raw backend is intentionally retained privately.  Each operation must
+    enter the caller-owned common -> control -> authority scope first; the
+    backend transaction then performs only the SQLite/descriptor checks while
+    those locks remain held.  This adapter does not authorize upgrade phases
+    and is not connected to the public upgrade dispatcher.
+    """
+
+    __slots__ = ("_backend",)
+
+    def __init__(self, backend: SQLiteBackend, sentinel: object) -> None:
+        if sentinel is not _FACTORY_SENTINEL:
+            raise TypeError("SQLiteAuthorityWriteAdapter must be issued by its factory")
+        self._backend = backend
+
+    def mutate(
+        self,
+        task_id: str,
+        expected_revision: int,
+        kind: str,
+        at: str,
+        transition: Callable[[Meta, list[Task]], tuple[str, str]],
+        session_record: Meta | None = None,
+        session_factory: Callable[[Meta], Meta] | None = None,
+        checkpoint_factory: Callable[[Meta], Meta] | None = None,
+    ) -> None:
+        """Apply one fenced task transition."""
+        self._backend.mutate(
+            task_id,
+            expected_revision,
+            kind,
+            at,
+            transition,
+            session_record,
+            session_factory,
+            checkpoint_factory,
+        )
+
+    def update_observations(self, observations: dict[str, Meta], at: str) -> None:
+        """Persist fenced live-worktree observations."""
+        self._backend.update_observations(observations, at)
+
+    def append_command_result(
+        self,
+        task_id: str,
+        owner: str,
+        command_hash: str,
+        returncode: int,
+        classification: str,
+        recorded_at: str,
+    ) -> None:
+        """Persist fenced command evidence."""
+        self._backend.append_command_result(
+            task_id, owner, command_hash, returncode, classification, recorded_at
+        )
+
+    def retire(
+        self,
+        project: Callable[[list[Task]], None],
+        switch_selector: Callable[[], None],
+    ) -> None:
+        """Retire authority through the fenced route."""
+        self._backend.retire(project, switch_selector)
+
+
+def bind_sqlite_authority_writer(
+    path: Path,
+    binding: Meta,
+    tasks_root: Path,
+    authority_binding: SQLiteAuthorityBinding,
+    scope: object,
+) -> SQLiteAuthorityWriteAdapter:
+    """Issue typed scope-bound writes without exposing a raw backend."""
+    from tools.lock_domain_scope import LockDomainScope
+
+    if not isinstance(scope, LockDomainScope):
+        raise TypeError("authority writer requires adapter-owned LockDomainScope")
+    if not isinstance(authority_binding, SQLiteAuthorityBinding):
+        raise TypeError("authority writer requires SQLiteAuthorityBinding")
+    if authority_binding.path != path.absolute():
+        raise ValueError("authority writer path does not match its binding")
+    backend = bind_sqlite_backend(path, binding, tasks_root, authority_binding, scope)
+    return SQLiteAuthorityWriteAdapter(backend, _FACTORY_SENTINEL)
+
+
 def bind_released_sqlite_backend(
     path: Path,
     binding: Meta,
