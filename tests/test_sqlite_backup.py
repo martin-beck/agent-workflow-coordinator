@@ -195,6 +195,49 @@ class SQLiteBackupTests(unittest.TestCase):
         with closing(sqlite3.connect(destination)) as connection:
             self.assertEqual(source_dump, list(connection.iterdump()))
 
+    def test_fresh_clone_restore_preserves_verified_sqlite_authority_equivalence(self) -> None:
+        """A clean restore preserves the verified authority view, not just bytes."""
+        source_digest = MODULE._digest(self.source)
+        with closing(sqlite3.connect(self.source)) as connection:
+            source_schema = list(
+                connection.execute(
+                    "SELECT type, name, tbl_name, sql FROM sqlite_master "
+                    "WHERE name NOT LIKE 'sqlite_%' ORDER BY type, name"
+                )
+            )
+            source_rows = list(connection.execute("SELECT key, value FROM metadata ORDER BY key"))
+            source_records = list(connection.execute("SELECT id, body FROM records ORDER BY id"))
+
+        backup = self.root / "backup.sqlite3"
+        manifest = backup_database(self.source, backup, BINDING)
+        verified_manifest = MODULE.verify_backup(backup, manifest, BINDING)
+        destination = self.root / "fresh-clone" / "authority.sqlite3"
+        restore_database(backup, destination, verified_manifest, BINDING, quiesced=True)
+
+        self.assertEqual(source_digest, MODULE._digest(self.source))
+        self.assertEqual(manifest["database_sha256"], MODULE._digest(destination))
+        with closing(sqlite3.connect(destination)) as connection:
+            self.assertEqual(
+                source_schema,
+                list(
+                    connection.execute(
+                        "SELECT type, name, tbl_name, sql FROM sqlite_master "
+                        "WHERE name NOT LIKE 'sqlite_%' ORDER BY type, name"
+                    )
+                ),
+            )
+            self.assertEqual(
+                source_rows,
+                list(connection.execute("SELECT key, value FROM metadata ORDER BY key")),
+            )
+            self.assertEqual(
+                source_records,
+                list(connection.execute("SELECT id, body FROM records ORDER BY id")),
+            )
+        self.assertFalse(Path(str(destination) + "-wal").exists())
+        self.assertFalse(Path(str(destination) + "-shm").exists())
+        self.assertFalse(list(destination.parent.glob(".coordinator-*")))
+
     def test_restore_requires_quiescence_and_refuses_existing_backup(self) -> None:
         backup = self.root / "backup.sqlite3"
         manifest = backup_database(self.source, backup, BINDING)

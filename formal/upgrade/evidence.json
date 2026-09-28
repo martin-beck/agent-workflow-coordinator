@@ -105,6 +105,7 @@
       "tests/test_rollback_control_store.py": "7d0df0cfe800f0f1cf7ffb44e7997b6040fd88c650031308ab1c521a1141da98",
       "tests/test_sqlite_authority_adapter.py": "ff1df13c97f58538a008e509cbb2ab1badd0044f2e60e8b7cb6a15211b263e51",
       "tests/test_sqlite_authority_mutation.py": "7994f4167471b5c55e2af9707e7b3a7baa27ff5cee1a552c7cd2e756601262f1",
+      "tests/test_sqlite_backup.py": "506f2056cf024c17af110329035de964c9b84989d309de5b9a96ae2a9ef60af9",
       "tests/test_sqlite_mutation_barrier.py": "c631a95678da4e3f88ec76019a2362de58e9f96d62ec6d8fd86b1df0dc62cb06",
       "tests/test_sqlite_storage.py": "851895c7f62925974f2450cb59420ebc8e0721992e5206f8b453953a63077fe5",
       "tests/test_upgrade_admission.py": "e6d763f323e0ed5b98c07d9a1cb409899d1d53d176facd2c500174e367f457f7",
@@ -131,8 +132,8 @@
       "tools/upgrade_identity.py": "80bdd94e461b1ad24078d55e4c69b16fcd9560c641620e703fcf84b0ef9e1798",
       "tools/validate_upgrade_contract.py": "acba22d1b64b62de11c69a2a97a6371a6dbcc4edd2b65145c487675bcb240ac7"
     },
-    "revision": "7bed7fb328638a53b19c6e486eec878e811905c3",
-    "runtime_revision": "7bed7fb328638a53b19c6e486eec878e811905c3"
+    "revision": "733ca82ba0222433c53b94ac0b8535d16dd7f290",
+    "runtime_revision": "733ca82ba0222433c53b94ac0b8535d16dd7f290"
   },
   "model": "formal/upgrade/UpgradeRecovery.tla",
   "model_sha256": "616d53832ac5ec18bf3242d47b2412195eb64adb2b1035235514e06cc3edf2ba",
