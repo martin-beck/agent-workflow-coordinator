@@ -286,15 +286,29 @@ class SQLiteCoordinationWriteAdapter:
         }
         if any(record.get(field) != value for field, value in expected.items()):
             raise ControlStoreError("control barrier identity is not bound to the session")
-        self._assert_control_operation(str(record.get("operation_id", "")))
+        child = self._bound_control_child(str(record.get("operation_id", "")))
+        if record.get("target") != child.target:
+            raise ControlStoreError("control barrier target is not bound to the session child")
 
     def _assert_control_operation(self, operation_id: str) -> None:
+        self._bound_control_child(operation_id)
+
+    def _bound_control_child(self, operation_id: str) -> BarrierChildIdentity:
         current = self._session._snapshot_locked()
         if current is None:  # pragma: no cover - scope recheck rejects absence first
             raise ControlStoreError("barrier session is absent")
         children = (current.forward_child, current.rollback_child)
-        if operation_id not in {child.operation_id for child in children if child is not None}:
+        child = next(
+            (
+                child
+                for child in children
+                if child is not None and child.operation_id == operation_id
+            ),
+            None,
+        )
+        if child is None:
             raise ControlStoreError("control operation is not bound to the session")
+        return child
 
     def session_cas(
         self,
