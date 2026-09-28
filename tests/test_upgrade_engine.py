@@ -19,6 +19,7 @@ from unittest.mock import patch
 from tools import upgrade_engine as upgrade_engine_module
 from tools.authority_mutation import (
     AuthorityMutationAmbiguousError,
+    AuthorityMutationRejectedError,
     DurableBoundBackendMutation,
     MutationReceipt,
 )
@@ -2193,6 +2194,8 @@ class UpgradeEngineTests(unittest.TestCase):
                 return durable
 
             def execute(self, phase: str, context: object) -> dict[str, object]:
+                if phase == "rollback" and self.fault == "pre-effect-rejected":
+                    raise AuthorityMutationRejectedError("rollback admission rejected")
                 result = super().execute(phase, context)
                 if phase == "rollback" and self.fault == "runtime-unverified":
                     result["runtime_validated"] = False
@@ -2231,6 +2234,7 @@ class UpgradeEngineTests(unittest.TestCase):
             ("verify-raises", "failed", None),
             ("verify-missing", "failed", None),
             ("runtime-unverified", "safe-mode", "ambiguous"),
+            ("pre-effect-rejected", "failed", "failed"),
             ("result-incomplete", "safe-mode", "ambiguous"),
             ("handler-conflict", "safe-mode", "ambiguous"),
             ("handler-evidence", "safe-mode", "ambiguous"),
