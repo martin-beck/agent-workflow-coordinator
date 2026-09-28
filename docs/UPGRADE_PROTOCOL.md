@@ -25,11 +25,12 @@ record. Only `authority.atomic_replace` maps to the forward commit mutation;
 `backend.restore` is the explicit rollback counterpart.
 
 This typed data contract is necessary but not execution evidence. Git and
-SQLite contracts may both be generated and validated, but neither becomes
-executable until a reviewed backend phase adapter implements every opcode and
-its evidence contract. The models are best-effort design guidance and do not
-need a source-to-model refinement proof. In particular, generated Git contracts
-do not enable Git upgrade execution.
+SQLite contracts may both be generated and validated, and the isolated
+authority effect seams now have a reviewed internal commit-phase adapter; the
+complete lifecycle still is not executable until every opcode and its evidence
+contract are bound to the durable barrier and runtime launcher. The models are
+best-effort design guidance and do not need a source-to-model refinement proof.
+In particular, generated Git contracts do not enable Git upgrade execution.
 
 `handoffctl upgrade check --contract FILE` and `handoffctl upgrade plan
 --contract FILE` expose only a deterministic, sanitized projection of a valid

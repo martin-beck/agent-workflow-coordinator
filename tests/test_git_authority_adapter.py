@@ -339,7 +339,21 @@ class GitAuthorityAdapterTests(unittest.TestCase):
             runtime_identity="runtime",
         )
         (self.root / "state").write_text("bound\n")
+        subprocess.run(["git", "-C", str(self.root), "config", "user.name", "test"], check=True)
+        subprocess.run(
+            ["git", "-C", str(self.root), "config", "user.email", "test@example"], check=True
+        )
         subprocess.run(["git", "-C", str(self.root), "add", "state"], check=True)
+
+        def outputless_commit_runner(
+            *args: object, **kwargs: object
+        ) -> subprocess.CompletedProcess[str]:
+            command = cast(list[str], args[0])
+            result = subprocess.run(command, **cast(Any, kwargs))
+            if "commit" in command and result.returncode == 0:
+                return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+            return result
+
         before = self.adapter._git("rev-parse", "HEAD")
         result = self.adapter.commit_bound(
             admission,
@@ -347,6 +361,7 @@ class GitAuthorityAdapterTests(unittest.TestCase):
             admission_reread=lambda: admission.__dict__,
             expected_branch=self.adapter._git("symbolic-ref", "--short", "-q", "HEAD"),
             expected_head=before,
+            runner=outputless_commit_runner,
         )
         self.assertEqual("git", result.backend)
         self.assertEqual("op-bound:commit", result.operation_id)
