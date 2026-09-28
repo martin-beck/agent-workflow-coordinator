@@ -35,14 +35,16 @@ store. The current adapter methods are `control_cas`,
 `session_mark_ambiguous`, and `session_recover_unknown`. They remain an
 uncalled coordination seam. `bind_sqlite_coordination_recovery` separately
 issues a fresh-fence `reconcile_ambiguous` operation for an ambiguous session;
-it does not reuse the old held-session lease. Public upgrade mutation and
-Dispatch stay rejection-only.
+it does not reuse the old held-session lease. Its
+`reconcile_control_ambiguous` method applies the same fresh-fence boundary to
+an ambiguous rollback-control barrier. Public upgrade mutation and Dispatch
+stay rejection-only.
 
 | Store | Route | Durable writes | Evidence |
 | --- | --- | --- | --- |
 | `SQLiteRollbackControlStore` | `cas` | barrier row/history | `test_cas_conflict_and_binding_mismatch_fail_closed`, `test_v10_cas_fences_verify_affected_rows_and_recovery_errors` |
 | `SQLiteRollbackControlStore` | `begin_release`, `reconcile_release`, release completion | barrier status/release journal | `test_release_reconciliation_requires_verified_engine_recovery`, `test_typed_coordination_writer_completes_release_and_reopen` |
-| `SQLiteRollbackControlStore` | `reconcile_ambiguous` | barrier/history replacement | `test_ambiguous_requires_explicit_newer_reconciliation` |
+| `SQLiteRollbackControlStore` | `reconcile_ambiguous` | barrier/history replacement | `test_ambiguous_requires_explicit_newer_reconciliation`, `test_fresh_recovery_scope_reconciles_ambiguous_control_barrier` |
 | `SQLiteRollbackControlStore` | `with_barrier` | barrier acquire/release | `test_with_barrier_holds_coordinator_lock_through_authority_callback` |
 | `SQLiteBarrierSessionStore` | `create`, `cas`, `bind_child`, `begin_reopen`, `complete_reopen`, `mark_ambiguous` | session/child rows and history | `test_v10_session_cas_fences_insert_and_update_rows`, `test_v10_durable_session_persists_children_and_reopen`, `test_typed_coordination_writer_completes_release_and_reopen`, `test_typed_coordination_writer_fences_uncertain_session_outcome` |
 | `SQLiteBarrierSessionStore` | `recover_unknown`, `reconcile_ambiguous` | intent/session/history rows | `test_v10_session_intent_recovery_fences_and_requires_newer_fence`, `test_typed_coordination_writer_recovers_unknown_under_full_scope`, `test_fresh_recovery_scope_reconciles_ambiguous_session` |

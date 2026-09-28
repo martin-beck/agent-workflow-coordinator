@@ -47,6 +47,7 @@ from tools.mutation_fence import MutationFence, provision, provision_control_bin
 from tools.rollback_control_store import (
     BarrierSessionState,
     ControlStoreError,
+    RecoveryRejectedError,
     SQLiteBarrierSessionStore,
     SQLiteRollbackControlStore,
 )
@@ -1248,6 +1249,137 @@ class LockDomainScopeTests(unittest.TestCase):
         self.assertEqual(replacement, result)
         self.assertEqual(replacement, self.session.snapshot())
         self.assertFalse(self.session.operation_owned_by_current_thread)
+
+    def test_fresh_recovery_scope_reconciles_ambiguous_control_barrier(self) -> None:
+        scope = LockDomainScope.bind(self.session, self.fence, self.lease, self.recheck, locked)
+        writer = bind_sqlite_coordination_writer(scope, self.store, self.session)
+        child = BarrierChildIdentity.bind(identity(), "forward-1", "new")
+        writer.session_bind_child(identity(), 1, child)
+        record = control_record()
+        record["operation_id"] = child.operation_id
+        record["target"] = child.target
+        record["barrier_identity_digest"] = canonical_barrier_digest(record)
+        record["envelope_digest"] = canonical_envelope_digest(record)
+        writer.control_cas(0, record)
+        self.store.cas(1, {**record, "status": "ambiguous"})
+        ambiguous = writer.session_mark_ambiguous(identity(), 2, "process-death")
+
+        replacement = dict(record)
+        replacement.update(
+            {
+                "operation_id": "forward-2",
+                "state_revision": 2,
+                "durable_barrier_id": "barrier-2",
+                "fencing_token": "fence-2",
+                "fencing_owner": "owner-2",
+                "status": "held",
+            }
+        )
+        replacement["barrier_identity_digest"] = canonical_barrier_digest(replacement)
+        replacement["envelope_digest"] = canonical_envelope_digest(replacement)
+        recovery = bind_sqlite_coordination_recovery(self.session, self.fence, locked)
+
+        def candidate(**updates: object) -> dict[str, object]:
+            value = {**replacement, **updates}
+            value["barrier_identity_digest"] = canonical_barrier_digest(value)
+            value["envelope_digest"] = canonical_envelope_digest(value)
+            return value
+
+        with self.assertRaisesRegex(RecoveryRejectedError, "identity changed"):
+            recovery.reconcile_control_ambiguous(
+                replace(identity(), attempt_id="wrong-attempt"),
+                ambiguous.revision,
+                child.operation_id,
+                replacement,
+            )
+        with self.assertRaisesRegex(RecoveryRejectedError, "CAS conflict"):
+            recovery.reconcile_control_ambiguous(
+                identity(), ambiguous.revision - 1, child.operation_id, replacement
+            )
+        with self.assertRaisesRegex(ControlStoreError, "new held operation"):
+            recovery.reconcile_control_ambiguous(
+                identity(),
+                ambiguous.revision,
+                child.operation_id,
+                candidate(operation_id=child.operation_id),
+            )
+        with self.assertRaisesRegex(ControlStoreError, "new held operation"):
+            recovery.reconcile_control_ambiguous(
+                identity(),
+                ambiguous.revision,
+                child.operation_id,
+                candidate(status="releasing"),
+            )
+        with self.assertRaisesRegex(ControlStoreError, "newer project fence"):
+            recovery.reconcile_control_ambiguous(
+                identity(),
+                ambiguous.revision,
+                child.operation_id,
+                candidate(state_revision=1),
+            )
+        with self.assertRaisesRegex(ControlStoreError, "distinct project fence"):
+            recovery.reconcile_control_ambiguous(
+                identity(),
+                ambiguous.revision,
+                child.operation_id,
+                candidate(fencing_token="fence-1"),  # noqa: S106
+            )
+
+        result = recovery.reconcile_control_ambiguous(
+            identity(), ambiguous.revision, child.operation_id, replacement
+        )
+
+        self.assertEqual(replacement["operation_id"], result["operation_id"])
+        self.assertEqual(result, self.store.snapshot("forward-2"))
+        self.assertFalse(self.store.operation_owned_by_current_thread)
+
+    def test_fresh_recovery_scope_rejects_control_admission_failures(self) -> None:
+        recovery = bind_sqlite_coordination_recovery(self.session, self.fence, locked)
+        replacement = control_record()
+        with self.assertRaisesRegex(ControlStoreError, "expected recovery identity"):
+            recovery.reconcile_control_ambiguous(cast(Any, None), 1, "op-1", replacement)
+        with self.assertRaisesRegex(ControlStoreError, "expected recovery revision"):
+            recovery.reconcile_control_ambiguous(identity(), 0, "op-1", replacement)
+        with self.assertRaisesRegex(ControlStoreError, "operation id"):
+            recovery.reconcile_control_ambiguous(identity(), 1, "", replacement)
+        with self.assertRaisesRegex(ControlStoreError, "replacement recovery record"):
+            recovery.reconcile_control_ambiguous(identity(), 1, "op-1", cast(Any, None))
+        with self.assertRaisesRegex(RecoveryRejectedError, "only ambiguous sessions"):
+            recovery.reconcile_control_ambiguous(identity(), 1, "op-1", replacement)
+
+    def test_fresh_recovery_scope_rejects_control_identity_drift(self) -> None:
+        scope = LockDomainScope.bind(self.session, self.fence, self.lease, self.recheck, locked)
+        writer = bind_sqlite_coordination_writer(scope, self.store, self.session)
+        child = BarrierChildIdentity.bind(identity(), "forward-1", "new")
+        writer.session_bind_child(identity(), 1, child)
+        record = control_record()
+        record["operation_id"] = child.operation_id
+        record["target"] = child.target
+        record["barrier_identity_digest"] = canonical_barrier_digest(record)
+        record["envelope_digest"] = canonical_envelope_digest(record)
+        drifted = {**record, "fencing_token": "foreign-fence"}
+        drifted["barrier_identity_digest"] = canonical_barrier_digest(drifted)
+        drifted["envelope_digest"] = canonical_envelope_digest(drifted)
+        self.store.cas(0, drifted)
+        ambiguous = writer.session_mark_ambiguous(identity(), 2, "process-death")
+        recovery = bind_sqlite_coordination_recovery(self.session, self.fence, locked)
+
+        replacement = dict(record)
+        replacement.update(
+            {
+                "operation_id": "forward-2",
+                "state_revision": 2,
+                "durable_barrier_id": "barrier-2",
+                "fencing_token": "fence-2",
+                "fencing_owner": "owner-2",
+            }
+        )
+        replacement["barrier_identity_digest"] = canonical_barrier_digest(replacement)
+        replacement["envelope_digest"] = canonical_envelope_digest(replacement)
+        with self.assertRaisesRegex(RecoveryRejectedError, "identity is not bound"):
+            recovery.reconcile_control_ambiguous(
+                identity(), ambiguous.revision, child.operation_id, replacement
+            )
 
     def test_fresh_recovery_scope_rejects_invalid_admission_and_reread(self) -> None:
         recovery = bind_sqlite_coordination_recovery(self.session, self.fence, locked)

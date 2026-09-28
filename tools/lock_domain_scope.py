@@ -456,7 +456,7 @@ class SQLiteCoordinationWriteAdapter:
 class SQLiteCoordinationRecoveryAdapter:
     """Fresh-fence recovery seam for an ambiguous durable session."""
 
-    __slots__ = ("_authority_fence", "_common_lock", "_session")
+    __slots__ = ("_authority_fence", "_common_lock", "_control", "_session")
 
     def __init__(
         self,
@@ -469,6 +469,7 @@ class SQLiteCoordinationRecoveryAdapter:
         if not isinstance(authority_fence, MutationFence):
             raise TypeError("authority fence is required")
         self._session = session
+        self._control = session._control
         self._authority_fence = authority_fence
         self._common_lock = common_lock
 
@@ -497,6 +498,67 @@ class SQLiteCoordinationRecoveryAdapter:
                     domain.assert_current(common_guard, self._session, self._authority_fence)
                     result = self._session.reconcile_ambiguous_locked(
                         common_guard, expected_revision, replacement
+                    )
+                    common_guard.assert_owned()
+                    return result
+
+    @staticmethod
+    def _assert_control_binding(session: BarrierSessionState, record: Mapping[str, object]) -> None:
+        identity = session.identity
+        expected = {
+            "project_id": identity.project_id,
+            "state_revision": identity.state_revision,
+            "authority_revision": identity.authority_revision_at_acquire,
+            "fencing_token": identity.fencing_token,
+            "fencing_owner": identity.fencing_owner,
+            "durable_barrier_id": identity.durable_barrier_id,
+        }
+        if any(record.get(field) != value for field, value in expected.items()):
+            raise RecoveryRejectedError("control barrier identity is not bound to the session")
+        children = (session.forward_child, session.rollback_child)
+        child = next(
+            (
+                child
+                for child in children
+                if child is not None and child.operation_id == record["operation_id"]
+            ),
+            None,
+        )
+        if child is None or record.get("target") != child.target:
+            raise RecoveryRejectedError("control barrier target is not bound to the session child")
+
+    def reconcile_control_ambiguous(
+        self,
+        expected_identity: BarrierSessionIdentity,
+        expected_revision: int,
+        operation_id: str,
+        replacement: Mapping[str, object],
+    ) -> dict[str, object]:
+        """Replace an ambiguous control barrier under a separate fresh fence."""
+        if not isinstance(expected_identity, BarrierSessionIdentity):
+            raise ControlStoreError("expected recovery identity is invalid")
+        if type(expected_revision) is not int or expected_revision < 1:
+            raise ControlStoreError("expected recovery revision is invalid")
+        if not isinstance(operation_id, str) or not operation_id:
+            raise ControlStoreError("recovery operation id is invalid")
+        if not isinstance(replacement, Mapping):
+            raise ControlStoreError("replacement recovery record is invalid")
+        with self._common_lock() as common_guard:
+            domain = LockDomainContract.capture(common_guard, self._session, self._authority_fence)
+            with self._session.lock_owned_by_caller(common_guard):
+                current = self._session.snapshot_owned_by_caller()
+                if current.status != "ambiguous":
+                    raise RecoveryRejectedError("only ambiguous sessions require reconciliation")
+                if current.identity != expected_identity:
+                    raise RecoveryRejectedError("ambiguous session identity changed")
+                if current.revision != expected_revision:
+                    raise RecoveryRejectedError("barrier session CAS conflict")
+                previous = self._control._snapshot_locked(operation_id)
+                self._assert_control_binding(current, previous)
+                with self._authority_fence.locked():
+                    domain.assert_current(common_guard, self._session, self._authority_fence)
+                    result = self._control.reconcile_ambiguous_locked(
+                        common_guard, operation_id, replacement
                     )
                     common_guard.assert_owned()
                     return result
