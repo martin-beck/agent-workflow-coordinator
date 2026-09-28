@@ -217,13 +217,6 @@ class LockDomainScope:
             )
         except ControlStoreError as error:
             raise LockDomainError(f"durable session recheck failed: {error}") from error
-        if state.status not in allowed_session_statuses:
-            message = (
-                "durable session is not held"
-                if allowed_session_statuses == ("held",)
-                else "durable session is not in an admissible status"
-            )
-            raise LockDomainError(message)
         if state.identity != self._session_identity or state.revision != self._session_revision:
             raise LockDomainError("durable session and lease do not match")
         self._identity.assert_session_binding(

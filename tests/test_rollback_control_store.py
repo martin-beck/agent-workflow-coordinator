@@ -1805,6 +1805,8 @@ class RollbackControlStoreTests(unittest.TestCase):
             )
             identity = self._session_identity()
             with locked() as guard:
+                with self.assertRaisesRegex(LockOwnershipError, "guard is required"):
+                    store.recover_unknown_locked(cast(Any, None))
                 with self.assertRaisesRegex(ControlStoreError, "operation lock is required"):
                     store.recheck_held_locked(guard, identity, 1)
                 with store.lock_owned_by_caller(guard):
