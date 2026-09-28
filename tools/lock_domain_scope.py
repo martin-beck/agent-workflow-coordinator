@@ -262,12 +262,39 @@ class SQLiteCoordinationWriteAdapter:
     ) -> dict[str, object]:
         """CAS one control barrier while common/control/authority are held."""
         with self._scope._hold_with_guard() as common_guard:
+            self._assert_control_binding(record)
             return self._control.cas_locked(common_guard, expected_revision, record)
 
     def control_begin_release(self, operation_id: str) -> dict[str, object]:
         """Move one held control barrier to releasing under the full scope."""
         with self._scope._hold_with_guard():
+            self._assert_control_operation(operation_id)
             return self._control._begin_release_locked(operation_id)
+
+    def _assert_control_binding(self, record: Mapping[str, object]) -> None:
+        current = self._session._snapshot_locked()
+        if current is None:  # pragma: no cover - scope recheck rejects absence first
+            raise ControlStoreError("barrier session is absent")
+        identity = current.identity
+        expected = {
+            "project_id": identity.project_id,
+            "state_revision": identity.state_revision,
+            "authority_revision": identity.authority_revision_at_acquire,
+            "fencing_token": identity.fencing_token,
+            "fencing_owner": identity.fencing_owner,
+            "durable_barrier_id": identity.durable_barrier_id,
+        }
+        if any(record.get(field) != value for field, value in expected.items()):
+            raise ControlStoreError("control barrier identity is not bound to the session")
+        self._assert_control_operation(str(record.get("operation_id", "")))
+
+    def _assert_control_operation(self, operation_id: str) -> None:
+        current = self._session._snapshot_locked()
+        if current is None:  # pragma: no cover - scope recheck rejects absence first
+            raise ControlStoreError("barrier session is absent")
+        children = (current.forward_child, current.rollback_child)
+        if operation_id not in {child.operation_id for child in children if child is not None}:
+            raise ControlStoreError("control operation is not bound to the session")
 
     def session_cas(
         self,
