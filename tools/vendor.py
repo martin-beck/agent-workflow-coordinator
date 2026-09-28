@@ -29,6 +29,7 @@ SOURCE_FILES: tuple[tuple[str, str], ...] = (
     ("tools/lock_domain_scope.py", "tools/lock_domain_scope.py"),
     ("tools/mutation_fence.py", "tools/mutation_fence.py"),
     ("tools/rollback_control_store.py", "tools/rollback_control_store.py"),
+    ("tools/sqlite_wal_lifecycle.py", "tools/sqlite_wal_lifecycle.py"),
     ("tools/rollback_evidence.py", "tools/rollback_evidence.py"),
     ("tools/upgrade_identity.py", "tools/upgrade_identity.py"),
     ("tools/session_records.py", "tools/session_records.py"),

@@ -861,6 +861,14 @@ class SQLiteRollbackControlStore:
             raise
         bound_sidecars: dict[str, tuple[int, int] | None] | None = None
         try:
+            if not self._lifecycle_observed:
+                try:
+                    self._lifecycle.validate()
+                except WALLifecycleError as error:
+                    message = str(error)
+                    if message == "WAL lifecycle project binding changed":
+                        message = "control store project binding mismatch"
+                    raise ControlStoreError(message) from error
             connection = sqlite3.connect(
                 f"file:/proc/self/fd/{descriptor}?mode=rw",
                 isolation_level=None,

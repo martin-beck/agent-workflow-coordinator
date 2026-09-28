@@ -207,6 +207,22 @@ class WALLifecycleTests(unittest.TestCase):
                 pass
             self.assertEqual("active", json.loads(lifecycle.read_text())["state"])
 
+    def test_invalid_lifecycle_is_rejected_before_sqlite_schema_mutation(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            control = SQLiteRollbackControlStore(root / "control.sqlite", PROJECT)
+            payload = json.loads(control._lifecycle.path.read_text())
+            payload["state"] = "active"
+            control._lifecycle.path.write_text(json.dumps(payload))
+            control._lifecycle.path.chmod(0o600)
+            with self.assertRaisesRegex(ControlStoreError, "digest"), control._connection():
+                pass
+            with sqlite3.connect(control.path) as connection:
+                tables = connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                ).fetchall()
+            self.assertEqual([], tables)
+
     def test_active_missing_sidecars_requires_explicit_reconciliation(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
