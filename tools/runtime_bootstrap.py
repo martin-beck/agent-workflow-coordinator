@@ -16,7 +16,13 @@ from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path
 
-from tools.upgrade_authority import AuthorityError, read_runtime_selector
+if __package__:
+    from .upgrade_authority import AuthorityError, read_runtime_selector
+else:  # pragma: no cover - direct script execution
+    from upgrade_authority import (  # type: ignore[import-not-found,no-redef]
+        AuthorityError,
+        read_runtime_selector,
+    )
 
 _RELEASE = re.compile(r"v[0-9]+\.[0-9]+\.[0-9]+\Z")
 _DIGEST = re.compile(r"[0-9a-f]{64}\Z")
@@ -269,6 +275,36 @@ def run_admitted_runtime(
             raise AuthorityError("admitted runtime dispatch failed") from error
     finally:
         command.close()
+
+
+def run_selected_runtime(
+    selector: Path,
+    releases_root: Path,
+    expected_identity: ExpectedRuntimeIdentity,
+    verify_authenticity: Callable[[Path, ExpectedRuntimeIdentity], VerifiedManifest],
+    arguments: Sequence[str] = (),
+    *,
+    timeout: float | None = None,
+) -> subprocess.CompletedProcess[str]:
+    """Resolve, revalidate, and consume one selected runtime entrypoint.
+
+    This is the production consumer boundary: callers provide a selector,
+    authenticated expected identity, and read-only arguments, never a runtime
+    or script path.  The retained admission is always closed after the child
+    exits or fails.
+    """
+    resolved = resolve_selected_runtime_bound(
+        selector, releases_root, expected_identity, verify_authenticity
+    )
+    try:
+        admission = resolved.admit_for_dispatch()
+    except BaseException:
+        resolved.close()
+        raise
+    try:
+        return run_admitted_runtime(admission, arguments, timeout=timeout)
+    finally:
+        admission.close()
 
 
 @dataclass(slots=True)

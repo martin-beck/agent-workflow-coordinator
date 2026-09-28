@@ -2997,10 +2997,34 @@ def cmd_migrate(args: argparse.Namespace) -> None:  # noqa: C901
 def cmd_upgrade(args: argparse.Namespace) -> int:
     """Dispatch only the reviewed, fail-closed upgrade command boundary."""
     if __package__:
-        from .upgrade_commands import execute_upgrade_command
+        from .upgrade_commands import consume_selected_runtime_command, execute_upgrade_command
     else:
         from upgrade_commands import (  # type: ignore[import-not-found,no-redef]
+            consume_selected_runtime_command,
             execute_upgrade_command,
+        )
+
+    if args.upgrade_action == "consume":
+        if __package__:
+            from .runtime_bootstrap import ExpectedRuntimeIdentity
+        else:  # pragma: no cover - direct script execution
+            from runtime_bootstrap import (  # type: ignore[import-not-found,no-redef]
+                ExpectedRuntimeIdentity,
+            )
+
+        return consume_selected_runtime_command(
+            Path(args.selector),
+            Path(args.releases_root),
+            ExpectedRuntimeIdentity(
+                args.source_commit,
+                args.tag_ref,
+                args.tag_object,
+                args.signature_sha256,
+                args.trust_policy_sha256,
+                args.vendor_manifest_sha256,
+            ),
+            args.manifest_digest,
+            tuple(args.runtime_command),
         )
 
     return execute_upgrade_command(
@@ -3124,6 +3148,17 @@ def main() -> int:
         upgrade_action = upgrade_actions.add_parser(action)
         upgrade_action.add_argument("--contract", type=Path, required=True)
         upgrade_action.add_argument("--binding", type=Path)
+    consume = upgrade_actions.add_parser("consume")
+    consume.add_argument("--selector", type=Path, required=True)
+    consume.add_argument("--releases-root", type=Path, required=True)
+    consume.add_argument("--source-commit", required=True)
+    consume.add_argument("--tag-ref", required=True)
+    consume.add_argument("--tag-object", required=True)
+    consume.add_argument("--signature-sha256", required=True)
+    consume.add_argument("--trust-policy-sha256", required=True)
+    consume.add_argument("--vendor-manifest-sha256", required=True)
+    consume.add_argument("--manifest-digest", required=True)
+    consume.add_argument("runtime_command", nargs="*")
     item = commands.add_parser("reconcile")
     item.add_argument("--commit", action="store_true")
     item.add_argument("--push", action="store_true")

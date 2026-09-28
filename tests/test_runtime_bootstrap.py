@@ -26,9 +26,11 @@ from tools.runtime_bootstrap import (
     resolve_selected_runtime,
     resolve_selected_runtime_bound,
     run_admitted_runtime,
+    run_selected_runtime,
     verify_runtime_manifest,
 )
 from tools.upgrade_authority import AuthorityError, commit_runtime_selector, read_runtime_selector
+from tools.upgrade_commands import consume_selected_runtime_command
 
 
 class RuntimeBootstrapTests(unittest.TestCase):
@@ -418,6 +420,50 @@ class RuntimeBootstrapTests(unittest.TestCase):
                 self.assertEqual("", result.stderr)
                 admission.close()
                 self.assertEqual(-1, resolved.descriptor)
+
+    def test_run_selected_runtime_consumes_authenticated_selected_entrypoint(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            releases = root / "releases"
+            releases.mkdir(mode=0o700)
+            selected = releases / "v1.2.3"
+            selected.mkdir(mode=0o700)
+            self._write_manifest(selected)
+            self._write_entrypoint(selected)
+            selector = root / "runtime-selector.json"
+            commit_runtime_selector(selector, "v1.2.3", "v1.2.2")
+            result = run_selected_runtime(
+                selector,
+                releases,
+                self._identity_for_release(),
+                self._verifier,
+                ("doctor",),
+            )
+            self.assertEqual(0, result.returncode)
+            self.assertEqual("selected-runtime\n", result.stdout)
+
+    def test_upgrade_command_consumes_selected_runtime_through_launcher(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            releases = root / "releases"
+            releases.mkdir(mode=0o700)
+            selected = releases / "v1.2.3"
+            selected.mkdir(mode=0o700)
+            self._write_manifest(selected)
+            self._write_entrypoint(selected)
+            selector = root / "runtime-selector.json"
+            commit_runtime_selector(selector, "v1.2.3", "v1.2.2")
+            manifest_digest = sha256((selected / "runtime-manifest.json").read_bytes()).hexdigest()
+            self.assertEqual(
+                0,
+                consume_selected_runtime_command(
+                    selector,
+                    releases,
+                    self._identity_for_release(),
+                    manifest_digest,
+                    ("doctor",),
+                ),
+            )
 
     def test_run_admitted_runtime_executes_real_selected_coordinator_entrypoint(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

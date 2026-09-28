@@ -8,8 +8,18 @@ from __future__ import annotations
 import json
 import os
 import stat
+from hashlib import sha256
 from pathlib import Path
 from typing import Any, NoReturn, cast
+
+if __package__:
+    from .runtime_bootstrap import ExpectedRuntimeIdentity, VerifiedManifest, run_selected_runtime
+else:  # pragma: no cover - direct script execution
+    from runtime_bootstrap import (  # type: ignore[import-not-found,no-redef]
+        ExpectedRuntimeIdentity,
+        VerifiedManifest,
+        run_selected_runtime,
+    )
 
 if __package__:
     from .upgrade_binding import (
@@ -36,6 +46,56 @@ MUTATING_ACTIONS = {"apply", "rollback"}
 
 class UpgradeCommandError(RuntimeError):
     """A requested upgrade command is invalid or not safely executable."""
+
+
+def consume_selected_runtime_command(
+    selector: Path,
+    releases_root: Path,
+    expected_identity: ExpectedRuntimeIdentity,
+    manifest_digest: str,
+    arguments: tuple[str, ...] = (),
+) -> int:
+    """Consume the selected runtime through the verified launcher boundary.
+
+    This is the production read-only upgrade command path.  The caller supplies
+    identity evidence and a selector/root, never a runtime or script path; the
+    launcher owns resolution, revalidation, fixed-entrypoint selection, and
+    read-only argument validation.
+    """
+    if len(manifest_digest) != 64 or any(
+        character not in "0123456789abcdef" for character in manifest_digest
+    ):
+        raise UpgradeCommandError("runtime manifest digest is invalid")
+
+    def verify_authenticity(
+        runtime_root: Path, identity: ExpectedRuntimeIdentity
+    ) -> VerifiedManifest:
+        manifest = runtime_root / "runtime-manifest.json"
+        try:
+            digest = sha256(manifest.read_bytes()).hexdigest()
+        except OSError as error:
+            raise UpgradeCommandError("runtime manifest is unavailable") from error
+        if digest != manifest_digest:
+            raise UpgradeCommandError("runtime manifest digest does not match")
+        return VerifiedManifest(
+            release=runtime_root.name,
+            identity=identity,
+            digest=digest,
+        )
+
+    try:
+        result = run_selected_runtime(
+            selector,
+            releases_root,
+            expected_identity,
+            verify_authenticity,
+            arguments,
+        )
+    except Exception as error:
+        if isinstance(error, UpgradeCommandError):
+            raise
+        raise UpgradeCommandError("selected runtime consumption failed") from error
+    return result.returncode
 
 
 def _strict_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
