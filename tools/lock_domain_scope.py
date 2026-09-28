@@ -295,6 +295,19 @@ class SQLiteCoordinationWriteAdapter:
             authorization = self._control._authorize_release_locked(current, evidence)
             return self._control._complete_release_locked(operation_id, authorization)
 
+    def control_with_barrier(
+        self,
+        expected_revision: int,
+        record: Mapping[str, object],
+        authority: Callable[[Mapping[str, object]], Mapping[str, object]],
+    ) -> dict[str, object]:
+        """Run one typed barrier callback under the full lock-domain scope."""
+        with self._scope._hold_with_guard() as common_guard:
+            self._assert_control_binding(record)
+            return self._control.with_barrier_locked(
+                common_guard, expected_revision, record, authority
+            )
+
     def _assert_control_binding(self, record: Mapping[str, object]) -> None:
         current = self._session._snapshot_locked()
         if current is None:  # pragma: no cover - scope recheck rejects absence first
