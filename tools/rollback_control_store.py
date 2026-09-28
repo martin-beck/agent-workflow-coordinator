@@ -1402,6 +1402,22 @@ class SQLiteRollbackControlStore:
             result = dict(authority(dict(held)))
             return self._cas_connection(connection, cast(int, held["revision"]), _validate(result))
 
+    def with_barrier_locked(
+        self,
+        common_guard: CoordinatorLockGuard,
+        expected_revision: int,
+        record: Mapping[str, object],
+        authority: Callable[[Mapping[str, object]], Mapping[str, object]],
+    ) -> dict[str, object]:
+        """Run the barrier callback while caller-owned locks are held."""
+        supplied = _validate(record)
+        if supplied["project_id"] != self.project_id:
+            raise ControlStoreError("control project binding mismatch")
+        self._require_operation_lock()
+        held = self.cas_locked(common_guard, expected_revision, supplied)
+        result = dict(authority(dict(held)))
+        return self.cas_locked(common_guard, cast(int, held["revision"]), _validate(result))
+
 
 class SQLiteBarrierSessionStore:
     """Durable CAS adapter for the target-neutral v10 barrier session.

@@ -1063,6 +1063,55 @@ class LockDomainScopeTests(unittest.TestCase):
         self.assertEqual("releasing", result["status"])
         self.assertEqual(2, result["revision"])
 
+    def test_typed_coordination_writer_with_barrier_holds_full_scope(self) -> None:
+        scope = LockDomainScope.bind(self.session, self.fence, self.lease, self.recheck, locked)
+        writer = bind_sqlite_coordination_writer(scope, self.store, self.session)
+        child = BarrierChildIdentity.bind(identity(), "forward-1", "new")
+        writer.session_bind_child(identity(), 1, child)
+        record = control_record()
+        record["operation_id"] = child.operation_id
+        record["target"] = child.target
+        record["barrier_identity_digest"] = canonical_barrier_digest(record)
+        record["envelope_digest"] = canonical_envelope_digest(record)
+        observed: list[tuple[bool, bool]] = []
+
+        def authority(held: Mapping[str, object]) -> Mapping[str, object]:
+            self.assertEqual("held", held["status"])
+            observed.append(
+                (
+                    self.store.operation_owned_by_current_thread,
+                    self.session.operation_owned_by_current_thread,
+                )
+            )
+            return {**held, "status": "releasing"}
+
+        result = writer.control_with_barrier(0, record, authority)
+
+        self.assertEqual("releasing", result["status"])
+        self.assertEqual(2, result["revision"])
+        self.assertEqual([(True, True)], observed)
+        self.assertFalse(self.store.operation_owned_by_current_thread)
+
+    def test_typed_coordination_writer_with_barrier_failure_leaves_held(self) -> None:
+        scope = LockDomainScope.bind(self.session, self.fence, self.lease, self.recheck, locked)
+        writer = bind_sqlite_coordination_writer(scope, self.store, self.session)
+        child = BarrierChildIdentity.bind(identity(), "forward-1", "new")
+        writer.session_bind_child(identity(), 1, child)
+        record = control_record()
+        record["operation_id"] = child.operation_id
+        record["target"] = child.target
+        record["barrier_identity_digest"] = canonical_barrier_digest(record)
+        record["envelope_digest"] = canonical_envelope_digest(record)
+
+        def fail(_: Mapping[str, object]) -> Mapping[str, object]:
+            raise RuntimeError("injected authority failure")
+
+        with self.assertRaisesRegex(RuntimeError, "injected authority failure"):
+            writer.control_with_barrier(0, record, fail)
+
+        self.assertEqual("held", self.store.snapshot(child.operation_id)["status"])
+        self.assertFalse(self.store.operation_owned_by_current_thread)
+
     def test_typed_coordination_writer_rejects_release_identity_drift(self) -> None:
         scope = LockDomainScope.bind(self.session, self.fence, self.lease, self.recheck, locked)
         writer = bind_sqlite_coordination_writer(scope, self.store, self.session)
