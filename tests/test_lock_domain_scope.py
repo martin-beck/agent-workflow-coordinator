@@ -1170,6 +1170,28 @@ class LockDomainScopeTests(unittest.TestCase):
         with self.assertRaisesRegex(LockDomainError, "not held"):
             scope.hold().__enter__()
 
+    def test_typed_coordination_writer_recovers_unknown_under_full_scope(self) -> None:
+        scope = LockDomainScope.bind(self.session, self.fence, self.lease, self.recheck, locked)
+        writer = bind_sqlite_coordination_writer(scope, self.store, self.session)
+
+        recovered = writer.session_recover_unknown()
+
+        self.assertIsNotNone(recovered)
+        assert recovered is not None
+        self.assertEqual("held", recovered.status)
+        self.assertEqual(1, recovered.revision)
+        self.assertFalse(self.session.operation_owned_by_current_thread)
+
+        with patch.object(self.session, "recover_unknown_locked", return_value=None):
+            self.assertIsNone(writer.session_recover_unknown())
+
+        wrong = BarrierSessionState(replace(identity(), attempt_id="other"), "held", 1)
+        with (
+            patch.object(self.session, "recover_unknown_locked", return_value=wrong),
+            self.assertRaisesRegex(ControlStoreError, "identity changed"),
+        ):
+            writer.session_recover_unknown()
+
     def test_typed_coordination_writer_rejects_completion_identity_drift(self) -> None:
         scope = LockDomainScope.bind(self.session, self.fence, self.lease, self.recheck, locked)
         writer = bind_sqlite_coordination_writer(scope, self.store, self.session)

@@ -217,13 +217,6 @@ class LockDomainScope:
             )
         except ControlStoreError as error:
             raise LockDomainError(f"durable session recheck failed: {error}") from error
-        if state.status not in allowed_session_statuses:
-            message = (
-                "durable session is not held"
-                if allowed_session_statuses == ("held",)
-                else "durable session is not in an admissible status"
-            )
-            raise LockDomainError(message)
         if state.identity != self._session_identity or state.revision != self._session_revision:
             raise LockDomainError("durable session and lease do not match")
         self._identity.assert_session_binding(
@@ -444,6 +437,17 @@ class SQLiteCoordinationWriteAdapter:
             state = contract.mark_ambiguous(expected_revision, cause_code)
             result = self._session._cas_locked(expected_revision, state)
             self._scope._session_revision = result.revision
+            common_guard.assert_owned()
+            return result
+
+    def session_recover_unknown(self) -> BarrierSessionState | None:
+        """Recover prepared session outcomes under the full lock-domain scope."""
+        with self._scope._hold_with_guard(("held", "releasing")) as common_guard:
+            result = self._session.recover_unknown_locked(common_guard)
+            if result is not None:
+                if result.identity != self._scope._session_identity:
+                    raise ControlStoreError("recovered barrier session identity changed")
+                self._scope._session_revision = result.revision
             common_guard.assert_owned()
             return result
 
