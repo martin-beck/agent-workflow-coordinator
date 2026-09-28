@@ -408,6 +408,7 @@
       "inputs": {
         "backend": "sqlite",
         "backup_operation_id": "fixture:v0.3.8-to-v0.3.9:001:backup",
+        "target": "rollback",
         "barrier_id": "fixture-barrier",
         "expected_state_revision": 12,
         "fencing_token": "fixture-fence",

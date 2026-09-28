@@ -813,6 +813,35 @@ class SQLiteAuthorityAdapter:
                 "SQLite durable commit capability binding was rejected"
             ) from error
 
+    def bind_durable_rollback_capability(  # pragma: no cover - isolated backend seam
+        self,
+        admission: Any,
+        journal: Any,
+        *,
+        session_revision: int,
+        rollback_effect: Any,
+    ) -> Any:
+        """Bind one backend-owned rollback effect to the durable fence.
+
+        Public rollback dispatch remains disabled; this is only the typed
+        internal capability seam for a separately reviewed rollback effect.
+        """
+        from tools.authority_mutation import AuthorityMutationError, DurableBoundBackendMutation
+
+        if getattr(admission, "target", None) != "rollback" or not callable(rollback_effect):
+            raise SQLiteAuthorityError("SQLite durable rollback capability binding was rejected")
+        try:
+            return DurableBoundBackendMutation(
+                admission,
+                journal,
+                session_revision=session_revision,
+                backend_effect=rollback_effect,
+            )
+        except AuthorityMutationError as error:
+            raise SQLiteAuthorityError(
+                "SQLite durable rollback capability binding was rejected"
+            ) from error
+
     @staticmethod
     def observe_backup_identity(
         backup: Path,

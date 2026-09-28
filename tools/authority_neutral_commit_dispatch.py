@@ -16,7 +16,7 @@ from copy import deepcopy
 from types import MappingProxyType
 from typing import Protocol
 
-from tools.authority_mutation import MutationReceipt
+from tools.authority_mutation import DurableBoundBackendMutation, MutationReceipt
 
 
 class CommitDispatchError(RuntimeError):
@@ -142,7 +142,9 @@ class BoundCommitPhaseAdapter:
         ):
             if context.get(field) != expected:
                 raise CommitDispatchError(f"commit context identity mismatch: {field}")
-        if not callable(getattr(executor, "execute", None)):
+        if not isinstance(executor, DurableBoundBackendMutation) or not callable(
+            getattr(executor, "execute", None)
+        ):
             raise CommitDispatchError("commit executor is not a durable capability")
         self._operation = MappingProxyType(deepcopy(dict(validated)))
         self._context = MappingProxyType(deepcopy(dict(context)))

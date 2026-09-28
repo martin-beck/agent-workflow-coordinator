@@ -69,7 +69,7 @@ class CommitAdmissionBundle:
     def __post_init__(self) -> None:
         if not isinstance(self.backend, str) or self.backend not in {"git", "sqlite"}:
             raise CommitAuthorizationExecutionError("commit authorization identity is invalid")
-        if not isinstance(self.target, str) or self.target != "new":
+        if not isinstance(self.target, str) or self.target not in {"new", "rollback"}:
             raise CommitAuthorizationExecutionError("commit authorization identity is invalid")
         for field in ("operation_id", "fencing_token", "barrier_id"):
             value = getattr(self, field)

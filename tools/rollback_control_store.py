@@ -208,7 +208,7 @@ class AuthorityEffectIntent:
             )
         ):
             raise ControlStoreError("authority effect intent identity is invalid")
-        if self.backend not in {"git", "sqlite"} or self.target != "new":
+        if self.backend not in {"git", "sqlite"} or self.target not in {"new", "rollback"}:
             raise ControlStoreError("authority effect intent backend or target is invalid")
         if type(self.session_revision) is not int or self.session_revision < 1:
             raise ControlStoreError("authority effect intent session revision is invalid")
@@ -2428,7 +2428,7 @@ class SQLiteBarrierSessionStore:
         intent_id = uuid.uuid4().hex
         if not all(isinstance(value, str) and value for value in (operation_id, backend, target)):
             raise ControlStoreError("authority effect identity is invalid")
-        if backend not in {"git", "sqlite"} or target != "new":
+        if backend not in {"git", "sqlite"} or target not in {"new", "rollback"}:
             raise ControlStoreError("authority effect backend or target is invalid")
         for value, label in (
             (expected_fencing_token, "fencing token"),
@@ -2458,6 +2458,15 @@ class SQLiteBarrierSessionStore:
             current = self._snapshot_locked()
             if current is None or current.status != "held":
                 raise ControlStoreError("authority effect requires a held barrier session")
+            if "." in operation_id or ":" in operation_id:
+                child = current.rollback_child if target == "rollback" else current.forward_child
+                expected_child_ids = {operation_id, operation_id.rsplit(":", 1)[0]}
+                if child is not None and (
+                    child.operation_id not in expected_child_ids or child.target != target
+                ):
+                    raise ControlStoreError(
+                        "authority effect operation is not the registered barrier child"
+                    )
             if current.revision != expected_revision:
                 raise ControlStoreError("authority effect session revision conflict")
             if (

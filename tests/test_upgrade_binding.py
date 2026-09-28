@@ -304,6 +304,7 @@ class UpgradeBindingTests(unittest.TestCase):
             "barrier_id": "barrier-7",
             "fencing_token": "fence-7",
             "backup_operation_id": "op:backup",
+            "target": "rollback",
         }
         value: dict[str, Any] = {
             "operation_id": "op",
@@ -317,6 +318,7 @@ class UpgradeBindingTests(unittest.TestCase):
             for mutation in (
                 {**inputs, "unexpected": True},
                 {**inputs, "selector_ref": "other"},
+                {**inputs, "target": "new"},
             ):
                 changed = copy.deepcopy(value)
                 changed["rollback"]["operation"]["inputs"] = mutation

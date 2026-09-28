@@ -18,11 +18,19 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Protocol, cast, runtime_checkable
 
-from tools.authority_mutation import AuthorityMutationAmbiguousError
+from tools.authority_mutation import (
+    AuthorityMutationAmbiguousError,
+    AuthorityMutationRejectedError,
+)
 from tools.authority_neutral_backup import BoundBackupPhaseAdapter
-from tools.authority_neutral_commit_dispatch import BoundCommitPhaseAdapter
+from tools.authority_neutral_commit_dispatch import BoundCommitPhaseAdapter, CommitDispatchError
+from tools.authority_neutral_rollback_dispatch import (
+    BoundRollbackPhaseAdapter,
+    RollbackDispatchError,
+)
 from tools.authority_neutral_stage import BoundStagePhaseAdapter
 from tools.authority_neutral_validation import BoundValidationPhaseAdapter
+from tools.rollback_control_store import ControlStoreError
 from tools.rollback_evidence import BackupObservation
 from tools.runtime_bootstrap import DispatchAdmission
 from tools.upgrade_admission import (
@@ -722,6 +730,11 @@ class UpgradeEngine:
         commit_executor: object | None = None,
         commit_argument: object | None = None,
         commit_evidence: Mapping[str, object] | None = None,
+        rollback_operation: Mapping[str, object] | None = None,
+        rollback_context: Mapping[str, object] | None = None,
+        rollback_executor: object | None = None,
+        rollback_argument: object | None = None,
+        rollback_evidence: Mapping[str, object] | None = None,
     ) -> None:
         if not operation_id or ":" in operation_id:
             raise UpgradeError("invalid operation identity")
@@ -730,6 +743,37 @@ class UpgradeEngine:
         self.lock_path = lock_path or journal.parent / ".upgrade-engine.lock"
         self.backend_adapter = backend_adapter
         self.rollback_bound_verifier = rollback_bound_verifier
+        rollback_parts = (
+            rollback_operation,
+            rollback_context,
+            rollback_executor,
+            rollback_argument,
+            rollback_evidence,
+        )
+        rollback_count = sum(value is not None for value in rollback_parts)
+        if rollback_count not in (0, len(rollback_parts)):
+            raise UpgradeError(
+                "rollback operation, context, executor, argument, and "
+                "evidence are required together"
+            )
+        self._rollback_phase_adapter: BoundRollbackPhaseAdapter | None = None
+        if rollback_count == len(rollback_parts):  # pragma: no cover - isolated internal seam
+            if (
+                backend_adapter is None
+                or rollback_context is None
+                or rollback_operation is None
+                or rollback_executor is None
+            ):
+                raise UpgradeError("rollback capability requires a backend adapter")
+            try:
+                self._rollback_phase_adapter = BoundRollbackPhaseAdapter(
+                    rollback_operation,
+                    rollback_context,
+                    cast(Any, rollback_executor),
+                    rollback_argument,
+                )
+            except Exception as error:
+                raise UpgradeError("rollback capability binding is invalid") from error
         if (backup_operation is None) != (backup_context is None):
             raise UpgradeError("backup operation and context must be supplied together")
         self._backup_phase_adapter: BoundBackupPhaseAdapter | None = None
@@ -1239,7 +1283,7 @@ class UpgradeEngine:
                         raise UpgradeError("handler cannot override backend evidence")
                 result.update(handler_result)
                 self._load()
-            except AuthorityMutationAmbiguousError as error:
+            except (AuthorityMutationAmbiguousError, CommitDispatchError) as error:
                 record.update(outcome="ambiguous", error=type(error).__name__)
                 value["status"] = "safe-mode"
                 _write(self.journal, value)
@@ -1297,6 +1341,8 @@ class UpgradeEngine:
 
     def rollback(self, handler: Handler) -> dict[str, Any]:  # noqa: C901
         with self._operation_scope(), self._exclusive():
+            if self._rollback_phase_adapter is not None:  # pragma: no cover - public guard
+                raise UpgradeError("public rollback dispatch is disabled")
             if self.backend_adapter is None:
                 raise UpgradeError("backend adapter is required for rollback")
             snapshot: Mapping[str, object]
@@ -1442,11 +1488,10 @@ class UpgradeEngine:
         value["records"].append(record)
         _write(self.journal, value)
         try:
-            adapter_result = dict(
-                self.backend_adapter.execute(
-                    "rollback", cast(Mapping[str, object], _freeze(self._verified_rollback_context))
-                )
-            )
+            rollback_context = cast(Mapping[str, object], _freeze(self._verified_rollback_context))
+            # The internal rollback capability is bound for a later, separately
+            # authorized dispatcher.  Public rollback remains rejection-only.
+            adapter_result = dict(self.backend_adapter.execute("rollback", rollback_context))
             required = ("restored_verified", "runtime_validated", "backend_roundtrip_valid")
             if any(
                 type(adapter_result.get(field)) is not bool or adapter_result.get(field) is not True
@@ -1466,6 +1511,15 @@ class UpgradeEngine:
                 raise UpgradeError("backend rollback result identity is incomplete")
             record["outcome"] = "rollback_verified"
             record["result"] = result
+        except (  # pragma: no cover - internal dispatcher is not public
+            AuthorityMutationRejectedError,
+            ControlStoreError,
+            RollbackDispatchError,
+        ) as error:
+            record.update(outcome="failed", error=type(error).__name__)
+            value["status"] = "failed"
+            _write(self.journal, value)
+            raise UpgradeError("rollback phase rejected") from error
         except Exception as error:
             record.update(outcome="ambiguous", error=type(error).__name__)
             value["status"] = "safe-mode"

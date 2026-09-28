@@ -1700,7 +1700,7 @@ class SQLiteMutationBarrierProcessTests(unittest.TestCase):
         with self.assertRaisesRegex(ControlStoreError, "identity is invalid"):
             self.session.prepare_authority_effect(1, "", "sqlite")
         with self.assertRaisesRegex(ControlStoreError, "backend or target"):
-            self.session.prepare_authority_effect(1, "op-1", "git", "rollback")
+            self.session.prepare_authority_effect(1, "op-1", "git", "sideways")
         for values in (
             ("", "op", "sqlite", "new", "attempt", "d" * 64, "fence", 1),
             ("intent", "op", "other", "new", "attempt", "d" * 64, "fence", 1),
@@ -1854,6 +1854,17 @@ class SQLiteMutationBarrierProcessTests(unittest.TestCase):
         ambiguous_intent = self.session.prepare_authority_effect(held.revision, "op-2", "sqlite")
         ambiguous = self.session.finish_authority_effect(ambiguous_intent, "ambiguous")
         self.assertEqual("ambiguous", ambiguous.status)
+
+    def test_generated_authority_effect_must_match_registered_child(self) -> None:
+        held = self._create_held()
+        bound = self.session.bind_child(
+            held.revision,
+            BarrierChildIdentity("upgrade-1.commit", "new", held.identity.identity_digest),
+        )
+        with self.assertRaisesRegex(ControlStoreError, "registered barrier child"):
+            self.session.prepare_authority_effect(
+                bound.revision, "upgrade-foreign.commit", "sqlite"
+            )
 
     def test_integrated_pre_effect_rejection_is_journaled_without_fencing(self) -> None:
         held = self._create_held()

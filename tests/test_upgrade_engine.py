@@ -17,7 +17,12 @@ from typing import Any, cast
 from unittest.mock import patch
 
 from tools import upgrade_engine as upgrade_engine_module
-from tools.authority_mutation import AuthorityMutationAmbiguousError, MutationReceipt
+from tools.authority_mutation import (
+    AuthorityMutationAmbiguousError,
+    AuthorityMutationRejectedError,
+    DurableBoundBackendMutation,
+    MutationReceipt,
+)
 from tools.authority_neutral_backup import BoundBackupPhaseAdapter
 from tools.authority_neutral_stage import BoundStagePhaseAdapter
 from tools.authority_neutral_validation import BoundValidationPhaseAdapter
@@ -218,7 +223,7 @@ class UpgradeEngineTests(unittest.TestCase):
             "current_snapshot": admission,
         }
 
-        class Executor:
+        class Executor(DurableBoundBackendMutation):
             def __init__(self) -> None:
                 self.arguments: list[object] = []
 
@@ -423,28 +428,31 @@ class UpgradeEngineTests(unittest.TestCase):
             self.assertEqual(result["status"], "completed")
             self.assertEqual(executor.arguments, ["bound-effect"])
 
-            class AmbiguousExecutor:
-                def execute(self, _argument: object) -> MutationReceipt:
-                    raise AuthorityMutationAmbiguousError("unknown authority outcome")
+        class AmbiguousExecutor(DurableBoundBackendMutation):
+            def __init__(self) -> None:
+                pass
 
-            with tempfile.TemporaryDirectory() as ambiguous_directory:
-                ambiguous_engine = UpgradeEngine(
-                    "op-commit",
-                    Path(ambiguous_directory) / "journal.json",
-                    context,
-                    backend_adapter=FakeAdapter(),
-                    commit_operation=operation,
-                    commit_context=commit_context,
-                    commit_executor=AmbiguousExecutor(),
-                    commit_argument="bound-effect",
-                    commit_evidence=evidence,
-                )
-                ambiguous_engine.plan()
-                with self.assertRaisesRegex(UpgradeError, "phase outcome is ambiguous: commit"):
-                    ambiguous_engine.apply(handlers)
-                ambiguous_journal = ambiguous_engine._load()
-                self.assertEqual(ambiguous_journal["status"], "safe-mode")
-                self.assertEqual(ambiguous_journal["records"][-1]["outcome"], "ambiguous")
+            def execute(self, _argument: object) -> MutationReceipt:
+                raise AuthorityMutationAmbiguousError("unknown authority outcome")
+
+        with tempfile.TemporaryDirectory() as ambiguous_directory:
+            ambiguous_engine = UpgradeEngine(
+                "op-commit",
+                Path(ambiguous_directory) / "journal.json",
+                context,
+                backend_adapter=FakeAdapter(),
+                commit_operation=operation,
+                commit_context=commit_context,
+                commit_executor=AmbiguousExecutor(),
+                commit_argument="bound-effect",
+                commit_evidence=evidence,
+            )
+            ambiguous_engine.plan()
+            with self.assertRaisesRegex(UpgradeError, "phase outcome is ambiguous: commit"):
+                ambiguous_engine.apply(handlers)
+            ambiguous_journal = ambiguous_engine._load()
+            self.assertEqual(ambiguous_journal["status"], "safe-mode")
+            self.assertEqual(ambiguous_journal["records"][-1]["outcome"], "ambiguous")
 
     def test_validation_binding_rejects_partial_or_unbound_inputs(self) -> None:
         admission = object.__new__(DispatchAdmission)
@@ -2186,6 +2194,8 @@ class UpgradeEngineTests(unittest.TestCase):
                 return durable
 
             def execute(self, phase: str, context: object) -> dict[str, object]:
+                if phase == "rollback" and self.fault == "pre-effect-rejected":
+                    raise AuthorityMutationRejectedError("rollback admission rejected")
                 result = super().execute(phase, context)
                 if phase == "rollback" and self.fault == "runtime-unverified":
                     result["runtime_validated"] = False
@@ -2224,6 +2234,7 @@ class UpgradeEngineTests(unittest.TestCase):
             ("verify-raises", "failed", None),
             ("verify-missing", "failed", None),
             ("runtime-unverified", "safe-mode", "ambiguous"),
+            ("pre-effect-rejected", "failed", "failed"),
             ("result-incomplete", "safe-mode", "ambiguous"),
             ("handler-conflict", "safe-mode", "ambiguous"),
             ("handler-evidence", "safe-mode", "ambiguous"),

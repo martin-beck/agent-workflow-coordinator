@@ -7,7 +7,7 @@ from __future__ import annotations
 import unittest
 from typing import cast
 
-from tools.authority_mutation import MutationReceipt
+from tools.authority_mutation import DurableBoundBackendMutation, MutationReceipt
 from tools.authority_neutral_commit_dispatch import (
     BoundCommitPhaseAdapter,
     CommitDispatchError,
@@ -42,7 +42,7 @@ CONTEXT = {
 }
 
 
-class FakeExecutor:
+class FakeExecutor(DurableBoundBackendMutation):
     def __init__(self, receipt: MutationReceipt) -> None:
         self.receipt = receipt
         self.arguments: list[object] = []
@@ -52,13 +52,19 @@ class FakeExecutor:
         return self.receipt
 
 
-class WrongResultExecutor:
-    def execute(self, argument: object) -> object:
+class WrongResultExecutor(DurableBoundBackendMutation):
+    def __init__(self) -> None:
+        pass
+
+    def execute(self, argument: object) -> object:  # type: ignore[override]
         return argument
 
 
-class NonCallableExecutor:
-    execute = None
+class NonCallableExecutor(DurableBoundBackendMutation):
+    def __init__(self) -> None:
+        pass
+
+    execute = None  # type: ignore[assignment]
 
 
 def receipt(
@@ -214,7 +220,10 @@ class CommitDispatchTests(unittest.TestCase):
             ).execute("commit", CONTEXT)
 
     def test_executor_failure_consumes_capability(self) -> None:
-        class FailingExecutor:
+        class FailingExecutor(DurableBoundBackendMutation):
+            def __init__(self) -> None:
+                pass
+
             def execute(self, _argument: object) -> MutationReceipt:
                 raise RuntimeError("durable effect failed")
 

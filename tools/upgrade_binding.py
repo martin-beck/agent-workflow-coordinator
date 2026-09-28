@@ -80,16 +80,21 @@ def _validate_contract_identity(contract: Mapping[str, Any]) -> dict[str, Any]:
         "barrier_id",
         "fencing_token",
         "backup_operation_id",
+        "target",
     }
     if set(inputs) != required:
         raise UpgradeBindingError("upgrade contract binding inputs are invalid")
     for phase in value["phases"]:
-        if phase["operation"]["inputs"] != inputs:
+        if phase["operation"]["inputs"] != {
+            key: value for key, value in inputs.items() if key != "target"
+        }:
             raise UpgradeBindingError("upgrade phase inputs do not match rollback inputs")
     if value["backend"] != inputs["backend"]:
         raise UpgradeBindingError("upgrade contract backend binding is inconsistent")
     if inputs["backup_operation_id"] != f"{value['operation_id']}:backup":
         raise UpgradeBindingError("upgrade backup operation identity is invalid")
+    if inputs["target"] != "rollback":
+        raise UpgradeBindingError("upgrade rollback target is invalid")
     if value["rollback"]["operation"]["operation_id"] != f"{value['operation_id']}:rollback":
         raise UpgradeBindingError("upgrade rollback operation identity is invalid")
     return value
