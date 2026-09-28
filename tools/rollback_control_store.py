@@ -208,7 +208,7 @@ class AuthorityEffectIntent:
             )
         ):
             raise ControlStoreError("authority effect intent identity is invalid")
-        if self.backend not in {"git", "sqlite"} or self.target != "new":
+        if self.backend not in {"git", "sqlite"} or self.target not in {"new", "rollback"}:
             raise ControlStoreError("authority effect intent backend or target is invalid")
         if type(self.session_revision) is not int or self.session_revision < 1:
             raise ControlStoreError("authority effect intent session revision is invalid")
@@ -2428,7 +2428,7 @@ class SQLiteBarrierSessionStore:
         intent_id = uuid.uuid4().hex
         if not all(isinstance(value, str) and value for value in (operation_id, backend, target)):
             raise ControlStoreError("authority effect identity is invalid")
-        if backend not in {"git", "sqlite"} or target != "new":
+        if backend not in {"git", "sqlite"} or target not in {"new", "rollback"}:
             raise ControlStoreError("authority effect backend or target is invalid")
         for value, label in (
             (expected_fencing_token, "fencing token"),

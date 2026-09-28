@@ -1700,7 +1700,7 @@ class SQLiteMutationBarrierProcessTests(unittest.TestCase):
         with self.assertRaisesRegex(ControlStoreError, "identity is invalid"):
             self.session.prepare_authority_effect(1, "", "sqlite")
         with self.assertRaisesRegex(ControlStoreError, "backend or target"):
-            self.session.prepare_authority_effect(1, "op-1", "git", "rollback")
+            self.session.prepare_authority_effect(1, "op-1", "git", "sideways")
         for values in (
             ("", "op", "sqlite", "new", "attempt", "d" * 64, "fence", 1),
             ("intent", "op", "other", "new", "attempt", "d" * 64, "fence", 1),

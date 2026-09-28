@@ -30,6 +30,7 @@ from tools.authority_neutral_rollback_dispatch import (
 )
 from tools.authority_neutral_stage import BoundStagePhaseAdapter
 from tools.authority_neutral_validation import BoundValidationPhaseAdapter
+from tools.rollback_control_store import ControlStoreError
 from tools.rollback_evidence import BackupObservation
 from tools.runtime_bootstrap import DispatchAdmission
 from tools.upgrade_admission import (
@@ -1340,6 +1341,8 @@ class UpgradeEngine:
 
     def rollback(self, handler: Handler) -> dict[str, Any]:  # noqa: C901
         with self._operation_scope(), self._exclusive():
+            if self._rollback_phase_adapter is not None:
+                raise UpgradeError("public rollback dispatch is disabled")
             if self.backend_adapter is None:
                 raise UpgradeError("backend adapter is required for rollback")
             snapshot: Mapping[str, object]
@@ -1516,7 +1519,11 @@ class UpgradeEngine:
                 raise UpgradeError("backend rollback result identity is incomplete")
             record["outcome"] = "rollback_verified"
             record["result"] = result
-        except (AuthorityMutationRejectedError, RollbackDispatchError) as error:
+        except (
+            AuthorityMutationRejectedError,
+            ControlStoreError,
+            RollbackDispatchError,
+        ) as error:
             record.update(outcome="failed", error=type(error).__name__)
             value["status"] = "failed"
             _write(self.journal, value)

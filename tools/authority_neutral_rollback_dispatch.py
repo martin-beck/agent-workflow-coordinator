@@ -8,6 +8,8 @@ rejection-only until a later AR supplies the complete operational evidence.
 
 from __future__ import annotations
 
+import posixpath
+import re
 from collections.abc import Mapping
 from copy import deepcopy
 from types import MappingProxyType
@@ -44,6 +46,7 @@ _INPUT_FIELDS = {
     "fencing_token",
     "backup_operation_id",
 }
+_SELECTOR_REF = re.compile(r"(?!/)(?!.*(?:^|/)\.\.(?:/|$))[A-Za-z0-9._/-]{1,255}")
 
 
 def _validate_operation(operation: Mapping[str, object]) -> dict[str, object]:  # noqa: C901
@@ -59,7 +62,12 @@ def _validate_operation(operation: Mapping[str, object]) -> dict[str, object]:  
         raise RollbackDispatchError("rollback operation inputs are incomplete or unknown")
     if inputs.get("backend") not in {"git", "sqlite"} or inputs.get("target") != "rollback":
         raise RollbackDispatchError("rollback operation target or backend is invalid")
-    if not isinstance(inputs.get("selector_ref"), str) or not inputs["selector_ref"]:
+    selector_ref = inputs.get("selector_ref")
+    if (
+        not isinstance(selector_ref, str)
+        or _SELECTOR_REF.fullmatch(selector_ref) is None
+        or posixpath.normpath(selector_ref) != selector_ref
+    ):
         raise RollbackDispatchError("rollback operation selector reference is invalid")
     if inputs.get("backup_operation_id") != f"{operation_id.rsplit(':', 1)[0]}:backup":
         raise RollbackDispatchError("rollback operation backup identity is invalid")
