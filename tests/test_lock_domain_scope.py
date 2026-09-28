@@ -1031,6 +1031,7 @@ class LockDomainScopeTests(unittest.TestCase):
         )
         record = control_record()
         record["operation_id"] = "forward-1"
+        record["target"] = "new"
         record["barrier_identity_digest"] = canonical_barrier_digest(record)
         record["envelope_digest"] = canonical_envelope_digest(record)
 
@@ -1047,6 +1048,7 @@ class LockDomainScopeTests(unittest.TestCase):
         )
         record = control_record()
         record["operation_id"] = "forward-1"
+        record["target"] = "new"
         record["barrier_identity_digest"] = canonical_barrier_digest(record)
         record["envelope_digest"] = canonical_envelope_digest(record)
         writer.control_cas(0, record)
@@ -1100,6 +1102,17 @@ class LockDomainScopeTests(unittest.TestCase):
         )
         record = control_record()
         with self.assertRaisesRegex(ControlStoreError, "not bound"):
+            writer.control_cas(0, record)
+
+    def test_typed_coordination_writer_rejects_control_target_drift(self) -> None:
+        scope = LockDomainScope.bind(self.session, self.fence, self.lease, self.recheck, locked)
+        writer = bind_sqlite_coordination_writer(scope, self.store, self.session)
+        writer.session_bind_child(
+            identity(), 1, BarrierChildIdentity.bind(identity(), "forward-1", "new")
+        )
+        record = control_record()
+        record["operation_id"] = "forward-1"
+        with self.assertRaisesRegex(ControlStoreError, "target"):
             writer.control_cas(0, record)
 
     def test_control_cas_rejects_non_guard_before_store_access(self) -> None:
