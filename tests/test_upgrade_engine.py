@@ -84,6 +84,7 @@ ADMISSION = {
     **dict.fromkeys(QUIESCENCE_PREDICATES, True),
     **dict.fromkeys(REOPEN_PREDICATES, True),
     **CONTEXT,
+    "barrier_status": "held",
     "validation_failed": False,
 }
 
