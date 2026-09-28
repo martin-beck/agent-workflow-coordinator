@@ -24,8 +24,9 @@ publication, upgrade, apply, or rollback dispatch.
 
 ## Ownership and lock order
 
-The caller owns one non-reentrant outer scope for the entire authority
-operation. It acquires and releases locks in exactly this order:
+The caller-owned typed coordination adapter uses one non-reentrant outer scope
+for each control/session operation. It acquires and releases locks in exactly
+this order:
 
 ```text
 repository-common -> control-store -> authority
@@ -34,7 +35,7 @@ repository-common -> control-store -> authority
 `SQLiteBarrierSessionStore.operation_lock()` must not be composed with this
 scope: that method acquires its own common/control locks and would either
 re-enter them or release the barrier before the authority lock is acquired.
-The future adapter therefore needs a caller-owned form with these semantics:
+The adapter's caller-owned form has these semantics:
 
 ```text
 with common_lock:
@@ -84,8 +85,9 @@ The implementation slice may be promoted only with tests that demonstrate:
 - process termination or uncertain commit entering durable `ambiguous` state;
 - writes resuming only after an independently verified `released` state.
 
-The typed coordination adapter remains an uncalled contract seam until its
-complete route inventory and corresponding bounded executable evidence are
-accepted. No public mutation route may bind to it. The model may guide
-implementation and scenario coverage, but a proof that the source refines the
-model is not a release prerequisite.
+The typed coordination adapter remains an uncalled contract seam. The route
+inventory and bounded hostile evidence, including a process-death boundary
+after durable control-barrier publication, do not authorize any public
+mutation route to bind to it. The model may guide implementation and scenario
+coverage, but a proof that the source refines the model is not a release
+prerequisite.
