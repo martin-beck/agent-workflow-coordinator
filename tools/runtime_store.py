@@ -9,12 +9,15 @@ It prepares a complete release for a later, separately admitted publication.
 
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import json
 import os
 import re
 import stat
 import tempfile
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -26,6 +29,24 @@ _DIGEST = re.compile(r"[0-9a-f]{64}\Z")
 
 class RuntimeStoreError(RuntimeError):
     """A release cannot be staged or trusted safely."""
+
+
+@contextmanager
+def _publication_lock(releases_root: Path, release: str) -> Iterator[None]:
+    """Serialize the final existence check and publication for one release."""
+    lock_path = releases_root / f".{release}.lock"
+    descriptor = os.open(lock_path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+    try:
+        with os.fdopen(descriptor, "a+") as lock:
+            descriptor = -1
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
 
 
 @dataclass(frozen=True, slots=True)
@@ -239,6 +260,9 @@ def stage_runtime_release(  # noqa: C901
         manifest_path.chmod(0o600)
         staged.chmod(0o700)
         verify_runtime_release(staged, policy, expected_release=release)
-        staged.replace(destination)
+        with _publication_lock(releases_root, release):
+            if destination.exists() or destination.is_symlink():
+                raise RuntimeStoreError("runtime release already exists")
+            staged.replace(destination)
     destination.chmod(0o700)
     return destination
