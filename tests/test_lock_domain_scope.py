@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import multiprocessing
 import os
+import signal
 import sqlite3
 import tempfile
 import time
@@ -325,6 +326,42 @@ def _typed_effect_prepare_process(root_text: str, ready: Any) -> None:
     writer.session_prepare_authority_effect(1, "effect-process-death", "sqlite")
     ready.set()
     multiprocessing.Event().wait()
+
+
+def _typed_control_barrier_process(root_text: str, ready: Any) -> None:
+    """Publish the held control barrier, then die before callback completion."""
+    root = Path(root_text)
+    authority = root / "authority.sqlite"
+    control = root / "control.sqlite"
+    store = SQLiteRollbackControlStore(control, PROJECT, authority)
+    session = SQLiteBarrierSessionStore(store, lambda: "authority-1")
+    fence = MutationFence(
+        authority,
+        root / "authority-marker.json",
+        root / "authority-lifecycle.json",
+        root / "authority.lock",
+        control,
+        root / "control-binding.json",
+        store.control_lock_path,
+    )
+    with locked() as guard:
+        domain = LockDomainContract.capture(guard, session, fence)
+    lease = AdmissionLease(PROJECT, "authority-1", "fence-1", "owner-1", "barrier-1", 1)
+    scope = LockDomainScope(domain, session, fence, lease, lease_recheck(lease), identity(), locked)
+    writer = bind_sqlite_coordination_writer(scope, store, session)
+    child = BarrierChildIdentity.bind(identity(), "forward-process-death", "new")
+    writer.session_bind_child(identity(), 1, child)
+    record = control_record()
+    record.update({"operation_id": child.operation_id, "target": child.target})
+    record["barrier_identity_digest"] = canonical_barrier_digest(record)
+    record["envelope_digest"] = canonical_envelope_digest(record)
+
+    def die_after_held(_: Mapping[str, object]) -> Mapping[str, object]:
+        ready.set()
+        os.kill(os.getpid(), signal.SIGKILL)
+        raise AssertionError("process must be dead")  # pragma: no cover
+
+    writer.control_with_barrier(0, record, die_after_held)
 
 
 def _fresh_recheck_process(
@@ -1250,6 +1287,26 @@ class LockDomainScopeTests(unittest.TestCase):
         self.assertEqual(2, scope._session_revision)
         with self.assertRaisesRegex(LockDomainError, "not held"):
             scope.hold().__enter__()
+
+    def test_typed_coordination_writer_process_death_preserves_held_control_boundary(self) -> None:
+        context = multiprocessing.get_context("fork")
+        ready = context.Event()
+        process = context.Process(
+            target=_typed_control_barrier_process,
+            args=(self.directory.name, ready),
+        )
+        process.start()
+        self.assertTrue(ready.wait(5))
+        process.join(timeout=10)
+        self.assertEqual(-signal.SIGKILL, process.exitcode)
+
+        fresh_store = SQLiteRollbackControlStore(
+            self.root / "control.sqlite", PROJECT, self.authority
+        )
+        observed = fresh_store.snapshot("forward-process-death")
+        self.assertEqual("held", observed["status"])
+        self.assertEqual(1, observed["revision"])
+        self.assertFalse(fresh_store.operation_owned_by_current_thread)
 
     def test_typed_coordination_writer_recovers_unknown_under_full_scope(self) -> None:
         scope = LockDomainScope.bind(self.session, self.fence, self.lease, self.recheck, locked)
