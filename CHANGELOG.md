@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.27
+
+- Add the independently reviewed, internally bound commit-phase dispatch seam;
+  public apply, rollback, release, and Dispatch remain rejection-only.
+
 ## 0.3.26
 
 - Recover checkpointed SQLite sidecars left by a killed writer while rejecting
