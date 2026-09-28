@@ -13,7 +13,7 @@ import tempfile
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import AbstractContextManager, contextmanager, nullcontext
 from pathlib import Path
-from typing import Any, Protocol, cast
+from typing import Any, Protocol, TypeVar, cast
 
 type Meta = dict[str, Any]
 type Task = tuple[Path, Meta, str]
@@ -24,6 +24,7 @@ NETWORK_FILESYSTEMS = frozenset(
     {"9p", "afs", "ceph", "cifs", "fuse.sshfs", "gfs2", "glusterfs", "nfs", "nfs4", "smb3"}
 )
 _FACTORY_SENTINEL = object()
+_WriteResult = TypeVar("_WriteResult")
 
 
 class StorageContentionError(RuntimeError):
@@ -1176,6 +1177,52 @@ def bind_sqlite_backend(
         backend_binding=backend_binding,
         _admission_capability=_FACTORY_SENTINEL,
     )
+
+
+class SQLiteAuthorityWriteAdapter:
+    """Single-operation authority writer bound to one lock-domain scope.
+
+    The raw backend is intentionally retained privately.  Each operation must
+    enter the caller-owned common -> control -> authority scope first; the
+    backend transaction then performs only the SQLite/descriptor checks while
+    those locks remain held.  This adapter does not authorize upgrade phases
+    and is not connected to the public upgrade dispatcher.
+    """
+
+    __slots__ = ("_backend",)
+
+    def __init__(self, backend: SQLiteBackend, sentinel: object) -> None:
+        if sentinel is not _FACTORY_SENTINEL:
+            raise TypeError("SQLiteAuthorityWriteAdapter must be issued by its factory")
+        self._backend = backend
+
+    def execute(self, operation: Callable[[SQLiteBackend], _WriteResult]) -> _WriteResult:
+        """Run exactly one caller operation while the bound scope is held."""
+        if not callable(operation):
+            raise TypeError("authority write operation must be callable")
+        # The issued backend's transaction enters the bound LockDomainScope;
+        # callers cannot obtain that backend except through this capability.
+        return operation(self._backend)
+
+
+def bind_sqlite_authority_writer(
+    path: Path,
+    binding: Meta,
+    tasks_root: Path,
+    authority_binding: SQLiteAuthorityBinding,
+    scope: object,
+) -> SQLiteAuthorityWriteAdapter:
+    """Issue a scope-bound writer without exposing a bypassable raw backend."""
+    from tools.lock_domain_scope import LockDomainScope
+
+    if not isinstance(scope, LockDomainScope):
+        raise TypeError("authority writer requires adapter-owned LockDomainScope")
+    if not isinstance(authority_binding, SQLiteAuthorityBinding):
+        raise TypeError("authority writer requires SQLiteAuthorityBinding")
+    if authority_binding.path != path.absolute():
+        raise ValueError("authority writer path does not match its binding")
+    backend = bind_sqlite_backend(path, binding, tasks_root, authority_binding, scope)
+    return SQLiteAuthorityWriteAdapter(backend, _FACTORY_SENTINEL)
 
 
 def bind_released_sqlite_backend(

@@ -47,6 +47,7 @@ from tools.sqlite_storage import (
     SQLiteAuthorityBinding,
     SQLiteBackend,
     SQLiteBackendBinding,
+    bind_sqlite_authority_writer,
     bind_sqlite_backend,
     create_database,
 )
@@ -863,6 +864,82 @@ class GitAuthorityAdapterTests(unittest.TestCase):
             authority,
             self.scope,
         )
+
+    def test_scope_bound_authority_writer_hides_raw_backend_and_holds_locks(self) -> None:
+        control = SQLiteBackendBinding.bind(self.control_store, self.session)
+        authority_path = self.control_store.authority_path
+        assert authority_path is not None
+        authority = SQLiteAuthorityBinding.bind(control, authority_path, self.scope)
+        writer = bind_sqlite_authority_writer(
+            authority_path,
+            self.authority_binding,
+            self.authority_tasks,
+            authority,
+            self.scope,
+        )
+        self.assertFalse(hasattr(writer, "mutate"))
+        self.assertFalse(hasattr(writer, "backend"))
+
+        def update_summary(
+            backend: SQLiteBackend,
+        ) -> None:
+            def transition(
+                meta: dict[str, Any], _tasks: list[tuple[Path, dict[str, Any], str]]
+            ) -> tuple[str, str]:
+                meta["summary"] = "scope-bound"
+                return "bound writer", "# Authority fixture\n"
+
+            backend.mutate(
+                "AR-0001",
+                1,
+                "update",
+                "2026-09-16T00:00:00+00:00",
+                transition,
+            )
+
+        writer.execute(update_summary)
+        self.assertEqual(
+            "scope-bound", self._bound_authority_backend().load_tasks()[0][1]["summary"]
+        )
+
+        with self.assertRaises(TypeError):
+            writer.execute(cast(Any, object()))
+
+    def test_scope_bound_authority_writer_rejects_unbound_capabilities(self) -> None:
+        control = SQLiteBackendBinding.bind(self.control_store, self.session)
+        authority_path = self.control_store.authority_path
+        assert authority_path is not None
+        authority = SQLiteAuthorityBinding.bind(control, authority_path, self.scope)
+        backend = self._bound_authority_backend()
+
+        with self.assertRaisesRegex(TypeError, "issued by its factory"):
+            from tools.sqlite_storage import SQLiteAuthorityWriteAdapter
+
+            SQLiteAuthorityWriteAdapter(backend, object())
+        with self.assertRaisesRegex(TypeError, "LockDomainScope"):
+            bind_sqlite_authority_writer(
+                authority_path,
+                self.authority_binding,
+                self.authority_tasks,
+                authority,
+                object(),
+            )
+        with self.assertRaisesRegex(TypeError, "SQLiteAuthorityBinding"):
+            bind_sqlite_authority_writer(
+                authority_path,
+                self.authority_binding,
+                self.authority_tasks,
+                cast(Any, object()),
+                self.scope,
+            )
+        with self.assertRaisesRegex(ValueError, "path does not match"):
+            bind_sqlite_authority_writer(
+                authority_path.with_name("other.sqlite"),
+                self.authority_binding,
+                self.authority_tasks,
+                authority,
+                self.scope,
+            )
 
     def test_bound_backend_routes_use_initialized_authority_schema(self) -> None:
         backend = self._bound_authority_backend()

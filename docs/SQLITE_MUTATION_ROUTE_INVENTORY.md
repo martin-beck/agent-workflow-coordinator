@@ -12,8 +12,10 @@ safe without an explicitly bound fence.
 | `SQLiteBackend.retire` | metadata lifecycle row | `SQLiteBackend.transaction()` | fenced when `mutation_scope` is bound |
 
 The shared boundary is intentionally dependency-injected. A production caller
-must bind `MutationFence.mutation_scope`; this slice only proves that every
-listed route enters the supplied scope before opening its write transaction.
+must bind `MutationFence.mutation_scope`; `bind_sqlite_authority_writer` now
+issues a single-operation capability that holds the caller-owned lock-domain
+scope while entering every listed route. The raw backend remains private to
+that capability and is not exposed through the public upgrade dispatcher.
 The unbound backend remains outside the acceptance claim and upgrade
 apply/rollback remain rejection-only.
 
@@ -56,7 +58,9 @@ these control-plane constructors compatible. AR-0091 owns the next bounded
 adapter slice; this remains an explicit nonclaim until that adapter and its
 multiprocess evidence exist.
 
-The uncalled `commit_runtime_selector_admitted` adapter defines the
+The `SQLiteAuthorityWriteAdapter` is a caller-owned authority seam; it does
+not authorize upgrade phases or connect public apply/rollback. The uncalled
+`commit_runtime_selector_admitted` adapter defines the
 caller-owned selector boundary: it requires an immutable `AdmissionLease`, a
 matching `AdmissionRecheck`, and a separate ordered scope that exposes
 `assert_ordered()` and `hold()`. It validates immutable evidence and lock order
