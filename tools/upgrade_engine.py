@@ -18,10 +18,16 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Protocol, cast, runtime_checkable
 
-from tools.authority_mutation import AuthorityMutationAmbiguousError
+from tools.authority_mutation import (
+    AuthorityMutationAmbiguousError,
+    AuthorityMutationRejectedError,
+)
 from tools.authority_neutral_backup import BoundBackupPhaseAdapter
 from tools.authority_neutral_commit_dispatch import BoundCommitPhaseAdapter, CommitDispatchError
-from tools.authority_neutral_rollback_dispatch import BoundRollbackPhaseAdapter
+from tools.authority_neutral_rollback_dispatch import (
+    BoundRollbackPhaseAdapter,
+    RollbackDispatchError,
+)
 from tools.authority_neutral_stage import BoundStagePhaseAdapter
 from tools.authority_neutral_validation import BoundValidationPhaseAdapter
 from tools.rollback_evidence import BackupObservation
@@ -1510,6 +1516,11 @@ class UpgradeEngine:
                 raise UpgradeError("backend rollback result identity is incomplete")
             record["outcome"] = "rollback_verified"
             record["result"] = result
+        except (AuthorityMutationRejectedError, RollbackDispatchError) as error:
+            record.update(outcome="failed", error=type(error).__name__)
+            value["status"] = "failed"
+            _write(self.journal, value)
+            raise UpgradeError("rollback phase rejected") from error
         except Exception as error:
             record.update(outcome="ambiguous", error=type(error).__name__)
             value["status"] = "safe-mode"

@@ -159,6 +159,7 @@ def contract() -> dict[str, Any]:
                     "barrier_id": "barrier-7",
                     "fencing_token": "fence-7",
                     "backup_operation_id": "upgrade:v0.3.5-to-v0.3.6:001:backup",
+                    "target": "rollback",
                 },
                 "timeout_seconds": 300,
                 "resources": ["maintenance-barrier"],

@@ -94,7 +94,7 @@
   },
   "implementation_snapshot": {
     "files": {
-      "schema/upgrade-contract.schema.json": "88c8aeab53b897129948bb5551e0b19ea1cb241a9f6521267c4a1042d01b838d",
+      "schema/upgrade-contract.schema.json": "bf04d7297c037cac80dcfb0cf21cca024014455e8b5b45c9bc9d355259b627a4",
       "tests/test_authority_mutation.py": "63e7e2d588826b6407bc4ad4da1e0054c5116466c116d50b7d1d057372b7da64",
       "tests/test_authority_neutral_commit.py": "8e0914ca43efe665bd4ef4d28b899d7f36f029315a37183b49c457aa82d87056",
       "tests/test_authority_neutral_commit_dispatch.py": "7cac74ff6b868e0c4ef42c265246290ea614ed8a4906636d1bc539d62ba66fe9",
@@ -110,12 +110,12 @@
       "tests/test_upgrade_admission.py": "e6d763f323e0ed5b98c07d9a1cb409899d1d53d176facd2c500174e367f457f7",
       "tests/test_upgrade_binding.py": "e57468a3f00b79eb97538ae692e9cb753543ffb71a6bd4fef486794ad0f8b9f9",
       "tests/test_upgrade_commands.py": "94536b40f98bdcd662eb971f8e146b5170df9ad94898351c2eb3932ba8e13ca5",
-      "tests/test_upgrade_contract.py": "04434245a70c249b48d206b0d14427b9ef0d182a8085bd35cc3d6621a8c68cee",
+      "tests/test_upgrade_contract.py": "810f984f2bf795600b22f61fd435ec8101b1afc274e21af6eea2bf2971d50b6b",
       "tests/test_upgrade_identity.py": "d677ab21c8048fdda10e8b302082c05b0aa387a8e0ba1f81e189f84011cc89f3",
       "tools/authority_mutation.py": "df6692a9cf7473bc86de4a5e678ab55881eb33d56dc7657950f54f47bc77cdb7",
       "tools/authority_neutral_commit.py": "fa96074ef3736d9975fae445a841de7e3c62d9f163aa39352eea5b2f22e9fdc7",
       "tools/authority_neutral_commit_dispatch.py": "21dcc92e197ff11d95078aca5d3021fd6486572208e16ccc0b3d375cc14c8572",
-      "tools/generate_upgrade_contract.py": "aa9a2ed072df3937b7799b33559d03b1744d3b9049891180d1a4852531df3ada",
+      "tools/generate_upgrade_contract.py": "5f82ea63312bc9786c55202c3c9ecf046a887191d997eb44ae6bf8aeebdb1b51",
       "tools/git_authority_mutation.py": "6582cb240cd2def209bf61cf5c0fdd3bae26620dafc7d745980442b0bf3a276e",
       "tools/handoffctl.py": "6d118c4993ccb3d2b868ae501ddb86164ec4acb4240656b5ab5f4e8859a54a9d",
       "tools/lock_domain_correspondence.py": "f028f34edea704701040d59d7e8a00d57d7acde8582eebb7d20bcbe8054905b9",
@@ -125,11 +125,11 @@
       "tools/sqlite_authority_mutation.py": "15472ba214ecaba4ae9040e4dfa00c6a404966f820128a59cd01f11e847aa97d",
       "tools/sqlite_storage.py": "cd0d24983b985e77a9c20bae165e422b7b3a4fba68b3528264980636936967e4",
       "tools/upgrade_admission.py": "0dfc53126675a3cfbc52d14322a0bfb0b04e2c18a1be4c0dfaf44e4d6eb884e6",
-      "tools/upgrade_binding.py": "3a9dc56023e2debd23a6d242a6bbe298fb48e277c80fa495b4aa611e6a5ef604",
+      "tools/upgrade_binding.py": "34863208e1c731937de20c9772bd1871fd9b5e344f7d10864d25f04d0847cbba",
       "tools/upgrade_commands.py": "6529d70255bc84ceb3aec5d690549d8d8fbb02f8fcb39c5cf92bba1894462c4b",
-      "tools/upgrade_contract_runtime.py": "99aacae180a6ab92df2df45323f3112a095b964c869b90ecdb8a6695a9e06939",
-      "tools/upgrade_identity.py": "754ce7b8ecc3f5521d30597fc259df9a4241e9cd2178dd4d72aba89df5d3133d",
-      "tools/validate_upgrade_contract.py": "6c264c4775e4ee1a778181d7e127d9f256c56abd4bfebb02c624e13c289dbc4a"
+      "tools/upgrade_contract_runtime.py": "2327a4a7f78d39138a8b8cb9304213547b0cd443049619e47161b6c8b9496b30",
+      "tools/upgrade_identity.py": "80bdd94e461b1ad24078d55e4c69b16fcd9560c641620e703fcf84b0ef9e1798",
+      "tools/validate_upgrade_contract.py": "acba22d1b64b62de11c69a2a97a6371a6dbcc4edd2b65145c487675bcb240ac7"
     },
     "revision": "7bed7fb328638a53b19c6e486eec878e811905c3",
     "runtime_revision": "7bed7fb328638a53b19c6e486eec878e811905c3"

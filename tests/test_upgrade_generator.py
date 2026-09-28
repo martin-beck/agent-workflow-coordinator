@@ -94,9 +94,9 @@ class UpgradeGeneratorTests(unittest.TestCase):
         )
         self.assertEqual("authority.atomic_replace", first["phases"][5]["operation"]["opcode"])
         self.assertEqual("backend.restore", first["rollback"]["operation"]["opcode"])
-        self.assertEqual(
-            first["rollback"]["operation"]["inputs"], first["phases"][0]["operation"]["inputs"]
-        )
+        rollback_inputs = dict(first["rollback"]["operation"]["inputs"])
+        self.assertEqual(rollback_inputs.pop("target"), "rollback")
+        self.assertEqual(rollback_inputs, first["phases"][0]["operation"]["inputs"])
 
     def test_unknown_input_field_is_rejected_before_generation(self) -> None:
         document = transition()

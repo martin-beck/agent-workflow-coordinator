@@ -17,6 +17,7 @@ if __package__:
         INPUT_FIELDS,
         PHASE_OPCODES,
         PHASES,
+        ROLLBACK_INPUT_FIELDS,
         RuntimeContractError,
         validate_runtime_contract,
     )
@@ -26,6 +27,7 @@ else:  # pragma: no cover - direct script execution
             INPUT_FIELDS,
             PHASE_OPCODES,
             PHASES,
+            ROLLBACK_INPUT_FIELDS,
             RuntimeContractError,
             validate_runtime_contract,
         )
@@ -34,6 +36,7 @@ else:  # pragma: no cover - direct script execution
             INPUT_FIELDS,
             PHASE_OPCODES,
             PHASES,
+            ROLLBACK_INPUT_FIELDS,
             RuntimeContractError,
             validate_runtime_contract,
         )
@@ -114,15 +117,26 @@ def _validate_phases(document: dict[str, Any]) -> None:  # noqa: C901
         raise ContractError("rollback operation ID is not bound")
     if rollback["opcode"] != "backend.restore":
         raise ContractError("rollback must use backend.restore")
-    _validate_inputs(rollback["inputs"], selected_backend, top_operation_id)
-    if rollback["inputs"] != canonical_inputs:
+    _validate_inputs(rollback["inputs"], selected_backend, top_operation_id, rollback=True)
+    if {
+        key: value for key, value in rollback["inputs"].items() if key != "target"
+    } != canonical_inputs:
         raise ContractError("rollback inputs do not match forward operation")
 
 
-def _validate_inputs(inputs: dict[str, object], backend: str, operation_id: str) -> None:
+def _validate_inputs(
+    inputs: dict[str, object],
+    backend: str,
+    operation_id: str,
+    *,
+    rollback: bool = False,
+) -> None:
     """Require one exact identity/fencing input tuple for every typed opcode."""
-    if set(inputs) != INPUT_FIELDS:
+    expected_fields = ROLLBACK_INPUT_FIELDS if rollback else INPUT_FIELDS
+    if set(inputs) != expected_fields:
         raise ContractError("operation input fields are incomplete or unknown")
+    if rollback and inputs["target"] != "rollback":
+        raise ContractError("rollback target is invalid")
     if inputs["backend"] != backend:
         raise ContractError("operation backend does not match selected backend")
     revision = inputs["expected_state_revision"]

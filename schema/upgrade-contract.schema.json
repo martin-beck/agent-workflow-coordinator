@@ -110,6 +110,7 @@
         "barrier_id": {"pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$", "type": "string"},
         "fencing_token": {"pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$", "type": "string"},
         "backup_operation_id": {"pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$", "type": "string"}
+        ,"target": {"const": "rollback"}
       }
     },
     "backend": {

@@ -9,7 +9,7 @@ import argparse
 import json
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 if __package__:
     from .validate_upgrade_contract import ContractError, validate_contract
@@ -69,9 +69,11 @@ def _load_transition(path: Path) -> dict[str, Any]:
     return _validate_transition(value)
 
 
-def _operation(transition: dict[str, Any], phase: str, opcode: str) -> dict[str, Any]:
+def _operation(
+    transition: dict[str, Any], phase: str, opcode: str, *, target: str | None = None
+) -> dict[str, Any]:
     operation_id = transition["operation_id"]
-    return {
+    operation = {
         "operation_id": f"{operation_id}:{phase}",
         "opcode": opcode,
         "inputs": {
@@ -89,6 +91,9 @@ def _operation(transition: dict[str, Any], phase: str, opcode: str) -> dict[str,
         "evidence": ["durable-operation-record"],
         "durable_record": "operation-id-and-outcome",
     }
+    if target is not None:
+        cast(dict[str, Any], operation["inputs"])["target"] = target
+    return operation
 
 
 def generate(transition: dict[str, Any]) -> dict[str, Any]:
@@ -181,7 +186,7 @@ def generate(transition: dict[str, Any]) -> dict[str, Any]:
             "equivalence": "authority-compatible-round-trip",
             "reopen_gate": "validate-before-reopen",
             "ambiguous_external_result": "persist-operation-id-and-reconcile",
-            "operation": _operation(transition, "rollback", "backend.restore"),
+            "operation": _operation(transition, "rollback", "backend.restore", target="rollback"),
         },
     }
     validate_contract(document)

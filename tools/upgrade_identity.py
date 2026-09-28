@@ -60,6 +60,7 @@ ENVELOPE_FIELDS = (
     "envelope_digest",
 )
 _TOKEN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
+_CHILD_TOKEN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}")
 _SELECTOR_REF = re.compile(r"(?!/)(?!.*(?:^|/)\.\.(?:/|$))[A-Za-z0-9._/-]{1,255}")
 _DIGEST = re.compile(r"[0-9a-f]{64}")
 
@@ -121,7 +122,7 @@ class BarrierChildIdentity:
     def bind(
         cls, session: BarrierSessionIdentity, operation_id: str, target: str
     ) -> BarrierChildIdentity:
-        if _TOKEN.fullmatch(operation_id) is None:
+        if _CHILD_TOKEN.fullmatch(operation_id) is None:
             raise UpgradeIdentityError("barrier child operation identity is invalid")
         if target not in {"new", "rollback"}:
             raise UpgradeIdentityError("barrier child target is invalid")
@@ -130,7 +131,7 @@ class BarrierChildIdentity:
     def validate_for(self, session: BarrierSessionIdentity) -> None:
         if self.barrier_identity_digest != session.identity_digest:
             raise UpgradeIdentityError("barrier child session identity does not match")
-        if _TOKEN.fullmatch(self.operation_id) is None:
+        if _CHILD_TOKEN.fullmatch(self.operation_id) is None:
             raise UpgradeIdentityError("barrier child operation identity is invalid")
         if self.target not in {"new", "rollback"}:
             raise UpgradeIdentityError("barrier child target is invalid")
