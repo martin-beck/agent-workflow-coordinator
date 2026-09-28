@@ -1076,6 +1076,7 @@ class SQLiteRollbackControlStore:
                 if all(identity is None for identity in sidecars.values()):
                     if lifecycle["state"] == "active":
                         self._lifecycle.mark_clean_checkpointed(parent, self.path.name)
+                        self._lifecycle_observed = False
                     elif lifecycle["state"] == "absent":
                         self._lifecycle._publish(
                             self._lifecycle._record(
@@ -1084,6 +1085,7 @@ class SQLiteRollbackControlStore:
                                 dict.fromkeys(SIDECAR_SUFFIXES),
                             )
                         )
+                        self._lifecycle_observed = False
                 else:
                     self._lifecycle.mark_active(parent, self.path.name, allow_rebind=True)
             except WALLifecycleError as error:
@@ -1132,6 +1134,7 @@ class SQLiteRollbackControlStore:
             if all(identity is None for identity in sidecars.values()):
                 if lifecycle["state"] == "active":
                     self._lifecycle.mark_clean_checkpointed(parent, self.path.name)
+                    self._lifecycle_observed = False
             else:
                 self._lifecycle.mark_active(parent, self.path.name, allow_rebind=True)
         except WALLifecycleError as error:

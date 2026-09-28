@@ -203,6 +203,9 @@ class WALLifecycleTests(unittest.TestCase):
             control.checkpoint_wal()
             lifecycle = root / ".control.sqlite.lifecycle.json"
             self.assertEqual("clean_checkpointed", json.loads(lifecycle.read_text())["state"])
+            with control._connection():
+                pass
+            self.assertEqual("active", json.loads(lifecycle.read_text())["state"])
 
     def test_active_missing_sidecars_requires_explicit_reconciliation(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
