@@ -1268,7 +1268,7 @@ class SQLiteRollbackControlStore:
         self._require_operation_lock()
         previous = self._snapshot_locked(operation_id)
         candidate = self._validate_ambiguous_replacement(previous, operation_id, replacement)
-        return self._cas_locked(0, candidate)
+        return self.cas_locked(_common_guard, 0, candidate)
 
     def _cas_connection(  # noqa: C901
         self, connection: sqlite3.Connection, expected_revision: int, supplied: dict[str, object]
