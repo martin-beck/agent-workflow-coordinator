@@ -339,6 +339,10 @@ class GitAuthorityAdapterTests(unittest.TestCase):
             runtime_identity="runtime",
         )
         (self.root / "state").write_text("bound\n")
+        subprocess.run(["git", "-C", str(self.root), "config", "user.name", "test"], check=True)
+        subprocess.run(
+            ["git", "-C", str(self.root), "config", "user.email", "test@example"], check=True
+        )
         subprocess.run(["git", "-C", str(self.root), "add", "state"], check=True)
 
         def outputless_commit_runner(
