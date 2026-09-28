@@ -16,7 +16,13 @@ from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path
 
-from tools.upgrade_authority import AuthorityError, read_runtime_selector
+if __package__:
+    from .upgrade_authority import AuthorityError, read_runtime_selector
+else:  # pragma: no cover - direct script execution
+    from upgrade_authority import (  # type: ignore[import-not-found,no-redef]
+        AuthorityError,
+        read_runtime_selector,
+    )
 
 _RELEASE = re.compile(r"v[0-9]+\.[0-9]+\.[0-9]+\Z")
 _DIGEST = re.compile(r"[0-9a-f]{64}\Z")

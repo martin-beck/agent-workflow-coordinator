@@ -126,7 +126,7 @@
       "tools/sqlite_storage.py": "a2b9b3f3a4650e0a715a84bcbfebb6abbe1a1ef3c46811a3131a14e7cb6a99bf",
       "tools/upgrade_admission.py": "0dfc53126675a3cfbc52d14322a0bfb0b04e2c18a1be4c0dfaf44e4d6eb884e6",
       "tools/upgrade_binding.py": "3a9dc56023e2debd23a6d242a6bbe298fb48e277c80fa495b4aa611e6a5ef604",
-      "tools/upgrade_commands.py": "8767d78035efc69df3c37c08f838051daa27c701778502dccc5315872228f8ad",
+      "tools/upgrade_commands.py": "6529d70255bc84ceb3aec5d690549d8d8fbb02f8fcb39c5cf92bba1894462c4b",
       "tools/upgrade_contract_runtime.py": "99aacae180a6ab92df2df45323f3112a095b964c869b90ecdb8a6695a9e06939",
       "tools/upgrade_identity.py": "754ce7b8ecc3f5521d30597fc259df9a4241e9cd2178dd4d72aba89df5d3133d",
       "tools/validate_upgrade_contract.py": "6c264c4775e4ee1a778181d7e127d9f256c56abd4bfebb02c624e13c289dbc4a"

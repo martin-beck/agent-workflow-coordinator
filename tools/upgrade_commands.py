@@ -12,11 +12,14 @@ from hashlib import sha256
 from pathlib import Path
 from typing import Any, NoReturn, cast
 
-from tools.runtime_bootstrap import (
-    ExpectedRuntimeIdentity,
-    VerifiedManifest,
-    run_selected_runtime,
-)
+if __package__:
+    from .runtime_bootstrap import ExpectedRuntimeIdentity, VerifiedManifest, run_selected_runtime
+else:  # pragma: no cover - direct script execution
+    from runtime_bootstrap import (  # type: ignore[import-not-found,no-redef]
+        ExpectedRuntimeIdentity,
+        VerifiedManifest,
+        run_selected_runtime,
+    )
 
 if __package__:
     from .upgrade_binding import (
