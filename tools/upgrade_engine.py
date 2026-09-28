@@ -18,6 +18,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Protocol, cast, runtime_checkable
 
+from tools.authority_mutation import AuthorityMutationAmbiguousError
 from tools.authority_neutral_backup import BoundBackupPhaseAdapter
 from tools.authority_neutral_commit_dispatch import BoundCommitPhaseAdapter
 from tools.authority_neutral_stage import BoundStagePhaseAdapter
@@ -823,6 +824,10 @@ class UpgradeEngine:
             for field in ("admitted_snapshot", "current_snapshot"):
                 snapshot = self._commit_phase_evidence[field]
                 self._bind_snapshot(cast(Mapping[str, object], snapshot))
+            try:
+                self._admit("commit", self._commit_phase_evidence)
+            except Exception as error:
+                raise UpgradeError("commit capability admission evidence is invalid") from error
         if rollback_bound_verifier is not None and not isinstance(
             rollback_bound_verifier, BoundRollbackCapability
         ):
@@ -1234,6 +1239,11 @@ class UpgradeEngine:
                         raise UpgradeError("handler cannot override backend evidence")
                 result.update(handler_result)
                 self._load()
+            except AuthorityMutationAmbiguousError as error:
+                record.update(outcome="ambiguous", error=type(error).__name__)
+                value["status"] = "safe-mode"
+                _write(self.journal, value)
+                raise UpgradeError(f"phase outcome is ambiguous: {phase}") from error
             except Exception as error:
                 record.update(outcome="failed", error=type(error).__name__)
                 value["status"] = "failed"

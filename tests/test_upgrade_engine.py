@@ -17,7 +17,7 @@ from typing import Any, cast
 from unittest.mock import patch
 
 from tools import upgrade_engine as upgrade_engine_module
-from tools.authority_mutation import MutationReceipt
+from tools.authority_mutation import AuthorityMutationAmbiguousError, MutationReceipt
 from tools.authority_neutral_backup import BoundBackupPhaseAdapter
 from tools.authority_neutral_stage import BoundStagePhaseAdapter
 from tools.authority_neutral_validation import BoundValidationPhaseAdapter
@@ -342,6 +342,22 @@ class UpgradeEngineTests(unittest.TestCase):
                     commit_argument="bound-effect",
                     commit_evidence=foreign_snapshot,
                 )
+            invalid_predicates = dict(evidence)
+            invalid_predicates["admitted_snapshot"] = {
+                key: value for key, value in admission.items() if key != "barrier_status"
+            }
+            with self.assertRaisesRegex(UpgradeError, "admission evidence is invalid"):
+                UpgradeEngine(
+                    "op-commit",
+                    journal,
+                    context,
+                    backend_adapter=FakeAdapter(),
+                    commit_operation=operation,
+                    commit_context=commit_context,
+                    commit_executor=executor,
+                    commit_argument="bound-effect",
+                    commit_evidence=invalid_predicates,
+                )
 
         with tempfile.TemporaryDirectory() as directory:
             engine = UpgradeEngine(
@@ -406,6 +422,29 @@ class UpgradeEngineTests(unittest.TestCase):
             result = engine.apply(handlers)
             self.assertEqual(result["status"], "completed")
             self.assertEqual(executor.arguments, ["bound-effect"])
+
+            class AmbiguousExecutor:
+                def execute(self, _argument: object) -> MutationReceipt:
+                    raise AuthorityMutationAmbiguousError("unknown authority outcome")
+
+            with tempfile.TemporaryDirectory() as ambiguous_directory:
+                ambiguous_engine = UpgradeEngine(
+                    "op-commit",
+                    Path(ambiguous_directory) / "journal.json",
+                    context,
+                    backend_adapter=FakeAdapter(),
+                    commit_operation=operation,
+                    commit_context=commit_context,
+                    commit_executor=AmbiguousExecutor(),
+                    commit_argument="bound-effect",
+                    commit_evidence=evidence,
+                )
+                ambiguous_engine.plan()
+                with self.assertRaisesRegex(UpgradeError, "phase outcome is ambiguous: commit"):
+                    ambiguous_engine.apply(handlers)
+                ambiguous_journal = ambiguous_engine._load()
+                self.assertEqual(ambiguous_journal["status"], "safe-mode")
+                self.assertEqual(ambiguous_journal["records"][-1]["outcome"], "ambiguous")
 
     def test_validation_binding_rejects_partial_or_unbound_inputs(self) -> None:
         admission = object.__new__(DispatchAdmission)
