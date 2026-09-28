@@ -13,6 +13,7 @@ from tools.lifecycle_trace import LifecycleObserver, _issue_event
 from tools.lock_domain import LockDomainContract, LockDomainError, LockDomainIdentity
 from tools.mutation_fence import MutationFence
 from tools.rollback_control_store import (
+    AuthorityEffectIntent,
     BarrierSessionContract,
     BarrierSessionState,
     ControlStoreError,
@@ -463,6 +464,50 @@ class SQLiteCoordinationWriteAdapter:
                     raise ControlStoreError("recovered barrier session identity changed")
                 self._scope._session_revision = result.revision
             common_guard.assert_owned()
+            return result
+
+    def session_prepare_authority_effect(
+        self,
+        expected_revision: int,
+        operation_id: str,
+        backend: str,
+        target: str = "new",
+        *,
+        expected_fencing_token: str | None = None,
+        expected_barrier_id: str | None = None,
+        expected_artifact_identity: str | None = None,
+        expected_manifest_identity: str | None = None,
+        expected_selector_identity: str | None = None,
+        expected_runtime_identity: str | None = None,
+    ) -> AuthorityEffectIntent:
+        """Prepare an effect intent under common/control/authority locks."""
+        with self._scope._hold_with_guard() as common_guard:
+            return self._session.prepare_authority_effect_locked(
+                common_guard,
+                expected_revision,
+                operation_id,
+                backend,
+                target,
+                expected_fencing_token=expected_fencing_token,
+                expected_barrier_id=expected_barrier_id,
+                expected_artifact_identity=expected_artifact_identity,
+                expected_manifest_identity=expected_manifest_identity,
+                expected_selector_identity=expected_selector_identity,
+                expected_runtime_identity=expected_runtime_identity,
+            )
+
+    def session_finish_authority_effect(
+        self,
+        intent: AuthorityEffectIntent,
+        outcome: str,
+        receipt: object | None = None,
+    ) -> BarrierSessionState:
+        """Publish an effect outcome under common/control/authority locks."""
+        with self._scope._hold_with_guard() as common_guard:
+            result = self._session.finish_authority_effect_locked(
+                common_guard, intent, outcome, receipt
+            )
+            self._scope._session_revision = result.revision
             return result
 
 

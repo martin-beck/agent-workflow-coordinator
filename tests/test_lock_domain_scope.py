@@ -1246,6 +1246,20 @@ class LockDomainScopeTests(unittest.TestCase):
         ):
             writer.session_recover_unknown()
 
+    def test_typed_coordination_writer_fences_authority_effect_intent(self) -> None:
+        scope = LockDomainScope.bind(self.session, self.fence, self.lease, self.recheck, locked)
+        writer = bind_sqlite_coordination_writer(scope, self.store, self.session)
+
+        rejected_intent = writer.session_prepare_authority_effect(1, "effect-rejected", "sqlite")
+        rejected = writer.session_finish_authority_effect(rejected_intent, "rejected")
+        self.assertEqual(("held", 1), (rejected.status, rejected.revision))
+
+        ambiguous_intent = writer.session_prepare_authority_effect(1, "effect-ambiguous", "sqlite")
+        ambiguous = writer.session_finish_authority_effect(ambiguous_intent, "ambiguous")
+        self.assertEqual(("ambiguous", 2), (ambiguous.status, ambiguous.revision))
+        self.assertEqual(2, scope._session_revision)
+        self.assertFalse(self.session.operation_owned_by_current_thread)
+
     def test_typed_coordination_writer_rejects_completion_identity_drift(self) -> None:
         scope = LockDomainScope.bind(self.session, self.fence, self.lease, self.recheck, locked)
         writer = bind_sqlite_coordination_writer(scope, self.store, self.session)
