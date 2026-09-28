@@ -33,8 +33,10 @@ store. The current adapter methods are `control_cas`,
 `control_begin_release`, `control_complete_release`, `session_cas`,
 `session_bind_child`, `session_begin_reopen`, `session_complete_reopen`, and
 `session_mark_ambiguous`, and `session_recover_unknown`. They remain an
-uncalled coordination seam; public upgrade mutation and Dispatch stay
-rejection-only.
+uncalled coordination seam. `bind_sqlite_coordination_recovery` separately
+issues a fresh-fence `reconcile_ambiguous` operation for an ambiguous session;
+it does not reuse the old held-session lease. Public upgrade mutation and
+Dispatch stay rejection-only.
 
 | Store | Route | Durable writes | Evidence |
 | --- | --- | --- | --- |
@@ -43,7 +45,7 @@ rejection-only.
 | `SQLiteRollbackControlStore` | `reconcile_ambiguous` | barrier/history replacement | `test_ambiguous_requires_explicit_newer_reconciliation` |
 | `SQLiteRollbackControlStore` | `with_barrier` | barrier acquire/release | `test_with_barrier_holds_coordinator_lock_through_authority_callback` |
 | `SQLiteBarrierSessionStore` | `create`, `cas`, `bind_child`, `begin_reopen`, `complete_reopen`, `mark_ambiguous` | session/child rows and history | `test_v10_session_cas_fences_insert_and_update_rows`, `test_v10_durable_session_persists_children_and_reopen`, `test_typed_coordination_writer_completes_release_and_reopen`, `test_typed_coordination_writer_fences_uncertain_session_outcome` |
-| `SQLiteBarrierSessionStore` | `recover_unknown`, `reconcile_ambiguous` | intent/session/history rows | `test_v10_session_intent_recovery_fences_and_requires_newer_fence`, `test_typed_coordination_writer_recovers_unknown_under_full_scope` |
+| `SQLiteBarrierSessionStore` | `recover_unknown`, `reconcile_ambiguous` | intent/session/history rows | `test_v10_session_intent_recovery_fences_and_requires_newer_fence`, `test_typed_coordination_writer_recovers_unknown_under_full_scope`, `test_fresh_recovery_scope_reconciles_ambiguous_session` |
 
 The inventory proves admission ordering and row-fence tests only. It does not
 prove that every future authority route is registered here, that SQLite

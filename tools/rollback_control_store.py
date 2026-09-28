@@ -18,7 +18,7 @@ import threading
 import time
 import uuid
 from collections.abc import Callable, Iterator, Mapping
-from contextlib import AbstractContextManager, contextmanager
+from contextlib import AbstractContextManager, contextmanager, nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol, cast
@@ -2600,6 +2600,8 @@ class SQLiteBarrierSessionStore:
         self,
         expected_revision: int,
         replacement: BarrierSessionState,
+        *,
+        common_guard: CoordinatorLockGuard | None = None,
     ) -> BarrierSessionState:
         """Replace an ambiguous session only with a distinct newer fence."""
         if type(expected_revision) is not int or expected_revision < 1:
@@ -2610,9 +2612,19 @@ class SQLiteBarrierSessionStore:
             or replacement.identity.project_id != self.project_id
         ):
             raise RecoveryRejectedError("ambiguous reconciliation requires a new held session")
-        if self.operation_owned_by_current_thread:
-            raise RecoveryRejectedError("control store lock is non-reentrant")
-        with self.operation_lock(), self._control._connection() as connection:
+        if common_guard is None:
+            if self.operation_owned_by_current_thread:
+                raise RecoveryRejectedError("control store lock is non-reentrant")
+            lock_context: AbstractContextManager[object] = self.operation_lock()
+        else:
+            if not isinstance(common_guard, CoordinatorLockGuard):
+                raise LockOwnershipError("caller-owned coordinator lock guard is required")
+            common_guard.assert_owned()
+            if common_guard.path != coordinator_lock_path().resolve():
+                raise RecoveryRejectedError("coordinator lock guard path mismatch")
+            self._control._require_operation_lock()
+            lock_context = nullcontext()
+        with lock_context, self._control._connection() as connection:
             self._ensure_table(connection)
             current = self._snapshot_locked()
             if current is None or current.status != "ambiguous":
@@ -2714,7 +2726,20 @@ class SQLiteBarrierSessionStore:
                 raise ControlStoreError(
                     "barrier session reconciliation outcome is ambiguous; recovery is required"
                 ) from error
+            if common_guard is not None:
+                common_guard.assert_owned()
             return replacement
+
+    def reconcile_ambiguous_locked(
+        self,
+        common_guard: CoordinatorLockGuard,
+        expected_revision: int,
+        replacement: BarrierSessionState,
+    ) -> BarrierSessionState:
+        """Reconcile an ambiguous session under caller-owned locks."""
+        return self.reconcile_ambiguous(
+            expected_revision, replacement, common_guard=common_guard
+        )
 
     def _mark_ambiguous_after_commit_failure(
         self,
