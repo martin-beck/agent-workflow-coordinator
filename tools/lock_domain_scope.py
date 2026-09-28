@@ -502,6 +502,31 @@ class SQLiteCoordinationRecoveryAdapter:
                     common_guard.assert_owned()
                     return result
 
+    @staticmethod
+    def _assert_control_binding(session: BarrierSessionState, record: Mapping[str, object]) -> None:
+        identity = session.identity
+        expected = {
+            "project_id": identity.project_id,
+            "state_revision": identity.state_revision,
+            "authority_revision": identity.authority_revision_at_acquire,
+            "fencing_token": identity.fencing_token,
+            "fencing_owner": identity.fencing_owner,
+            "durable_barrier_id": identity.durable_barrier_id,
+        }
+        if any(record.get(field) != value for field, value in expected.items()):
+            raise RecoveryRejectedError("control barrier identity is not bound to the session")
+        children = (session.forward_child, session.rollback_child)
+        child = next(
+            (
+                child
+                for child in children
+                if child is not None and child.operation_id == record["operation_id"]
+            ),
+            None,
+        )
+        if child is None or record.get("target") != child.target:
+            raise RecoveryRejectedError("control barrier target is not bound to the session child")
+
     def reconcile_control_ambiguous(
         self,
         expected_identity: BarrierSessionIdentity,
@@ -528,6 +553,8 @@ class SQLiteCoordinationRecoveryAdapter:
                     raise RecoveryRejectedError("ambiguous session identity changed")
                 if current.revision != expected_revision:
                     raise RecoveryRejectedError("barrier session CAS conflict")
+                previous = self._control._snapshot_locked(operation_id)
+                self._assert_control_binding(current, previous)
                 with self._authority_fence.locked():
                     domain.assert_current(common_guard, self._session, self._authority_fence)
                     result = self._control.reconcile_ambiguous_locked(

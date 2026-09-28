@@ -1233,6 +1233,15 @@ class SQLiteRollbackControlStore:
     ) -> dict[str, object]:
         """Start a new fenced operation only after explicit ambiguous recovery."""
         previous = self.snapshot(operation_id)
+        candidate = self._validate_ambiguous_replacement(previous, operation_id, replacement)
+        return self.cas(0, candidate)
+
+    @staticmethod
+    def _validate_ambiguous_replacement(
+        previous: Mapping[str, object],
+        operation_id: str,
+        replacement: Mapping[str, object],
+    ) -> dict[str, object]:
         if previous["status"] != "ambiguous":
             raise ControlStoreError("only ambiguous barriers require reconciliation")
         candidate = _validate(replacement)
@@ -1247,41 +1256,19 @@ class SQLiteRollbackControlStore:
             or candidate["fencing_token"] == previous["fencing_token"]
         ):
             raise ControlStoreError("ambiguous reconciliation requires a distinct project fence")
-        return self.cas(0, candidate)
+        return candidate
 
     def reconcile_ambiguous_locked(
         self,
-        common_guard: CoordinatorLockGuard,
+        _common_guard: CoordinatorLockGuard,
         operation_id: str,
         replacement: Mapping[str, object],
     ) -> dict[str, object]:
         """Reconcile one ambiguous barrier under caller-owned locks."""
-        if not isinstance(common_guard, CoordinatorLockGuard):
-            raise LockOwnershipError("caller-owned coordinator lock guard is required")
-        common_guard.assert_owned()
-        if common_guard.path != coordinator_lock_path().resolve():
-            raise ControlStoreError("coordinator lock guard path mismatch")
-        if not isinstance(operation_id, str) or not operation_id:
-            raise ControlStoreError("ambiguous barrier operation id is required")
         self._require_operation_lock()
         previous = self._snapshot_locked(operation_id)
-        if previous["status"] != "ambiguous":
-            raise ControlStoreError("only ambiguous barriers require reconciliation")
-        candidate = _validate(replacement)
-        if candidate["operation_id"] == operation_id or candidate["status"] != "held":
-            raise ControlStoreError("ambiguous reconciliation requires a new held operation")
-        if candidate["project_id"] != previous["project_id"] or cast(
-            int, candidate["state_revision"]
-        ) <= cast(int, previous["state_revision"]):
-            raise ControlStoreError("ambiguous reconciliation requires a newer project fence")
-        if (
-            candidate["durable_barrier_id"] == previous["durable_barrier_id"]
-            or candidate["fencing_token"] == previous["fencing_token"]
-        ):
-            raise ControlStoreError("ambiguous reconciliation requires a distinct project fence")
-        result = self._cas_locked(0, candidate)
-        common_guard.assert_owned()
-        return result
+        candidate = self._validate_ambiguous_replacement(previous, operation_id, replacement)
+        return self._cas_locked(0, candidate)
 
     def _cas_connection(  # noqa: C901
         self, connection: sqlite3.Connection, expected_revision: int, supplied: dict[str, object]

@@ -1322,7 +1322,7 @@ class LockDomainScopeTests(unittest.TestCase):
                 identity(),
                 ambiguous.revision,
                 child.operation_id,
-                candidate(fencing_token="fence-1"),
+                candidate(fencing_token="fence-1"),  # noqa: S106
             )
 
         result = recovery.reconcile_control_ambiguous(
@@ -1346,6 +1346,40 @@ class LockDomainScopeTests(unittest.TestCase):
             recovery.reconcile_control_ambiguous(identity(), 1, "op-1", cast(Any, None))
         with self.assertRaisesRegex(RecoveryRejectedError, "only ambiguous sessions"):
             recovery.reconcile_control_ambiguous(identity(), 1, "op-1", replacement)
+
+    def test_fresh_recovery_scope_rejects_control_identity_drift(self) -> None:
+        scope = LockDomainScope.bind(self.session, self.fence, self.lease, self.recheck, locked)
+        writer = bind_sqlite_coordination_writer(scope, self.store, self.session)
+        child = BarrierChildIdentity.bind(identity(), "forward-1", "new")
+        writer.session_bind_child(identity(), 1, child)
+        record = control_record()
+        record["operation_id"] = child.operation_id
+        record["target"] = child.target
+        record["barrier_identity_digest"] = canonical_barrier_digest(record)
+        record["envelope_digest"] = canonical_envelope_digest(record)
+        drifted = {**record, "fencing_token": "foreign-fence"}
+        drifted["barrier_identity_digest"] = canonical_barrier_digest(drifted)
+        drifted["envelope_digest"] = canonical_envelope_digest(drifted)
+        self.store.cas(0, drifted)
+        ambiguous = writer.session_mark_ambiguous(identity(), 2, "process-death")
+        recovery = bind_sqlite_coordination_recovery(self.session, self.fence, locked)
+
+        replacement = dict(record)
+        replacement.update(
+            {
+                "operation_id": "forward-2",
+                "state_revision": 2,
+                "durable_barrier_id": "barrier-2",
+                "fencing_token": "fence-2",
+                "fencing_owner": "owner-2",
+            }
+        )
+        replacement["barrier_identity_digest"] = canonical_barrier_digest(replacement)
+        replacement["envelope_digest"] = canonical_envelope_digest(replacement)
+        with self.assertRaisesRegex(RecoveryRejectedError, "identity is not bound"):
+            recovery.reconcile_control_ambiguous(
+                identity(), ambiguous.revision, child.operation_id, replacement
+            )
 
     def test_fresh_recovery_scope_rejects_invalid_admission_and_reread(self) -> None:
         recovery = bind_sqlite_coordination_recovery(self.session, self.fence, locked)
