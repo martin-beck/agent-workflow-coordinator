@@ -300,6 +300,33 @@ def _fresh_binding_reacquire_process(root_text: str, result: Any) -> None:
         result.put((type(error).__name__, False))
 
 
+def _typed_effect_prepare_process(root_text: str, ready: Any) -> None:
+    """Prepare one typed effect intent, then die before its caller receives a reply."""
+    root = Path(root_text)
+    authority = root / "authority.sqlite"
+    control = root / "control.sqlite"
+    store = SQLiteRollbackControlStore(control, PROJECT, authority)
+    session = SQLiteBarrierSessionStore(store, lambda: "authority-1")
+    fence = MutationFence(
+        authority,
+        root / "authority-marker.json",
+        root / "authority-lifecycle.json",
+        root / "authority.lock",
+        control,
+        root / "control-binding.json",
+        store.control_lock_path,
+    )
+    with locked() as guard:
+        domain = LockDomainContract.capture(guard, session, fence)
+    lease = AdmissionLease(PROJECT, "authority-1", "fence-1", "owner-1", "barrier-1", 1)
+    recheck = lease_recheck(lease)
+    scope = LockDomainScope(domain, session, fence, lease, recheck, identity(), locked)
+    writer = bind_sqlite_coordination_writer(scope, store, session)
+    writer.session_prepare_authority_effect(1, "effect-process-death", "sqlite")
+    ready.set()
+    multiprocessing.Event().wait()
+
+
 def _fresh_recheck_process(
     root_text: str,
     result: Any,
@@ -1259,6 +1286,34 @@ class LockDomainScopeTests(unittest.TestCase):
         self.assertEqual(("ambiguous", 2), (ambiguous.status, ambiguous.revision))
         self.assertEqual(2, scope._session_revision)
         self.assertFalse(self.session.operation_owned_by_current_thread)
+
+    def test_typed_effect_process_death_recovers_as_ambiguous(self) -> None:
+        context = multiprocessing.get_context("fork")
+        ready = context.Event()
+        crashed = context.Process(
+            target=_typed_effect_prepare_process,
+            args=(self.directory.name, ready),
+        )
+        crashed.start()
+        self.assertTrue(ready.wait(5))
+        crashed.terminate()
+        crashed.join(5)
+        self.assertIsNotNone(crashed.exitcode)
+        self.assertFalse(self.session.operation_owned_by_current_thread)
+
+        recovered = self.session.recover_unknown()
+
+        self.assertIsNotNone(recovered)
+        assert recovered is not None
+        self.assertEqual(("ambiguous", 2), (recovered.status, recovered.revision))
+        with closing(sqlite3.connect(self.store.control_store_path)) as connection, connection:
+            self.assertEqual(
+                [("ambiguous", "process-death")],
+                connection.execute(
+                    "SELECT outcome,cause_code FROM authority_effect_intent WHERE project_id=?",
+                    (PROJECT,),
+                ).fetchall(),
+            )
 
     def test_typed_coordination_writer_rejects_completion_identity_drift(self) -> None:
         scope = LockDomainScope.bind(self.session, self.fence, self.lease, self.recheck, locked)
