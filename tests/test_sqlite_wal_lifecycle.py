@@ -211,6 +211,7 @@ class WALLifecycleTests(unittest.TestCase):
             with control.operation_lock(), control._connection():
                 pass
             lifecycle = control._lifecycle
+            self.assertEqual("active", lifecycle.read()["state"])
             lifecycle._publish(lifecycle._record("active", 1, dict.fromkeys(SIDECAR_SUFFIXES)))
             control.reconcile_wal_lifecycle()
             self.assertEqual("clean_checkpointed", lifecycle.read()["state"])
