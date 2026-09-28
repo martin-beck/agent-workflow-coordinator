@@ -70,8 +70,15 @@ def _require_private_ancestors(path: Path, label: str) -> None:
             raise RuntimeStoreError(f"{label} path contains a symlink")
         if current != absolute and not stat.S_ISDIR(value.st_mode):
             raise RuntimeStoreError(f"{label} ancestor is unsafe")
+        mode = stat.S_IMODE(value.st_mode)
+        sticky_system_directory = (
+            value.st_uid == 0
+            and stat.S_ISDIR(value.st_mode)
+            and mode & 0o022
+            and mode & stat.S_ISVTX
+        )
         if current != Path(current.anchor) and (
-            value.st_uid not in {os.geteuid(), 0} or stat.S_IMODE(value.st_mode) & 0o022
+            value.st_uid not in {os.geteuid(), 0} or (mode & 0o022 and not sticky_system_directory)
         ):
             raise RuntimeStoreError(f"{label} ancestor is not owner-controlled")
 
