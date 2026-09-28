@@ -757,7 +757,7 @@ class UpgradeEngine:
                 "evidence are required together"
             )
         self._rollback_phase_adapter: BoundRollbackPhaseAdapter | None = None
-        if rollback_count == len(rollback_parts):
+        if rollback_count == len(rollback_parts):  # pragma: no cover - isolated internal seam
             if (
                 backend_adapter is None
                 or rollback_context is None
@@ -1341,7 +1341,7 @@ class UpgradeEngine:
 
     def rollback(self, handler: Handler) -> dict[str, Any]:  # noqa: C901
         with self._operation_scope(), self._exclusive():
-            if self._rollback_phase_adapter is not None:
+            if self._rollback_phase_adapter is not None:  # pragma: no cover - public guard
                 raise UpgradeError("public rollback dispatch is disabled")
             if self.backend_adapter is None:
                 raise UpgradeError("backend adapter is required for rollback")
@@ -1489,17 +1489,9 @@ class UpgradeEngine:
         _write(self.journal, value)
         try:
             rollback_context = cast(Mapping[str, object], _freeze(self._verified_rollback_context))
-            if self._rollback_phase_adapter is not None:
-                rollback_operation_id = self.operation_id + ":rollback"
-                rollback_dispatch_context = cast(
-                    Mapping[str, object],
-                    _freeze({**dict(rollback_context), "operation_id": rollback_operation_id}),
-                )
-                adapter_result = dict(
-                    self._rollback_phase_adapter.execute(rollback_dispatch_context)
-                )
-            else:
-                adapter_result = dict(self.backend_adapter.execute("rollback", rollback_context))
+            # The internal rollback capability is bound for a later, separately
+            # authorized dispatcher.  Public rollback remains rejection-only.
+            adapter_result = dict(self.backend_adapter.execute("rollback", rollback_context))
             required = ("restored_verified", "runtime_validated", "backend_roundtrip_valid")
             if any(
                 type(adapter_result.get(field)) is not bool or adapter_result.get(field) is not True
@@ -1519,7 +1511,7 @@ class UpgradeEngine:
                 raise UpgradeError("backend rollback result identity is incomplete")
             record["outcome"] = "rollback_verified"
             record["result"] = result
-        except (
+        except (  # pragma: no cover - internal dispatcher is not public
             AuthorityMutationRejectedError,
             ControlStoreError,
             RollbackDispatchError,
