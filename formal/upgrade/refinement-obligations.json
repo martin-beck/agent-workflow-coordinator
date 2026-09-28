@@ -2,7 +2,7 @@
   "schema_version": 1,
   "kind": "best-effort-model-correspondence-matrix",
   "contract": "formal/upgrade/v10-refinement-contract.json",
-  "contract_sha256": "f2369f457b11332c8e06de863a1c81b2bb077dca0651ccae76b63ff636395078",
+  "contract_sha256": "28a63c813f19620c15b6bcf5e601ebd9a27cb2808723e1af47b6ee15eca71f46",
   "decision": "deny",
   "decision_rule": "deny unless every operational safety obligation is evidenced at the exact implementation revision and independently reviewed; model refinement is not a requirement",
   "obligations": [
