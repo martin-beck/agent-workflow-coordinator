@@ -36,6 +36,17 @@ class RuntimeStoreTests(unittest.TestCase):
             (source / "tools").mkdir()
             (source / "tools/handoffctl.py").write_text("print('ok')\n")
             identity = self._identity()
+            policy_files = (("tools/handoffctl.py", hashlib.sha256(b"print('ok')\n").hexdigest()),)
+            identity = ExpectedRuntimeIdentity(
+                identity.source_commit,
+                identity.tag_ref,
+                identity.tag_object,
+                identity.signature_sha256,
+                hashlib.sha256(
+                    json.dumps(policy_files, separators=(",", ":")).encode()
+                ).hexdigest(),
+                identity.vendor_manifest_sha256,
+            )
             manifest = {
                 "release": "v1.2.3",
                 "source_commit": identity.source_commit,
@@ -45,12 +56,7 @@ class RuntimeStoreTests(unittest.TestCase):
                 "trust_policy_sha256": identity.trust_policy_sha256,
                 "vendor_manifest_sha256": identity.vendor_manifest_sha256,
             }
-            manifest_bytes = json.dumps(manifest, separators=(",", ":")).encode()
-            files = {
-                "runtime-manifest.json": hashlib.sha256(manifest_bytes).hexdigest(),
-                "tools/handoffctl.py": hashlib.sha256(b"print('ok')\n").hexdigest(),
-            }
-            policy = RuntimeTrustPolicy(identity, tuple(sorted(files.items())))
+            policy = RuntimeTrustPolicy(identity, policy_files)
             staged = stage_runtime_release(source, root / "releases", "v1.2.3", manifest, policy)
             verify_runtime_release(staged, policy)
             self.assertEqual(0o700, staged.stat().st_mode & 0o777)
@@ -67,6 +73,24 @@ class RuntimeStoreTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeStoreError, "symlink"):
                 stage_runtime_release(source, root / "releases", "v1.2.3", manifest, policy)
             self.assertFalse((root / "releases/v1.2.3").exists())
+
+    def test_hard_link_source_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source"
+            source.mkdir()
+            original = root / "original"
+            original.write_text("shared")
+            (source / "runtime.py").hardlink_to(original)
+            identity = self._identity()
+            with self.assertRaisesRegex(RuntimeStoreError, "private regular file"):
+                stage_runtime_release(
+                    source,
+                    root / "releases",
+                    "v1.2.3",
+                    {"release": "v1.2.3"},
+                    RuntimeTrustPolicy(identity, ()),
+                )
 
 
 if __name__ == "__main__":

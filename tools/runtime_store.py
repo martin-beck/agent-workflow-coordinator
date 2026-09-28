@@ -46,11 +46,39 @@ class RuntimeTrustPolicy:
         ):
             raise RuntimeStoreError("trust policy file allowlist is invalid")
 
+    def digest(self) -> str:
+        """Return the canonical digest bound into the runtime identity."""
+        payload = json.dumps(self.files, separators=(",", ":")).encode()
+        return hashlib.sha256(payload).hexdigest()
+
+
+def _require_private_ancestors(path: Path, label: str) -> None:
+    """Reject symlinked ancestors and non-owner-controlled directories."""
+    absolute = path.absolute()
+    current = Path(absolute.anchor)
+    for part in absolute.parts[1:]:
+        current /= part
+        try:
+            value = current.lstat()
+        except OSError as error:
+            if current == absolute and not current.exists():
+                break
+            raise RuntimeStoreError(f"{label} path is unavailable") from error
+        if stat.S_ISLNK(value.st_mode):
+            raise RuntimeStoreError(f"{label} path contains a symlink")
+        if current != absolute and not stat.S_ISDIR(value.st_mode):
+            raise RuntimeStoreError(f"{label} ancestor is unsafe")
+
 
 def _digest(path: Path) -> str:
     try:
         value = path.lstat()
-        if not stat.S_ISREG(value.st_mode) or value.st_nlink != 1:
+        if (
+            not stat.S_ISREG(value.st_mode)
+            or value.st_uid != os.geteuid()
+            or value.st_nlink != 1
+            or stat.S_IMODE(value.st_mode) not in {0o600, 0o700}
+        ):
             raise RuntimeStoreError(f"runtime file is not a private regular file: {path}")
         return hashlib.sha256(path.read_bytes()).hexdigest()
     except OSError as error:
@@ -100,8 +128,13 @@ def verify_runtime_release(
     )
     if (expected_release or path.name) != manifest["release"] or actual_identity != expected:
         raise RuntimeStoreError("runtime identity does not match trust policy")
+    if manifest["trust_policy_sha256"] != policy.digest():
+        raise RuntimeStoreError("runtime trust policy digest does not match")
     actual = _inventory(path)
     expected_files = dict(policy.files)
+    expected_files["runtime-manifest.json"] = hashlib.sha256(
+        (path / "runtime-manifest.json").read_bytes()
+    ).hexdigest()
     if actual != expected_files:
         raise RuntimeStoreError("runtime file inventory does not match trust policy")
 
@@ -116,6 +149,8 @@ def stage_runtime_release(  # noqa: C901
     """Stage one complete immutable runtime without publishing a selector."""
     if _RELEASE.fullmatch(release) is None or manifest.get("release") != release:
         raise RuntimeStoreError("runtime release identity is invalid")
+    _require_private_ancestors(source, "runtime source")
+    _require_private_ancestors(releases_root, "runtime release root")
     if not source.is_dir() or source.is_symlink():
         raise RuntimeStoreError("runtime source is not a directory")
     if not releases_root.exists():
@@ -140,7 +175,14 @@ def stage_runtime_release(  # noqa: C901
             if source_path.is_dir():
                 target.mkdir(mode=0o700, parents=True, exist_ok=True)
                 continue
-            mode = stat.S_IMODE(source_path.lstat().st_mode)
+            source_status = source_path.lstat()
+            if (
+                not stat.S_ISREG(source_status.st_mode)
+                or source_status.st_uid != os.geteuid()
+                or source_status.st_nlink != 1
+            ):
+                raise RuntimeStoreError("runtime source file is not a private regular file")
+            mode = 0o700 if source_status.st_mode & stat.S_IXUSR else 0o600
             target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
             shutil.copyfile(source_path, target)
             target.chmod(mode)
