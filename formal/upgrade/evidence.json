@@ -122,7 +122,7 @@
       "tools/lock_domain_correspondence.py": "f028f34edea704701040d59d7e8a00d57d7acde8582eebb7d20bcbe8054905b9",
       "tools/lock_domain_scope.py": "9b345ac16aec9d4afc995bc367dc865c41607839b67cf58e3a3b2174d686c3c4",
       "tools/mutation_fence.py": "08ff8993ddc63d7622b2bdc22866f62340dbed6d7d648c845df74b06b28e5a21",
-      "tools/rollback_control_store.py": "6647d8c159060ce966c352805c3712efd01b1ccfaf25a63516830bdf3f8cee17",
+      "tools/rollback_control_store.py": "9f5d3b5b6d8d93fe65c23dafdf37c9a3a03d74515127a2268bb19be7a5e82f65",
       "tools/sqlite_authority_mutation.py": "15472ba214ecaba4ae9040e4dfa00c6a404966f820128a59cd01f11e847aa97d",
       "tools/sqlite_storage.py": "cd0d24983b985e77a9c20bae165e422b7b3a4fba68b3528264980636936967e4",
       "tools/upgrade_admission.py": "0dfc53126675a3cfbc52d14322a0bfb0b04e2c18a1be4c0dfaf44e4d6eb884e6",
