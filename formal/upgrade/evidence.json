@@ -28,7 +28,7 @@
     "config": "formal/upgrade/HandoffctlUpgradeBarrier.cfg",
     "config_sha256": "e38502a22e5c73b175c92d152b21f086269c49e9256d2d25fa9209657697e776",
     "model": "formal/upgrade/HandoffctlUpgradeBarrier.tla",
-    "model_sha256": "2a1a31f530781645f5e8e76f67ca80a8ed59ec5d1f78706ca2a5530ebefa7b92",
+    "model_sha256": "89563f7da0fcaf3322ab52834dd473701d8262b064df76fb39fb4afd6918f939",
     "result": {
       "depth": 43,
       "distinct_states": 2518656,
