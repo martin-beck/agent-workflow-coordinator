@@ -157,7 +157,9 @@ paths. A built-in adapter derives all locations from the permanent project
 binding and a fixed versioned runtime layout. The isolated Git and SQLite
 authority effects now have a common, receipt-checked commit-phase seam, but
 public execution remains rejected until the complete barrier lifecycle,
-runtime launcher, and restore-equivalence obligations are implemented.
+barrier-integrated mutation path, and restore-equivalence obligations are
+implemented. Read-only selected-runtime consumption is implemented by
+`handoffctl upgrade consume` and does not authorize mutation.
 
 Barrier acquisition records the bounded set of wrapped commands that were
 already outside the lock. New commands cannot start after the barrier CAS.
@@ -219,10 +221,12 @@ fixed entrypoint with caller arguments only, and closes the admission after
 the child exits or fails. Callers do not supply a runtime or script path, and
 public apply, rollback, and release dispatch remain rejection-only.
 
-The repository has no current owner or complete API for this bootstrap,
-versioned runtime store, authenticity policy, and validation-to-exec binding.
-A new dependency AR is therefore required. Mutating CLI commands remain
-disabled until that AR is implemented and independently reviewed.
+The `handoffctl upgrade consume` command is the production read-only caller
+for this boundary. It accepts identity evidence, the selector, and the fixed
+release root, then delegates execution to `run_selected_runtime`; it does not
+accept a runtime or script path. Mutating CLI commands remain disabled until
+the remaining barrier and restore-equivalence obligations are independently
+reviewed.
 
 ## Required hostile and crash tests
 
@@ -291,8 +295,8 @@ runtime evidence.
 - AR-0005 and AR-0006 retain Git and SQLite restore-equivalence ownership.
 - AR-0008 owns the new automaton and any best-effort implementation
   correspondence evidence; this is guidance, not a source-refinement gate.
-- A new child AR must own the stable selector-aware bootstrap, versioned
-  runtime store, release authenticity verifier, and compatible vendor layout.
+- AR-0090 owns the verified read-only selected-runtime consumer; any future
+  child AR must own the stable runtime publication/store and mutation path.
 - AR-0010 owns the operator reconciliation and safe-mode runbook.
 
 Publication remains blocked until those dependencies, the hostile test matrix,
