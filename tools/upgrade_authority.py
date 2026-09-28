@@ -21,8 +21,18 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, Protocol, cast, runtime_checkable
 
-from tools.admission_lease import AdmissionLease, AdmissionLeaseError, AdmissionRecheck
-from tools.sqlite_storage import SCHEMA_VERSION as SQLITE_SCHEMA_VERSION
+if __package__:
+    from .admission_lease import AdmissionLease, AdmissionLeaseError, AdmissionRecheck
+    from .sqlite_storage import SCHEMA_VERSION as SQLITE_SCHEMA_VERSION
+else:  # pragma: no cover - direct script execution
+    from admission_lease import (  # type: ignore[import-not-found,no-redef]
+        AdmissionLease,
+        AdmissionLeaseError,
+        AdmissionRecheck,
+    )
+    from sqlite_storage import (  # type: ignore[import-not-found,no-redef]
+        SCHEMA_VERSION as SQLITE_SCHEMA_VERSION,
+    )
 
 
 class AuthorityError(RuntimeError):
