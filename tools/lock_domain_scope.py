@@ -13,12 +13,13 @@ from tools.lifecycle_trace import LifecycleObserver, _issue_event
 from tools.lock_domain import LockDomainContract, LockDomainError, LockDomainIdentity
 from tools.mutation_fence import MutationFence
 from tools.rollback_control_store import (
+    BarrierSessionContract,
     BarrierSessionState,
     ControlStoreError,
     SQLiteBarrierSessionStore,
     SQLiteRollbackControlStore,
 )
-from tools.upgrade_identity import BarrierSessionIdentity
+from tools.upgrade_identity import BarrierChildIdentity, BarrierSessionIdentity
 
 LockDomainObserver = Callable[[str], None]
 
@@ -263,6 +264,11 @@ class SQLiteCoordinationWriteAdapter:
         with self._scope._hold_with_guard() as common_guard:
             return self._control.cas_locked(common_guard, expected_revision, record)
 
+    def control_begin_release(self, operation_id: str) -> dict[str, object]:
+        """Move one held control barrier to releasing under the full scope."""
+        with self._scope._hold_with_guard():
+            return self._control._begin_release_locked(operation_id)
+
     def session_cas(
         self,
         expected_identity: BarrierSessionIdentity,
@@ -271,11 +277,65 @@ class SQLiteCoordinationWriteAdapter:
     ) -> BarrierSessionState:
         """CAS one durable session while common/control/authority are held."""
         with self._scope._hold_with_guard() as common_guard:
-            result = self._session.cas_locked(
+            return self._session_cas_locked(
                 common_guard, expected_identity, expected_revision, state
             )
-            self._scope._session_revision = result.revision
-            return result
+
+    def _session_cas_locked(
+        self,
+        common_guard: CoordinatorLockGuard,
+        expected_identity: BarrierSessionIdentity,
+        expected_revision: int,
+        state: BarrierSessionState,
+    ) -> BarrierSessionState:
+        result = self._session.cas_locked(common_guard, expected_identity, expected_revision, state)
+        self._scope._session_revision = result.revision
+        return result
+
+    def session_bind_child(
+        self,
+        expected_identity: BarrierSessionIdentity,
+        expected_revision: int,
+        child: BarrierChildIdentity,
+    ) -> BarrierSessionState:
+        """Bind one typed forward/rollback child under the full scope."""
+        with self._scope._hold_with_guard() as common_guard:
+            current = self._session._snapshot_locked()
+            if current is None:  # pragma: no cover - scope recheck rejects absence first
+                raise ControlStoreError("barrier session is absent")
+            if (
+                current.identity != expected_identity
+            ):  # pragma: no cover - scope recheck binds identity
+                raise ControlStoreError("barrier session identity changed")
+            contract = BarrierSessionContract(current.identity)
+            contract._state = current
+            state = contract.bind_child(expected_revision, child)
+            return self._session_cas_locked(
+                common_guard, expected_identity, expected_revision, state
+            )
+
+    def session_begin_reopen(
+        self,
+        expected_identity: BarrierSessionIdentity,
+        expected_revision: int,
+        target: str,
+        verified_child_evidence: Mapping[str, object] | None = None,
+    ) -> BarrierSessionState:
+        """Begin a verified child reopen under the full scope."""
+        with self._scope._hold_with_guard() as common_guard:
+            current = self._session._snapshot_locked()
+            if current is None:  # pragma: no cover - scope recheck rejects absence first
+                raise ControlStoreError("barrier session is absent")
+            if (
+                current.identity != expected_identity
+            ):  # pragma: no cover - scope recheck binds identity
+                raise ControlStoreError("barrier session identity changed")
+            contract = BarrierSessionContract(current.identity)
+            contract._state = current
+            state = contract.begin_reopen(expected_revision, target, verified_child_evidence)
+            return self._session_cas_locked(
+                common_guard, expected_identity, expected_revision, state
+            )
 
 
 def bind_sqlite_coordination_writer(

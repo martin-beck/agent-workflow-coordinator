@@ -47,6 +47,7 @@ from tools.rollback_control_store import (
     SQLiteRollbackControlStore,
 )
 from tools.upgrade_identity import (
+    BarrierChildIdentity,
     BarrierSessionIdentity,
     canonical_barrier_digest,
     canonical_barrier_session_digest,
@@ -1031,6 +1032,38 @@ class LockDomainScopeTests(unittest.TestCase):
         self.assertEqual("held", result["status"])
         self.assertEqual(1, result["revision"])
         self.assertFalse(self.store.operation_owned_by_current_thread)
+
+    def test_typed_coordination_writer_control_begin_release_is_scoped(self) -> None:
+        scope = LockDomainScope.bind(self.session, self.fence, self.lease, self.recheck, locked)
+        writer = bind_sqlite_coordination_writer(scope, self.store, self.session)
+        writer.control_cas(0, control_record())
+
+        result = writer.control_begin_release("op-1")
+
+        self.assertEqual("releasing", result["status"])
+        self.assertEqual(2, result["revision"])
+
+    def test_typed_coordination_writer_child_and_reopen_admission_are_scoped(self) -> None:
+        scope = LockDomainScope.bind(self.session, self.fence, self.lease, self.recheck, locked)
+        writer = bind_sqlite_coordination_writer(scope, self.store, self.session)
+        child = BarrierChildIdentity.bind(identity(), "forward-1", "new")
+
+        bound = writer.session_bind_child(identity(), 1, child)
+        releasing = writer.session_begin_reopen(
+            identity(),
+            bound.revision,
+            "new",
+            {
+                "operation_id": child.operation_id,
+                "target": child.target,
+                "barrier_identity_digest": bound.identity.identity_digest,
+                "validated": True,
+            },
+        )
+
+        self.assertEqual("releasing", releasing.status)
+        self.assertEqual(3, releasing.revision)
+        self.assertFalse(self.session.operation_owned_by_current_thread)
 
     def test_typed_coordination_writer_rejects_control_project_drift(self) -> None:
         scope = LockDomainScope.bind(self.session, self.fence, self.lease, self.recheck, locked)
