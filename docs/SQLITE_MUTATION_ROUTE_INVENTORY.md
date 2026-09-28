@@ -51,7 +51,7 @@ stay rejection-only.
 | `SQLiteRollbackControlStore` | `with_barrier` | barrier acquire/release | `test_with_barrier_holds_coordinator_lock_through_authority_callback`, `test_typed_coordination_writer_with_barrier_holds_full_scope` |
 | `SQLiteBarrierSessionStore` | `create`, `cas`, `bind_child`, `begin_reopen`, `complete_reopen`, `mark_ambiguous` | session/child rows and history | `test_v10_session_cas_fences_insert_and_update_rows`, `test_v10_durable_session_persists_children_and_reopen`, `test_typed_coordination_writer_completes_release_and_reopen`, `test_typed_coordination_writer_fences_uncertain_session_outcome`, `test_fresh_recovery_scope_creates_initial_session` |
 | `SQLiteBarrierSessionStore` | `recover_unknown`, `reconcile_ambiguous` | intent/session/history rows | `test_v10_session_intent_recovery_fences_and_requires_newer_fence`, `test_typed_coordination_writer_recovers_unknown_under_full_scope`, `test_fresh_recovery_scope_reconciles_ambiguous_session` |
-| `SQLiteBarrierSessionStore` | `prepare_authority_effect`, `finish_authority_effect` | authority-effect intent/session rows | `test_typed_coordination_writer_fences_authority_effect_intent` |
+| `SQLiteBarrierSessionStore` | `prepare_authority_effect`, `finish_authority_effect` | authority-effect intent/session rows | `test_typed_coordination_writer_fences_authority_effect_intent`, `test_typed_effect_process_death_recovers_as_ambiguous` |
 
 The inventory proves admission ordering and row-fence tests only. It does not
 prove that every future authority route is registered here, that SQLite
