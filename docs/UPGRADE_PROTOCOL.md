@@ -40,16 +40,14 @@ commands intentionally reject before mutation while the executable protocol
 is incomplete. This boundary covers both backends: Git is not accidentally
 enabled, and SQLite is not enabled by fabricated admission evidence.
 
-Production execution remains blocked on four linked corrections: quiescence
-must acquire a barrier before quiesced admission. The admission boundary now
-rejects unless the snapshot records a held durable barrier and an explicit
-barrier-acquired-before-quiescence predicate; a forward barrier still needs a
-complete acquire/recheck/reopen lifecycle; forward `target=new` and rollback
-`target=rollback` must have a non-conflicting durable identity model; and the
-selected runtime must actually be consumed by a verified launcher. SQLite
-coordination writes must also participate in the upgrade fence. Until those
-contracts, their bounded executable evidence, and hostile tests are reviewed,
-no typed opcode is dispatched to a mutating implementation.
+The quiescence, forward barrier lifecycle, target-identity, and verified
+read-only launcher boundaries now have bounded executable evidence. Production
+mutation remains blocked on the remaining SQLite coordination-write fence,
+complete Git/SQLite restore-equivalence evidence, and a fresh-clone
+upgrade-and-rollback campaign. Until those contracts and hostile tests are
+independently reviewed, no typed opcode is dispatched to a mutating
+implementation. `handoffctl upgrade consume` is read-only and does not change
+this gate.
 
 The normative redesign needed to close those blockers is specified in
 [Upgrade execution redesign](UPGRADE_EXECUTION_REDESIGN.md). It is a design
@@ -208,7 +206,9 @@ AR-0004 owns admission, quiescence, fencing, and reopen gates. AR-0005 and
 AR-0006 own complete Git and SQLite backup/restore equivalence. AR-0007 owns
 the executable phase machine only after those contracts pass. AR-0008 binds
 these invariants and failure injections to exhaustive formal models. AR-0009
-and AR-0010 own release publication and operator runbooks.
+and AR-0010 own release publication and operator runbooks. AR-0090 owns the
+verified read-only selected-runtime consumer; AR-0091 owns the next bounded
+SQLite coordination-write fence slice.
 
 The coordinator must not advertise an upgrade capability until the combined
 child contracts, implementation, formal model, fault-injection suite, and a
