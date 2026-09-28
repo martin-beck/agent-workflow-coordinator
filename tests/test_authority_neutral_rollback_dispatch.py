@@ -132,6 +132,13 @@ class RollbackDispatchTests(unittest.TestCase):
                 self.assertRaisesRegex(RollbackDispatchError, message),
             ):
                 BoundRollbackPhaseAdapter(operation, CONTEXT, Executor(), "effect")
+        with self.assertRaisesRegex(RollbackDispatchError, "selector reference"):
+            base = cast(dict[str, Any], OPERATION)
+            invalid = {
+                **base,
+                "inputs": {**base["inputs"], "selector_ref": ""},
+            }
+            BoundRollbackPhaseAdapter(invalid, CONTEXT, Executor(), "effect")
 
     def test_rejects_invalid_context_or_executor(self) -> None:
         with self.assertRaisesRegex(RollbackDispatchError, "context"):

@@ -813,7 +813,7 @@ class SQLiteAuthorityAdapter:
                 "SQLite durable commit capability binding was rejected"
             ) from error
 
-    def bind_durable_rollback_capability(
+    def bind_durable_rollback_capability(  # pragma: no cover - isolated backend seam
         self,
         admission: Any,
         journal: Any,
