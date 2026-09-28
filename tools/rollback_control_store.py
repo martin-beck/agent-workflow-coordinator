@@ -1940,8 +1940,9 @@ class SQLiteBarrierSessionStore:
         common_guard: CoordinatorLockGuard,
         expected_identity: BarrierSessionIdentity,
         expected_revision: int,
+        allowed_statuses: tuple[str, ...] = ("held",),
     ) -> BarrierSessionState:
-        """Read-only held-session recheck while the caller owns both locks."""
+        """Read-only session recheck while the caller owns both locks."""
         if not isinstance(common_guard, CoordinatorLockGuard):
             raise LockOwnershipError("caller-owned coordinator lock guard is required")
         common_guard.assert_owned()
@@ -1951,6 +1952,10 @@ class SQLiteBarrierSessionStore:
             raise ControlStoreError("barrier session identity is required")
         if type(expected_revision) is not int or expected_revision < 1:
             raise ControlStoreError("barrier session expected revision is invalid")
+        if not allowed_statuses or any(
+            status not in {"held", "releasing"} for status in allowed_statuses
+        ):
+            raise ControlStoreError("barrier session allowed statuses are invalid")
         self._control._require_operation_lock()
         if self._authority_revision_reader is None:
             raise ControlStoreError("fresh authority rereader is required")
@@ -1967,8 +1972,13 @@ class SQLiteBarrierSessionStore:
             raise ControlStoreError("barrier session CAS conflict")
         if current.identity != expected_identity:
             raise ControlStoreError("barrier session identity changed")
-        if current.status != "held":
-            raise ControlStoreError("barrier session is not held")
+        if current.status not in allowed_statuses:
+            message = (
+                "barrier session is not held"
+                if allowed_statuses == ("held",)
+                else "barrier session is not in an admissible status"
+            )
+            raise ControlStoreError(message)
         if current.identity.authority_revision_at_acquire != fresh_authority_revision:
             raise ControlStoreError("barrier session authority revision changed")
         common_guard.assert_owned()

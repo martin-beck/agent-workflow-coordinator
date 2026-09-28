@@ -17,8 +17,10 @@ evidence comes from the bounded implementation and hostile-failure tests below.
 caller owns the common/control locks, then performs a trusted
 `recheck_held_locked` after acquiring the authority lock. A stale, replaced,
 non-held, or authority-drifted session is rejected before the scope yields to
-any adapter. This remains read-only scaffolding: no authority transaction,
-CAS, selector publication, upgrade, apply, or rollback route is wired to it.
+any adapter. The uncalled typed coordination adapter now covers control
+CAS/release completion and session child/reopen/ambiguous transitions under
+the same scope; it still performs no authority transaction, selector
+publication, upgrade, apply, or rollback dispatch.
 
 ## Ownership and lock order
 
@@ -82,7 +84,8 @@ The implementation slice may be promoted only with tests that demonstrate:
 - process termination or uncertain commit entering durable `ambiguous` state;
 - writes resuming only after an independently verified `released` state.
 
-Until this matrix and the corresponding bounded executable evidence exist, the
-seam is documentation/test scaffolding only and no mutation route may bind to
-it. The model may guide implementation and scenario coverage, but a proof that
-the source refines the model is not a release prerequisite.
+The typed coordination adapter remains an uncalled contract seam until its
+complete route inventory and corresponding bounded executable evidence are
+accepted. No public mutation route may bind to it. The model may guide
+implementation and scenario coverage, but a proof that the source refines the
+model is not a release prerequisite.
