@@ -29,10 +29,11 @@ class RuntimeStoreTests(unittest.TestCase):
         )
 
     def test_stage_and_verify_complete_release(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory(dir="/srv/data/projects") as directory:
             root = Path(directory)
             source = root / "source"
             source.mkdir()
+            source.chmod(0o700)
             (source / "tools").mkdir()
             (source / "tools/handoffctl.py").write_text("print('ok')\n")
             identity = self._identity()
@@ -62,10 +63,11 @@ class RuntimeStoreTests(unittest.TestCase):
             self.assertEqual(0o700, staged.stat().st_mode & 0o777)
 
     def test_symlink_source_rejected_before_publication(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory(dir="/srv/data/projects") as directory:
             root = Path(directory)
             source = root / "source"
             source.mkdir()
+            source.chmod(0o700)
             (source / "escape").symlink_to("/etc/passwd")
             identity = self._identity()
             manifest = {"release": "v1.2.3", "source_commit": identity.source_commit}
@@ -75,10 +77,11 @@ class RuntimeStoreTests(unittest.TestCase):
             self.assertFalse((root / "releases/v1.2.3").exists())
 
     def test_hard_link_source_rejected(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory(dir="/srv/data/projects") as directory:
             root = Path(directory)
             source = root / "source"
             source.mkdir()
+            source.chmod(0o700)
             original = root / "original"
             original.write_text("shared")
             (source / "runtime.py").hardlink_to(original)

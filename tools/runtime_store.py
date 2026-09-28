@@ -10,7 +10,6 @@ import hashlib
 import json
 import os
 import re
-import shutil
 import stat
 import tempfile
 from dataclasses import dataclass
@@ -68,6 +67,10 @@ def _require_private_ancestors(path: Path, label: str) -> None:
             raise RuntimeStoreError(f"{label} path contains a symlink")
         if current != absolute and not stat.S_ISDIR(value.st_mode):
             raise RuntimeStoreError(f"{label} ancestor is unsafe")
+        if current != Path(current.anchor) and (
+            value.st_uid not in {os.geteuid(), 0} or stat.S_IMODE(value.st_mode) & 0o022
+        ):
+            raise RuntimeStoreError(f"{label} ancestor is not owner-controlled")
 
 
 def _digest(path: Path) -> str:
@@ -80,7 +83,20 @@ def _digest(path: Path) -> str:
             or stat.S_IMODE(value.st_mode) not in {0o600, 0o700}
         ):
             raise RuntimeStoreError(f"runtime file is not a private regular file: {path}")
-        return hashlib.sha256(path.read_bytes()).hexdigest()
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+        try:
+            opened = os.fstat(descriptor)
+            if (opened.st_dev, opened.st_ino) != (value.st_dev, value.st_ino):
+                raise RuntimeStoreError(f"runtime file changed during verification: {path}")
+            hasher = hashlib.sha256()
+            while chunk := os.read(descriptor, 65536):
+                hasher.update(chunk)
+            final = os.fstat(descriptor)
+            if (final.st_dev, final.st_ino) != (value.st_dev, value.st_ino):
+                raise RuntimeStoreError(f"runtime file changed during verification: {path}")
+            return hasher.hexdigest()
+        finally:
+            os.close(descriptor)
     except OSError as error:
         raise RuntimeStoreError(f"runtime file is unavailable: {path}") from error
 
@@ -184,7 +200,20 @@ def stage_runtime_release(  # noqa: C901
                 raise RuntimeStoreError("runtime source file is not a private regular file")
             mode = 0o700 if source_status.st_mode & stat.S_IXUSR else 0o600
             target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-            shutil.copyfile(source_path, target)
+            descriptor = os.open(source_path, os.O_RDONLY | os.O_NOFOLLOW)
+            try:
+                opened = os.fstat(descriptor)
+                if (opened.st_dev, opened.st_ino) != (source_status.st_dev, source_status.st_ino):
+                    raise RuntimeStoreError("runtime source changed during staging")
+                with os.fdopen(descriptor, "rb") as source_stream:
+                    descriptor = -1
+                    target.write_bytes(source_stream.read())
+                final = source_path.lstat()
+                if (final.st_dev, final.st_ino) != (source_status.st_dev, source_status.st_ino):
+                    raise RuntimeStoreError("runtime source changed during staging")
+            finally:
+                if descriptor >= 0:
+                    os.close(descriptor)
             target.chmod(mode)
         manifest_path = staged / "runtime-manifest.json"
         if manifest_path.exists():
