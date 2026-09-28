@@ -121,6 +121,7 @@ def verify_runtime_release(
     path: Path, policy: RuntimeTrustPolicy, *, expected_release: str | None = None
 ) -> None:
     """Verify exact manifest identity and the complete trusted file inventory."""
+    _require_private_ancestors(path, "runtime release")
     if not path.is_dir() or path.is_symlink():
         raise RuntimeStoreError("runtime release is not a directory")
     try:
