@@ -86,8 +86,8 @@
   "config_sha256": "47425af53affd104aa5e30d7434cf3e71e3c7b69bccb9b05fbd749d3285991a2",
   "design_snapshot": {
     "files": {
-      "docs/UPGRADE_EXECUTION_REDESIGN.md": "610e937d47cb5b793f684626c139ca1c8b460bedcd3b8f1f4dbdf5cde0c67954",
-      "docs/UPGRADE_PROTOCOL.md": "8b3a1e5600165919e9cf4a3943237abfec064c6cc4286ad727b463cf2ddbfc62"
+      "docs/UPGRADE_EXECUTION_REDESIGN.md": "2ad71183945d73ab302c65d22ad2e539832135894649dcfa497a0a369103671c",
+      "docs/UPGRADE_PROTOCOL.md": "e3ddd0429ad4b7c7e9c3bc61371a961af9c82f7c03cced8e3b7cf7e4bd6132bc"
     },
     "revision": "bbbef2053bad329e85a8d257493cd642e20e06d2",
     "status": "design-only-v10; best-effort model guidance; no refinement proof required"
