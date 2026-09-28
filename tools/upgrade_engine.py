@@ -11,13 +11,16 @@ import tempfile
 import time
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import AbstractContextManager, contextmanager, nullcontext
+from copy import deepcopy
 from dataclasses import asdict, dataclass
 from dataclasses import field as dataclass_field
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Protocol, cast, runtime_checkable
 
+from tools.authority_mutation import AuthorityMutationAmbiguousError
 from tools.authority_neutral_backup import BoundBackupPhaseAdapter
+from tools.authority_neutral_commit_dispatch import BoundCommitPhaseAdapter
 from tools.authority_neutral_stage import BoundStagePhaseAdapter
 from tools.authority_neutral_validation import BoundValidationPhaseAdapter
 from tools.rollback_evidence import BackupObservation
@@ -255,6 +258,19 @@ TOP_LEVEL_FIELDS = {
 RECORD_FIELDS = {"operation_id", "step_id", "phase", "outcome", "result", "error", "context"}
 CONTEXT_FIELDS = ENVELOPE_FIELDS
 _ROLLBACK_EVIDENCE_TOKEN = object()
+_COMMIT_PHASE_EVIDENCE_FIELDS = frozenset(
+    {
+        "quiesced",
+        "backup_verified",
+        "selector_verified",
+        "selector_commit_atomic",
+        "fencing_verified",
+        "selector_before_verified",
+        "selector_after_verified",
+        "admitted_snapshot",
+        "current_snapshot",
+    }
+)
 
 
 def backup_identity_digest(
@@ -701,6 +717,11 @@ class UpgradeEngine:
         validation_admission: object | None = None,
         validation_operation: Mapping[str, object] | None = None,
         validation_context: Mapping[str, object] | None = None,
+        commit_operation: Mapping[str, object] | None = None,
+        commit_context: Mapping[str, object] | None = None,
+        commit_executor: object | None = None,
+        commit_argument: object | None = None,
+        commit_evidence: Mapping[str, object] | None = None,
     ) -> None:
         if not operation_id or ":" in operation_id:
             raise UpgradeError("invalid operation identity")
@@ -750,10 +771,63 @@ class UpgradeEngine:
                 )
             except Exception as error:
                 raise UpgradeError("validation capability binding is invalid") from error
+        commit_parts = (
+            commit_operation,
+            commit_context,
+            commit_executor,
+            commit_argument,
+            commit_evidence,
+        )
+        commit_count = sum(value is not None for value in commit_parts)
+        if commit_count not in (0, len(commit_parts)):
+            raise UpgradeError(
+                "commit operation, context, executor, argument, and evidence are required together"
+            )
+        self._commit_phase_adapter: BoundCommitPhaseAdapter | None = None
+        self._commit_operation: Mapping[str, object] | None = None
+        self._commit_phase_evidence: dict[str, object] = {}
+        if commit_count == len(commit_parts):
+            if backend_adapter is None:
+                raise UpgradeError("commit capability requires a backend adapter")
+            if (
+                not isinstance(commit_operation, Mapping)
+                or commit_operation.get("operation_id") != f"{operation_id}:commit"
+            ):
+                raise UpgradeError("commit capability operation identity mismatch")
+            if (
+                not isinstance(commit_evidence, Mapping)
+                or set(commit_evidence) != _COMMIT_PHASE_EVIDENCE_FIELDS
+            ):
+                raise UpgradeError("commit capability evidence is incomplete or unknown")
+            for field in _COMMIT_PHASE_EVIDENCE_FIELDS - {"admitted_snapshot", "current_snapshot"}:
+                if commit_evidence.get(field) is not True:
+                    raise UpgradeError("commit capability evidence is not verified")
+            for field in ("admitted_snapshot", "current_snapshot"):
+                if not isinstance(commit_evidence.get(field), Mapping):
+                    raise UpgradeError("commit capability admission snapshots are invalid")
+            try:
+                self._commit_operation = dict(commit_operation)
+                self._commit_phase_adapter = BoundCommitPhaseAdapter(
+                    commit_operation,
+                    cast(Mapping[str, object], commit_context),
+                    cast(Any, commit_executor),
+                    commit_argument,
+                )
+            except Exception as error:
+                raise UpgradeError("commit capability binding is invalid") from error
+            self._commit_phase_evidence = deepcopy(dict(commit_evidence))
         self._verified_rollback_context: dict[str, object] | None = None
         supplied = dict(context)
         _validate_context(supplied, operation_id)
         self.context = PhaseContext(**cast(dict[str, Any], supplied))
+        if self._commit_phase_adapter is not None:
+            for field in ("admitted_snapshot", "current_snapshot"):
+                snapshot = self._commit_phase_evidence[field]
+                self._bind_snapshot(cast(Mapping[str, object], snapshot))
+            try:
+                self._admit("commit", self._commit_phase_evidence)
+            except Exception as error:
+                raise UpgradeError("commit capability admission evidence is invalid") from error
         if rollback_bound_verifier is not None and not isinstance(
             rollback_bound_verifier, BoundRollbackCapability
         ):
@@ -1130,13 +1204,33 @@ class UpgradeEngine:
                 phase_adapters = {
                     "backup": self._backup_phase_adapter,
                     "stage": self._stage_phase_adapter,
+                    "commit": self._commit_phase_adapter,
                     "validate": self._validation_phase_adapter,
                 }
                 executor = phase_adapters.get(phase) or self.backend_adapter
                 if executor is None:  # pragma: no cover - backend checked before dispatch
                     raise UpgradeError("backend adapter is required for authoritative upgrade")
-                adapter_result = executor.execute(phase, frozen_context)
+                dispatch_context = frozen_context
+                if phase == "commit" and self._commit_phase_adapter is not None:
+                    # The generated effect is a phase step (``operation:commit``),
+                    # while the durable journal context names the parent
+                    # operation.  Keep the parent context immutable and project
+                    # only the step identity to the already-bound capability.
+                    commit_operation_id = (
+                        self._commit_operation.get("operation_id")
+                        if self._commit_operation is not None
+                        else None
+                    )
+                    if not isinstance(commit_operation_id, str):  # pragma: no cover
+                        raise UpgradeError("commit operation identity is unavailable")
+                    dispatch_context = cast(
+                        Mapping[str, object],
+                        _freeze({**dict(frozen_context), "operation_id": commit_operation_id}),
+                    )
+                adapter_result = executor.execute(phase, dispatch_context)
                 result = dict(adapter_result)
+                if phase == "commit" and self._commit_phase_adapter is not None:
+                    result.update(self._commit_phase_evidence)
                 handler_result = (
                     handlers[phase](step_id, cast(Mapping[str, Any], _freeze(value))) or {}
                 )
@@ -1145,6 +1239,11 @@ class UpgradeEngine:
                         raise UpgradeError("handler cannot override backend evidence")
                 result.update(handler_result)
                 self._load()
+            except AuthorityMutationAmbiguousError as error:
+                record.update(outcome="ambiguous", error=type(error).__name__)
+                value["status"] = "safe-mode"
+                _write(self.journal, value)
+                raise UpgradeError(f"phase outcome is ambiguous: {phase}") from error
             except Exception as error:
                 record.update(outcome="failed", error=type(error).__name__)
                 value["status"] = "failed"

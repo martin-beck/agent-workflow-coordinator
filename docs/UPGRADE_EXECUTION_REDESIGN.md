@@ -155,9 +155,13 @@ each allowlisted opcode:
 Production dispatch accepts neither caller-provided handlers nor scripts nor
 paths. A built-in adapter derives all locations from the permanent project
 binding and a fixed versioned runtime layout. The isolated Git and SQLite
-authority effects now have a common, receipt-checked commit-phase seam, but
-public execution remains rejected until the complete barrier lifecycle,
-barrier-integrated mutation path, and restore-equivalence obligations are
+authority effects now have a common, receipt-checked commit-phase seam.
+`UpgradeEngine` can consume that seam only when a caller supplies one complete
+generated commit operation, a matching phase-step identity, a single-use
+durable executor, and independently checked commit evidence; the parent
+journal context remains unchanged. The public CLI does not construct or accept
+those capabilities, so public execution remains rejected until the complete
+barrier-integrated mutation path and restore-equivalence obligations are
 implemented. Read-only selected-runtime consumption is implemented by
 `handoffctl upgrade consume` and does not authorize mutation.
 
