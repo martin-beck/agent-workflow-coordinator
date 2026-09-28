@@ -16,6 +16,7 @@ from tools.rollback_control_store import (
     BarrierSessionContract,
     BarrierSessionState,
     ControlStoreError,
+    RecoveryRejectedError,
     SQLiteBarrierSessionStore,
     SQLiteRollbackControlStore,
 )
@@ -452,6 +453,55 @@ class SQLiteCoordinationWriteAdapter:
             return result
 
 
+class SQLiteCoordinationRecoveryAdapter:
+    """Fresh-fence recovery seam for an ambiguous durable session."""
+
+    __slots__ = ("_authority_fence", "_common_lock", "_session")
+
+    def __init__(
+        self,
+        session: SQLiteBarrierSessionStore,
+        authority_fence: MutationFence,
+        common_lock: Callable[[], AbstractContextManager[CoordinatorLockGuard]],
+    ) -> None:
+        if not isinstance(session, SQLiteBarrierSessionStore):
+            raise TypeError("SQLite barrier session is required")
+        if not isinstance(authority_fence, MutationFence):
+            raise TypeError("authority fence is required")
+        self._session = session
+        self._authority_fence = authority_fence
+        self._common_lock = common_lock
+
+    def reconcile_ambiguous(
+        self,
+        expected_identity: BarrierSessionIdentity,
+        expected_revision: int,
+        replacement: BarrierSessionState,
+    ) -> BarrierSessionState:
+        """Install a newer held session only under a fresh ordered fence."""
+        if not isinstance(expected_identity, BarrierSessionIdentity):
+            raise ControlStoreError("expected recovery identity is invalid")
+        if not isinstance(replacement, BarrierSessionState):
+            raise ControlStoreError("replacement recovery state is invalid")
+        with self._common_lock() as common_guard:
+            domain = LockDomainContract.capture(common_guard, self._session, self._authority_fence)
+            with self._session.lock_owned_by_caller(common_guard):
+                current = self._session.snapshot_owned_by_caller()
+                if current.status != "ambiguous":
+                    raise RecoveryRejectedError("only ambiguous sessions require reconciliation")
+                if current.identity != expected_identity:
+                    raise RecoveryRejectedError("ambiguous session identity changed")
+                if current.revision != expected_revision:
+                    raise RecoveryRejectedError("barrier session CAS conflict")
+                with self._authority_fence.locked():
+                    domain.assert_current(common_guard, self._session, self._authority_fence)
+                    result = self._session.reconcile_ambiguous_locked(
+                        common_guard, expected_revision, replacement
+                    )
+                    common_guard.assert_owned()
+                    return result
+
+
 def bind_sqlite_coordination_writer(
     scope: LockDomainScope,
     control: SQLiteRollbackControlStore,
@@ -459,3 +509,12 @@ def bind_sqlite_coordination_writer(
 ) -> SQLiteCoordinationWriteAdapter:
     """Issue the typed coordination CAS seam without exposing raw stores."""
     return SQLiteCoordinationWriteAdapter(scope, control, session)
+
+
+def bind_sqlite_coordination_recovery(
+    session: SQLiteBarrierSessionStore,
+    authority_fence: MutationFence,
+    common_lock: Callable[[], AbstractContextManager[CoordinatorLockGuard]],
+) -> SQLiteCoordinationRecoveryAdapter:
+    """Issue the fresh-fence recovery seam without exposing stores."""
+    return SQLiteCoordinationRecoveryAdapter(session, authority_fence, common_lock)

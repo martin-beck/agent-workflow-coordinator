@@ -1804,6 +1804,11 @@ class RollbackControlStoreTests(unittest.TestCase):
                 SQLiteRollbackControlStore(path, PROJECT), lambda: "authority-3"
             )
             identity = self._session_identity()
+            with locked() as wrong_guard:
+                wrong_guard._path = Path(directory) / "wrong-lock"
+                with self.assertRaisesRegex(LockOwnershipError, "path changed"):
+                    store.recover_unknown_locked(wrong_guard)
+
             with locked() as guard:
                 with self.assertRaisesRegex(LockOwnershipError, "guard is required"):
                     store.recover_unknown_locked(cast(Any, None))

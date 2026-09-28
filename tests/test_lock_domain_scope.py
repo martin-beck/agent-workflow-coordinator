@@ -38,7 +38,11 @@ from tools.lock_domain_correspondence import (
     validate_lock_domain_model_contract,
     validate_lock_domain_trace,
 )
-from tools.lock_domain_scope import LockDomainScope, bind_sqlite_coordination_writer
+from tools.lock_domain_scope import (
+    LockDomainScope,
+    bind_sqlite_coordination_recovery,
+    bind_sqlite_coordination_writer,
+)
 from tools.mutation_fence import MutationFence, provision, provision_control_binding
 from tools.rollback_control_store import (
     BarrierSessionState,
@@ -1218,6 +1222,73 @@ class LockDomainScopeTests(unittest.TestCase):
         wrong_identity = replace(identity(), attempt_id="other-attempt")
         with self.assertRaisesRegex(ControlStoreError, "identity changed"):
             writer.session_mark_ambiguous(wrong_identity, 1, "commit-failure")
+
+    def test_fresh_recovery_scope_reconciles_ambiguous_session(self) -> None:
+        scope = LockDomainScope.bind(self.session, self.fence, self.lease, self.recheck, locked)
+        writer = bind_sqlite_coordination_writer(scope, self.store, self.session)
+        ambiguous = writer.session_mark_ambiguous(identity(), 1, "process-death")
+        replacement_record = identity().as_record()
+        replacement_record.update(
+            {
+                "attempt_id": "attempt-2",
+                "state_revision": 2,
+                "durable_barrier_id": "barrier-2",
+                "fencing_token": "fence-2",
+                "fencing_owner": "owner-2",
+                "identity_digest": "0" * 64,
+            }
+        )
+        replacement_record["identity_digest"] = canonical_barrier_session_digest(replacement_record)
+        replacement_identity = BarrierSessionIdentity.from_record(replacement_record)
+        replacement = BarrierSessionState(replacement_identity, "held", 1)
+        recovery = bind_sqlite_coordination_recovery(self.session, self.fence, locked)
+
+        result = recovery.reconcile_ambiguous(identity(), ambiguous.revision, replacement)
+
+        self.assertEqual(replacement, result)
+        self.assertEqual(replacement, self.session.snapshot())
+        self.assertFalse(self.session.operation_owned_by_current_thread)
+
+    def test_fresh_recovery_scope_rejects_invalid_admission_and_reread(self) -> None:
+        recovery = bind_sqlite_coordination_recovery(self.session, self.fence, locked)
+        replacement = BarrierSessionState(identity(), "held", 1)
+        with self.assertRaisesRegex(ControlStoreError, "expected recovery identity"):
+            recovery.reconcile_ambiguous(cast(Any, None), 1, replacement)
+        with self.assertRaisesRegex(ControlStoreError, "replacement recovery state"):
+            recovery.reconcile_ambiguous(identity(), 1, cast(Any, None))
+
+        with self.assertRaisesRegex(ControlStoreError, "only ambiguous"):
+            recovery.reconcile_ambiguous(identity(), 1, replacement)
+
+        writer = bind_sqlite_coordination_writer(
+            LockDomainScope.bind(self.session, self.fence, self.lease, self.recheck, locked),
+            self.store,
+            self.session,
+        )
+        ambiguous = writer.session_mark_ambiguous(identity(), 1, "process-death")
+        wrong_identity = replace(identity(), attempt_id="wrong-attempt")
+        with self.assertRaisesRegex(ControlStoreError, "identity changed"):
+            recovery.reconcile_ambiguous(wrong_identity, ambiguous.revision, replacement)
+        with self.assertRaisesRegex(ControlStoreError, "CAS conflict"):
+            recovery.reconcile_ambiguous(identity(), ambiguous.revision - 1, replacement)
+
+        replacement_record = identity().as_record()
+        replacement_record.update(
+            {
+                "attempt_id": "attempt-2",
+                "state_revision": 2,
+                "durable_barrier_id": "barrier-2",
+                "fencing_token": "fence-2",
+                "fencing_owner": "owner-2",
+                "identity_digest": "0" * 64,
+            }
+        )
+        replacement_record["identity_digest"] = canonical_barrier_session_digest(replacement_record)
+        replacement_identity = BarrierSessionIdentity.from_record(replacement_record)
+        replacement = BarrierSessionState(replacement_identity, "held", 1)
+        self.session._authority_revision_reader = None
+        with self.assertRaisesRegex(ControlStoreError, "fresh authority rereader"):
+            recovery.reconcile_ambiguous(identity(), ambiguous.revision, replacement)
 
     def test_typed_coordination_writer_rejects_control_project_drift(self) -> None:
         scope = LockDomainScope.bind(self.session, self.fence, self.lease, self.recheck, locked)
