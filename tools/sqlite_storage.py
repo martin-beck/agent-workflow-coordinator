@@ -13,7 +13,7 @@ import tempfile
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import AbstractContextManager, contextmanager, nullcontext
 from pathlib import Path
-from typing import Any, Protocol, TypeVar, cast
+from typing import Any, Protocol, cast
 
 type Meta = dict[str, Any]
 type Task = tuple[Path, Meta, str]
@@ -24,7 +24,6 @@ NETWORK_FILESYSTEMS = frozenset(
     {"9p", "afs", "ceph", "cifs", "fuse.sshfs", "gfs2", "glusterfs", "nfs", "nfs4", "smb3"}
 )
 _FACTORY_SENTINEL = object()
-_WriteResult = TypeVar("_WriteResult")
 
 
 class StorageContentionError(RuntimeError):
@@ -1180,7 +1179,7 @@ def bind_sqlite_backend(
 
 
 class SQLiteAuthorityWriteAdapter:
-    """Single-operation authority writer bound to one lock-domain scope.
+    """Typed authority writer bound to one lock-domain scope.
 
     The raw backend is intentionally retained privately.  Each operation must
     enter the caller-owned common -> control -> authority scope first; the
@@ -1196,13 +1195,54 @@ class SQLiteAuthorityWriteAdapter:
             raise TypeError("SQLiteAuthorityWriteAdapter must be issued by its factory")
         self._backend = backend
 
-    def execute(self, operation: Callable[[SQLiteBackend], _WriteResult]) -> _WriteResult:
-        """Run exactly one caller operation while the bound scope is held."""
-        if not callable(operation):
-            raise TypeError("authority write operation must be callable")
-        # The issued backend's transaction enters the bound LockDomainScope;
-        # callers cannot obtain that backend except through this capability.
-        return operation(self._backend)
+    def mutate(
+        self,
+        task_id: str,
+        expected_revision: int,
+        kind: str,
+        at: str,
+        transition: Callable[[Meta, list[Task]], tuple[str, str]],
+        session_record: Meta | None = None,
+        session_factory: Callable[[Meta], Meta] | None = None,
+        checkpoint_factory: Callable[[Meta], Meta] | None = None,
+    ) -> None:
+        """Apply one fenced task transition."""
+        self._backend.mutate(
+            task_id,
+            expected_revision,
+            kind,
+            at,
+            transition,
+            session_record,
+            session_factory,
+            checkpoint_factory,
+        )
+
+    def update_observations(self, observations: dict[str, Meta], at: str) -> None:
+        """Persist fenced live-worktree observations."""
+        self._backend.update_observations(observations, at)
+
+    def append_command_result(
+        self,
+        task_id: str,
+        owner: str,
+        command_hash: str,
+        returncode: int,
+        classification: str,
+        recorded_at: str,
+    ) -> None:
+        """Persist fenced command evidence."""
+        self._backend.append_command_result(
+            task_id, owner, command_hash, returncode, classification, recorded_at
+        )
+
+    def retire(
+        self,
+        project: Callable[[list[Task]], None],
+        switch_selector: Callable[[], None],
+    ) -> None:
+        """Retire authority through the fenced route."""
+        self._backend.retire(project, switch_selector)
 
 
 def bind_sqlite_authority_writer(
@@ -1212,7 +1252,7 @@ def bind_sqlite_authority_writer(
     authority_binding: SQLiteAuthorityBinding,
     scope: object,
 ) -> SQLiteAuthorityWriteAdapter:
-    """Issue a scope-bound writer without exposing a bypassable raw backend."""
+    """Issue typed scope-bound writes without exposing a raw backend."""
     from tools.lock_domain_scope import LockDomainScope
 
     if not isinstance(scope, LockDomainScope):

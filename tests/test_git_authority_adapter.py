@@ -877,33 +877,19 @@ class GitAuthorityAdapterTests(unittest.TestCase):
             authority,
             self.scope,
         )
-        self.assertFalse(hasattr(writer, "mutate"))
+        self.assertTrue(hasattr(writer, "mutate"))
         self.assertFalse(hasattr(writer, "backend"))
 
-        def update_summary(
-            backend: SQLiteBackend,
-        ) -> None:
-            def transition(
-                meta: dict[str, Any], _tasks: list[tuple[Path, dict[str, Any], str]]
-            ) -> tuple[str, str]:
-                meta["summary"] = "scope-bound"
-                return "bound writer", "# Authority fixture\n"
+        def transition(
+            meta: dict[str, Any], _tasks: list[tuple[Path, dict[str, Any], str]]
+        ) -> tuple[str, str]:
+            meta["summary"] = "scope-bound"
+            return "bound writer", "# Authority fixture\n"
 
-            backend.mutate(
-                "AR-0001",
-                1,
-                "update",
-                "2026-09-16T00:00:00+00:00",
-                transition,
-            )
-
-        writer.execute(update_summary)
+        writer.mutate("AR-0001", 1, "update", "2026-09-16T00:00:00+00:00", transition)
         self.assertEqual(
             "scope-bound", self._bound_authority_backend().load_tasks()[0][1]["summary"]
         )
-
-        with self.assertRaises(TypeError):
-            writer.execute(cast(Any, object()))
 
     def test_scope_bound_authority_writer_rejects_unbound_capabilities(self) -> None:
         control = SQLiteBackendBinding.bind(self.control_store, self.session)
@@ -913,9 +899,7 @@ class GitAuthorityAdapterTests(unittest.TestCase):
         backend = self._bound_authority_backend()
 
         with self.assertRaisesRegex(TypeError, "issued by its factory"):
-            from tools.sqlite_storage import SQLiteAuthorityWriteAdapter
-
-            SQLiteAuthorityWriteAdapter(backend, object())
+            sqlite_storage.SQLiteAuthorityWriteAdapter(backend, object())
         with self.assertRaisesRegex(TypeError, "LockDomainScope"):
             bind_sqlite_authority_writer(
                 authority_path,
@@ -942,7 +926,17 @@ class GitAuthorityAdapterTests(unittest.TestCase):
             )
 
     def test_bound_backend_routes_use_initialized_authority_schema(self) -> None:
-        backend = self._bound_authority_backend()
+        control = SQLiteBackendBinding.bind(self.control_store, self.session)
+        authority_path = self.control_store.authority_path
+        assert authority_path is not None
+        authority = SQLiteAuthorityBinding.bind(control, authority_path, self.scope)
+        writer = bind_sqlite_authority_writer(
+            authority_path,
+            self.authority_binding,
+            self.authority_tasks,
+            authority,
+            self.scope,
+        )
         session_before = self.session.snapshot()
 
         def update_summary(
@@ -951,7 +945,7 @@ class GitAuthorityAdapterTests(unittest.TestCase):
             meta["summary"] = "Mutated through the bound authority route."
             return "bound mutation", "# Authority fixture\n\nMutation committed.\n"
 
-        backend.mutate(
+        writer.mutate(
             "AR-0001",
             1,
             "update",
@@ -959,11 +953,11 @@ class GitAuthorityAdapterTests(unittest.TestCase):
             update_summary,
         )
 
-        backend.update_observations(
+        writer.update_observations(
             {"worker-1": {"branch": "feature/test", "head": "b" * 40, "dirty": False}},
             "2026-09-16T00:02:00+00:00",
         )
-        backend.append_command_result(
+        writer.append_command_result(
             "AR-0001",
             "worker",
             "c" * 64,
@@ -972,6 +966,7 @@ class GitAuthorityAdapterTests(unittest.TestCase):
             "2026-09-16T00:03:00+00:00",
         )
 
+        backend = self._bound_authority_backend()
         tasks = backend.load_tasks()
         self.assertEqual(1, len(tasks))
         _, meta, body = tasks[0]
@@ -983,7 +978,7 @@ class GitAuthorityAdapterTests(unittest.TestCase):
         self.assertEqual("# Authority fixture\n\nMutation committed.\n", body)
         projected: list[list[tuple[Path, dict[str, Any], str]]] = []
         selector_calls: list[str] = []
-        backend.retire(projected.append, lambda: selector_calls.append("retired"))
+        writer.retire(projected.append, lambda: selector_calls.append("retired"))
         self.assertEqual("AR-0001", projected[0][0][1]["id"])
         self.assertEqual(["retired"], selector_calls)
         self.assertEqual(session_before, self.session.snapshot())

@@ -13,9 +13,10 @@ safe without an explicitly bound fence.
 
 The shared boundary is intentionally dependency-injected. A production caller
 must bind `MutationFence.mutation_scope`; `bind_sqlite_authority_writer` now
-issues a single-operation capability that holds the caller-owned lock-domain
-scope while entering every listed route. The raw backend remains private to
-that capability and is not exposed through the public upgrade dispatcher.
+issues a typed capability exposing `mutate`, `update_observations`,
+`append_command_result`, and `retire` while entering every listed route under
+the caller-owned lock-domain scope. It never passes the raw backend to the
+caller and is not exposed through the public upgrade dispatcher.
 The unbound backend remains outside the acceptance claim and upgrade
 apply/rollback remain rejection-only.
 
