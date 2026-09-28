@@ -300,17 +300,47 @@ class UpgradeEngineTests(unittest.TestCase):
                     commit_argument="bound-effect",
                     commit_evidence=malformed_snapshots,
                 )
+            malformed_operation = dict(operation)
+            malformed_operation["inputs"] = {}
             with self.assertRaisesRegex(UpgradeError, "binding is invalid"):
                 UpgradeEngine(
                     "op-commit",
                     journal,
                     context,
                     backend_adapter=FakeAdapter(),
-                    commit_operation={},
+                    commit_operation=malformed_operation,
                     commit_context=commit_context,
                     commit_executor=executor,
                     commit_argument="bound-effect",
                     commit_evidence=evidence,
+                )
+            foreign_operation = dict(operation)
+            foreign_operation["operation_id"] = "foreign:commit"
+            with self.assertRaisesRegex(UpgradeError, "operation identity mismatch"):
+                UpgradeEngine(
+                    "op-commit",
+                    journal,
+                    context,
+                    backend_adapter=FakeAdapter(),
+                    commit_operation=foreign_operation,
+                    commit_context=commit_context,
+                    commit_executor=executor,
+                    commit_argument="bound-effect",
+                    commit_evidence=evidence,
+                )
+            foreign_snapshot = dict(evidence)
+            foreign_snapshot["current_snapshot"] = {**admission, "project_id": "foreign"}
+            with self.assertRaisesRegex(UpgradeError, "admission snapshot identity mismatch"):
+                UpgradeEngine(
+                    "op-commit",
+                    journal,
+                    context,
+                    backend_adapter=FakeAdapter(),
+                    commit_operation=operation,
+                    commit_context=commit_context,
+                    commit_executor=executor,
+                    commit_argument="bound-effect",
+                    commit_evidence=foreign_snapshot,
                 )
 
         with tempfile.TemporaryDirectory() as directory:

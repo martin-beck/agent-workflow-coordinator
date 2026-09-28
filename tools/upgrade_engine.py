@@ -11,6 +11,7 @@ import tempfile
 import time
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import AbstractContextManager, contextmanager, nullcontext
+from copy import deepcopy
 from dataclasses import asdict, dataclass
 from dataclasses import field as dataclass_field
 from pathlib import Path
@@ -788,6 +789,11 @@ class UpgradeEngine:
             if backend_adapter is None:
                 raise UpgradeError("commit capability requires a backend adapter")
             if (
+                not isinstance(commit_operation, Mapping)
+                or commit_operation.get("operation_id") != f"{operation_id}:commit"
+            ):
+                raise UpgradeError("commit capability operation identity mismatch")
+            if (
                 not isinstance(commit_evidence, Mapping)
                 or set(commit_evidence) != _COMMIT_PHASE_EVIDENCE_FIELDS
             ):
@@ -799,20 +805,24 @@ class UpgradeEngine:
                 if not isinstance(commit_evidence.get(field), Mapping):
                     raise UpgradeError("commit capability admission snapshots are invalid")
             try:
-                self._commit_operation = dict(cast(Mapping[str, object], commit_operation))
+                self._commit_operation = dict(commit_operation)
                 self._commit_phase_adapter = BoundCommitPhaseAdapter(
-                    cast(Mapping[str, object], commit_operation),
+                    commit_operation,
                     cast(Mapping[str, object], commit_context),
                     cast(Any, commit_executor),
                     commit_argument,
                 )
             except Exception as error:
                 raise UpgradeError("commit capability binding is invalid") from error
-            self._commit_phase_evidence = dict(commit_evidence)
+            self._commit_phase_evidence = deepcopy(dict(commit_evidence))
         self._verified_rollback_context: dict[str, object] | None = None
         supplied = dict(context)
         _validate_context(supplied, operation_id)
         self.context = PhaseContext(**cast(dict[str, Any], supplied))
+        if self._commit_phase_adapter is not None:
+            for field in ("admitted_snapshot", "current_snapshot"):
+                snapshot = self._commit_phase_evidence[field]
+                self._bind_snapshot(cast(Mapping[str, object], snapshot))
         if rollback_bound_verifier is not None and not isinstance(
             rollback_bound_verifier, BoundRollbackCapability
         ):
