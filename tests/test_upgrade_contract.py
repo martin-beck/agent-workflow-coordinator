@@ -306,6 +306,7 @@ class UpgradeContractTests(unittest.TestCase):
             ),
             (lambda value: value["rollback"]["operation"].update(opcode="barrier.reopen")),
             (lambda value: value["rollback"]["operation"]["inputs"].update(backend="git")),
+            (lambda value: value["rollback"]["operation"]["inputs"].update(target="new")),
         )
         for mutate in mutations:
             document = contract()
