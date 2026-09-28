@@ -20,7 +20,7 @@ from typing import Any, Protocol, cast, runtime_checkable
 
 from tools.authority_mutation import AuthorityMutationAmbiguousError
 from tools.authority_neutral_backup import BoundBackupPhaseAdapter
-from tools.authority_neutral_commit_dispatch import BoundCommitPhaseAdapter
+from tools.authority_neutral_commit_dispatch import BoundCommitPhaseAdapter, CommitDispatchError
 from tools.authority_neutral_rollback_dispatch import BoundRollbackPhaseAdapter
 from tools.authority_neutral_stage import BoundStagePhaseAdapter
 from tools.authority_neutral_validation import BoundValidationPhaseAdapter
@@ -1276,7 +1276,7 @@ class UpgradeEngine:
                         raise UpgradeError("handler cannot override backend evidence")
                 result.update(handler_result)
                 self._load()
-            except AuthorityMutationAmbiguousError as error:
+            except (AuthorityMutationAmbiguousError, CommitDispatchError) as error:
                 record.update(outcome="ambiguous", error=type(error).__name__)
                 value["status"] = "safe-mode"
                 _write(self.journal, value)

@@ -7,7 +7,7 @@ from __future__ import annotations
 import unittest
 from typing import Any, cast
 
-from tools.authority_mutation import MutationReceipt
+from tools.authority_mutation import DurableBoundBackendMutation, MutationReceipt
 from tools.authority_neutral_rollback_dispatch import (
     BoundRollbackPhaseAdapter,
     RollbackDispatchError,
@@ -15,7 +15,7 @@ from tools.authority_neutral_rollback_dispatch import (
 
 OPERATION = {
     "operation_id": "upgrade-1:rollback",
-    "opcode": "authority.restore",
+    "opcode": "backend.restore",
     "inputs": {
         "backend": "git",
         "target": "rollback",
@@ -57,7 +57,7 @@ def receipt() -> MutationReceipt:
     )
 
 
-class Executor:
+class Executor(DurableBoundBackendMutation):
     def __init__(self) -> None:
         self.calls = 0
 
@@ -93,8 +93,11 @@ class RollbackDispatchTests(unittest.TestCase):
                 "effect",
             )
 
-        class WrongExecutor:
-            def execute(self, argument: object) -> object:
+        class WrongExecutor(DurableBoundBackendMutation):
+            def __init__(self) -> None:
+                pass
+
+            def execute(self, argument: object) -> object:  # type: ignore[override]
                 return argument
 
         adapter = BoundRollbackPhaseAdapter(
@@ -137,7 +140,10 @@ class RollbackDispatchTests(unittest.TestCase):
             BoundRollbackPhaseAdapter(OPERATION, CONTEXT, object(), "effect")  # type: ignore[arg-type]
 
     def test_rejects_receipt_identity_or_mutation_flag(self) -> None:
-        class BadReceiptExecutor:
+        class BadReceiptExecutor(DurableBoundBackendMutation):
+            def __init__(self) -> None:
+                pass
+
             def execute(self, _argument: object) -> MutationReceipt:
                 value = receipt()
                 return MutationReceipt(**{**value.__dict__, "mutates_authority": False})

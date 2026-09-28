@@ -13,7 +13,7 @@ from copy import deepcopy
 from types import MappingProxyType
 from typing import Protocol
 
-from tools.authority_mutation import MutationReceipt
+from tools.authority_mutation import DurableBoundBackendMutation, MutationReceipt
 
 
 class RollbackDispatchError(RuntimeError):
@@ -48,7 +48,7 @@ _INPUT_FIELDS = {
 def _validate_operation(operation: Mapping[str, object]) -> dict[str, object]:  # noqa: C901
     if not isinstance(operation, Mapping) or set(operation) != _OPERATION_FIELDS:
         raise RollbackDispatchError("rollback operation fields are incomplete or unknown")
-    if operation.get("opcode") != "authority.restore":
+    if operation.get("opcode") != "backend.restore":
         raise RollbackDispatchError("rollback operation opcode is unsupported")
     operation_id = operation.get("operation_id")
     if not isinstance(operation_id, str) or not operation_id:
@@ -98,7 +98,9 @@ class BoundRollbackPhaseAdapter:
         for field, value in expected.items():
             if context.get(field) != value:
                 raise RollbackDispatchError(f"rollback context identity mismatch: {field}")
-        if not callable(getattr(executor, "execute", None)):
+        if not isinstance(executor, DurableBoundBackendMutation) or not callable(
+            getattr(executor, "execute", None)
+        ):
             raise RollbackDispatchError("rollback executor is not a durable capability")
         self._operation = MappingProxyType(deepcopy(dict(validated)))
         self._context = MappingProxyType(deepcopy(dict(context)))
