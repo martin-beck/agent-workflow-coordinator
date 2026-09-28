@@ -27,6 +27,9 @@ writer below acquires the coordinator/control operation scope, or delegates to
 a writer that does so. The private helpers are only callable while that scope
 is already held.
 
+`bind_sqlite_coordination_writer` adds the typed common -> control -> authority
+CAS seam for durable control/session transitions without exposing either store.
+
 | Store | Route | Durable writes | Evidence |
 | --- | --- | --- | --- |
 | `SQLiteRollbackControlStore` | `cas` | barrier row/history | `test_cas_conflict_and_binding_mismatch_fail_closed`, `test_v10_cas_fences_verify_affected_rows_and_recovery_errors` |
@@ -52,12 +55,10 @@ store and also does not bind an authority mutation scope. Existing callers and
 the rejection-only upgrade paths rely on these compatible constructors.
 
 Requiring a scope in either constructor would be a breaking change; silently
-adding an optional scope would not be a fail-closed proof. The exact remaining
-route gap is a future typed adapter that binds the already-tested
-`MutationFence.mutation_scope` around every authoritative write while keeping
-these control-plane constructors compatible. AR-0091 owns the next bounded
-adapter slice; this remains an explicit nonclaim until that adapter and its
-multiprocess evidence exist.
+adding an optional scope would not be a fail-closed proof. The typed CAS seam
+keeps these control-plane constructors compatible. The remaining routes beyond
+CAS still require explicit adapter methods and evidence; this slice does not
+enable public upgrade mutation.
 
 The `SQLiteAuthorityWriteAdapter` is a caller-owned authority seam; it does
 not authorize upgrade phases or connect public apply/rollback. The uncalled

@@ -1139,6 +1139,30 @@ class SQLiteRollbackControlStore:
         with self._connection() as connection:
             return self._cas_connection(connection, expected_revision, supplied)
 
+    def cas_locked(
+        self,
+        common_guard: CoordinatorLockGuard,
+        expected_revision: int,
+        record: Mapping[str, object],
+    ) -> dict[str, object]:
+        """CAS one barrier under a caller-owned common/control lock.
+
+        The authority lock is supplied by the enclosing lock-domain adapter;
+        this method only exposes the typed control-store operation.
+        """
+        if not isinstance(common_guard, CoordinatorLockGuard):
+            raise LockOwnershipError("caller-owned coordinator lock guard is required")
+        common_guard.assert_owned()
+        if common_guard.path != coordinator_lock_path().resolve():
+            raise ControlStoreError("coordinator lock guard path mismatch")
+        supplied = _validate(record)
+        if supplied["project_id"] != self.project_id:
+            raise ControlStoreError("control project binding mismatch")
+        self._require_operation_lock()
+        result = self._cas_locked(expected_revision, supplied)
+        common_guard.assert_owned()
+        return result
+
     def begin_release(self, operation_id: str) -> dict[str, object]:
         """Commit the held-to-releasing transition without reopening authority."""
         if self._operation_owner is not None:

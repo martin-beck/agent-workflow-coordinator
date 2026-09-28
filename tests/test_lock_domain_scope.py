@@ -24,7 +24,7 @@ from tools.admission_lease import (
     validate_recheck,
 )
 from tools.admitted_control_store import AdmittedControlBinding
-from tools.handoffctl import locked
+from tools.handoffctl import LockOwnershipError, locked
 from tools.lifecycle_trace import (
     LifecycleEvent,
     _issue_event,
@@ -38,14 +38,20 @@ from tools.lock_domain_correspondence import (
     validate_lock_domain_model_contract,
     validate_lock_domain_trace,
 )
-from tools.lock_domain_scope import LockDomainScope
+from tools.lock_domain_scope import LockDomainScope, bind_sqlite_coordination_writer
 from tools.mutation_fence import MutationFence, provision, provision_control_binding
 from tools.rollback_control_store import (
+    BarrierSessionState,
     ControlStoreError,
     SQLiteBarrierSessionStore,
     SQLiteRollbackControlStore,
 )
-from tools.upgrade_identity import BarrierSessionIdentity, canonical_barrier_session_digest
+from tools.upgrade_identity import (
+    BarrierSessionIdentity,
+    canonical_barrier_digest,
+    canonical_barrier_session_digest,
+    canonical_envelope_digest,
+)
 
 PROJECT = "11111111-1111-4111-8111-111111111111"
 ROOT = Path(__file__).resolve().parents[1]
@@ -77,6 +83,33 @@ def lease_recheck(lease: AdmissionLease) -> AdmissionRecheck:
         durable_barrier_id=lease.durable_barrier_id,
         revision=lease.revision,
     )
+
+
+def control_record() -> dict[str, object]:
+    record: dict[str, object] = {
+        "schema_version": 2,
+        "backend": "sqlite",
+        "project_id": PROJECT,
+        "operation_id": "op-1",
+        "state_revision": 1,
+        "authority_revision": "authority-1",
+        "fencing_token": "fence-1",
+        "fencing_owner": "owner-1",
+        "durable_barrier_id": "barrier-1",
+        "artifact_root": "/artifacts",
+        "source": "/authority.sqlite",
+        "destination": "/artifacts/backup.sqlite",
+        "manifest": "/artifacts/manifest.json",
+        "selector_ref": ".runtime/runtime-selector.json",
+        "barrier_identity_digest": "0" * 64,
+        "target": "rollback",
+        "envelope_digest": "0" * 64,
+        "status": "held",
+        "revision": 1,
+    }
+    record["barrier_identity_digest"] = canonical_barrier_digest(record)
+    record["envelope_digest"] = canonical_envelope_digest(record)
+    return record
 
 
 def _scope_process(
@@ -971,6 +1004,66 @@ class LockDomainScopeTests(unittest.TestCase):
         with scope.hold():
             self.assertTrue(self.session.operation_owned_by_current_thread)
         self.assertFalse(self.session.operation_owned_by_current_thread)
+
+    def test_typed_coordination_writer_cas_holds_full_scope_without_store_exposure(self) -> None:
+        scope = LockDomainScope.bind(self.session, self.fence, self.lease, self.recheck, locked)
+        writer = bind_sqlite_coordination_writer(scope, self.store, self.session)
+        self.assertFalse(hasattr(writer, "control"))
+        self.assertFalse(hasattr(writer, "session"))
+
+        result = writer.session_cas(
+            identity(),
+            1,
+            BarrierSessionState(identity(), "releasing", 2),
+        )
+
+        self.assertEqual("releasing", result.status)
+        self.assertEqual(2, result.revision)
+        self.assertFalse(self.session.operation_owned_by_current_thread)
+        self.assertEqual(2, scope._session_revision)
+
+    def test_typed_coordination_writer_control_cas_holds_full_scope(self) -> None:
+        scope = LockDomainScope.bind(self.session, self.fence, self.lease, self.recheck, locked)
+        writer = bind_sqlite_coordination_writer(scope, self.store, self.session)
+        record = control_record()
+
+        result = writer.control_cas(0, record)
+        self.assertEqual("held", result["status"])
+        self.assertEqual(1, result["revision"])
+        self.assertFalse(self.store.operation_owned_by_current_thread)
+
+    def test_typed_coordination_writer_rejects_control_project_drift(self) -> None:
+        scope = LockDomainScope.bind(self.session, self.fence, self.lease, self.recheck, locked)
+        writer = bind_sqlite_coordination_writer(scope, self.store, self.session)
+        record = control_record()
+        record["project_id"] = "22222222-2222-4222-8222-222222222222"
+        record["barrier_identity_digest"] = canonical_barrier_digest(record)
+        record["envelope_digest"] = canonical_envelope_digest(record)
+        with self.assertRaisesRegex(ControlStoreError, "project binding"):
+            writer.control_cas(0, record)
+
+    def test_control_cas_rejects_non_guard_before_store_access(self) -> None:
+        with self.assertRaisesRegex(LockOwnershipError, "caller-owned coordinator"):
+            self.store.cas_locked(cast(Any, object()), 0, control_record())
+
+    def test_typed_coordination_writer_rejects_invalid_components(self) -> None:
+        with self.assertRaisesRegex(TypeError, "lock-domain scope"):
+            bind_sqlite_coordination_writer(cast(Any, object()), self.store, self.session)
+        scope = LockDomainScope.bind(self.session, self.fence, self.lease, self.recheck, locked)
+        with self.assertRaisesRegex(TypeError, "rollback control"):
+            bind_sqlite_coordination_writer(scope, cast(Any, object()), self.session)
+        with self.assertRaisesRegex(TypeError, "barrier session"):
+            bind_sqlite_coordination_writer(scope, self.store, cast(Any, object()))
+
+    def test_typed_coordination_writer_rejects_foreign_bindings(self) -> None:
+        scope = LockDomainScope.bind(self.session, self.fence, self.lease, self.recheck, locked)
+        foreign = SQLiteRollbackControlStore(self.root / "foreign.sqlite", PROJECT, self.authority)
+        foreign_session = SQLiteBarrierSessionStore(foreign, lambda: "authority-1")
+        with self.assertRaisesRegex(ValueError, "control/session"):
+            bind_sqlite_coordination_writer(scope, self.store, foreign_session)
+        same_control_session = SQLiteBarrierSessionStore(self.store, lambda: "authority-1")
+        with self.assertRaisesRegex(ValueError, "scope/session"):
+            bind_sqlite_coordination_writer(scope, self.store, same_control_session)
 
     def test_bind_rejects_nonheld_durable_session_before_returning_scope(self) -> None:
         self.session.mark_ambiguous(1, "bind-admission")
