@@ -1080,6 +1080,106 @@ class LockDomainScopeTests(unittest.TestCase):
         self.assertEqual(3, releasing.revision)
         self.assertFalse(self.session.operation_owned_by_current_thread)
 
+    def test_typed_coordination_writer_completes_release_and_reopen(self) -> None:
+        scope = LockDomainScope.bind(self.session, self.fence, self.lease, self.recheck, locked)
+        writer = bind_sqlite_coordination_writer(scope, self.store, self.session)
+        child = BarrierChildIdentity.bind(identity(), "forward-1", "new")
+        bound = writer.session_bind_child(identity(), 1, child)
+        record = control_record()
+        record["operation_id"] = child.operation_id
+        record["target"] = child.target
+        record["barrier_identity_digest"] = canonical_barrier_digest(record)
+        record["envelope_digest"] = canonical_envelope_digest(record)
+        writer.control_cas(0, record)
+        writer.control_begin_release(child.operation_id)
+
+        released_control = writer.control_complete_release(
+            child.operation_id,
+            {
+                "restored_verified": True,
+                "runtime_validated": True,
+                "backend_roundtrip_valid": True,
+                "backend": "sqlite",
+                "fencing_token": "fence-1",
+            },
+        )
+        self.assertEqual("released", released_control["status"])
+        self.assertEqual(3, released_control["revision"])
+
+        releasing = writer.session_begin_reopen(
+            identity(),
+            bound.revision,
+            "new",
+            {
+                "operation_id": child.operation_id,
+                "target": child.target,
+                "barrier_identity_digest": bound.identity.identity_digest,
+                "validated": True,
+            },
+        )
+        completed = writer.session_complete_reopen(
+            identity(),
+            releasing.revision,
+            {
+                "authority_revision": "authority-1",
+                "backend": "sqlite",
+                "backend_roundtrip": "sqlite",
+                "foreign_key_violations": 0,
+                "fencing_token": "fence-1",
+                "integrity_check": "ok",
+                "project_id": PROJECT,
+                "target": "new",
+                "verified": True,
+            },
+        )
+        self.assertEqual("released", completed.status)
+        self.assertEqual(4, completed.revision)
+        snapshot = self.session.snapshot()
+        assert snapshot is not None
+        self.assertEqual("released", snapshot.status)
+
+    def test_typed_coordination_writer_fences_uncertain_session_outcome(self) -> None:
+        scope = LockDomainScope.bind(self.session, self.fence, self.lease, self.recheck, locked)
+        writer = bind_sqlite_coordination_writer(scope, self.store, self.session)
+
+        ambiguous = writer.session_mark_ambiguous(identity(), 1, "commit-failure")
+
+        self.assertEqual("ambiguous", ambiguous.status)
+        self.assertEqual(2, ambiguous.revision)
+        snapshot = self.session.snapshot()
+        assert snapshot is not None
+        self.assertEqual("ambiguous", snapshot.status)
+        self.assertEqual(2, scope._session_revision)
+        with self.assertRaisesRegex(LockDomainError, "not held"):
+            scope.hold().__enter__()
+
+    def test_typed_coordination_writer_rejects_completion_identity_drift(self) -> None:
+        scope = LockDomainScope.bind(self.session, self.fence, self.lease, self.recheck, locked)
+        writer = bind_sqlite_coordination_writer(scope, self.store, self.session)
+        child = BarrierChildIdentity.bind(identity(), "forward-1", "new")
+        bound = writer.session_bind_child(identity(), 1, child)
+        releasing = writer.session_begin_reopen(
+            identity(),
+            bound.revision,
+            "new",
+            {
+                "operation_id": child.operation_id,
+                "target": child.target,
+                "barrier_identity_digest": bound.identity.identity_digest,
+                "validated": True,
+            },
+        )
+        wrong_identity = replace(identity(), attempt_id="other-attempt")
+        with self.assertRaisesRegex(ControlStoreError, "identity changed"):
+            writer.session_complete_reopen(wrong_identity, releasing.revision, {})
+
+    def test_typed_coordination_writer_rejects_ambiguous_identity_drift(self) -> None:
+        scope = LockDomainScope.bind(self.session, self.fence, self.lease, self.recheck, locked)
+        writer = bind_sqlite_coordination_writer(scope, self.store, self.session)
+        wrong_identity = replace(identity(), attempt_id="other-attempt")
+        with self.assertRaisesRegex(ControlStoreError, "identity changed"):
+            writer.session_mark_ambiguous(wrong_identity, 1, "commit-failure")
+
     def test_typed_coordination_writer_rejects_control_project_drift(self) -> None:
         scope = LockDomainScope.bind(self.session, self.fence, self.lease, self.recheck, locked)
         writer = bind_sqlite_coordination_writer(scope, self.store, self.session)

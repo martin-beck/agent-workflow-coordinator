@@ -27,16 +27,21 @@ writer below acquires the coordinator/control operation scope, or delegates to
 a writer that does so. The private helpers are only callable while that scope
 is already held.
 
-`bind_sqlite_coordination_writer` adds the typed common -> control -> authority
-CAS seam for durable control/session transitions without exposing either store.
+`bind_sqlite_coordination_writer` adds typed common -> control -> authority
+operations for durable control/session transitions without exposing either
+store. The current adapter methods are `control_cas`,
+`control_begin_release`, `control_complete_release`, `session_cas`,
+`session_bind_child`, `session_begin_reopen`, `session_complete_reopen`, and
+`session_mark_ambiguous`. They remain an uncalled coordination seam; public
+upgrade mutation and Dispatch stay rejection-only.
 
 | Store | Route | Durable writes | Evidence |
 | --- | --- | --- | --- |
 | `SQLiteRollbackControlStore` | `cas` | barrier row/history | `test_cas_conflict_and_binding_mismatch_fail_closed`, `test_v10_cas_fences_verify_affected_rows_and_recovery_errors` |
-| `SQLiteRollbackControlStore` | `begin_release`, `reconcile_release` | barrier status/release journal | `test_release_reconciliation_requires_verified_engine_recovery` |
+| `SQLiteRollbackControlStore` | `begin_release`, `reconcile_release`, release completion | barrier status/release journal | `test_release_reconciliation_requires_verified_engine_recovery`, `test_typed_coordination_writer_completes_release_and_reopen` |
 | `SQLiteRollbackControlStore` | `reconcile_ambiguous` | barrier/history replacement | `test_ambiguous_requires_explicit_newer_reconciliation` |
 | `SQLiteRollbackControlStore` | `with_barrier` | barrier acquire/release | `test_with_barrier_holds_coordinator_lock_through_authority_callback` |
-| `SQLiteBarrierSessionStore` | `create`, `cas`, `bind_child`, `begin_reopen`, `complete_reopen`, `mark_ambiguous` | session/child rows and history | `test_v10_session_cas_fences_insert_and_update_rows`, `test_v10_durable_session_persists_children_and_reopen` |
+| `SQLiteBarrierSessionStore` | `create`, `cas`, `bind_child`, `begin_reopen`, `complete_reopen`, `mark_ambiguous` | session/child rows and history | `test_v10_session_cas_fences_insert_and_update_rows`, `test_v10_durable_session_persists_children_and_reopen`, `test_typed_coordination_writer_completes_release_and_reopen`, `test_typed_coordination_writer_fences_uncertain_session_outcome` |
 | `SQLiteBarrierSessionStore` | `recover_unknown`, `reconcile_ambiguous` | intent/session/history rows | `test_v10_session_intent_recovery_fences_and_requires_newer_fence` |
 
 The inventory proves admission ordering and row-fence tests only. It does not
@@ -55,10 +60,10 @@ store and also does not bind an authority mutation scope. Existing callers and
 the rejection-only upgrade paths rely on these compatible constructors.
 
 Requiring a scope in either constructor would be a breaking change; silently
-adding an optional scope would not be a fail-closed proof. The typed CAS seam
-keeps these control-plane constructors compatible. The remaining routes beyond
-CAS still require explicit adapter methods and evidence; this slice does not
-enable public upgrade mutation.
+adding an optional scope would not be a fail-closed proof. The typed
+coordination seam keeps these control-plane constructors compatible. Remaining
+recovery and cross-process route evidence still requires explicit hostile tests;
+this slice does not enable public upgrade mutation.
 
 The `SQLiteAuthorityWriteAdapter` is a caller-owned authority seam; it does
 not authorize upgrade phases or connect public apply/rollback. The uncalled

@@ -118,14 +118,20 @@ class LockDomainIdentity:
         lease: AdmissionLease,
         *,
         session_revision: int | None = None,
+        allowed_statuses: tuple[str, ...] = ("held",),
     ) -> None:
-        """Require durable held-session identity to match caller lease evidence."""
+        """Require durable session identity to match caller lease evidence."""
         if not isinstance(session_state, BarrierSessionState):
             raise LockDomainError("durable barrier session is required")
         if not isinstance(lease, AdmissionLease):
             raise LockDomainError("admission lease is required")
-        if session_state.status != "held":
-            raise LockDomainError("durable barrier session is not held")
+        if session_state.status not in allowed_statuses:
+            message = (
+                "durable barrier session is not held"
+                if allowed_statuses == ("held",)
+                else "durable barrier session is not in an admissible status"
+            )
+            raise LockDomainError(message)
         identity = session_state.identity
         if not isinstance(identity, BarrierSessionIdentity):
             raise LockDomainError("durable barrier session identity is required")

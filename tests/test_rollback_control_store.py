@@ -1659,7 +1659,7 @@ class RollbackControlStoreTests(unittest.TestCase):
             ):
                 pass
             with self.assertRaisesRegex(TypeError, "missing"):
-                store.recheck_held_locked(identity, held.revision)  # type: ignore[call-arg]
+                store.recheck_held_locked(identity, held.revision)  # type: ignore[arg-type,call-arg]
             with locked() as guard, store.lock_owned_by_caller(guard):
                 reread = store.recheck_held_locked(guard, identity, held.revision)
                 self.assertEqual(held, reread)
@@ -1812,6 +1812,8 @@ class RollbackControlStoreTests(unittest.TestCase):
                         store.recheck_held_locked(guard, cast(Any, None), 1)
                     with self.assertRaisesRegex(ControlStoreError, "expected revision"):
                         store.recheck_held_locked(guard, identity, 0)
+                    with self.assertRaisesRegex(ControlStoreError, "allowed statuses"):
+                        store.recheck_held_locked(guard, identity, 1, ("ambiguous",))
                     with self.assertRaisesRegex(ControlStoreError, "session is absent"):
                         store.recheck_held_locked(guard, identity, 1)
 

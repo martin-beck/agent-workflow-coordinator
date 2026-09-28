@@ -155,7 +155,9 @@ class LockDomainScope:
             yield object()
 
     @contextmanager
-    def _hold_with_guard(self) -> Iterator[CoordinatorLockGuard]:
+    def _hold_with_guard(
+        self, allowed_session_statuses: tuple[str, ...] = ("held",)
+    ) -> Iterator[CoordinatorLockGuard]:
         """Hold the scope and retain the common guard for typed write adapters."""
         self.assert_ordered()
         with self._common_lock() as common_guard:
@@ -167,14 +169,14 @@ class LockDomainScope:
                 with self._session_store.lock_owned_by_caller(common_guard):
                     self._observe_lock("AcquireControl")
                     try:
-                        self._recheck_session(common_guard)
+                        self._recheck_session(common_guard, allowed_session_statuses)
                         with self._authority_fence.locked():
                             self._observe_lock("AcquireAuthority")
                             try:
                                 self._identity.assert_current(
                                     common_guard, self._session_store, self._authority_fence
                                 )
-                                self._recheck_session(common_guard)
+                                self._recheck_session(common_guard, allowed_session_statuses)
                                 yield common_guard
                             finally:
                                 self._observe_lock("ReleaseAuthority")
@@ -187,11 +189,20 @@ class LockDomainScope:
         if self._lock_observer is not None:
             self._lock_observer(action)
 
-    def _recheck_session(self, common_guard: CoordinatorLockGuard) -> None:
+    def _recheck_session(
+        self,
+        common_guard: CoordinatorLockGuard,
+        allowed_session_statuses: tuple[str, ...] = ("held",),
+    ) -> None:
         """Reread trusted session evidence while the caller owns control locks."""
         observed = self._session_store.snapshot_owned_by_caller()
-        if observed.status != "held":
-            raise LockDomainError("durable session is not held")
+        if observed.status not in allowed_session_statuses:
+            message = (
+                "durable session is not held"
+                if allowed_session_statuses == ("held",)
+                else "durable session is not in an admissible status"
+            )
+            raise LockDomainError(message)
         if (
             observed.identity != self._session_identity
             or observed.revision != self._session_revision
@@ -202,15 +213,24 @@ class LockDomainScope:
                 common_guard,
                 self._session_identity,
                 self._session_revision,
+                allowed_session_statuses,
             )
         except ControlStoreError as error:
             raise LockDomainError(f"durable session recheck failed: {error}") from error
-        if state.status != "held":
-            raise LockDomainError("durable session is not held")
+        if state.status not in allowed_session_statuses:
+            message = (
+                "durable session is not held"
+                if allowed_session_statuses == ("held",)
+                else "durable session is not in an admissible status"
+            )
+            raise LockDomainError(message)
         if state.identity != self._session_identity or state.revision != self._session_revision:
             raise LockDomainError("durable session and lease do not match")
         self._identity.assert_session_binding(
-            state, self._lease, session_revision=self._session_revision
+            state,
+            self._lease,
+            session_revision=self._session_revision,
+            allowed_statuses=allowed_session_statuses,
         )
         if self._observer is not None:
             self._observer(
@@ -270,6 +290,16 @@ class SQLiteCoordinationWriteAdapter:
         with self._scope._hold_with_guard():
             self._assert_control_operation(operation_id)
             return self._control._begin_release_locked(operation_id)
+
+    def control_complete_release(
+        self, operation_id: str, evidence: Mapping[str, object]
+    ) -> dict[str, object]:
+        """Complete a releasing control barrier with typed runtime evidence."""
+        with self._scope._hold_with_guard(("held", "releasing")):
+            self._assert_control_operation(operation_id)
+            current = self._control._snapshot_locked(operation_id)
+            authorization = self._control._authorize_release_locked(current, evidence)
+            return self._control._complete_release_locked(operation_id, authorization)
 
     def _assert_control_binding(self, record: Mapping[str, object]) -> None:
         current = self._session._snapshot_locked()
@@ -377,6 +407,44 @@ class SQLiteCoordinationWriteAdapter:
             return self._session_cas_locked(
                 common_guard, expected_identity, expected_revision, state
             )
+
+    def session_complete_reopen(
+        self,
+        expected_identity: BarrierSessionIdentity,
+        expected_revision: int,
+        fresh_runtime_evidence: Mapping[str, object] | None = None,
+    ) -> BarrierSessionState:
+        """Complete a verified child reopen under the full releasing scope."""
+        with self._scope._hold_with_guard(("releasing",)) as common_guard:
+            current = self._session._snapshot_locked()
+            if current is None or current.identity != expected_identity:
+                raise ControlStoreError("barrier session identity changed")
+            contract = BarrierSessionContract(current.identity)
+            contract._state = current
+            state = contract.complete_reopen(expected_revision, fresh_runtime_evidence)
+            result = self._session._cas_locked(expected_revision, state)
+            self._scope._session_revision = result.revision
+            common_guard.assert_owned()
+            return result
+
+    def session_mark_ambiguous(
+        self,
+        expected_identity: BarrierSessionIdentity,
+        expected_revision: int,
+        cause_code: str,
+    ) -> BarrierSessionState:
+        """Durably fence a held/releasing session after an uncertain outcome."""
+        with self._scope._hold_with_guard(("held", "releasing")) as common_guard:
+            current = self._session._snapshot_locked()
+            if current is None or current.identity != expected_identity:
+                raise ControlStoreError("barrier session identity changed")
+            contract = BarrierSessionContract(current.identity)
+            contract._state = current
+            state = contract.mark_ambiguous(expected_revision, cause_code)
+            result = self._session._cas_locked(expected_revision, state)
+            self._scope._session_revision = result.revision
+            common_guard.assert_owned()
+            return result
 
 
 def bind_sqlite_coordination_writer(
