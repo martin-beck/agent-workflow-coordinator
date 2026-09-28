@@ -12,7 +12,12 @@ from tools.handoffctl import CoordinatorLockGuard
 from tools.lifecycle_trace import LifecycleObserver, _issue_event
 from tools.lock_domain import LockDomainContract, LockDomainError, LockDomainIdentity
 from tools.mutation_fence import MutationFence
-from tools.rollback_control_store import ControlStoreError, SQLiteBarrierSessionStore
+from tools.rollback_control_store import (
+    BarrierSessionState,
+    ControlStoreError,
+    SQLiteBarrierSessionStore,
+    SQLiteRollbackControlStore,
+)
 from tools.upgrade_identity import BarrierSessionIdentity
 
 LockDomainObserver = Callable[[str], None]
@@ -145,6 +150,12 @@ class LockDomainScope:
     @contextmanager
     def hold(self) -> Iterator[object]:
         """Acquire and prove the full scope, releasing every lock on failure."""
+        with self._hold_with_guard():
+            yield object()
+
+    @contextmanager
+    def _hold_with_guard(self) -> Iterator[CoordinatorLockGuard]:
+        """Hold the scope and retain the common guard for typed write adapters."""
         self.assert_ordered()
         with self._common_lock() as common_guard:
             if not isinstance(common_guard, CoordinatorLockGuard):
@@ -163,7 +174,7 @@ class LockDomainScope:
                                     common_guard, self._session_store, self._authority_fence
                                 )
                                 self._recheck_session(common_guard)
-                                yield object()
+                                yield common_guard
                             finally:
                                 self._observe_lock("ReleaseAuthority")
                     finally:
@@ -213,3 +224,64 @@ class LockDomainScope:
                     self._lease.fencing_token,
                 )
             )
+
+
+class SQLiteCoordinationWriteAdapter:
+    """Typed control/session CAS seam under one proven lock-domain scope.
+
+    This adapter deliberately exposes no store, connection, or callback.  It
+    is a coordination boundary only; it does not authorize upgrade phases or
+    public authority mutation.
+    """
+
+    __slots__ = ("_control", "_scope", "_session")
+
+    def __init__(
+        self,
+        scope: LockDomainScope,
+        control: SQLiteRollbackControlStore,
+        session: SQLiteBarrierSessionStore,
+    ) -> None:
+        if not isinstance(scope, LockDomainScope):
+            raise TypeError("concrete lock-domain scope is required")
+        if not isinstance(control, SQLiteRollbackControlStore):
+            raise TypeError("SQLite rollback control store is required")
+        if not isinstance(session, SQLiteBarrierSessionStore):
+            raise TypeError("SQLite barrier session store is required")
+        if session._control is not control:
+            raise ValueError("control/session store binding does not match")
+        if scope._session_store is not session:
+            raise ValueError("scope/session store binding does not match")
+        self._scope = scope
+        self._control = control
+        self._session = session
+
+    def control_cas(
+        self, expected_revision: int, record: Mapping[str, object]
+    ) -> dict[str, object]:
+        """CAS one control barrier while common/control/authority are held."""
+        with self._scope._hold_with_guard() as common_guard:
+            return self._control.cas_locked(common_guard, expected_revision, record)
+
+    def session_cas(
+        self,
+        expected_identity: BarrierSessionIdentity,
+        expected_revision: int,
+        state: BarrierSessionState,
+    ) -> BarrierSessionState:
+        """CAS one durable session while common/control/authority are held."""
+        with self._scope._hold_with_guard() as common_guard:
+            result = self._session.cas_locked(
+                common_guard, expected_identity, expected_revision, state
+            )
+            self._scope._session_revision = result.revision
+            return result
+
+
+def bind_sqlite_coordination_writer(
+    scope: LockDomainScope,
+    control: SQLiteRollbackControlStore,
+    session: SQLiteBarrierSessionStore,
+) -> SQLiteCoordinationWriteAdapter:
+    """Issue the typed coordination CAS seam without exposing raw stores."""
+    return SQLiteCoordinationWriteAdapter(scope, control, session)
