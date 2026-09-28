@@ -1058,6 +1058,23 @@ class LockDomainScopeTests(unittest.TestCase):
         self.assertEqual("releasing", result["status"])
         self.assertEqual(2, result["revision"])
 
+    def test_typed_coordination_writer_rejects_release_identity_drift(self) -> None:
+        scope = LockDomainScope.bind(self.session, self.fence, self.lease, self.recheck, locked)
+        writer = bind_sqlite_coordination_writer(scope, self.store, self.session)
+        child = BarrierChildIdentity.bind(identity(), "forward-1", "new")
+        writer.session_bind_child(identity(), 1, child)
+        record = control_record()
+        record["operation_id"] = child.operation_id
+        record["target"] = child.target
+        record["fencing_token"] = "foreign-fence"  # noqa: S105
+        record["barrier_identity_digest"] = canonical_barrier_digest(record)
+        record["envelope_digest"] = canonical_envelope_digest(record)
+        self.store.cas(0, record)
+
+        with self.assertRaisesRegex(ControlStoreError, "barrier identity"):
+            writer.control_begin_release(child.operation_id)
+        self.assertEqual("held", self.store.snapshot(child.operation_id)["status"])
+
     def test_typed_coordination_writer_child_and_reopen_admission_are_scoped(self) -> None:
         scope = LockDomainScope.bind(self.session, self.fence, self.lease, self.recheck, locked)
         writer = bind_sqlite_coordination_writer(scope, self.store, self.session)

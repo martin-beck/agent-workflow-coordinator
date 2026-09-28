@@ -321,7 +321,8 @@ class SQLiteCoordinationWriteAdapter:
             raise ControlStoreError("control barrier target is not bound to the session child")
 
     def _assert_control_operation(self, operation_id: str) -> None:
-        self._bound_control_child(operation_id)
+        current = self._control._snapshot_locked(operation_id)
+        self._assert_control_binding(current)
 
     def _bound_control_child(self, operation_id: str) -> BarrierChildIdentity:
         current = self._session._snapshot_locked()
