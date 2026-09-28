@@ -11,6 +11,7 @@ from tools.authority_mutation import MutationReceipt
 from tools.authority_neutral_commit_dispatch import (
     BoundCommitPhaseAdapter,
     CommitDispatchError,
+    DurableCommitExecutor,
 )
 
 OPERATION = {
@@ -51,6 +52,15 @@ class FakeExecutor:
         return self.receipt
 
 
+class WrongResultExecutor:
+    def execute(self, argument: object) -> object:
+        return argument
+
+
+class NonCallableExecutor:
+    execute = None
+
+
 def receipt(
     *, operation_id: str = "upgrade-1:commit", mutates_authority: bool = True
 ) -> MutationReceipt:
@@ -70,6 +80,17 @@ def receipt(
 
 
 class CommitDispatchTests(unittest.TestCase):
+    def assert_constructor_rejects(
+        self, operation: object, context: object, executor: object = None
+    ) -> None:
+        with self.assertRaises(CommitDispatchError):
+            BoundCommitPhaseAdapter(
+                cast(dict[str, object], operation),
+                cast(dict[str, object], context),
+                cast(DurableCommitExecutor, executor or FakeExecutor(receipt())),
+                object(),
+            )
+
     def test_bound_adapter_dispatches_one_exact_generated_commit(self) -> None:
         executor = FakeExecutor(receipt())
         adapter = BoundCommitPhaseAdapter(OPERATION, CONTEXT, executor, "built-in-effect")
@@ -110,6 +131,98 @@ class CommitDispatchTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(CommitDispatchError, "backup identity"):
             BoundCommitPhaseAdapter(malformed, CONTEXT, FakeExecutor(receipt()), object())
+
+    def test_rejects_invalid_operation_shapes_and_inputs(self) -> None:
+        self.assert_constructor_rejects({}, CONTEXT)
+        self.assert_constructor_rejects({**OPERATION, "operation_id": ""}, CONTEXT)
+        for field, value in (
+            ("backend", "other"),
+            ("expected_state_revision", 0),
+            ("expected_state_revision", True),
+            ("selector_ref", ""),
+            ("barrier_id", None),
+            ("fencing_token", 7),
+        ):
+            inputs = dict(cast(dict[str, object], OPERATION["inputs"]))
+            inputs[field] = value
+            self.assert_constructor_rejects({**OPERATION, "inputs": inputs}, CONTEXT)
+        malformed = dict(OPERATION)
+        malformed["inputs"] = "not-a-mapping"
+        self.assert_constructor_rejects(malformed, CONTEXT)
+        malformed = dict(OPERATION)
+        malformed.pop("evidence")
+        self.assert_constructor_rejects(malformed, CONTEXT)
+
+    def test_rejects_context_and_executor_binding_errors(self) -> None:
+        self.assert_constructor_rejects(OPERATION, "not-a-mapping")
+        for field in CONTEXT:
+            self.assert_constructor_rejects(
+                OPERATION,
+                {key: value for key, value in CONTEXT.items() if key != field},
+            )
+        self.assert_constructor_rejects(OPERATION, CONTEXT, NonCallableExecutor())
+
+    def test_rejects_receipt_shape_and_each_identity_field(self) -> None:
+        self.assertRaises(
+            CommitDispatchError,
+            BoundCommitPhaseAdapter(
+                OPERATION,
+                CONTEXT,
+                cast(DurableCommitExecutor, WrongResultExecutor()),
+                object(),
+            ).execute,
+            "commit",
+            CONTEXT,
+        )
+        for field, value in (
+            ("backend", "sqlite"),
+            ("target", "rollback"),
+            ("operation_id", "foreign"),
+            ("state_revision", 8),
+            ("barrier_id", "foreign"),
+            ("fencing_token", "foreign"),
+        ):
+            values = {
+                "backend": "git",
+                "target": "new",
+                "operation_id": "upgrade-1:commit",
+                "state_revision": 7,
+                "barrier_id": "barrier-7",
+                "fencing_token": "fence-7",
+            }
+            values[field] = value
+            bad = MutationReceipt(
+                backend=cast(str, values["backend"]),
+                target=cast(str, values["target"]),
+                operation_id=cast(str, values["operation_id"]),
+                state_revision=cast(int, values["state_revision"]),
+                barrier_id=cast(str, values["barrier_id"]),
+                artifact_identity="artifact",
+                manifest_identity="manifest",
+                selector_identity="selector",
+                runtime_identity="runtime",
+                fencing_token=cast(str, values["fencing_token"]),
+                mutates_authority=True,
+            )
+            with self.assertRaisesRegex(CommitDispatchError, "receipt identity"):
+                BoundCommitPhaseAdapter(OPERATION, CONTEXT, FakeExecutor(bad), object()).execute(
+                    "commit", CONTEXT
+                )
+        with self.assertRaisesRegex(CommitDispatchError, "receipt identity"):
+            BoundCommitPhaseAdapter(
+                OPERATION, CONTEXT, FakeExecutor(receipt(mutates_authority=False)), object()
+            ).execute("commit", CONTEXT)
+
+    def test_executor_failure_consumes_capability(self) -> None:
+        class FailingExecutor:
+            def execute(self, _argument: object) -> MutationReceipt:
+                raise RuntimeError("durable effect failed")
+
+        adapter = BoundCommitPhaseAdapter(OPERATION, CONTEXT, FailingExecutor(), object())
+        with self.assertRaisesRegex(RuntimeError, "durable effect failed"):
+            adapter.execute("commit", CONTEXT)
+        with self.assertRaisesRegex(CommitDispatchError, "already consumed"):
+            adapter.execute("commit", CONTEXT)
 
 
 if __name__ == "__main__":

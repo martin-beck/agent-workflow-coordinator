@@ -181,11 +181,9 @@ class GitCommitCapability:
             raise GitMutationRejectedError("Git identity reread was rejected") from error
 
     @staticmethod
-    def _commit_head(result: subprocess.CompletedProcess[str]) -> str:
+    def _commit_head(result: subprocess.CompletedProcess[str]) -> str | None:
         match = _COMMIT_HEAD.search(f"{result.stdout}\n{result.stderr}")
-        if match is None:
-            raise GitMutationAmbiguousError("Git commit identity is unavailable")
-        return match.group(1)
+        return None if match is None else match.group(1)
 
     def _assert_before(self) -> tuple[str, str]:
         self._assert_repository_identity()
@@ -210,7 +208,7 @@ class GitCommitCapability:
             raise GitMutationRejectedError("Git admission identity changed before commit")
 
     @staticmethod
-    def _decode_commit_result(result: subprocess.CompletedProcess[str]) -> str:
+    def _decode_commit_result(result: subprocess.CompletedProcess[str]) -> str | None:
         try:
             if result.returncode != 0:
                 # A nonzero exit does not prove that Git made no ref update.
@@ -287,6 +285,8 @@ class GitCommitCapability:
             raise GitMutationAmbiguousError("Git commit postcondition is ambiguous") from error
         except BaseException as error:
             raise GitMutationAmbiguousError("Git commit postcondition is ambiguous") from error
+        if committed_head is None:
+            committed_head = after
         validated_after = self._validate_postcondition(
             after_branch=after_branch,
             branch=branch,
