@@ -17,6 +17,7 @@ from typing import Any, cast
 from unittest.mock import patch
 
 from tools import upgrade_engine as upgrade_engine_module
+from tools.authority_mutation import MutationReceipt
 from tools.authority_neutral_backup import BoundBackupPhaseAdapter
 from tools.authority_neutral_stage import BoundStagePhaseAdapter
 from tools.authority_neutral_validation import BoundValidationPhaseAdapter
@@ -176,6 +177,206 @@ class FailingAdapter(FakeAdapter):
 
 
 class UpgradeEngineTests(unittest.TestCase):
+    def test_bound_commit_capability_is_consumed_by_engine_only_when_supplied(self) -> None:  # noqa: C901
+        operation = {
+            "operation_id": "op-commit:commit",
+            "opcode": "authority.atomic_replace",
+            "inputs": {
+                "backend": "sqlite",
+                "selector_ref": ".runtime/runtime-selector.json",
+                "expected_state_revision": 1,
+                "barrier_id": "barrier-1",
+                "fencing_token": "fence-1",
+                "backup_operation_id": "op-commit:backup",
+            },
+            "timeout_seconds": 300,
+            "resources": ["maintenance-barrier"],
+            "preconditions": ["previous-phase-complete"],
+            "postconditions": ["commit-contract-satisfied"],
+            "evidence": ["durable-operation-record"],
+            "durable_record": "operation-id-and-outcome",
+        }
+        context = make_context("op-commit")
+        commit_context = {
+            "backend": "sqlite",
+            "target": "new",
+            "operation_id": "op-commit:commit",
+            "state_revision": 1,
+            "durable_barrier_id": "barrier-1",
+            "fencing_token": "fence-1",
+        }
+        admission = {**ADMISSION, **context}
+        evidence = {
+            "quiesced": True,
+            "backup_verified": True,
+            "selector_verified": True,
+            "selector_commit_atomic": True,
+            "fencing_verified": True,
+            "selector_before_verified": True,
+            "selector_after_verified": True,
+            "admitted_snapshot": admission,
+            "current_snapshot": admission,
+        }
+
+        class Executor:
+            def __init__(self) -> None:
+                self.arguments: list[object] = []
+
+            def execute(self, argument: object) -> MutationReceipt:
+                self.arguments.append(argument)
+                return MutationReceipt(
+                    backend="sqlite",
+                    target="new",
+                    operation_id="op-commit:commit",
+                    state_revision=1,
+                    barrier_id="barrier-1",
+                    artifact_identity="artifact",
+                    manifest_identity="manifest",
+                    selector_identity="selector",
+                    runtime_identity="runtime",
+                    fencing_token="fence-1",  # noqa: S106
+                    mutates_authority=True,
+                )
+
+        executor = Executor()
+        with tempfile.TemporaryDirectory() as directory:
+            journal = Path(directory) / "journal.json"
+            with self.assertRaisesRegex(UpgradeError, "required together"):
+                UpgradeEngine(
+                    "op-commit",
+                    journal,
+                    context,
+                    backend_adapter=FakeAdapter(),
+                    commit_operation=operation,
+                )
+            with self.assertRaisesRegex(UpgradeError, "requires a backend adapter"):
+                UpgradeEngine(
+                    "op-commit",
+                    journal,
+                    context,
+                    commit_operation=operation,
+                    commit_context=commit_context,
+                    commit_executor=executor,
+                    commit_argument="bound-effect",
+                    commit_evidence=evidence,
+                )
+            with self.assertRaisesRegex(UpgradeError, "incomplete or unknown"):
+                UpgradeEngine(
+                    "op-commit",
+                    journal,
+                    context,
+                    backend_adapter=FakeAdapter(),
+                    commit_operation=operation,
+                    commit_context=commit_context,
+                    commit_executor=executor,
+                    commit_argument="bound-effect",
+                    commit_evidence={},
+                )
+            unverified = dict(evidence)
+            unverified["backup_verified"] = False
+            with self.assertRaisesRegex(UpgradeError, "not verified"):
+                UpgradeEngine(
+                    "op-commit",
+                    journal,
+                    context,
+                    backend_adapter=FakeAdapter(),
+                    commit_operation=operation,
+                    commit_context=commit_context,
+                    commit_executor=executor,
+                    commit_argument="bound-effect",
+                    commit_evidence=unverified,
+                )
+            malformed_snapshots = dict(evidence)
+            malformed_snapshots["current_snapshot"] = []
+            with self.assertRaisesRegex(UpgradeError, "snapshots are invalid"):
+                UpgradeEngine(
+                    "op-commit",
+                    journal,
+                    context,
+                    backend_adapter=FakeAdapter(),
+                    commit_operation=operation,
+                    commit_context=commit_context,
+                    commit_executor=executor,
+                    commit_argument="bound-effect",
+                    commit_evidence=malformed_snapshots,
+                )
+            with self.assertRaisesRegex(UpgradeError, "binding is invalid"):
+                UpgradeEngine(
+                    "op-commit",
+                    journal,
+                    context,
+                    backend_adapter=FakeAdapter(),
+                    commit_operation={},
+                    commit_context=commit_context,
+                    commit_executor=executor,
+                    commit_argument="bound-effect",
+                    commit_evidence=evidence,
+                )
+
+        with tempfile.TemporaryDirectory() as directory:
+            engine = UpgradeEngine(
+                "op-commit",
+                Path(directory) / "journal.json",
+                context,
+                backend_adapter=FakeAdapter(),
+                commit_operation=operation,
+                commit_context=commit_context,
+                commit_executor=executor,
+                commit_argument="bound-effect",
+                commit_evidence=evidence,
+            )
+            engine.plan()
+
+            def handler(_step: str, _state: object) -> dict[str, object]:
+                return {}
+
+            def phase_handler(phase: str) -> Handler:
+                def run(_step: str, _state: object) -> dict[str, object]:
+                    result: dict[str, object] = {
+                        "backend": "sqlite",
+                        "fencing_token": "fence-1",
+                        "backend_identity_verified": True,
+                    }
+                    if phase == "discover":
+                        result.update(release_authentic=True, runtime_supported=True)
+                    elif phase == "preflight":
+                        result.update(preflight_admitted=True, capacity_verified=True)
+                        result["preflight_snapshot"] = admission
+                    elif phase == "quiesce":
+                        result.update(
+                            barrier_acquired=True,
+                            workers_drained=True,
+                            leases_fenced=True,
+                            fencing_verified=True,
+                        )
+                        result["quiescence_snapshot"] = admission
+                    elif phase == "backup":
+                        result.update(backup_verified=True, restore_roundtrip_verified=True)
+                    elif phase == "stage":
+                        result.update(staged_verified=True, manifest_verified=True)
+                    elif phase == "validate":
+                        result.update(
+                            runtime_validated=True,
+                            backend_roundtrip_valid=True,
+                            projections_valid=True,
+                            binding_valid=True,
+                        )
+                    elif phase == "reopen":
+                        result.update(validated=True, barrier_held=True)
+                        result["reopen_snapshot"] = admission
+                    result["mutates_authority"] = phase == "commit"
+                    return result
+
+                return run
+
+            handlers = {phase: phase_handler(phase) for phase in PHASES}
+            # The commit handler contributes no mutation evidence; the bound
+            # capability must supply it through the engine dispatch seam.
+            handlers["commit"] = handler
+            result = engine.apply(handlers)
+            self.assertEqual(result["status"], "completed")
+            self.assertEqual(executor.arguments, ["bound-effect"])
+
     def test_validation_binding_rejects_partial_or_unbound_inputs(self) -> None:
         admission = object.__new__(DispatchAdmission)
         with tempfile.TemporaryDirectory() as directory:
