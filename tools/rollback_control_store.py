@@ -2416,6 +2416,7 @@ class SQLiteBarrierSessionStore:
         expected_manifest_identity: str | None = None,
         expected_selector_identity: str | None = None,
         expected_runtime_identity: str | None = None,
+        _common_guard: CoordinatorLockGuard | None = None,
     ) -> AuthorityEffectIntent:
         """Durably fence one external authority effect before invoking it.
 
@@ -2450,9 +2451,9 @@ class SQLiteBarrierSessionStore:
             value is not None for value in admission_identities
         ):
             raise ControlStoreError("authority effect admission identity is incomplete")
-        if self.operation_owned_by_current_thread:
+        if _common_guard is None and self.operation_owned_by_current_thread:
             raise ControlStoreError("control store lock is non-reentrant")
-        with self.operation_lock(), self._control._connection() as connection:
+        with self._authority_effect_scope(_common_guard), self._control._connection() as connection:
             self._ensure_table(connection)
             current = self._snapshot_locked()
             if current is None or current.status != "held":
@@ -2525,11 +2526,43 @@ class SQLiteBarrierSessionStore:
             connection.commit()
             return intent
 
+    def prepare_authority_effect_locked(
+        self,
+        common_guard: CoordinatorLockGuard,
+        expected_revision: int,
+        operation_id: str,
+        backend: str,
+        target: str = "new",
+        *,
+        expected_fencing_token: str | None = None,
+        expected_barrier_id: str | None = None,
+        expected_artifact_identity: str | None = None,
+        expected_manifest_identity: str | None = None,
+        expected_selector_identity: str | None = None,
+        expected_runtime_identity: str | None = None,
+    ) -> AuthorityEffectIntent:
+        """Prepare one authority effect under caller-owned full-scope locks."""
+        return self.prepare_authority_effect(
+            expected_revision,
+            operation_id,
+            backend,
+            target,
+            expected_fencing_token=expected_fencing_token,
+            expected_barrier_id=expected_barrier_id,
+            expected_artifact_identity=expected_artifact_identity,
+            expected_manifest_identity=expected_manifest_identity,
+            expected_selector_identity=expected_selector_identity,
+            expected_runtime_identity=expected_runtime_identity,
+            _common_guard=common_guard,
+        )
+
     def finish_authority_effect(  # noqa: C901
         self,
         intent: AuthorityEffectIntent,
         outcome: str,
         receipt: object | None = None,
+        *,
+        _common_guard: CoordinatorLockGuard | None = None,
     ) -> BarrierSessionState:
         """Publish an effect result, fencing ambiguity instead of retrying it."""
         if not isinstance(intent, AuthorityEffectIntent):
@@ -2538,9 +2571,9 @@ class SQLiteBarrierSessionStore:
             raise ControlStoreError("authority effect outcome is invalid")
         if outcome == "committed" and intent.artifact_identity is not None:
             _validate_authority_effect_receipt(intent, receipt)
-        if self.operation_owned_by_current_thread:
+        if _common_guard is None and self.operation_owned_by_current_thread:
             raise ControlStoreError("control store lock is non-reentrant")
-        with self.operation_lock(), self._control._connection() as connection:
+        with self._authority_effect_scope(_common_guard), self._control._connection() as connection:
             self._ensure_table(connection)
             current = self._snapshot_locked()
             if current is None or not self._effect_intent_matches(current, intent):
@@ -2575,6 +2608,32 @@ class SQLiteBarrierSessionStore:
                     "authority effect outcome publication is ambiguous; recovery is required"
                 ) from self._mark_recovery_ambiguous_after_commit_failure(connection, error)
             return current
+
+    def finish_authority_effect_locked(
+        self,
+        common_guard: CoordinatorLockGuard,
+        intent: AuthorityEffectIntent,
+        outcome: str,
+        receipt: object | None = None,
+    ) -> BarrierSessionState:
+        """Publish one authority-effect outcome under caller-owned full-scope locks."""
+        return self.finish_authority_effect(intent, outcome, receipt, _common_guard=common_guard)
+
+    @contextmanager
+    def _authority_effect_scope(self, common_guard: CoordinatorLockGuard | None) -> Iterator[None]:
+        if common_guard is None:
+            with self.operation_lock():
+                yield
+            return
+        if not isinstance(common_guard, CoordinatorLockGuard):
+            raise LockOwnershipError("caller-owned coordinator lock guard is required")
+        common_guard.assert_owned()
+        if common_guard.path != coordinator_lock_path().resolve():
+            raise ControlStoreError("coordinator lock guard path mismatch")
+        self._control._require_operation_lock()
+        common_guard.assert_owned()
+        yield
+        common_guard.assert_owned()
 
     def _recover_prepared_effects_locked(
         self,
