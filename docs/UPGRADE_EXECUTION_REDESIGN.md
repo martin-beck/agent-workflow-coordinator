@@ -150,9 +150,10 @@ each allowlisted opcode:
 
 Production dispatch accepts neither caller-provided handlers nor scripts nor
 paths. A built-in adapter derives all locations from the permanent project
-binding and a fixed versioned runtime layout. Git execution remains rejected
-before mutation until its complete adapter and restore equivalence are
-implemented.
+binding and a fixed versioned runtime layout. The isolated Git and SQLite
+authority effects now have a common, receipt-checked commit-phase seam, but
+public execution remains rejected until the complete barrier lifecycle,
+runtime launcher, and restore-equivalence obligations are implemented.
 
 Barrier acquisition records the bounded set of wrapped commands that were
 already outside the lock. New commands cannot start after the barrier CAS.
