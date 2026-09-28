@@ -27,6 +27,7 @@ The following mappings are evidence relationships, not equivalence claims:
 | SQLite route fencing and process death | `tests/test_sqlite_mutation_barrier.py`, `tests/test_sqlite_route_inventory.py` | Concrete route and recovery evidence; no model-refinement proof is required. |
 | Durable intent and ambiguous recovery | `tests/test_rollback_control_store.py`, `formal/upgrade/intent-evidence.json` | Diagnostic model guidance paired with executable recovery tests. |
 | Selector/runtime admission | `tests/test_authority_neutral_selector.py`, `tests/test_authority_neutral_runtime.py`, `tests/test_upgrade_admission.py` | Read-only admission and identity evidence; no mutation authorization. |
+| Verified launcher consumption | `tools/runtime_bootstrap.py`, `tests/test_runtime_bootstrap.py` | Concrete selected-runtime consumer and descriptor/path identity checks; model correspondence remains best-effort and public mutation remains disabled. |
 
 Passing TLC establishes only the checked finite model properties and their
 declared assumptions. It does not establish source-code equivalence, and a

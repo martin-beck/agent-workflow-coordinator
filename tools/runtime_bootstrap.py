@@ -271,6 +271,36 @@ def run_admitted_runtime(
         command.close()
 
 
+def run_selected_runtime(
+    selector: Path,
+    releases_root: Path,
+    expected_identity: ExpectedRuntimeIdentity,
+    verify_authenticity: Callable[[Path, ExpectedRuntimeIdentity], VerifiedManifest],
+    arguments: Sequence[str] = (),
+    *,
+    timeout: float | None = None,
+) -> subprocess.CompletedProcess[str]:
+    """Resolve, revalidate, and consume one selected runtime entrypoint.
+
+    This is the production consumer boundary: callers provide a selector,
+    authenticated expected identity, and read-only arguments, never a runtime
+    or script path.  The retained admission is always closed after the child
+    exits or fails.
+    """
+    resolved = resolve_selected_runtime_bound(
+        selector, releases_root, expected_identity, verify_authenticity
+    )
+    try:
+        admission = resolved.admit_for_dispatch()
+    except BaseException:
+        resolved.close()
+        raise
+    try:
+        return run_admitted_runtime(admission, arguments, timeout=timeout)
+    finally:
+        admission.close()
+
+
 @dataclass(slots=True)
 class ResolvedRuntime:
     """Opaque descriptor-bound runtime result; dispatch is intentionally absent."""

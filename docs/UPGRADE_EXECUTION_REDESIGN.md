@@ -213,6 +213,12 @@ the old runtime remains intact, staging populates a distinct versioned
 directory, and only the selector CAS changes the active release. The stable
 bootstrap itself is outside the upgrade replacement set.
 
+The production read-only consumer is `run_selected_runtime`: it resolves the
+selector, retains and revalidates the descriptor-bound admission, invokes the
+fixed entrypoint with caller arguments only, and closes the admission after
+the child exits or fails. Callers do not supply a runtime or script path, and
+public apply, rollback, and release dispatch remain rejection-only.
+
 The repository has no current owner or complete API for this bootstrap,
 versioned runtime store, authenticity policy, and validation-to-exec binding.
 A new dependency AR is therefore required. Mutating CLI commands remain
