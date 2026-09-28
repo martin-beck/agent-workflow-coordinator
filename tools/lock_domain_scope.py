@@ -447,6 +447,17 @@ class SQLiteCoordinationWriteAdapter:
             common_guard.assert_owned()
             return result
 
+    def session_recover_unknown(self) -> BarrierSessionState | None:
+        """Recover prepared session outcomes under the full lock-domain scope."""
+        with self._scope._hold_with_guard(("held", "releasing")) as common_guard:
+            result = self._session.recover_unknown_locked(common_guard)
+            if result is not None:
+                if result.identity != self._scope._session_identity:
+                    raise ControlStoreError("recovered barrier session identity changed")
+                self._scope._session_revision = result.revision
+            common_guard.assert_owned()
+            return result
+
 
 def bind_sqlite_coordination_writer(
     scope: LockDomainScope,

@@ -2559,21 +2559,42 @@ class SQLiteBarrierSessionStore:
             ) from self._mark_recovery_ambiguous_after_commit_failure(connection, error)
         return current
 
+    def _recover_unknown_connection_locked(
+        self, connection: sqlite3.Connection
+    ) -> BarrierSessionState | None:
+        """Recover prepared outcomes while the caller owns control storage."""
+        self._ensure_table(connection)
+        prepared_effects = self._prepared_effect_intents_locked(connection)
+        if prepared_effects:
+            return self._recover_prepared_effects_locked(connection, prepared_effects)
+        prepared = self._prepared_intents_locked(connection)
+        return (
+            self._snapshot_locked()
+            if not prepared
+            else self._recover_prepared_locked(connection, prepared)
+        )
+
     def recover_unknown(self) -> BarrierSessionState | None:
         """Fence every prepared outcome left by a process death or lost reply."""
         if self.operation_owned_by_current_thread:
             raise ControlStoreError("control store lock is non-reentrant")
         with self.operation_lock(), self._control._connection() as connection:
-            self._ensure_table(connection)
-            prepared_effects = self._prepared_effect_intents_locked(connection)
-            if prepared_effects:
-                return self._recover_prepared_effects_locked(connection, prepared_effects)
-            prepared = self._prepared_intents_locked(connection)
-            return (
-                self._snapshot_locked()
-                if not prepared
-                else self._recover_prepared_locked(connection, prepared)
-            )
+            return self._recover_unknown_connection_locked(connection)
+
+    def recover_unknown_locked(
+        self, common_guard: CoordinatorLockGuard
+    ) -> BarrierSessionState | None:
+        """Recover prepared outcomes under a caller-owned common/control lock."""
+        if not isinstance(common_guard, CoordinatorLockGuard):
+            raise LockOwnershipError("caller-owned coordinator lock guard is required")
+        common_guard.assert_owned()
+        if common_guard.path != coordinator_lock_path().resolve():
+            raise ControlStoreError("coordinator lock guard path mismatch")
+        self._control._require_operation_lock()
+        with self._control._connection() as connection:
+            result = self._recover_unknown_connection_locked(connection)
+        common_guard.assert_owned()
+        return result
 
     def reconcile_ambiguous(  # noqa: C901
         self,
