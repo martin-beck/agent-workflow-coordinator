@@ -2737,9 +2737,7 @@ class SQLiteBarrierSessionStore:
         replacement: BarrierSessionState,
     ) -> BarrierSessionState:
         """Reconcile an ambiguous session under caller-owned locks."""
-        return self.reconcile_ambiguous(
-            expected_revision, replacement, common_guard=common_guard
-        )
+        return self.reconcile_ambiguous(expected_revision, replacement, common_guard=common_guard)
 
     def _mark_ambiguous_after_commit_failure(
         self,

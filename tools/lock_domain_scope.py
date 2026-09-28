@@ -484,9 +484,7 @@ class SQLiteCoordinationRecoveryAdapter:
         if not isinstance(replacement, BarrierSessionState):
             raise ControlStoreError("replacement recovery state is invalid")
         with self._common_lock() as common_guard:
-            domain = LockDomainContract.capture(
-                common_guard, self._session, self._authority_fence
-            )
+            domain = LockDomainContract.capture(common_guard, self._session, self._authority_fence)
             with self._session.lock_owned_by_caller(common_guard):
                 current = self._session.snapshot_owned_by_caller()
                 if current.status != "ambiguous":

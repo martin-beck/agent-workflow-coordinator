@@ -1238,9 +1238,7 @@ class LockDomainScopeTests(unittest.TestCase):
                 "identity_digest": "0" * 64,
             }
         )
-        replacement_record["identity_digest"] = canonical_barrier_session_digest(
-            replacement_record
-        )
+        replacement_record["identity_digest"] = canonical_barrier_session_digest(replacement_record)
         replacement_identity = BarrierSessionIdentity.from_record(replacement_record)
         replacement = BarrierSessionState(replacement_identity, "held", 1)
         recovery = bind_sqlite_coordination_recovery(self.session, self.fence, locked)
@@ -1285,9 +1283,7 @@ class LockDomainScopeTests(unittest.TestCase):
                 "identity_digest": "0" * 64,
             }
         )
-        replacement_record["identity_digest"] = canonical_barrier_session_digest(
-            replacement_record
-        )
+        replacement_record["identity_digest"] = canonical_barrier_session_digest(replacement_record)
         replacement_identity = BarrierSessionIdentity.from_record(replacement_record)
         replacement = BarrierSessionState(replacement_identity, "held", 1)
         self.session._authority_revision_reader = None
