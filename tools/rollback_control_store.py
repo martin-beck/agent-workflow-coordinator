@@ -689,7 +689,16 @@ class SQLiteRollbackControlStore:
             self._authority_identity,
         )
         try:
-            self._lifecycle.initialize()
+            if not self._lifecycle_path.exists() and not self._lifecycle_path.is_symlink():
+                sidecars_exist = any(
+                    (self.path.parent / f"{self.path.name}{suffix}").exists()
+                    or (self.path.parent / f"{self.path.name}{suffix}").is_symlink()
+                    for suffix in SIDECAR_SUFFIXES
+                )
+                if self.path.stat().st_size == 0 and not sidecars_exist:
+                    self._lifecycle.initialize()
+            else:
+                self._lifecycle.initialize()
         except WALLifecycleError as error:
             raise ControlStoreError(str(error)) from error
         self._lifecycle_observed = False
@@ -850,6 +859,7 @@ class SQLiteRollbackControlStore:
     @contextmanager
     def _connection(self) -> Iterator[sqlite3.Connection]:  # noqa: C901
         self._recheck_authority()
+        lifecycle_missing = not self._lifecycle_path.exists() or self._lifecycle_path.is_symlink()
         parent, descriptor = self._open_bound_file(
             self.path, self._parent_identity, self._control_identity
         )
@@ -861,7 +871,7 @@ class SQLiteRollbackControlStore:
             raise
         bound_sidecars: dict[str, tuple[int, int] | None] | None = None
         try:
-            if not self._lifecycle_observed:
+            if not lifecycle_missing and not self._lifecycle_observed:
                 try:
                     self._lifecycle.validate()
                 except WALLifecycleError as error:
@@ -907,6 +917,8 @@ class SQLiteRollbackControlStore:
                             "control store schema is legacy; explicit selector "
                             "migration is required"
                         )
+            if lifecycle_missing:
+                raise ControlStoreError("control store WAL lifecycle record is unavailable")
             mode = str(connection.execute("PRAGMA journal_mode=WAL").fetchone()[0]).lower()
             if mode != "wal":
                 raise ControlStoreError("control store WAL is unavailable")

@@ -223,6 +223,26 @@ class WALLifecycleTests(unittest.TestCase):
                 ).fetchall()
             self.assertEqual([], tables)
 
+    def test_missing_lifecycle_record_is_not_recreated_for_existing_database(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            control = SQLiteRollbackControlStore(root / "control.sqlite", PROJECT)
+            with control._connection():
+                pass
+            lifecycle = control._lifecycle.path
+            lifecycle.unlink()
+            with (
+                self.assertRaisesRegex(ControlStoreError, "lifecycle record is unavailable"),
+                control._connection(),
+            ):
+                pass
+            reopened = SQLiteRollbackControlStore(root / "control.sqlite", PROJECT)
+            with (
+                self.assertRaisesRegex(ControlStoreError, "lifecycle record is unavailable"),
+                reopened._connection(),
+            ):
+                pass
+
     def test_active_missing_sidecars_requires_explicit_reconciliation(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
