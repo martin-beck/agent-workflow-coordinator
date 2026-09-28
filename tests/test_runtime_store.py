@@ -7,15 +7,20 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from tools.runtime_bootstrap import ExpectedRuntimeIdentity
 from tools.runtime_store import (
     RuntimeStoreError,
     RuntimeTrustPolicy,
+    _digest,
+    _inventory,
+    _require_private_ancestors,
     stage_runtime_release,
     verify_runtime_release,
 )
@@ -296,6 +301,79 @@ class RuntimeStoreTests(unittest.TestCase):
                 stage_runtime_release(
                     source_link,
                     root / "releases-3",
+                    "v1.2.3",
+                    {"release": "v1.2.3"},
+                    policy,
+                )
+
+    def test_runtime_store_error_paths_fail_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            file_path = root / "payload"
+            file_path.write_text("payload\n")
+            file_path.chmod(0o600)
+            with patch.object(Path, "lstat", side_effect=OSError("lstat failure")):
+                with self.assertRaisesRegex(RuntimeStoreError, "unavailable"):
+                    _require_private_ancestors(root / "nested" / "path", "test")
+                with self.assertRaisesRegex(RuntimeStoreError, "unavailable"):
+                    _digest(file_path)
+            with (
+                patch.object(Path, "rglob", side_effect=OSError("inventory failure")),
+                self.assertRaisesRegex(RuntimeStoreError, "inventory failed"),
+            ):
+                _inventory(root)
+            identity = self._identity()
+            policy = RuntimeTrustPolicy(identity, ())
+            release = root / "v1.2.3"
+            release.mkdir(mode=0o700)
+            with (
+                patch("tools.runtime_store._require_private_ancestors"),
+                patch.object(Path, "lstat", side_effect=OSError("release unavailable")),
+                self.assertRaisesRegex(RuntimeStoreError, "release is unavailable"),
+            ):
+                verify_runtime_release(release, policy)
+            mismatch = SimpleNamespace(st_dev=0, st_ino=0)
+            with (
+                patch("tools.runtime_store.os.fstat", return_value=mismatch),
+                self.assertRaisesRegex(RuntimeStoreError, "changed during verification"),
+            ):
+                _digest(file_path)
+            matching = SimpleNamespace(
+                st_dev=file_path.stat().st_dev,
+                st_ino=file_path.stat().st_ino,
+            )
+            with (
+                patch("tools.runtime_store.os.fstat", side_effect=[matching, mismatch]),
+                self.assertRaisesRegex(RuntimeStoreError, "changed during verification"),
+            ):
+                _digest(file_path)
+            with self.assertRaisesRegex(RuntimeStoreError, "runtime source is not a directory"):
+                stage_runtime_release(
+                    file_path,
+                    root / "releases-4",
+                    "v1.2.3",
+                    {"release": "v1.2.3"},
+                    policy,
+                )
+            source = root / "source"
+            source.mkdir(mode=0o700)
+            (source / "runtime.py").write_text("runtime\n")
+            (source / "runtime.py").chmod(0o600)
+            original_fstat = os.fstat
+            fstat_calls = 0
+
+            def mismatch_first(fd: int) -> object:
+                nonlocal fstat_calls
+                fstat_calls += 1
+                return mismatch if fstat_calls == 1 else original_fstat(fd)
+
+            with (
+                patch("tools.runtime_store.os.fstat", side_effect=mismatch_first),
+                self.assertRaisesRegex(RuntimeStoreError, "changed during staging"),
+            ):
+                stage_runtime_release(
+                    source,
+                    root / "releases-5",
                     "v1.2.3",
                     {"release": "v1.2.3"},
                     policy,
