@@ -329,6 +329,7 @@ class RuntimeStoreTests(unittest.TestCase):
             with (
                 patch("tools.runtime_store._require_private_ancestors"),
                 patch.object(Path, "lstat", side_effect=OSError("release unavailable")),
+                patch.object(Path, "is_symlink", return_value=False),
                 self.assertRaisesRegex(RuntimeStoreError, "release is unavailable"),
             ):
                 verify_runtime_release(release, policy)
