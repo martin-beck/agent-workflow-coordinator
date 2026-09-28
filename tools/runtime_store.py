@@ -1,0 +1,162 @@
+"""Offline, immutable versioned-runtime staging and trust-policy checks.
+
+This module deliberately has no selector or public upgrade command side effect.
+It prepares a complete release for a later, separately admitted publication.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import re
+import shutil
+import stat
+import tempfile
+from dataclasses import dataclass
+from pathlib import Path
+
+from .runtime_bootstrap import ExpectedRuntimeIdentity, read_runtime_manifest
+
+_RELEASE = re.compile(r"v[0-9]+\.[0-9]+\.[0-9]+\Z")
+_DIGEST = re.compile(r"[0-9a-f]{64}\Z")
+
+
+class RuntimeStoreError(RuntimeError):
+    """A release cannot be staged or trusted safely."""
+
+
+@dataclass(frozen=True, slots=True)
+class RuntimeTrustPolicy:
+    """Immutable allowlist and identity facts for one release."""
+
+    identity: ExpectedRuntimeIdentity
+    files: tuple[tuple[str, str], ...]
+
+    def __post_init__(self) -> None:
+        names = [name for name, _ in self.files]
+        if names != sorted(names) or len(names) != len(set(names)):
+            raise RuntimeStoreError("trust policy file allowlist is not canonical")
+        if any(
+            not name
+            or name.startswith("/")
+            or ".." in Path(name).parts
+            or not _DIGEST.fullmatch(digest)
+            for name, digest in self.files
+        ):
+            raise RuntimeStoreError("trust policy file allowlist is invalid")
+
+
+def _digest(path: Path) -> str:
+    try:
+        value = path.lstat()
+        if not stat.S_ISREG(value.st_mode) or value.st_nlink != 1:
+            raise RuntimeStoreError(f"runtime file is not a private regular file: {path}")
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+    except OSError as error:
+        raise RuntimeStoreError(f"runtime file is unavailable: {path}") from error
+
+
+def _inventory(root: Path) -> dict[str, str]:
+    result: dict[str, str] = {}
+    try:
+        for path in sorted(root.rglob("*")):
+            relative = path.relative_to(root)
+            if path.is_symlink():
+                raise RuntimeStoreError("runtime release contains a symlink")
+            if path.is_dir():
+                continue
+            name = relative.as_posix()
+            result[name] = _digest(path)
+    except OSError as error:
+        raise RuntimeStoreError("runtime release inventory failed") from error
+    return result
+
+
+def verify_runtime_release(
+    path: Path, policy: RuntimeTrustPolicy, *, expected_release: str | None = None
+) -> None:
+    """Verify exact manifest identity and the complete trusted file inventory."""
+    if not path.is_dir() or path.is_symlink():
+        raise RuntimeStoreError("runtime release is not a directory")
+    try:
+        root = path.lstat()
+        if root.st_uid != os.geteuid() or stat.S_IMODE(root.st_mode) != 0o700:
+            raise RuntimeStoreError("runtime release ownership or mode is unsafe")
+    except OSError as error:
+        raise RuntimeStoreError("runtime release is unavailable") from error
+    try:
+        manifest = read_runtime_manifest(path)
+    except Exception as error:
+        raise RuntimeStoreError("runtime manifest is invalid") from error
+    expected = policy.identity
+    actual_identity = ExpectedRuntimeIdentity(
+        manifest["source_commit"],
+        manifest["tag_ref"],
+        manifest["tag_object"],
+        manifest["signature_sha256"],
+        manifest["trust_policy_sha256"],
+        manifest["vendor_manifest_sha256"],
+    )
+    if (expected_release or path.name) != manifest["release"] or actual_identity != expected:
+        raise RuntimeStoreError("runtime identity does not match trust policy")
+    actual = _inventory(path)
+    expected_files = dict(policy.files)
+    if actual != expected_files:
+        raise RuntimeStoreError("runtime file inventory does not match trust policy")
+
+
+def stage_runtime_release(  # noqa: C901
+    source: Path,
+    releases_root: Path,
+    release: str,
+    manifest: dict[str, str],
+    policy: RuntimeTrustPolicy,
+) -> Path:
+    """Stage one complete immutable runtime without publishing a selector."""
+    if _RELEASE.fullmatch(release) is None or manifest.get("release") != release:
+        raise RuntimeStoreError("runtime release identity is invalid")
+    if not source.is_dir() or source.is_symlink():
+        raise RuntimeStoreError("runtime source is not a directory")
+    if not releases_root.exists():
+        releases_root.mkdir(mode=0o700, parents=True)
+    root_status = releases_root.lstat()
+    if (
+        root_status.st_uid != os.geteuid()
+        or stat.S_IMODE(root_status.st_mode) != 0o700
+        or releases_root.is_symlink()
+    ):
+        raise RuntimeStoreError("runtime release root is unsafe")
+    destination = releases_root / release
+    if destination.exists() or destination.is_symlink():
+        raise RuntimeStoreError("runtime release already exists")
+    with tempfile.TemporaryDirectory(prefix=f".{release}.", dir=releases_root) as temporary:
+        staged = Path(temporary)
+        for source_path in sorted(source.rglob("*")):
+            relative = source_path.relative_to(source)
+            target = staged / relative
+            if source_path.is_symlink():
+                raise RuntimeStoreError("runtime source contains a symlink")
+            if source_path.is_dir():
+                target.mkdir(mode=0o700, parents=True, exist_ok=True)
+                continue
+            mode = stat.S_IMODE(source_path.lstat().st_mode)
+            target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+            shutil.copyfile(source_path, target)
+            target.chmod(mode)
+        manifest_path = staged / "runtime-manifest.json"
+        if manifest_path.exists():
+            raise RuntimeStoreError("runtime source must not provide the manifest")
+        manifest_path.write_bytes(
+            json.dumps(
+                manifest,
+                sort_keys=False,
+                separators=(",", ":"),
+            ).encode()
+        )
+        manifest_path.chmod(0o600)
+        staged.chmod(0o700)
+        verify_runtime_release(staged, policy, expected_release=release)
+        staged.replace(destination)
+    destination.chmod(0o700)
+    return destination
