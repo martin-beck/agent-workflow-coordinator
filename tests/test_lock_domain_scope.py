@@ -47,6 +47,7 @@ from tools.rollback_control_store import (
     SQLiteRollbackControlStore,
 )
 from tools.upgrade_identity import (
+    BarrierChildIdentity,
     BarrierSessionIdentity,
     canonical_barrier_digest,
     canonical_barrier_session_digest,
@@ -1025,21 +1026,93 @@ class LockDomainScopeTests(unittest.TestCase):
     def test_typed_coordination_writer_control_cas_holds_full_scope(self) -> None:
         scope = LockDomainScope.bind(self.session, self.fence, self.lease, self.recheck, locked)
         writer = bind_sqlite_coordination_writer(scope, self.store, self.session)
+        writer.session_bind_child(
+            identity(), 1, BarrierChildIdentity.bind(identity(), "forward-1", "new")
+        )
         record = control_record()
+        record["operation_id"] = "forward-1"
+        record["target"] = "new"
+        record["barrier_identity_digest"] = canonical_barrier_digest(record)
+        record["envelope_digest"] = canonical_envelope_digest(record)
 
         result = writer.control_cas(0, record)
         self.assertEqual("held", result["status"])
         self.assertEqual(1, result["revision"])
         self.assertFalse(self.store.operation_owned_by_current_thread)
 
+    def test_typed_coordination_writer_control_begin_release_is_scoped(self) -> None:
+        scope = LockDomainScope.bind(self.session, self.fence, self.lease, self.recheck, locked)
+        writer = bind_sqlite_coordination_writer(scope, self.store, self.session)
+        writer.session_bind_child(
+            identity(), 1, BarrierChildIdentity.bind(identity(), "forward-1", "new")
+        )
+        record = control_record()
+        record["operation_id"] = "forward-1"
+        record["target"] = "new"
+        record["barrier_identity_digest"] = canonical_barrier_digest(record)
+        record["envelope_digest"] = canonical_envelope_digest(record)
+        writer.control_cas(0, record)
+
+        result = writer.control_begin_release("forward-1")
+
+        self.assertEqual("releasing", result["status"])
+        self.assertEqual(2, result["revision"])
+
+    def test_typed_coordination_writer_child_and_reopen_admission_are_scoped(self) -> None:
+        scope = LockDomainScope.bind(self.session, self.fence, self.lease, self.recheck, locked)
+        writer = bind_sqlite_coordination_writer(scope, self.store, self.session)
+        child = BarrierChildIdentity.bind(identity(), "forward-1", "new")
+
+        bound = writer.session_bind_child(identity(), 1, child)
+        releasing = writer.session_begin_reopen(
+            identity(),
+            bound.revision,
+            "new",
+            {
+                "operation_id": child.operation_id,
+                "target": child.target,
+                "barrier_identity_digest": bound.identity.identity_digest,
+                "validated": True,
+            },
+        )
+
+        self.assertEqual("releasing", releasing.status)
+        self.assertEqual(3, releasing.revision)
+        self.assertFalse(self.session.operation_owned_by_current_thread)
+
     def test_typed_coordination_writer_rejects_control_project_drift(self) -> None:
         scope = LockDomainScope.bind(self.session, self.fence, self.lease, self.recheck, locked)
         writer = bind_sqlite_coordination_writer(scope, self.store, self.session)
         record = control_record()
+        writer.session_bind_child(
+            identity(), 1, BarrierChildIdentity.bind(identity(), "forward-1", "new")
+        )
+        record["operation_id"] = "forward-1"
         record["project_id"] = "22222222-2222-4222-8222-222222222222"
         record["barrier_identity_digest"] = canonical_barrier_digest(record)
         record["envelope_digest"] = canonical_envelope_digest(record)
-        with self.assertRaisesRegex(ControlStoreError, "project binding"):
+        with self.assertRaisesRegex(ControlStoreError, "barrier identity"):
+            writer.control_cas(0, record)
+
+    def test_typed_coordination_writer_rejects_control_operation_drift(self) -> None:
+        scope = LockDomainScope.bind(self.session, self.fence, self.lease, self.recheck, locked)
+        writer = bind_sqlite_coordination_writer(scope, self.store, self.session)
+        writer.session_bind_child(
+            identity(), 1, BarrierChildIdentity.bind(identity(), "forward-1", "new")
+        )
+        record = control_record()
+        with self.assertRaisesRegex(ControlStoreError, "not bound"):
+            writer.control_cas(0, record)
+
+    def test_typed_coordination_writer_rejects_control_target_drift(self) -> None:
+        scope = LockDomainScope.bind(self.session, self.fence, self.lease, self.recheck, locked)
+        writer = bind_sqlite_coordination_writer(scope, self.store, self.session)
+        writer.session_bind_child(
+            identity(), 1, BarrierChildIdentity.bind(identity(), "forward-1", "new")
+        )
+        record = control_record()
+        record["operation_id"] = "forward-1"
+        with self.assertRaisesRegex(ControlStoreError, "target"):
             writer.control_cas(0, record)
 
     def test_control_cas_rejects_non_guard_before_store_access(self) -> None:
