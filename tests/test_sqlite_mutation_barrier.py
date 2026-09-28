@@ -1855,6 +1855,17 @@ class SQLiteMutationBarrierProcessTests(unittest.TestCase):
         ambiguous = self.session.finish_authority_effect(ambiguous_intent, "ambiguous")
         self.assertEqual("ambiguous", ambiguous.status)
 
+    def test_generated_authority_effect_must_match_registered_child(self) -> None:
+        held = self._create_held()
+        bound = self.session.bind_child(
+            held.revision,
+            BarrierChildIdentity("upgrade-1.commit", "new", held.identity.identity_digest),
+        )
+        with self.assertRaisesRegex(ControlStoreError, "registered barrier child"):
+            self.session.prepare_authority_effect(
+                bound.revision, "upgrade-foreign.commit", "sqlite"
+            )
+
     def test_integrated_pre_effect_rejection_is_journaled_without_fencing(self) -> None:
         held = self._create_held()
         admission = CommitAdmissionBundle(
