@@ -21,6 +21,7 @@ from typing import Any, Protocol, cast, runtime_checkable
 from tools.authority_mutation import AuthorityMutationAmbiguousError
 from tools.authority_neutral_backup import BoundBackupPhaseAdapter
 from tools.authority_neutral_commit_dispatch import BoundCommitPhaseAdapter
+from tools.authority_neutral_rollback_dispatch import BoundRollbackPhaseAdapter
 from tools.authority_neutral_stage import BoundStagePhaseAdapter
 from tools.authority_neutral_validation import BoundValidationPhaseAdapter
 from tools.rollback_evidence import BackupObservation
@@ -722,6 +723,11 @@ class UpgradeEngine:
         commit_executor: object | None = None,
         commit_argument: object | None = None,
         commit_evidence: Mapping[str, object] | None = None,
+        rollback_operation: Mapping[str, object] | None = None,
+        rollback_context: Mapping[str, object] | None = None,
+        rollback_executor: object | None = None,
+        rollback_argument: object | None = None,
+        rollback_evidence: Mapping[str, object] | None = None,
     ) -> None:
         if not operation_id or ":" in operation_id:
             raise UpgradeError("invalid operation identity")
@@ -730,6 +736,37 @@ class UpgradeEngine:
         self.lock_path = lock_path or journal.parent / ".upgrade-engine.lock"
         self.backend_adapter = backend_adapter
         self.rollback_bound_verifier = rollback_bound_verifier
+        rollback_parts = (
+            rollback_operation,
+            rollback_context,
+            rollback_executor,
+            rollback_argument,
+            rollback_evidence,
+        )
+        rollback_count = sum(value is not None for value in rollback_parts)
+        if rollback_count not in (0, len(rollback_parts)):
+            raise UpgradeError(
+                "rollback operation, context, executor, argument, and "
+                "evidence are required together"
+            )
+        self._rollback_phase_adapter: BoundRollbackPhaseAdapter | None = None
+        if rollback_count == len(rollback_parts):
+            if (
+                backend_adapter is None
+                or rollback_context is None
+                or rollback_operation is None
+                or rollback_executor is None
+            ):
+                raise UpgradeError("rollback capability requires a backend adapter")
+            try:
+                self._rollback_phase_adapter = BoundRollbackPhaseAdapter(
+                    rollback_operation,
+                    rollback_context,
+                    cast(Any, rollback_executor),
+                    rollback_argument,
+                )
+            except Exception as error:
+                raise UpgradeError("rollback capability binding is invalid") from error
         if (backup_operation is None) != (backup_context is None):
             raise UpgradeError("backup operation and context must be supplied together")
         self._backup_phase_adapter: BoundBackupPhaseAdapter | None = None
@@ -1442,11 +1479,18 @@ class UpgradeEngine:
         value["records"].append(record)
         _write(self.journal, value)
         try:
-            adapter_result = dict(
-                self.backend_adapter.execute(
-                    "rollback", cast(Mapping[str, object], _freeze(self._verified_rollback_context))
+            rollback_context = cast(Mapping[str, object], _freeze(self._verified_rollback_context))
+            if self._rollback_phase_adapter is not None:
+                rollback_operation_id = self.operation_id + ":rollback"
+                rollback_dispatch_context = cast(
+                    Mapping[str, object],
+                    _freeze({**dict(rollback_context), "operation_id": rollback_operation_id}),
                 )
-            )
+                adapter_result = dict(
+                    self._rollback_phase_adapter.execute(rollback_dispatch_context)
+                )
+            else:
+                adapter_result = dict(self.backend_adapter.execute("rollback", rollback_context))
             required = ("restored_verified", "runtime_validated", "backend_roundtrip_valid")
             if any(
                 type(adapter_result.get(field)) is not bool or adapter_result.get(field) is not True
