@@ -85,6 +85,7 @@ ADMISSION = {
     **dict.fromkeys(REOPEN_PREDICATES, True),
     **CONTEXT,
     "barrier_status": "held",
+    "reopen_barrier_status": "released",
     "validation_failed": False,
 }
 

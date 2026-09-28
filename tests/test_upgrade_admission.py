@@ -52,6 +52,7 @@ def complete(names: tuple[str, ...]) -> dict[str, object]:
             "target": "new",
             "envelope_digest": "0" * 64,
             "barrier_status": "held",
+            "reopen_barrier_status": "released",
         }
     )
     snapshot["barrier_identity_digest"] = canonical_barrier_digest(snapshot)
@@ -100,6 +101,20 @@ class UpgradeAdmissionTests(unittest.TestCase):
             denied = dict(snapshot)
             denied[predicate] = False
             with self.subTest(predicate=predicate), self.assertRaises(AdmissionError):
+                admit_reopen(denied)
+
+    def test_reopen_requires_durable_release_evidence(self) -> None:
+        snapshot = complete(REOPEN_PREDICATES)
+        snapshot["barrier_reopen_verified"] = False
+        with self.assertRaisesRegex(AdmissionError, "barrier_reopen_verified"):
+            admit_reopen(snapshot)
+        for status in ("held", "releasing", "ambiguous", True):
+            denied = complete(REOPEN_PREDICATES)
+            denied["reopen_barrier_status"] = status
+            with (
+                self.subTest(status=status),
+                self.assertRaisesRegex(AdmissionError, "not released"),
+            ):
                 admit_reopen(denied)
 
     def test_reopen_requires_explicit_functional_availability(self) -> None:

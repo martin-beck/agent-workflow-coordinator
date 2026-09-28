@@ -137,7 +137,9 @@ each allowlisted opcode:
   lock, then drains/fences work, then obtains and admits a fresh quiescence
   snapshot. That snapshot must report `barrier_status=held` and
   `barrier_acquired_before_quiescence=true`; a generic maintenance-barrier
-  boolean is insufficient.
+  boolean is insufficient. Reopen admission separately requires
+  `barrier_reopen_verified=true` and `reopen_barrier_status=released` after
+  the durable releasing transition.
 - `backend.backup` and `runtime.stage` recheck the held barrier and authority
   before and after their bounded operation.
 - `authority.atomic_replace` admits exact current quiescence, performs one

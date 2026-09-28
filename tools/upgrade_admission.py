@@ -44,6 +44,7 @@ QUIESCENCE_PREDICATES = (
 
 REOPEN_PREDICATES = (
     "maintenance_barrier",
+    "barrier_reopen_verified",
     "functional_available",
     "runtime_validated",
     "backend_roundtrip_valid",
@@ -60,6 +61,7 @@ KNOWN_FIELDS.update(
         *IDENTITY_FIELDS,
         QUIESCENCE_IDENTITY,
         "barrier_status",
+        "reopen_barrier_status",
         "validation_failed",
         "safe_mode_ready",
     )
@@ -114,6 +116,8 @@ def admit_reopen(snapshot: Mapping[str, object]) -> None:
     barrier = snapshot.get(QUIESCENCE_IDENTITY)
     if not isinstance(barrier, str) or not barrier:
         raise AdmissionError("reopen denied; durable barrier proof is absent")
+    if snapshot.get("reopen_barrier_status") != "released":
+        raise AdmissionError("reopen denied; durable barrier is not released")
     validation_failed = snapshot.get("validation_failed", False)
     if not isinstance(validation_failed, bool):
         raise AdmissionError("reopen denied; validation_failed must be boolean")

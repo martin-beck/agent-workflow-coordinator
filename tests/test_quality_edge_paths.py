@@ -41,6 +41,7 @@ ADMISSION_TRUE_FIELDS = (
     "backup_destination_restorable",
     "maintenance_barrier",
     "barrier_acquired_before_quiescence",
+    "barrier_reopen_verified",
     "functional_available",
     "workers_drained",
     "leases_fenced",
@@ -88,6 +89,7 @@ def admission_snapshot(**changes: object) -> dict[str, object]:
         ),
         durable_barrier_id="barrier-1",
         barrier_status="held",
+        reopen_barrier_status="released",
         safe_mode_ready=True,
     )
     value.update(changes)
