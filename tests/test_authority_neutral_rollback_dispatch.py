@@ -19,6 +19,7 @@ OPERATION = {
     "inputs": {
         "backend": "git",
         "target": "rollback",
+        "selector_ref": ".runtime/runtime-selector.json",
         "expected_state_revision": 7,
         "barrier_id": "barrier-7",
         "fencing_token": "fence-7",
@@ -34,6 +35,7 @@ OPERATION = {
 CONTEXT = {
     "backend": "git",
     "target": "rollback",
+    "selector_ref": ".runtime/runtime-selector.json",
     "operation_id": "upgrade-1:rollback",
     "state_revision": 7,
     "durable_barrier_id": "barrier-7",

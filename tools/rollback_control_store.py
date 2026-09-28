@@ -2458,9 +2458,12 @@ class SQLiteBarrierSessionStore:
             current = self._snapshot_locked()
             if current is None or current.status != "held":
                 raise ControlStoreError("authority effect requires a held barrier session")
-            if "." in operation_id:
+            if "." in operation_id or ":" in operation_id:
                 child = current.rollback_child if target == "rollback" else current.forward_child
-                if child is None or child.operation_id != operation_id or child.target != target:
+                expected_child_ids = {operation_id, operation_id.rsplit(":", 1)[0]}
+                if child is not None and (
+                    child.operation_id not in expected_child_ids or child.target != target
+                ):
                     raise ControlStoreError(
                         "authority effect operation is not the registered barrier child"
                     )

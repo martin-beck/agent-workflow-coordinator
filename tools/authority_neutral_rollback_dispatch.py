@@ -38,6 +38,7 @@ _OPERATION_FIELDS = {
 _INPUT_FIELDS = {
     "backend",
     "target",
+    "selector_ref",
     "expected_state_revision",
     "barrier_id",
     "fencing_token",
@@ -58,6 +59,8 @@ def _validate_operation(operation: Mapping[str, object]) -> dict[str, object]:  
         raise RollbackDispatchError("rollback operation inputs are incomplete or unknown")
     if inputs.get("backend") not in {"git", "sqlite"} or inputs.get("target") != "rollback":
         raise RollbackDispatchError("rollback operation target or backend is invalid")
+    if not isinstance(inputs.get("selector_ref"), str) or not inputs["selector_ref"]:
+        raise RollbackDispatchError("rollback operation selector reference is invalid")
     if inputs.get("backup_operation_id") != f"{operation_id.rsplit(':', 1)[0]}:backup":
         raise RollbackDispatchError("rollback operation backup identity is invalid")
     if (
@@ -90,6 +93,7 @@ class BoundRollbackPhaseAdapter:
         expected = {
             "backend": inputs["backend"],
             "target": "rollback",
+            "selector_ref": inputs["selector_ref"],
             "operation_id": validated["operation_id"],
             "state_revision": inputs["expected_state_revision"],
             "durable_barrier_id": inputs["barrier_id"],
@@ -114,6 +118,7 @@ class BoundRollbackPhaseAdapter:
         for field in (
             "backend",
             "target",
+            "selector_ref",
             "operation_id",
             "state_revision",
             "durable_barrier_id",

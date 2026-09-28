@@ -257,6 +257,36 @@ class GitAuthorityAdapter:
         except BaseException as error:
             raise GitAuthorityError("Git durable commit capability binding was rejected") from error
 
+    def bind_durable_rollback_capability(
+        self,
+        admission: Any,
+        journal: Any,
+        *,
+        session_revision: int,
+        rollback_effect: Any,
+    ) -> Any:
+        """Bind one backend-owned rollback effect to the durable fence.
+
+        This isolated seam is not connected to the public rollback command.
+        The effect is supplied by the backend-specific rollback campaign and
+        is fenced by the same durable journal before it can run.
+        """
+        from tools.authority_mutation import AuthorityMutationError, DurableBoundBackendMutation
+
+        if getattr(admission, "target", None) != "rollback" or not callable(rollback_effect):
+            raise GitAuthorityError("Git durable rollback capability binding was rejected")
+        try:
+            return DurableBoundBackendMutation(
+                admission,
+                journal,
+                session_revision=session_revision,
+                backend_effect=rollback_effect,
+            )
+        except AuthorityMutationError as error:
+            raise GitAuthorityError(
+                "Git durable rollback capability binding was rejected"
+            ) from error
+
     @staticmethod
     def observe_backup_identity(
         backup: Path,
