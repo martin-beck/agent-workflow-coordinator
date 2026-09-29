@@ -716,6 +716,8 @@ class GitAuthorityAdapterTests(unittest.TestCase):
             ],
             check=True,
         )
+        self.root.chmod(0o700)
+        (self.root / ".git").chmod(0o700)
         self.adapter = GitAuthorityAdapter(self.root)
         self.coordination = tempfile.TemporaryDirectory()
         coord = Path(self.coordination.name)
