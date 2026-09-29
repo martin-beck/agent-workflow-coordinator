@@ -7,6 +7,7 @@ import tempfile
 import unittest
 import uuid
 from pathlib import Path, PurePosixPath
+from typing import Any, cast
 
 from tools.generate_upgrade_contract import generate
 from tools.production_upgrade_binding import ProductionBindingError, resolve_sqlite_live_binding
@@ -86,7 +87,7 @@ class ProductionUpgradeBindingTests(unittest.TestCase):
                     project_binding=root / "coordinator.binding.json",
                     backend_config=root / "coordinator.backend.json",
                     runtime_selector=root / "runtime-selector.json",
-                    common_lock=lambda: None,
+                    common_lock=cast(Any, lambda: None),
                 )
 
     def test_missing_sqlite_state_is_rejected_before_scope_construction(self) -> None:
@@ -107,5 +108,5 @@ class ProductionUpgradeBindingTests(unittest.TestCase):
                     project_binding=root / "coordinator.binding.json",
                     backend_config=root / "coordinator.backend.json",
                     runtime_selector=root / "runtime-selector.json",
-                    common_lock=lambda: None,
+                    common_lock=cast(Any, lambda: None),
                 )

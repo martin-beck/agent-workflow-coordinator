@@ -4,7 +4,13 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from contextlib import AbstractContextManager
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from tools.handoffctl import CoordinatorLockGuard
 
 from tools.admission_lease import AdmissionLease, AdmissionRecheck
 from tools.lock_domain_scope import LockDomainScope
@@ -32,7 +38,7 @@ def resolve_sqlite_live_binding(
     project_binding: Path,
     backend_config: Path,
     runtime_selector: Path,
-    common_lock,
+    common_lock: Callable[[], AbstractContextManager[CoordinatorLockGuard]],
 ) -> LiveUpgradeBinding:
     """Reconstruct and admit one live SQLite binding from durable state."""
     if runtime.contract_backend != "sqlite":
