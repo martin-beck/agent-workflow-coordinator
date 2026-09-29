@@ -17,7 +17,7 @@ from typing import Any
 from unittest.mock import patch
 
 from tools.generate_upgrade_contract import generate
-from tools.upgrade_binding import LiveUpgradeBinding, UpgradeRuntimeBinding
+from tools.upgrade_binding import UpgradeRuntimeBinding
 from tools.upgrade_commands import (
     MAX_CONTRACT_BYTES,
     UpgradeCommandError,
@@ -149,13 +149,6 @@ class UpgradeCommandTests(unittest.TestCase):
     def test_mutation_boundary_requires_matching_live_binding(self) -> None:
         document = contract(operation_id="upgrade-001")
         self.write(document)
-        binding_path = self.write_binding(document)
-        runtime = UpgradeRuntimeBinding.from_mapping(
-            json.loads(binding_path.read_text(encoding="utf-8"))
-        )
-        live = LiveUpgradeBinding(runtime, object(), object(), object(), object(), object())
-        with self.assertRaisesRegex(UpgradeCommandError, "execution protocol is incomplete"):
-            execute_upgrade_command("rollback", self.path, "sqlite", binding_path, live)
         with self.assertRaisesRegex(UpgradeCommandError, "concrete live"):
             execute_upgrade_command("apply", self.path, "sqlite", live_binding=object())
 

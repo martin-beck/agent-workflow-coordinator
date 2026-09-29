@@ -41,13 +41,14 @@ BINDING_FIELDS = (
     "runtime_envelope",
 )
 _DIGEST = re.compile(r"[0-9a-f]{64}")
+_LIVE_BINDING_TOKEN = object()
 
 
 class UpgradeBindingError(ValueError):
     """A portable contract and host-bound runtime identity do not match."""
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, init=False)
 class LiveUpgradeBinding:
     """One immutable binding of contract, durable session, and backend scope.
 
@@ -56,23 +57,27 @@ class LiveUpgradeBinding:
     proof before it can construct any effect capability.
     """
 
-    runtime: "UpgradeRuntimeBinding"
+    runtime: UpgradeRuntimeBinding
     session: object
     scope: object
     lease: object
     admission_recheck: object
     adapter: object
+    _token: object
+
+    def __init__(self) -> None:
+        raise TypeError("LiveUpgradeBinding must be issued by bind()")
 
     @classmethod
-    def bind(
+    def bind(  # noqa: C901
         cls,
-        runtime: "UpgradeRuntimeBinding",
+        runtime: UpgradeRuntimeBinding,
         session: object,
         scope: object,
         lease: object,
         admission_recheck: object,
         adapter: object,
-    ) -> "LiveUpgradeBinding":
+    ) -> LiveUpgradeBinding:
         from tools.admission_lease import AdmissionLease, AdmissionRecheck
         from tools.git_authority_adapter import GitAuthorityAdapter
         from tools.lock_domain_scope import LockDomainScope
@@ -129,7 +134,15 @@ class LiveUpgradeBinding:
                 adapter, "_authority", None
             ):
                 raise UpgradeBindingError("SQLite live backend is bound to a foreign authority")
-        return cls(runtime, session, scope, lease, admission_recheck, adapter)
+        issued = object.__new__(cls)
+        object.__setattr__(issued, "runtime", runtime)
+        object.__setattr__(issued, "session", session)
+        object.__setattr__(issued, "scope", scope)
+        object.__setattr__(issued, "lease", lease)
+        object.__setattr__(issued, "admission_recheck", admission_recheck)
+        object.__setattr__(issued, "adapter", adapter)
+        object.__setattr__(issued, "_token", _LIVE_BINDING_TOKEN)
+        return issued
 
     def reread_backend(
         self, *, expected_branch: str | None = None, expected_head: str | None = None
@@ -144,9 +157,38 @@ class LiveUpgradeBinding:
             expected_head=expected_head,
         )
 
-    def matches_runtime(self, runtime: "UpgradeRuntimeBinding") -> bool:
+    def matches_runtime(self, runtime: UpgradeRuntimeBinding) -> bool:
         """Return whether this live binding is for the exact runtime binding."""
-        return isinstance(runtime, UpgradeRuntimeBinding) and self.runtime == runtime
+        return (
+            self.is_admitted()
+            and isinstance(runtime, UpgradeRuntimeBinding)
+            and self.runtime == runtime
+        )
+
+    def matches_contract(self, contract: Mapping[str, object], backend: str) -> bool:
+        """Return whether this binding is admitted for one exact contract."""
+        return (
+            self.is_admitted()
+            and self.runtime.contract_digest == canonical_contract_digest(contract)
+            and self.runtime.contract_backend == backend
+        )
+
+    def is_admitted(self) -> bool:
+        """Revalidate the sealed binding before a production boundary consumes it."""
+        if getattr(self, "_token", None) is not _LIVE_BINDING_TOKEN:
+            return False
+        try:
+            type(self).bind(
+                self.runtime,
+                self.session,
+                self.scope,
+                self.lease,
+                self.admission_recheck,
+                self.adapter,
+            )
+        except Exception:
+            return False
+        return True
 
 
 def canonical_contract_digest(contract: Mapping[str, object]) -> str:
@@ -267,7 +309,7 @@ class UpgradeRuntimeBinding:
         )
 
     @classmethod
-    def from_mapping(cls, value: Mapping[str, object]) -> UpgradeRuntimeBinding:
+    def from_mapping(cls, value: Mapping[str, object]) -> UpgradeRuntimeBinding:  # noqa: C901
         if set(value) != set(BINDING_FIELDS):
             raise UpgradeBindingError("runtime binding fields are invalid")
         if value["schema_version"] != BINDING_SCHEMA_VERSION:
