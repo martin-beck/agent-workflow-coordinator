@@ -271,6 +271,20 @@ class UpgradeRuntimeBinding:
         envelope = value["runtime_envelope"]
         if not isinstance(envelope, Mapping) or set(envelope) != set(ENVELOPE_FIELDS):
             raise UpgradeBindingError("runtime binding envelope is invalid")
+        if value["contract_operation_id"] != envelope.get("operation_id"):
+            raise UpgradeBindingError("runtime binding operation identity is inconsistent")
+        if value["contract_backend"] != envelope.get("backend"):
+            raise UpgradeBindingError("runtime binding backend identity is inconsistent")
+        for binding_field, envelope_field in (
+            ("contract_selector_ref", "selector_ref"),
+            ("contract_expected_state_revision", "state_revision"),
+            ("contract_barrier_id", "durable_barrier_id"),
+            ("contract_fencing_token", "fencing_token"),
+        ):
+            if value[binding_field] != envelope.get(envelope_field):
+                raise UpgradeBindingError(
+                    f"runtime binding {binding_field} is inconsistent with envelope"
+                )
         for field in (
             "contract_digest",
             "session_identity_digest",

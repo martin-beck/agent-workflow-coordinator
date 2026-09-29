@@ -296,6 +296,25 @@ class UpgradeBindingTests(unittest.TestCase):
             with self.subTest(value=value), self.assertRaises(UpgradeBindingError):
                 UpgradeRuntimeBinding.from_mapping(value)
 
+    def test_rejects_inconsistent_persisted_binding_identity(self) -> None:
+        contract = _contract()
+        runtime = _envelope(contract)
+        binding = UpgradeRuntimeBinding.bind(
+            contract, runtime, session_identity_digest="a" * 64
+        ).as_mapping()
+        for field, value in (
+            ("contract_backend", "git"),
+            ("contract_expected_state_revision", 99),
+            ("contract_selector_ref", "foreign-selector.json"),
+            ("contract_barrier_id", "foreign-barrier"),
+            ("contract_fencing_token", "foreign-fence"),
+            ("contract_operation_id", "foreign-operation"),
+        ):
+            changed = dict(binding)
+            changed[field] = value
+            with self.subTest(field=field), self.assertRaises(UpgradeBindingError):
+                UpgradeRuntimeBinding.from_mapping(changed)
+
     def test_rejects_live_session_status_and_identity_drift(self) -> None:
         contract = _contract()
         runtime = _envelope(contract)
