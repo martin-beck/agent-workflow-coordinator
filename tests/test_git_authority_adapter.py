@@ -51,7 +51,7 @@ from tools.sqlite_storage import (
     bind_sqlite_backend,
     create_database,
 )
-from tools.upgrade_binding import LiveUpgradeBinding, UpgradeRuntimeBinding
+from tools.upgrade_binding import LiveUpgradeBinding, UpgradeBindingError, UpgradeRuntimeBinding
 from tools.upgrade_engine import (
     BoundRollbackCapability,
     GitRollbackObservationCapability,
@@ -859,7 +859,13 @@ class GitAuthorityAdapterTests(unittest.TestCase):
             contract, runtime, session_identity_digest=identity.identity_digest
         )
         live = LiveUpgradeBinding.bind(
-            binding, self.session.snapshot(), scope, self.lease, self.recheck, self.adapter
+            binding,
+            self.session.snapshot(),
+            scope,
+            self.lease,
+            self.recheck,
+            self.adapter,
+            expected_git_repository=self.root,
         )
         evidence = live.reread_backend(
             expected_branch=self.adapter._git("symbolic-ref", "--short", "-q", "HEAD"),
@@ -868,6 +874,36 @@ class GitAuthorityAdapterTests(unittest.TestCase):
         self.assertEqual("git", evidence["backend"])
         self.assertTrue(evidence["git_clean"])
         self.assertFalse(evidence["mutates_authority"])
+        with tempfile.TemporaryDirectory() as foreign_directory:
+            foreign_root = Path(foreign_directory)
+            subprocess.run(["git", "init", "-q", str(foreign_root)], check=True)
+            (foreign_root / "foreign-state").write_text("foreign\n")
+            subprocess.run(["git", "-C", str(foreign_root), "add", "foreign-state"], check=True)
+            subprocess.run(
+                [
+                    "git",
+                    "-C",
+                    str(foreign_root),
+                    "-c",
+                    "user.name=test",
+                    "-c",
+                    "user.email=test@example",
+                    "commit",
+                    "-qm",
+                    "foreign",
+                ],
+                check=True,
+            )
+            with self.assertRaisesRegex(UpgradeBindingError, "foreign repository"):
+                LiveUpgradeBinding.bind(
+                    binding,
+                    self.session.snapshot(),
+                    scope,
+                    self.lease,
+                    self.recheck,
+                    GitAuthorityAdapter(foreign_root),
+                    expected_git_repository=self.root,
+                )
 
     def test_sqlite_backend_binding_rejects_foreign_session_and_descriptor_swap(self) -> None:
         other_path = Path(self.coordination.name) / "foreign-control.sqlite"
