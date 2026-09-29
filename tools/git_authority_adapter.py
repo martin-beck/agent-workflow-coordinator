@@ -144,14 +144,15 @@ class GitAuthorityAdapter:
         try:
             root_status = resolved.stat()
             git_status = git_directory.stat()
-        except OSError as error:
-            raise GitAuthorityError("Git authority repository identity is unavailable") from error
-        self._repository_identity = (
-            root_status.st_dev,
-            root_status.st_ino,
-            git_status.st_dev,
-            git_status.st_ino,
-        )
+        except OSError:
+            self._repository_identity: tuple[int, int, int, int] | None = None
+        else:
+            self._repository_identity = (
+                root_status.st_dev,
+                root_status.st_ino,
+                git_status.st_dev,
+                git_status.st_ino,
+            )
 
     def lifecycle_session(self) -> LifecycleSession:
         """Return an opaque session bound to this adapter's repository."""
@@ -564,7 +565,8 @@ class GitAuthorityAdapter:
                 git_status.st_dev,
                 git_status.st_ino,
             )
-            if current_identity != getattr(self, "_repository_identity", current_identity):
+            captured_identity = getattr(self, "_repository_identity", None)
+            if captured_identity is not None and current_identity != captured_identity:
                 raise GitAuthorityError("Git authority repository identity changed")
             from tools.upgrade_authority import read_git_authority_snapshot
 
