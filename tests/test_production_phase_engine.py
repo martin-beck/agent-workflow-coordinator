@@ -7,6 +7,7 @@ import unittest
 import uuid
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any, cast
 from unittest.mock import Mock, patch
 
 from tools.generate_upgrade_contract import generate
@@ -70,7 +71,7 @@ class ProductionPhaseEngineTests(unittest.TestCase):
             adapter=adapter,
             is_admitted=Mock(return_value=True),
         )
-        backend = object.__new__(BoundProductionBackendAdapter)
+        backend: Any = object.__new__(BoundProductionBackendAdapter)
         backend._binding = binding
         backend._adapter = adapter
         backend.bound_rollback_kind = kind
@@ -128,7 +129,7 @@ class ProductionPhaseEngineTests(unittest.TestCase):
         adapter = object.__new__(SQLiteAuthorityAdapter)
         object.__setattr__(binding, "adapter", adapter)
         with patch.object(LiveUpgradeBinding, "is_admitted", return_value=True):
-            backend = BoundProductionBackendAdapter(binding)
+            backend: Any = BoundProductionBackendAdapter(binding)
         self.assertIsNone(backend.operation_lock)
         backend._binding = SimpleNamespace(
             is_admitted=Mock(return_value=True),
@@ -170,20 +171,21 @@ class ProductionPhaseEngineTests(unittest.TestCase):
 
     def test_phase_operation_validation_rejects_incomplete_shapes(self) -> None:
         contract = _contract()
-        for changed in (
+        changed_cases: tuple[dict[str, object], ...] = (
             {"phases": []},
             {"phases": contract["phases"], "operation_id": None},
-        ):
+        )
+        for changed in changed_cases:
             invalid = dict(contract)
             invalid.update(changed)
             with self.assertRaises(ProductionPhaseBindingError):
                 _phase_operations(invalid)
-        phases = list(contract["phases"])
+        phases = list(cast(list[dict[str, object]], contract["phases"]))
         phases[0] = {"id": "foreign"}
         invalid = dict(contract, phases=phases)
         with self.assertRaises(ProductionPhaseBindingError):
             _phase_operations(invalid)
-        phases = list(contract["phases"])
+        phases = list(cast(list[dict[str, object]], contract["phases"]))
         phases[0] = dict(phases[0], operation=None)
         with self.assertRaises(ProductionPhaseBindingError):
             _phase_operations(dict(contract, phases=phases))
