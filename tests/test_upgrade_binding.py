@@ -417,6 +417,47 @@ class UpgradeBindingTests(unittest.TestCase):
                 LiveUpgradeBinding.bind(binding, session.snapshot(), scope, lease, recheck, adapter)
             scope._lease = original_scope_lease
             evidence = live.reread_backend()
+            self.assertTrue(live.matches_runtime(binding))
+            self.assertFalse(live.matches_runtime(cast(Any, object())))
+            self.assertTrue(live.matches_contract(contract, "sqlite"))
+            self.assertFalse(live.matches_contract({}, "sqlite"))
+            original_token = live._token
+            object.__setattr__(live, "_token", object())
+            self.assertFalse(live.is_admitted())
+            object.__setattr__(live, "_token", original_token)
+            original_store = scope._session_store
+            scope._session_store = cast(Any, object())
+            with self.assertRaisesRegex(UpgradeBindingError, "concrete session store"):
+                LiveUpgradeBinding.bind(binding, session.snapshot(), scope, lease, recheck, adapter)
+            scope._session_store = original_store
+            with self.assertRaisesRegex(UpgradeBindingError, "Git repository identity"):
+                LiveUpgradeBinding.bind(
+                    binding,
+                    session.snapshot(),
+                    scope,
+                    lease,
+                    recheck,
+                    adapter,
+                    expected_git_repository=Path("/foreign"),
+                )
+            foreign_authority = root / "foreign.sqlite"
+            with sqlite3.connect(foreign_authority):
+                pass
+            foreign_authority.chmod(0o600)
+            foreign_adapter = SQLiteAuthorityAdapter(foreign_authority)
+            with self.assertRaisesRegex(UpgradeBindingError, "foreign authority"):
+                LiveUpgradeBinding.bind(
+                    binding, session.snapshot(), scope, lease, recheck, foreign_adapter
+                )
+            adapter_any: Any = adapter
+            original_snapshot_bound = adapter_any.snapshot_bound
+            adapter_any.snapshot_bound = MagicMock(side_effect=RuntimeError("stale"))
+            with self.assertRaisesRegex(UpgradeBindingError, "reread was rejected"):
+                binding.reread_backend_bound(adapter, scope, lease, recheck)
+            adapter_any.snapshot_bound = MagicMock(return_value=[])
+            with self.assertRaisesRegex(UpgradeBindingError, "invalid evidence"):
+                binding.reread_backend_bound(adapter, scope, lease, recheck)
+            adapter_any.snapshot_bound = original_snapshot_bound
             self.assertTrue(evidence["sqlite_integrity_verified"])
             self.assertFalse(evidence["mutates_authority"])
             self.assertFalse(session.operation_owned_by_current_thread)
