@@ -14,9 +14,13 @@ from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import Mock, patch
 
+from tools.admission_lease import AdmissionLease, AdmissionRecheck
 from tools.authority_mutation import DurableBoundBackendMutation
 from tools.authority_neutral_commit import CommitAdmissionBundle
 from tools.generate_upgrade_contract import generate
+from tools.handoffctl import locked
+from tools.lock_domain_scope import LockDomainScope
+from tools.mutation_fence import MutationFence, provision, provision_control_binding
 from tools.production_phase_engine import (
     BoundProductionBackendAdapter,
     ForwardCommitCapabilityInputs,
@@ -34,10 +38,19 @@ from tools.rollback_control_store import (
     SQLiteRollbackControlStore,
 )
 from tools.runtime_bootstrap import DispatchAdmission
-from tools.sqlite_authority_adapter import SQLiteAuthorityAdapter, SQLiteLifecycleExecutor
+from tools.sqlite_authority_adapter import (
+    SQLiteAuthorityAdapter,
+    SQLiteAuthorityError,
+    SQLiteLifecycleExecutor,
+)
 from tools.upgrade_admission import QUIESCENCE_PREDICATES
-from tools.upgrade_binding import LiveUpgradeBinding, canonical_contract_digest
+from tools.upgrade_binding import (
+    LiveUpgradeBinding,
+    UpgradeRuntimeBinding,
+    canonical_contract_digest,
+)
 from tools.upgrade_identity import (
+    BarrierChildIdentity,
     BarrierSessionIdentity,
     canonical_barrier_digest,
     canonical_barrier_session_digest,
@@ -240,6 +253,11 @@ class ProductionPhaseEngineTests(unittest.TestCase):
         executor.execute_generated_operation.assert_not_called()
 
     def test_constructor_binds_durable_sqlite_lifecycle_executor(self) -> None:
+        from test_upgrade_binding import _contract as binding_contract
+        from test_upgrade_binding import _envelope as binding_envelope
+
+        runtime_contract = binding_contract()
+        runtime_envelope = binding_envelope(runtime_contract)
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             authority = root / "authority.sqlite"
@@ -247,18 +265,20 @@ class ProductionPhaseEngineTests(unittest.TestCase):
                 connection.execute("CREATE TABLE state (id INTEGER PRIMARY KEY, value TEXT)")
                 connection.execute("INSERT INTO state VALUES (1, 'old')")
             authority.chmod(0o600)
-            project = str(uuid.uuid4())
+            project = str(runtime_envelope["project_id"])
             control = SQLiteRollbackControlStore(root / "control.sqlite", project, authority)
-            session = SQLiteBarrierSessionStore(control, lambda: "authority")
+            session = SQLiteBarrierSessionStore(
+                control, lambda: str(runtime_envelope["authority_revision"])
+            )
             identity_record: dict[str, object] = {
                 "schema_version": 1,
                 "project_id": project,
                 "attempt_id": "attempt-production",
-                "state_revision": 1,
-                "authority_revision_at_acquire": "authority",
-                "durable_barrier_id": "barrier-production",
-                "fencing_token": "fence-production",
-                "fencing_owner": "owner-production",
+                "state_revision": runtime_envelope["state_revision"],
+                "authority_revision_at_acquire": runtime_envelope["authority_revision"],
+                "durable_barrier_id": runtime_envelope["durable_barrier_id"],
+                "fencing_token": runtime_envelope["fencing_token"],
+                "fencing_owner": runtime_envelope["fencing_owner"],
                 "identity_digest": "0" * 64,
             }
             identity_record["identity_digest"] = canonical_barrier_session_digest(
@@ -266,14 +286,59 @@ class ProductionPhaseEngineTests(unittest.TestCase):
             )
             identity = BarrierSessionIdentity.from_record(identity_record)
             session.create(identity)
+            session.bind_child(
+                1, BarrierChildIdentity.bind(identity, "upgrade-001:forward", "new")
+            )
+            session.bind_child(
+                2, BarrierChildIdentity.bind(identity, "upgrade-001", "rollback")
+            )
+            marker = root / "authority-marker.json"
+            lifecycle = root / "authority-lifecycle.json"
+            authority_lock = root / "authority.lock"
+            control_binding = root / "control-binding.json"
+            provision(authority, marker, lifecycle, authority_lock, project)
+            provision_control_binding(
+                control.path, control_binding, control.control_lock_path, project
+            )
+            fence = MutationFence(
+                authority,
+                marker,
+                lifecycle,
+                authority_lock,
+                control.path,
+                control_binding,
+                control.control_lock_path,
+            )
+            lease = AdmissionLease(
+                project_id=project,
+                authority_revision=str(runtime_envelope["authority_revision"]),
+                fencing_token=str(runtime_envelope["fencing_token"]),
+                fencing_owner=str(runtime_envelope["fencing_owner"]),
+                durable_barrier_id=str(runtime_envelope["durable_barrier_id"]),
+                revision=cast(int, runtime_envelope["state_revision"]),
+            )
+            recheck = AdmissionRecheck(
+                lease=lease,
+                project_id=project,
+                authority_revision=str(runtime_envelope["authority_revision"]),
+                fencing_token=str(runtime_envelope["fencing_token"]),
+                fencing_owner=str(runtime_envelope["fencing_owner"]),
+                durable_barrier_id=str(runtime_envelope["durable_barrier_id"]),
+                revision=cast(int, runtime_envelope["state_revision"]),
+            )
+            scope = LockDomainScope.bind(session, fence, lease, recheck, locked)
+            runtime = UpgradeRuntimeBinding.bind(
+                runtime_contract, runtime_envelope,
+                session_identity_digest=identity.identity_digest,
+            )
             adapter = SQLiteAuthorityAdapter(authority)
-            binding = object.__new__(LiveUpgradeBinding)
-            scope = SimpleNamespace(_session_store=session)
-            object.__setattr__(binding, "adapter", adapter)
-            object.__setattr__(binding, "scope", scope)
-            with patch.object(LiveUpgradeBinding, "is_admitted", return_value=True):
-                backend = BoundProductionBackendAdapter(binding, journal=root / "journal.json")
+            live = LiveUpgradeBinding.bind(
+                runtime, session.snapshot(), scope, lease, recheck, adapter
+            )
+            backend = BoundProductionBackendAdapter(live, journal=root / "journal.json")
             self.assertIsInstance(backend._sqlite_lifecycle_executor, SQLiteLifecycleExecutor)
+            with self.assertRaises(SQLiteAuthorityError):
+                backend.execute_generated_operation({}, root / "backup.sqlite", {})
 
     def test_bound_backend_constructor_and_result_shapes_are_strict(self) -> None:
         binding = object.__new__(LiveUpgradeBinding)
