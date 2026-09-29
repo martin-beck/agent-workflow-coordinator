@@ -267,7 +267,7 @@ class UpgradeBindingTests(unittest.TestCase):
                 binding, replace(session, status="released"), scope, lease, recheck, adapter
             )
         with self.assertRaises(TypeError):
-            LiveUpgradeBinding()  # type: ignore[call-arg]
+            LiveUpgradeBinding()
 
     def test_binds_real_sqlite_session_scope_and_adapter(self) -> None:
         contract = _contract()

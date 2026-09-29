@@ -13,7 +13,7 @@ import unittest
 from collections.abc import Callable
 from contextlib import redirect_stdout
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from unittest.mock import patch
 
 from tools.generate_upgrade_contract import generate
@@ -150,7 +150,7 @@ class UpgradeCommandTests(unittest.TestCase):
         document = contract(operation_id="upgrade-001")
         self.write(document)
         with self.assertRaisesRegex(UpgradeCommandError, "concrete live"):
-            execute_upgrade_command("apply", self.path, "sqlite", live_binding=object())
+            execute_upgrade_command("apply", self.path, "sqlite", live_binding=cast(Any, object()))
 
     def test_contract_file_and_dispatch_boundaries_fail_closed(self) -> None:
         self.write(contract())
