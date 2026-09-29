@@ -56,6 +56,7 @@ class ForwardPhaseCapabilityInputs:
     validation_admission: DispatchAdmission
     validation_context: Mapping[str, object]
     commit: ForwardCommitCapabilityInputs | None = None
+    readiness_evidence: Mapping[str, Mapping[str, object]] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -272,7 +273,13 @@ class BoundProductionBackendAdapter:
 
     requires_bound_rollback = True
 
-    def __init__(self, binding: LiveUpgradeBinding, *, journal: Path | None = None) -> None:
+    def __init__(
+        self,
+        binding: LiveUpgradeBinding,
+        *,
+        journal: Path | None = None,
+        readiness_evidence: Mapping[str, Mapping[str, object]] | None = None,
+    ) -> None:
         if type(binding) is not LiveUpgradeBinding or not binding.is_admitted():
             raise ProductionPhaseBindingError("an admitted live upgrade binding is required")
         if type(binding.adapter) is GitAuthorityAdapter:
@@ -284,6 +291,9 @@ class BoundProductionBackendAdapter:
         self._binding = binding
         self._adapter: Any = binding.adapter
         self.bound_rollback_kind = kind
+        self._readiness_evidence = {
+            phase: dict(value) for phase, value in (readiness_evidence or {}).items()
+        }
         self._sqlite_lifecycle_executor: SQLiteLifecycleExecutor | None = None
         if kind == "sqlite" and journal is not None:
             session_store = getattr(binding.scope, "_session_store", None)
@@ -327,6 +337,24 @@ class BoundProductionBackendAdapter:
             )
         if not isinstance(result, dict):
             raise ProductionPhaseBindingError("backend snapshot is not an object")
+        evidence = getattr(self, "_readiness_evidence", {}).get(phase)
+        if evidence is not None and phase in {"discover", "preflight", "quiesce", "reopen"}:
+            immutable = {field: result[field] for field in context if field in result}
+            if any(evidence.get(field) != value for field, value in immutable.items()):
+                raise ProductionPhaseBindingError(
+                    f"readiness evidence identity differs for {phase}"
+                )
+            result.update(evidence)
+            result["phase"] = phase
+            result["backend"] = context["backend"]
+            result["mutates_authority"] = False
+            result["fencing_token"] = context["fencing_token"]
+            if phase == "preflight":
+                result["preflight_snapshot"] = dict(evidence)
+            elif phase == "quiesce":
+                result["quiescence_snapshot"] = dict(evidence)
+            elif phase == "reopen":
+                result["reopen_snapshot"] = dict(evidence)
         return result
 
     def verify_rollback_context(self, context: Mapping[str, object]) -> dict[str, Any]:
@@ -378,6 +406,25 @@ class BoundProductionBackendAdapter:
 
     def execute(self, phase: str, context: Mapping[str, object]) -> dict[str, Any]:
         self._admit()
+        if phase in {"discover", "preflight", "quiesce", "reopen"}:
+            evidence = getattr(self, "_readiness_evidence", {}).get(phase)
+            if evidence is None:
+                raise ProductionPhaseBindingError(
+                    f"admitted readiness evidence is missing for {phase}"
+                )
+            snapshot = self.snapshot(phase, context)
+            result = {**snapshot, **evidence}
+            result["phase"] = phase
+            result["backend"] = context["backend"]
+            result["mutates_authority"] = False
+            result["fencing_token"] = context["fencing_token"]
+            if phase == "preflight":
+                result["preflight_snapshot"] = dict(evidence)
+            elif phase == "quiesce":
+                result["quiescence_snapshot"] = dict(evidence)
+            elif phase == "reopen":
+                result["reopen_snapshot"] = dict(evidence)
+            return result
         result = self._adapter.execute(phase, context)
         if not isinstance(result, dict):
             raise ProductionPhaseBindingError("backend execution result is not an object")
@@ -445,7 +492,10 @@ def build_production_phase_binding(  # noqa: C901
         context = PhaseContext(**cast(dict[str, Any], envelope))
     except (TypeError, UpgradeError) as error:
         raise ProductionPhaseBindingError("live runtime envelope is not a phase context") from error
-    backend = BoundProductionBackendAdapter(live_binding, journal=journal)
+    readiness_evidence = forward_inputs.readiness_evidence if forward_inputs is not None else None
+    backend = BoundProductionBackendAdapter(
+        live_binding, journal=journal, readiness_evidence=readiness_evidence
+    )
     forward_capabilities: ForwardPhaseCapabilities | None = None
     commit_capability: object | None = None
     engine_context: Mapping[str, object] = envelope
