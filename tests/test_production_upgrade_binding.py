@@ -233,6 +233,68 @@ class ProductionUpgradeBindingTests(unittest.TestCase):
                     common_lock=cast(Any, lambda: None),
                 )
 
+    def test_git_resolver_rejects_sqlite_runtime_and_missing_durable_state(self) -> None:
+        sqlite_contract, sqlite_envelope = _runtime("sqlite")
+        sqlite_runtime = UpgradeRuntimeBinding.bind(
+            sqlite_contract,
+            sqlite_envelope,
+            session_identity_digest="a" * 64,
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            root.chmod(0o700)
+            with self.assertRaisesRegex(ProductionBindingError, "requires a Git"):
+                resolve_git_live_binding(
+                    sqlite_runtime,
+                    repository=root,
+                    control_database=root / "control.sqlite",
+                    authority_marker=root / "marker.json",
+                    authority_lifecycle=root / "lifecycle.json",
+                    authority_lock=root / "authority.lock",
+                    control_binding=root / "control-binding.json",
+                    control_lock=root / "control.lock",
+                    project_binding=root / "coordinator.binding.json",
+                    runtime_selector=root / "runtime-selector.json",
+                    common_lock=cast(Any, lambda: None),
+                )
+
+            contract, envelope = _runtime("git")
+            project_id = str(envelope["project_id"])
+            repository = root / "authority"
+            repository.mkdir()
+            subprocess.run(["git", "init", str(repository)], check=True, capture_output=True)
+            repository.chmod(0o700)
+            (repository / ".git").chmod(0o700)
+            project_binding = root / "coordinator.binding.json"
+            project_binding.write_text(
+                f'{{"schema_version":1,"project_id":"{project_id}"}}\n',
+                encoding="utf-8",
+            )
+            selector = root / "runtime-selector.json"
+            selector.write_text(
+                '{"active_release":"v0.3.6","previous_release":"v0.3.5","schema_version":1}\n',
+                encoding="utf-8",
+            )
+            runtime = UpgradeRuntimeBinding.bind(
+                contract,
+                envelope,
+                session_identity_digest="a" * 64,
+            )
+            with self.assertRaisesRegex(ProductionBindingError, "durable rollback barrier"):
+                resolve_git_live_binding(
+                    runtime,
+                    repository=repository,
+                    control_database=root / "control.sqlite",
+                    authority_marker=root / "marker.json",
+                    authority_lifecycle=root / "lifecycle.json",
+                    authority_lock=root / "authority.lock",
+                    control_binding=root / "control-binding.json",
+                    control_lock=root / "control.lock",
+                    project_binding=project_binding,
+                    runtime_selector=selector,
+                    common_lock=cast(Any, lambda: None),
+                )
+
     def test_resolver_reconstructs_real_durable_git_scope(self) -> None:
         contract, envelope = _runtime("git")
         project_id = str(envelope["project_id"])
