@@ -2997,7 +2997,6 @@ def cmd_migrate(args: argparse.Namespace) -> None:  # noqa: C901
 def cmd_upgrade(args: argparse.Namespace) -> int:
     """Dispatch only the reviewed, fail-closed upgrade command boundary."""
     if __package__:
-        from .production_upgrade_binding import resolve_sqlite_live_binding
         from .upgrade_commands import (
             _read_contract,
             _read_runtime_binding,
@@ -3005,9 +3004,6 @@ def cmd_upgrade(args: argparse.Namespace) -> int:
             execute_upgrade_command,
         )
     else:
-        from production_upgrade_binding import (  # type: ignore[import-not-found,no-redef]
-            resolve_sqlite_live_binding,
-        )
         from upgrade_commands import (  # type: ignore[import-not-found,no-redef]
             _read_contract,
             _read_runtime_binding,
@@ -3041,8 +3037,16 @@ def cmd_upgrade(args: argparse.Namespace) -> int:
     live_binding = None
     binding_path = Path(args.binding) if args.binding is not None else None
     if args.upgrade_action in {"apply", "rollback"}:
+        if __package__:
+            from .production_upgrade_binding import resolve_sqlite_live_binding
+        else:  # pragma: no cover - direct script execution
+            from production_upgrade_binding import (  # type: ignore[import-not-found,no-redef]
+                resolve_sqlite_live_binding,
+            )
         if binding_path is None:
-            raise RuntimeError("mutating upgrade actions require --binding")
+            raise RuntimeError(
+                "mutating upgrade actions require --binding; no coordinator state was mutated"
+            )
         contract = _read_contract(Path(args.contract))
         runtime_binding = _read_runtime_binding(
             binding_path, contract, str(backend_selection()["backend"])
