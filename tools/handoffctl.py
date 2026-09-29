@@ -3036,7 +3036,12 @@ def cmd_upgrade(args: argparse.Namespace) -> int:
 
     live_binding = None
     binding_path = Path(args.binding) if args.binding is not None else None
+    selected_backend = str(backend_selection()["backend"])
     if args.upgrade_action in {"apply", "rollback"}:
+        if selected_backend != "sqlite":
+            raise RuntimeError(
+                "Git production live binding is not implemented; no coordinator state was mutated"
+            )
         if __package__:
             from .production_upgrade_binding import resolve_sqlite_live_binding
         else:  # pragma: no cover - direct script execution
@@ -3069,7 +3074,7 @@ def cmd_upgrade(args: argparse.Namespace) -> int:
     return execute_upgrade_command(
         str(args.upgrade_action),
         Path(args.contract),
-        str(backend_selection()["backend"]),
+        selected_backend,
         binding_path,
         live_binding,
     )
