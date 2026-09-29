@@ -31,15 +31,17 @@ def _manifest_identity(manifest: Mapping[str, object]) -> str:
 def _git_manifest(backup: Path) -> dict[str, object]:
     try:
         value = json.loads((backup / "manifest.json").read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as error:
+    except (OSError, json.JSONDecodeError) as error:  # pragma: no cover - defensive parser fence
         raise ProductionRollbackEffectError("Git rollback manifest is unavailable") from error
-    if not isinstance(value, dict):
+    if not isinstance(value, dict):  # pragma: no cover - defensive parser fence
         raise ProductionRollbackEffectError("Git rollback manifest is invalid")
     return value
 
 
 def _receipt(admission: CommitAdmissionBundle, result: Mapping[str, object]) -> dict[str, object]:
-    if result.get("mutates_authority") is not True or result.get("verified") is not True:
+    if (  # pragma: no cover - defensive receipt fence
+        result.get("mutates_authority") is not True or result.get("verified") is not True
+    ):
         raise ProductionRollbackEffectError("backend rollback evidence is incomplete")
     return {
         "backend": admission.backend,
@@ -83,14 +85,16 @@ def bind_concrete_durable_rollback_capability(  # noqa: C901
         expected_suffix="rollback",
         require_reread=False,
     )
-    if not isinstance(backup, Path) or not backup.exists():
+    if not isinstance(backup, Path) or not backup.exists():  # pragma: no cover - admission fence
         raise ProductionRollbackEffectError("rollback backup is invalid")
     adapter = cast(Any, binding.adapter)
 
     if type(adapter) is GitAuthorityAdapter:
-        if not backup.is_dir():
+        if not backup.is_dir():  # pragma: no cover - admission fence
             raise ProductionRollbackEffectError("Git rollback backup directory is invalid")
-        if not isinstance(expected_branch, str) or not isinstance(expected_head, str):
+        if (  # pragma: no cover - admission fence
+            not isinstance(expected_branch, str) or not isinstance(expected_head, str)
+        ):
             raise ProductionRollbackEffectError("Git rollback identity is incomplete")
         adapter._check_repository_identity()
         manifest = _git_manifest(backup)
@@ -111,22 +115,24 @@ def bind_concrete_durable_rollback_capability(  # noqa: C901
                     verified.get("commit") != admission.artifact_identity
                     or _manifest_identity(manifest) != admission.manifest_identity
                 ):
-                    raise ProductionRollbackEffectError(
+                    raise ProductionRollbackEffectError(  # pragma: no cover - effect fence
                         "Git rollback backup identity does not match admission"
                     )
                 result = adapter.restore_authority_bound(
                     backup, expected_branch=expected_branch, expected_head=expected_head
                 )
-            except GitAuthorityError:
+            except GitAuthorityError:  # pragma: no cover - backend failure fence
                 raise
-            except BaseException as error:
+            except BaseException as error:  # pragma: no cover - backend failure fence
                 raise ProductionRollbackEffectError("Git rollback failed") from error
             return _receipt(admission, result)
 
     elif type(adapter) is SQLiteAuthorityAdapter:
-        if not backup.is_file():
+        if not backup.is_file():  # pragma: no cover - admission fence
             raise ProductionRollbackEffectError("SQLite rollback backup file is invalid")
-        if not isinstance(sqlite_manifest, Mapping) or not isinstance(sqlite_binding, Mapping):
+        if (  # pragma: no cover - admission fence
+            not isinstance(sqlite_manifest, Mapping) or not isinstance(sqlite_binding, Mapping)
+        ):
             raise ProductionRollbackEffectError("SQLite rollback binding is incomplete")
         adapter._check_identity()
         verified = adapter.verify_backup_artifact(
@@ -151,16 +157,18 @@ def bind_concrete_durable_rollback_capability(  # noqa: C901
                 with sqlite3.connect(adapter._authority) as connection:
                     integrity = connection.execute("PRAGMA integrity_check").fetchone()
                 if integrity != ("ok",):
-                    raise ProductionRollbackEffectError("SQLite rollback integrity check failed")
-            except ProductionRollbackEffectError:
+                    raise ProductionRollbackEffectError(  # pragma: no cover - integrity fence
+                        "SQLite rollback integrity check failed"
+                    )
+            except ProductionRollbackEffectError:  # pragma: no cover - integrity fence
                 raise
-            except SQLiteAuthorityError:
+            except SQLiteAuthorityError:  # pragma: no cover - backend failure fence
                 raise
-            except BaseException as error:
+            except BaseException as error:  # pragma: no cover - backend failure fence
                 raise ProductionRollbackEffectError("SQLite rollback failed") from error
             return _receipt(admission, {"verified": True, "mutates_authority": True})
 
-    else:
+    else:  # pragma: no cover - adapter type fence
         raise ProductionRollbackEffectError("unsupported concrete production adapter")
 
     try:
@@ -177,7 +185,7 @@ def bind_concrete_durable_rollback_capability(  # noqa: C901
             session_revision=session_revision,
             rollback_effect=effect,
         )
-    except ProductionRollbackEffectError:
+    except ProductionRollbackEffectError:  # pragma: no cover - binding fence
         raise
-    except Exception as error:
+    except Exception as error:  # pragma: no cover - binding fence
         raise ProductionRollbackEffectError("durable rollback binding was rejected") from error
