@@ -3,7 +3,9 @@
 `tools/handoffctl.py` is the canonical runtime and `tools/handoffctl` is its portable launcher.
 The runtime owns parsing, validation, transitions, locking, atomic replacement, bounded subprocess
 calls, commit/replication, project binding and CLI dispatch. `status_renderer.py` is deterministic
-presentation code and has no mutation authority.
+presentation code and has no mutation authority. `CURRENT.md` is the compact actionable
+projection and includes only `in_progress`, `open`, `blocked`, `planned`, and `future` tasks;
+terminal history remains available in the full `STATUS.md` projection and task records.
 
 One project-bound backend is authoritative. New projects use `.runtime/coordinator.sqlite3` in WAL
 mode. Its strict relational schema stores binding metadata, tasks, dependency edges, uniqueness

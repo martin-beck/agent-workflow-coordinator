@@ -197,6 +197,9 @@ STATUSES = (
     "cancelled",
     "superseded",
 )
+# CURRENT.md is the compact actionable queue; terminal history remains in the
+# full STATUS.md projection and authoritative task records.
+CURRENT_STATUSES = ("in_progress", "open", "blocked", "planned", "future")
 PRIORITIES = ("P0", "P1", "P2", "P3", "P4")
 REQ = (
     "schema_version",
@@ -234,7 +237,7 @@ type Meta = dict[str, Any]
 type Task = tuple[Path, Meta, str]
 type State = dict[str, Any]
 
-COORDINATOR_VERSION = "0.3.27"
+COORDINATOR_VERSION = "0.3.28"
 DEFAULT_PROJECT_SETTINGS: Meta = {
     "schema_version": 1,
     "project_id": "00000000-0000-4000-8000-000000000000",
@@ -821,7 +824,7 @@ def render_current(tasks: list[Task]) -> str:
     def clean(value: object) -> str:
         return str(value or "-").replace("|", "\\|").replace("\n", " ")
 
-    for status in STATUSES:
+    for status in CURRENT_STATUSES:
         rows = sorted(
             groups[status], key=lambda meta: (PRIORITIES.index(meta["priority"]), meta["id"])
         )
