@@ -98,7 +98,7 @@
       "tests/test_authority_mutation.py": "63e7e2d588826b6407bc4ad4da1e0054c5116466c116d50b7d1d057372b7da64",
       "tests/test_authority_neutral_commit.py": "8e0914ca43efe665bd4ef4d28b899d7f36f029315a37183b49c457aa82d87056",
       "tests/test_authority_neutral_commit_dispatch.py": "7cac74ff6b868e0c4ef42c265246290ea614ed8a4906636d1bc539d62ba66fe9",
-      "tests/test_git_authority_adapter.py": "bec952151ac5f7c137879b1568564ddbaa8788f68da31317deb8f9b1e476ac38",
+      "tests/test_git_authority_adapter.py": "f7e93ef208d86515f9acc1cf0d1a61c2d693066291b882277a72eb5910aa62d1",
       "tests/test_git_authority_mutation.py": "5e7ec366e0ac090e8245da321b03306072871b418e2e742e865580b9011e4f5b",
       "tests/test_lock_domain_scope.py": "774b01e8b2741e6cc072ee663f97b74a49fa4e97ed3101cba9252de21bf97ec7",
       "tests/test_mutation_fence.py": "e2bcea7b96bddd2509b79ff9c5eefd57001d1502949aba30cbbd50a9169e1cbb",

@@ -140,6 +140,18 @@ class GitAuthorityAdapter:
         if not resolved.is_dir():
             raise GitAuthorityError("Git authority repository is unavailable")
         self._repository = resolved
+        git_directory = resolved / ".git"
+        try:
+            root_status = resolved.stat()
+            git_status = git_directory.stat()
+        except OSError as error:
+            raise GitAuthorityError("Git authority repository identity is unavailable") from error
+        self._repository_identity = (
+            root_status.st_dev,
+            root_status.st_ino,
+            git_status.st_dev,
+            git_status.st_ino,
+        )
 
     def lifecycle_session(self) -> LifecycleSession:
         """Return an opaque session bound to this adapter's repository."""
@@ -543,6 +555,26 @@ class GitAuthorityAdapter:
             raise GitAuthorityError("Git authority context is invalid") from error
         if not isinstance(scope, LockDomainScope):
             raise GitAuthorityError("concrete lock-domain scope is required")
+        try:
+            root_status = self._repository.stat()
+            git_status = (self._repository / ".git").stat()
+            current_identity = (
+                root_status.st_dev,
+                root_status.st_ino,
+                git_status.st_dev,
+                git_status.st_ino,
+            )
+            if current_identity != getattr(self, "_repository_identity", current_identity):
+                raise GitAuthorityError("Git authority repository identity changed")
+            from tools.upgrade_authority import read_git_authority_snapshot
+
+            snapshot = read_git_authority_snapshot(self._repository)
+            if snapshot.branch != expected_branch or snapshot.head != expected_head:
+                raise GitAuthorityError("Git authority identity changed")
+        except GitAuthorityError:
+            raise
+        except Exception as error:
+            raise GitAuthorityError("Git authority identity reread was rejected") from error
         expected_identity = {
             "project_id": lease.project_id,
             "authority_revision": lease.authority_revision,
