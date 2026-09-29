@@ -8,6 +8,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import weakref
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -43,7 +44,9 @@ BINDING_FIELDS = (
 )
 _DIGEST = re.compile(r"[0-9a-f]{64}")
 _LIVE_BINDING_TOKEN = object()
-_LIVE_BINDING_REGISTRY: dict[int, tuple[object, tuple[object, ...]]] = {}
+_LIVE_BINDING_REGISTRY: dict[
+    int, tuple[weakref.ReferenceType[LiveUpgradeBinding], tuple[object, ...]]
+] = {}
 
 
 def _live_binding_fingerprint(value: object) -> tuple[object, ...]:
@@ -65,7 +68,7 @@ class UpgradeBindingError(ValueError):
     """A portable contract and host-bound runtime identity do not match."""
 
 
-@dataclass(frozen=True, slots=True, init=False)
+@dataclass(frozen=True, slots=True, weakref_slot=True, init=False)
 class LiveUpgradeBinding:
     """One immutable binding of contract, durable session, and backend scope.
 
@@ -99,6 +102,7 @@ class LiveUpgradeBinding:
         adapter: object,
         *,
         expected_git_repository: Path | None = None,
+        _register: bool = True,
     ) -> LiveUpgradeBinding:
         from tools.admission_lease import AdmissionLease, AdmissionRecheck
         from tools.git_authority_adapter import GitAuthorityAdapter
@@ -202,7 +206,16 @@ class LiveUpgradeBinding:
         object.__setattr__(issued, "expected_branch", expected_branch)
         object.__setattr__(issued, "expected_head", expected_head)
         object.__setattr__(issued, "expected_git_repository", expected_git_repository)
-        _LIVE_BINDING_REGISTRY[id(issued)] = (issued, _live_binding_fingerprint(issued))
+        if _register:
+            binding_id = id(issued)
+
+            def remove(reference: weakref.ReferenceType[LiveUpgradeBinding]) -> None:
+                current = _LIVE_BINDING_REGISTRY.get(binding_id)
+                if current is not None and current[0] is reference:
+                    _LIVE_BINDING_REGISTRY.pop(binding_id, None)
+
+            reference = weakref.ref(issued, remove)
+            _LIVE_BINDING_REGISTRY[binding_id] = (reference, _live_binding_fingerprint(issued))
         return issued
 
     def reread_backend(
@@ -245,7 +258,11 @@ class LiveUpgradeBinding:
         if getattr(self, "_token", None) is not _LIVE_BINDING_TOKEN:
             return False
         issued = _LIVE_BINDING_REGISTRY.get(id(self))
-        if issued is None or issued[0] is not self or issued[1] != _live_binding_fingerprint(self):
+        if (
+            issued is None
+            or issued[0]() is not self
+            or issued[1] != _live_binding_fingerprint(self)
+        ):
             return False
         try:
             refreshed = LiveUpgradeBinding.bind(
@@ -256,6 +273,7 @@ class LiveUpgradeBinding:
                 self.admission_recheck,
                 self.adapter,
                 expected_git_repository=self.expected_git_repository,
+                _register=False,
             )
         except Exception:
             return False
