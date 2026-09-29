@@ -30,6 +30,7 @@ from tools.handoffctl import (
     locked,
 )
 from tools.rollback_evidence import _OBSERVATION_PROVIDER_TOKEN, BackupObservation
+from tools.sqlite_wal_lifecycle import WALLifecycleError, WALLifecycleStore
 from tools.upgrade_authority import inspect_sqlite_release_authority
 from tools.upgrade_identity import (
     ENVELOPE_FIELDS,
@@ -680,6 +681,27 @@ class SQLiteRollbackControlStore:
         lock_parent, self._lock_identity = self._prepare_regular_file(self._lock_path)
         if lock_parent != self._parent_identity:
             raise ControlStoreError("control store lock parent identity changed")
+        self._lifecycle_path = self.path.parent / f".{self.path.name}.lifecycle.json"
+        self._lifecycle = WALLifecycleStore(
+            self._lifecycle_path,
+            project_id,
+            self._control_identity,
+            self._authority_identity,
+        )
+        try:
+            if not self._lifecycle_path.exists() and not self._lifecycle_path.is_symlink():
+                sidecars_exist = any(
+                    (self.path.parent / f"{self.path.name}{suffix}").exists()
+                    or (self.path.parent / f"{self.path.name}{suffix}").is_symlink()
+                    for suffix in SIDECAR_SUFFIXES
+                )
+                if self.path.stat().st_size == 0 and not sidecars_exist:
+                    self._lifecycle.initialize()
+            else:
+                self._lifecycle.initialize()
+        except WALLifecycleError as error:
+            raise ControlStoreError(str(error)) from error
+        self._lifecycle_observed = False
         self._operation_owner: int | None = None
         self.project_id = project_id
 
@@ -837,6 +859,7 @@ class SQLiteRollbackControlStore:
     @contextmanager
     def _connection(self) -> Iterator[sqlite3.Connection]:  # noqa: C901
         self._recheck_authority()
+        lifecycle_missing = not self._lifecycle_path.exists() or self._lifecycle_path.is_symlink()
         parent, descriptor = self._open_bound_file(
             self.path, self._parent_identity, self._control_identity
         )
@@ -848,6 +871,14 @@ class SQLiteRollbackControlStore:
             raise
         bound_sidecars: dict[str, tuple[int, int] | None] | None = None
         try:
+            if not lifecycle_missing and not self._lifecycle_observed:
+                try:
+                    self._lifecycle.validate()
+                except WALLifecycleError as error:
+                    message = str(error)
+                    if message == "WAL lifecycle project binding changed":
+                        message = "control store project binding mismatch"
+                    raise ControlStoreError(message) from error
             connection = sqlite3.connect(
                 f"file:/proc/self/fd/{descriptor}?mode=rw",
                 isolation_level=None,
@@ -886,6 +917,8 @@ class SQLiteRollbackControlStore:
                             "control store schema is legacy; explicit selector "
                             "migration is required"
                         )
+            if lifecycle_missing:
+                raise ControlStoreError("control store WAL lifecycle record is unavailable")
             mode = str(connection.execute("PRAGMA journal_mode=WAL").fetchone()[0]).lower()
             if mode != "wal":
                 raise ControlStoreError("control store WAL is unavailable")
@@ -943,6 +976,12 @@ class SQLiteRollbackControlStore:
             elif value[0] != self.project_id:
                 raise ControlStoreError("control store project binding mismatch")
             bound_sidecars = self._bind_sidecars(parent, self.path.name, before_sidecars)
+            if not self._lifecycle_observed:
+                try:
+                    self._lifecycle.mark_active(parent, self.path.name, allow_rebind=True)
+                except WALLifecycleError as error:
+                    raise ControlStoreError(str(error)) from error
+                self._lifecycle_observed = True
             yield connection
         except Exception:
             raise
@@ -1034,6 +1073,97 @@ class SQLiteRollbackControlStore:
                 yield
             finally:
                 self._operation_owner = None
+
+    def checkpoint_wal(self) -> None:
+        """Checkpoint and durably record the clean sidecar lifecycle state."""
+        if self._operation_owner is not None:
+            raise ControlStoreError("control store lock is non-reentrant")
+        with self.operation_lock():
+            try:
+                self._lifecycle.validate()
+            except WALLifecycleError as error:
+                raise ControlStoreError(str(error)) from error
+            with self._connection() as connection:
+                result = connection.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+                if result is None or tuple(result) != (0, 0, 0):
+                    raise ControlStoreError("WAL checkpoint did not complete")
+            parent, descriptor = self._open_bound_file(
+                self.path, self._parent_identity, self._control_identity
+            )
+            try:
+                lifecycle = self._lifecycle.validate()
+                sidecars = self._sidecar_identities(parent, self.path.name, required=False)
+                if all(identity is None for identity in sidecars.values()):
+                    if lifecycle["state"] == "active":
+                        self._lifecycle.mark_clean_checkpointed(parent, self.path.name)
+                        self._lifecycle_observed = False
+                    elif lifecycle["state"] == "absent":
+                        self._lifecycle._publish(
+                            self._lifecycle._record(
+                                "clean_checkpointed",
+                                1,
+                                dict.fromkeys(SIDECAR_SUFFIXES),
+                            )
+                        )
+                        self._lifecycle_observed = False
+                else:
+                    self._lifecycle.mark_active(parent, self.path.name, allow_rebind=True)
+            except WALLifecycleError as error:
+                raise ControlStoreError(str(error)) from error
+            finally:
+                os.close(descriptor)
+                os.close(parent)
+
+    def reconcile_wal_lifecycle(self) -> None:
+        """Reconcile a durable lifecycle after an interrupted SQLite process."""
+        if self._operation_owner is not None:
+            raise ControlStoreError("control store lock is non-reentrant")
+        with self.operation_lock():
+            self._reconcile_wal_lifecycle_locked()
+
+    def _reconcile_wal_lifecycle_locked(self) -> None:
+        """Reconcile lifecycle evidence while the caller owns the operation lock."""
+        self._recheck_authority()
+        parent, descriptor = self._open_bound_file(
+            self.path, self._parent_identity, self._control_identity
+        )
+        connection: sqlite3.Connection | None = None
+        try:
+            lifecycle = self._lifecycle.validate()
+            sidecars = self._sidecar_identities(parent, self.path.name, required=False)
+            if all(identity is None for identity in sidecars.values()) and lifecycle["state"] in {
+                "absent",
+                "clean_checkpointed",
+            }:
+                return
+            connection = sqlite3.connect(
+                f"file:/proc/self/fd/{descriptor}?mode=rw",
+                isolation_level=None,
+                timeout=10,
+                uri=True,
+            )
+            mode = str(connection.execute("PRAGMA journal_mode").fetchone()[0]).lower()
+            if mode != "wal":
+                raise ControlStoreError("control store WAL is unavailable")
+            integrity = connection.execute("PRAGMA integrity_check").fetchone()
+            if integrity is None or integrity[0] != "ok":
+                raise ControlStoreError("control store integrity check failed")
+            connection.close()
+            connection = None
+            sidecars = self._sidecar_identities(parent, self.path.name, required=False)
+            if all(identity is None for identity in sidecars.values()):
+                if lifecycle["state"] == "active":
+                    self._lifecycle.mark_clean_checkpointed(parent, self.path.name)
+                    self._lifecycle_observed = False
+            else:
+                self._lifecycle.mark_active(parent, self.path.name, allow_rebind=True)
+        except WALLifecycleError as error:
+            raise ControlStoreError(str(error)) from error
+        finally:
+            if connection is not None:
+                connection.close()
+            os.close(descriptor)
+            os.close(parent)
 
     @contextmanager
     def lock_owned_by_caller(self, common_guard: CoordinatorLockGuard) -> Iterator[None]:
@@ -1467,6 +1597,10 @@ class SQLiteBarrierSessionStore:
     def control_store_path(self) -> Path:
         """Return the underlying control-store path for identity contracts."""
         return self._control.control_store_path
+
+    def reconcile_wal_lifecycle(self) -> None:
+        """Reconcile interrupted control-store WAL/SHM state before recovery."""
+        self._control.reconcile_wal_lifecycle()
 
     @property
     def control_lock_path(self) -> Path:
@@ -2709,8 +2843,10 @@ class SQLiteBarrierSessionStore:
         """Fence every prepared outcome left by a process death or lost reply."""
         if self.operation_owned_by_current_thread:
             raise ControlStoreError("control store lock is non-reentrant")
-        with self.operation_lock(), self._control._connection() as connection:
-            return self._recover_unknown_connection_locked(connection)
+        with self.operation_lock():
+            self._control._reconcile_wal_lifecycle_locked()
+            with self._control._connection() as connection:
+                return self._recover_unknown_connection_locked(connection)
 
     def recover_unknown_locked(
         self, common_guard: CoordinatorLockGuard
@@ -2722,6 +2858,7 @@ class SQLiteBarrierSessionStore:
         if common_guard.path != coordinator_lock_path().resolve():
             raise ControlStoreError("coordinator lock guard path mismatch")
         self._control._require_operation_lock()
+        self._control._reconcile_wal_lifecycle_locked()
         with self._control._connection() as connection:
             result = self._recover_unknown_connection_locked(connection)
         common_guard.assert_owned()
