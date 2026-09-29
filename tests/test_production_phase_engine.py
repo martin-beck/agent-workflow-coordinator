@@ -242,6 +242,25 @@ class ProductionPhaseEngineTests(unittest.TestCase):
         with self.assertRaises(ProductionPhaseBindingError):
             backend.snapshot("discover", {"backend": "sqlite"})
 
+    def test_bound_backend_consumes_explicit_readiness_evidence(self) -> None:
+        backend, _adapter, _binding = self._bound_backend("sqlite")
+        backend._readiness_evidence = {
+            "discover": {
+                "backend": "sqlite",
+                "release_authentic": True,
+                "runtime_supported": True,
+            }
+        }
+        context = {"backend": "sqlite", "fencing_token": "fence"}
+        result = backend.execute("discover", context)
+        self.assertTrue(result["release_authentic"])
+        self.assertFalse(result["mutates_authority"])
+
+    def test_bound_backend_rejects_missing_readiness_evidence(self) -> None:
+        backend, _adapter, _binding = self._bound_backend("sqlite")
+        with self.assertRaisesRegex(ProductionPhaseBindingError, "readiness evidence"):
+            backend.execute("discover", {"backend": "sqlite", "fencing_token": "fence"})
+
     def test_generated_sqlite_dispatch_rechecks_admission_before_effect(self) -> None:
         backend, _adapter, binding = self._bound_backend("sqlite")
         executor = Mock()
