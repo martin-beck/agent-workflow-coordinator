@@ -181,6 +181,8 @@ class ProductionFactoryProcessDeathTests(unittest.TestCase):
             self.assertIsNotNone(held)
             assert held is not None
             ambiguous = reopened.recover_unknown()
+            self.assertIsNotNone(ambiguous)
+            assert ambiguous is not None
             self.assertEqual(
                 ("ambiguous", held.revision + 1), (ambiguous.status, ambiguous.revision)
             )
@@ -217,6 +219,8 @@ class ProductionFactoryProcessDeathTests(unittest.TestCase):
             self.assertIsNotNone(held)
             assert held is not None
             ambiguous = reopened.recover_unknown()
+            self.assertIsNotNone(ambiguous)
+            assert ambiguous is not None
             self.assertEqual(
                 ("ambiguous", held.revision + 1), (ambiguous.status, ambiguous.revision)
             )
