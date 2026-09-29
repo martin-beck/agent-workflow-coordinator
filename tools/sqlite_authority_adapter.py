@@ -468,6 +468,35 @@ class SQLiteLifecycleExecutor:
                 if self._snapshot_locked() != snapshot:
                     raise SQLiteAuthorityError("generated backup durable state changed")
                 result = self._adapter.backup_bound(destination, binding)
+                if "database_sha256" in result:
+                    manifest = {
+                        key: result[key]
+                        for key in (
+                            "schema_version",
+                            "kind",
+                            "database_sha256",
+                            "integrity_check",
+                            "foreign_key_check",
+                            "binding_verified",
+                            "wal_consistent",
+                        )
+                    }
+                    with tempfile.TemporaryDirectory(dir=destination.parent) as restore_root:
+                        self._adapter.restore_bound(
+                            destination,
+                            Path(restore_root) / "roundtrip.sqlite",
+                            manifest,
+                            binding,
+                        )
+                    result = {
+                        **result,
+                        "backend": "sqlite",
+                        "backup_verified": True,
+                        "restore_roundtrip_verified": True,
+                        "backend_identity_verified": True,
+                        "mutates_authority": False,
+                        "fencing_token": inputs["fencing_token"],
+                    }
                 self._publish_generated_outcome(snapshot, operation_id, result)
         except SQLiteAuthorityError:
             raise

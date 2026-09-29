@@ -275,7 +275,7 @@ class ProductionPhaseEngineTests(unittest.TestCase):
             "preflight",
             {"backend": "sqlite", "fencing_token": "fence"},
         )
-        self.assertTrue(result["preflight_snapshot"]["preflight_admitted"])
+        self.assertTrue(result["preflight_snapshot"]["backend_identity_verified"])
 
     def test_generated_sqlite_dispatch_rechecks_admission_before_effect(self) -> None:
         backend, _adapter, binding = self._bound_backend("sqlite")
@@ -367,7 +367,7 @@ class ProductionPhaseEngineTests(unittest.TestCase):
             )
             backend = BoundProductionBackendAdapter(live, journal=root / "journal.json")
             self.assertIsInstance(backend._sqlite_lifecycle_executor, SQLiteLifecycleExecutor)
-            with self.assertRaises(SQLiteAuthorityError):
+            with self.assertRaises(ProductionPhaseBindingError):
                 backend.execute_generated_operation({}, root / "backup.sqlite", {})
 
     def test_bound_backend_constructor_and_result_shapes_are_strict(self) -> None:

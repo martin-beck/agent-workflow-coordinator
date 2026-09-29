@@ -9,6 +9,9 @@ SQLite adapters' fail-closed ``execute`` methods.
 
 from __future__ import annotations
 
+import json
+import os
+import tempfile
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -279,6 +282,7 @@ class BoundProductionBackendAdapter:
         *,
         journal: Path | None = None,
         readiness_evidence: Mapping[str, Mapping[str, object]] | None = None,
+        commit_admission_evidence: Mapping[str, object] | None = None,
     ) -> None:
         if type(binding) is not LiveUpgradeBinding or not binding.is_admitted():
             raise ProductionPhaseBindingError("an admitted live upgrade binding is required")
@@ -291,16 +295,27 @@ class BoundProductionBackendAdapter:
         self._binding = binding
         self._adapter: Any = binding.adapter
         self.bound_rollback_kind = kind
+        self._engine_journal = journal.absolute() if journal is not None else None
+        self._lifecycle_journal = (
+            journal.with_name(f".{journal.name}.lifecycle.json").absolute()
+            if journal is not None
+            else None
+        )
         self._readiness_evidence = {
             phase: dict(value) for phase, value in (readiness_evidence or {}).items()
         }
+        self._commit_admission_evidence = (
+            dict(commit_admission_evidence) if commit_admission_evidence is not None else None
+        )
         self._sqlite_lifecycle_executor: SQLiteLifecycleExecutor | None = None
         if kind == "sqlite" and journal is not None:
             session_store = getattr(binding.scope, "_session_store", None)
             if session_store is not None:
                 try:
                     self._sqlite_lifecycle_executor = SQLiteLifecycleExecutor.bind(
-                        cast(SQLiteAuthorityAdapter, binding.adapter), session_store, journal
+                        cast(SQLiteAuthorityAdapter, binding.adapter),
+                        session_store,
+                        self._lifecycle_journal or journal,
                     )
                 except Exception as error:
                     raise ProductionPhaseBindingError(
@@ -315,7 +330,7 @@ class BoundProductionBackendAdapter:
         if not self._binding.is_admitted():
             raise ProductionPhaseBindingError("live upgrade binding is no longer admitted")
 
-    def snapshot(self, phase: str, context: Mapping[str, object]) -> dict[str, Any]:
+    def snapshot(self, phase: str, context: Mapping[str, object]) -> dict[str, Any]:  # noqa: C901
         self._admit()
         if self.bound_rollback_kind == "git":
             result = self._adapter.snapshot_bound(
@@ -350,11 +365,34 @@ class BoundProductionBackendAdapter:
             result["mutates_authority"] = False
             result["fencing_token"] = context["fencing_token"]
             if phase == "preflight":
-                result["preflight_snapshot"] = dict(evidence)
+                result["preflight_snapshot"] = {
+                    key: value
+                    for key, value in evidence.items()
+                    if key not in {"capacity_verified", "preflight_admitted"}
+                }
             elif phase == "quiesce":
-                result["quiescence_snapshot"] = dict(evidence)
+                result["quiescence_snapshot"] = {
+                    key: value
+                    for key, value in evidence.items()
+                    if key not in {"barrier_acquired", "fencing_verified"}
+                }
             elif phase == "reopen":
-                result["reopen_snapshot"] = dict(evidence)
+                result["reopen_snapshot"] = {
+                    key: value
+                    for key, value in evidence.items()
+                    if key not in {"validated", "barrier_held"}
+                }
+        if phase == "commit" and self._commit_admission_evidence is not None:
+            for key in ("admitted_snapshot", "current_snapshot"):
+                snapshot = self._commit_admission_evidence.get(key)
+                if not isinstance(snapshot, Mapping):
+                    raise ProductionPhaseBindingError(f"commit admission evidence is missing {key}")
+            result.update(
+                {
+                    "admitted_snapshot": self._commit_admission_evidence["admitted_snapshot"],
+                    "current_snapshot": self._commit_admission_evidence["current_snapshot"],
+                }
+            )
         return result
 
     def verify_rollback_context(self, context: Mapping[str, object]) -> dict[str, Any]:
@@ -404,6 +442,54 @@ class BoundProductionBackendAdapter:
             raise ProductionPhaseBindingError("rollback Git identity changed")
         return self.verify_rollback_context(context)
 
+    def _sync_lifecycle_journal(self, operation_id: str) -> None:
+        """Project the engine's started backup record into the SQLite journal schema."""
+        source = self._engine_journal
+        destination = self._lifecycle_journal
+        if source is None or destination is None:
+            raise ProductionPhaseBindingError("SQLite lifecycle journal is not configured")
+        try:
+            document = json.loads(source.read_text(encoding="utf-8"))
+            records = document.get("records")
+            if not isinstance(records, list) or not records:
+                raise ValueError("engine journal records are missing")
+            record = records[-1]
+            if (
+                not isinstance(record, dict)
+                or record.get("step_id") != f"{operation_id.replace(':', '.', 1)}"
+                or record.get("phase") != "backup"
+                or record.get("outcome") != "started"
+            ):
+                raise ValueError("engine backup record is not started")
+            projected_record = dict(record)
+            projected_record["step_id"] = operation_id
+            projected = {
+                "status": "running",
+                "phase": "backup",
+                "records": [projected_record],
+            }
+            descriptor, temporary = tempfile.mkstemp(
+                prefix=".sqlite-lifecycle-", suffix=".json", dir=destination.parent
+            )
+            temporary_path = Path(temporary)
+            try:
+                with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+                    stream.write(json.dumps(projected, sort_keys=True) + "\n")
+                    stream.flush()
+                    os.fsync(stream.fileno())
+                temporary_path.replace(destination)
+                directory = os.open(destination.parent, os.O_DIRECTORY)
+                try:
+                    os.fsync(directory)
+                finally:
+                    os.close(directory)
+            finally:
+                temporary_path.unlink(missing_ok=True)
+        except (OSError, TypeError, ValueError, json.JSONDecodeError) as error:
+            raise ProductionPhaseBindingError(
+                "SQLite lifecycle journal projection was rejected"
+            ) from error
+
     def execute(self, phase: str, context: Mapping[str, object]) -> dict[str, Any]:
         self._admit()
         if phase in {"discover", "preflight", "quiesce", "reopen"}:
@@ -419,11 +505,23 @@ class BoundProductionBackendAdapter:
             result["mutates_authority"] = False
             result["fencing_token"] = context["fencing_token"]
             if phase == "preflight":
-                result["preflight_snapshot"] = dict(evidence)
+                result["preflight_snapshot"] = {
+                    key: value
+                    for key, value in evidence.items()
+                    if key not in {"capacity_verified", "preflight_admitted"}
+                }
             elif phase == "quiesce":
-                result["quiescence_snapshot"] = dict(evidence)
+                result["quiescence_snapshot"] = {
+                    key: value
+                    for key, value in evidence.items()
+                    if key not in {"barrier_acquired", "fencing_verified"}
+                }
             elif phase == "reopen":
-                result["reopen_snapshot"] = dict(evidence)
+                result["reopen_snapshot"] = {
+                    key: value
+                    for key, value in evidence.items()
+                    if key not in {"validated", "barrier_held"}
+                }
             return result
         result = self._adapter.execute(phase, context)
         if not isinstance(result, dict):
@@ -442,6 +540,10 @@ class BoundProductionBackendAdapter:
             executor = self._sqlite_lifecycle_executor
             if executor is None:
                 raise ProductionPhaseBindingError("SQLite durable lifecycle executor is not bound")
+            operation_id = operation.get("operation_id")
+            if not isinstance(operation_id, str):
+                raise ProductionPhaseBindingError("generated operation identity is invalid")
+            self._sync_lifecycle_journal(operation_id)
             return executor.execute_generated_operation(operation, destination, binding)
         raise ProductionPhaseBindingError("generated operation is unsupported for Git")
 
@@ -493,8 +595,16 @@ def build_production_phase_binding(  # noqa: C901
     except (TypeError, UpgradeError) as error:
         raise ProductionPhaseBindingError("live runtime envelope is not a phase context") from error
     readiness_evidence = forward_inputs.readiness_evidence if forward_inputs is not None else None
+    commit_admission_evidence = (
+        forward_inputs.commit.evidence
+        if forward_inputs is not None and forward_inputs.commit is not None
+        else None
+    )
     backend = BoundProductionBackendAdapter(
-        live_binding, journal=journal, readiness_evidence=readiness_evidence
+        live_binding,
+        journal=journal,
+        readiness_evidence=readiness_evidence,
+        commit_admission_evidence=commit_admission_evidence,
     )
     forward_capabilities: ForwardPhaseCapabilities | None = None
     commit_capability: object | None = None
