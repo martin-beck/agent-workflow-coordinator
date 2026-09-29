@@ -74,7 +74,10 @@ def execute_verified_stage(
     _adapter: object, operation: Mapping[str, object], context: Mapping[str, object]
 ) -> dict[str, object]:
     """Verify one generated stage operation without changing authority."""
-    if not isinstance(operation, Mapping) or operation.get("opcode") != "backend.stage":
+    if not isinstance(operation, Mapping) or operation.get("opcode") not in {
+        "backend.stage",
+        "runtime.stage",
+    }:
         raise StageExecutionError("stage operation is unsupported")
     runtime_root, digest = _validate_context(context)
     try:
@@ -85,7 +88,7 @@ def execute_verified_stage(
         raise StageExecutionError("staged runtime verification is incomplete")
     return {
         "operation_id": operation.get("operation_id"),
-        "opcode": "backend.stage",
+        "opcode": operation["opcode"],
         "outcome": "completed",
         "backend": context["backend"],
         "staged_verified": True,
@@ -102,7 +105,10 @@ class BoundStagePhaseAdapter:
     def __init__(
         self, backend: object, operation: Mapping[str, object], stage_context: Mapping[str, object]
     ) -> None:
-        if not isinstance(operation, Mapping) or operation.get("opcode") != "backend.stage":
+        if not isinstance(operation, Mapping) or operation.get("opcode") not in {
+            "backend.stage",
+            "runtime.stage",
+        }:
             raise StageExecutionError("stage operation is unsupported")
         if not isinstance(stage_context, Mapping):
             raise StageExecutionError("stage execution context is incomplete")

@@ -695,6 +695,30 @@ class UpgradeEngineTests(unittest.TestCase):
                 capability,
             )
 
+    def test_concrete_bound_capability_rejects_tampered_envelope_digests(self) -> None:
+        class Concrete:
+            bound_rollback_kind = "sqlite"
+
+            def verify_rollback_context_bound(
+                self, _context: Mapping[str, object], _scope: object, **_kwargs: object
+            ) -> Mapping[str, object]:
+                self.called = True
+                return {}
+
+        adapter = Concrete()
+        capability = BoundRollbackCapability.bind(
+            PhaseContext(**cast(dict[str, Any], ROLLBACK_CONTEXT)),
+            adapter,
+            object(),
+            lease=object(),
+            admission_recheck=object(),
+        )
+        for field in ("barrier_identity_digest", "envelope_digest"):
+            forged = dict(ROLLBACK_CONTEXT, **{field: "f" * 64})
+            with self.assertRaisesRegex(UpgradeError, "context identity is invalid"):
+                capability.verify(forged)
+        self.assertFalse(hasattr(adapter, "called"))
+
     def test_sqlite_observation_capability_rejects_forged_and_invalid_bindings(self) -> None:
         context = PhaseContext(**cast(dict[str, Any], ROLLBACK_CONTEXT))
         with self.assertRaisesRegex(TypeError, "must be bound"):
