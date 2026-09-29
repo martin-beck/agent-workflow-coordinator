@@ -24,7 +24,7 @@ from tools.production_effect_binding import (
     bind_durable_commit_capability,
 )
 from tools.runtime_bootstrap import DispatchAdmission
-from tools.sqlite_authority_adapter import SQLiteAuthorityAdapter
+from tools.sqlite_authority_adapter import SQLiteAuthorityAdapter, SQLiteLifecycleExecutor
 from tools.upgrade_binding import LiveUpgradeBinding, canonical_contract_digest
 from tools.upgrade_contract_runtime import PHASES, validate_runtime_contract
 from tools.upgrade_engine import (
@@ -272,7 +272,7 @@ class BoundProductionBackendAdapter:
 
     requires_bound_rollback = True
 
-    def __init__(self, binding: LiveUpgradeBinding) -> None:
+    def __init__(self, binding: LiveUpgradeBinding, *, journal: Path | None = None) -> None:
         if type(binding) is not LiveUpgradeBinding or not binding.is_admitted():
             raise ProductionPhaseBindingError("an admitted live upgrade binding is required")
         if type(binding.adapter) is GitAuthorityAdapter:
@@ -284,6 +284,18 @@ class BoundProductionBackendAdapter:
         self._binding = binding
         self._adapter: Any = binding.adapter
         self.bound_rollback_kind = kind
+        self._sqlite_lifecycle_executor: SQLiteLifecycleExecutor | None = None
+        if kind == "sqlite" and journal is not None:
+            session_store = getattr(binding.scope, "_session_store", None)
+            if session_store is not None:
+                try:
+                    self._sqlite_lifecycle_executor = SQLiteLifecycleExecutor.bind(
+                        cast(SQLiteAuthorityAdapter, binding.adapter), session_store, journal
+                    )
+                except Exception as error:
+                    raise ProductionPhaseBindingError(
+                        "SQLite durable lifecycle executor binding was rejected"
+                    ) from error
 
     @property
     def operation_lock(self) -> Any:
@@ -371,6 +383,20 @@ class BoundProductionBackendAdapter:
             raise ProductionPhaseBindingError("backend execution result is not an object")
         return result
 
+    def execute_generated_operation(
+        self,
+        operation: Mapping[str, object],
+        destination: Path,
+        binding: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Consume a generated SQLite backup through its durable lifecycle executor."""
+        if self.bound_rollback_kind == "sqlite":
+            executor = self._sqlite_lifecycle_executor
+            if executor is None:
+                raise ProductionPhaseBindingError("SQLite durable lifecycle executor is not bound")
+            return executor.execute_generated_operation(operation, destination, binding)
+        raise ProductionPhaseBindingError("generated operation is unsupported for Git")
+
 
 def _phase_operations(contract: Mapping[str, object]) -> dict[str, Mapping[str, object]]:
     phases = contract.get("phases")
@@ -418,7 +444,7 @@ def build_production_phase_binding(  # noqa: C901
         context = PhaseContext(**cast(dict[str, Any], envelope))
     except (TypeError, UpgradeError) as error:
         raise ProductionPhaseBindingError("live runtime envelope is not a phase context") from error
-    backend = BoundProductionBackendAdapter(live_binding)
+    backend = BoundProductionBackendAdapter(live_binding, journal=journal)
     forward_capabilities: ForwardPhaseCapabilities | None = None
     commit_capability: object | None = None
     engine_context: Mapping[str, object] = envelope
