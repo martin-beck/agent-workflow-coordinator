@@ -382,6 +382,40 @@ class UpgradeBindingTests(unittest.TestCase):
             live = LiveUpgradeBinding.bind(
                 binding, session.snapshot(), scope, lease, recheck, adapter
             )
+            foreign_lease = replace(lease, revision=99)
+            foreign_recheck = replace(recheck, lease=foreign_lease, revision=99)
+            with self.assertRaisesRegex(UpgradeBindingError, "lease identity"):
+                LiveUpgradeBinding.bind(
+                    binding,
+                    session.snapshot(),
+                    scope,
+                    foreign_lease,
+                    foreign_recheck,
+                    adapter,
+                )
+            with (
+                patch.object(scope, "assert_context", side_effect=RuntimeError("drift")),
+                self.assertRaisesRegex(UpgradeBindingError, "scope identity"),
+            ):
+                LiveUpgradeBinding.bind(binding, session.snapshot(), scope, lease, recheck, adapter)
+            original_identity = scope._session_identity
+            scope._session_identity = replace(original_identity, attempt_id="foreign")
+            with self.assertRaisesRegex(UpgradeBindingError, "session identity"):
+                LiveUpgradeBinding.bind(binding, session.snapshot(), scope, lease, recheck, adapter)
+            scope._session_identity = original_identity
+            original_revision = scope._session_revision
+            scope._session_revision = original_revision + 1
+            with self.assertRaisesRegex(UpgradeBindingError, "session revision"):
+                LiveUpgradeBinding.bind(binding, session.snapshot(), scope, lease, recheck, adapter)
+            scope._session_revision = original_revision
+            original_scope_lease = scope._lease
+            scope._lease = replace(lease, fencing_token="foreign")  # noqa: S106
+            with (
+                patch.object(scope, "assert_context", return_value=None),
+                self.assertRaisesRegex(UpgradeBindingError, "scope lease"),
+            ):
+                LiveUpgradeBinding.bind(binding, session.snapshot(), scope, lease, recheck, adapter)
+            scope._lease = original_scope_lease
             evidence = live.reread_backend()
             self.assertTrue(evidence["sqlite_integrity_verified"])
             self.assertFalse(evidence["mutates_authority"])
