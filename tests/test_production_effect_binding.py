@@ -186,6 +186,97 @@ class ProductionEffectBindingTests(unittest.TestCase):
                 )
             adapter_method.assert_called_once()
 
+    def test_rejects_invalid_common_effect_identity_inputs(self) -> None:
+        binding = _binding("sqlite")
+        cases = (
+            (object(), _admission("sqlite"), 3, dict),
+            (binding, object(), 3, dict),
+            (binding, _admission("sqlite", "rollback"), 3, dict),
+            (binding, _admission("sqlite"), 0, dict),
+            (binding, _admission("sqlite"), 3, object()),
+        )
+        with patch.object(LiveUpgradeBinding, "is_admitted", return_value=True):
+            for candidate_binding, admission, revision, reread in cases:
+                with self.assertRaises(ProductionEffectBindingError):
+                    bind_durable_commit_capability(
+                        candidate_binding,  # type: ignore[arg-type]
+                        admission,  # type: ignore[arg-type]
+                        object(),
+                        session_revision=revision,
+                        admission_reread=reread,  # type: ignore[arg-type]
+                    )
+
+    def test_rejects_revision_and_backend_effect_failures(self) -> None:
+        binding = _binding("sqlite")
+        with patch.object(LiveUpgradeBinding, "is_admitted", return_value=True):
+            with self.assertRaises(ProductionEffectBindingError):
+                bind_durable_commit_capability(
+                    binding,
+                    _admission("sqlite"),
+                    object(),
+                    session_revision=2,
+                    admission_reread=dict,
+                )
+            object.__setattr__(
+                binding.runtime,
+                "runtime_envelope",
+                {**binding.runtime.runtime_envelope, "backend": "git"},
+            )
+            with self.assertRaises(ProductionEffectBindingError):
+                bind_durable_commit_capability(
+                    binding,
+                    _admission("sqlite"),
+                    object(),
+                    session_revision=3,
+                    admission_reread=dict,
+                )
+
+    def test_covers_optional_backend_arguments_and_adapter_errors(self) -> None:
+        sqlite_binding = _binding("sqlite")
+        connector = object()
+        sqlite_method = Mock(return_value=object())
+        with (
+            patch.object(LiveUpgradeBinding, "is_admitted", return_value=True),
+            patch.object(SQLiteAuthorityAdapter, "bind_durable_commit_capability", sqlite_method),
+        ):
+            bind_durable_commit_capability(
+                sqlite_binding,
+                _admission("sqlite"),
+                object(),
+                session_revision=3,
+                admission_reread=dict,
+                connector=connector,
+            )
+        self.assertIs(sqlite_method.call_args.kwargs["connector"], connector)
+
+        git_binding = _binding("git")
+        object.__setattr__(git_binding, "expected_branch", None)
+        with (
+            patch.object(LiveUpgradeBinding, "is_admitted", return_value=True),
+            self.assertRaises(ProductionEffectBindingError),
+        ):
+            bind_durable_commit_capability(
+                git_binding,
+                _admission("git"),
+                object(),
+                session_revision=3,
+                admission_reread=dict,
+            )
+
+        unsupported = _binding("sqlite")
+        object.__setattr__(unsupported, "adapter", object())
+        with (
+            patch.object(LiveUpgradeBinding, "is_admitted", return_value=True),
+            self.assertRaises(ProductionEffectBindingError),
+        ):
+            bind_durable_commit_capability(
+                unsupported,
+                _admission("sqlite"),
+                object(),
+                session_revision=3,
+                admission_reread=dict,
+            )
+
 
 if __name__ == "__main__":
     unittest.main()
