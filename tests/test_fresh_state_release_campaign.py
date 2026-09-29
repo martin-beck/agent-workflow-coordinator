@@ -91,9 +91,7 @@ def _campaign_transition(root: Path) -> tuple[dict[str, Any], bool]:
             "trust_policy_sha256": hashlib.sha256(
                 _bytes_at(root, head, "docs/QUALITY.md")
             ).hexdigest(),
-            "vendor_manifest_sha256": hashlib.sha256(
-                _bytes_at(root, head, "uv.lock")
-            ).hexdigest(),
+            "vendor_manifest_sha256": hashlib.sha256(_bytes_at(root, head, "uv.lock")).hexdigest(),
         }
     return (
         {
