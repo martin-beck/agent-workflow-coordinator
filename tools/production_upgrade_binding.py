@@ -107,7 +107,7 @@ def resolve_sqlite_live_binding(
             fencing_token=identity.fencing_token,
             fencing_owner=identity.fencing_owner,
             durable_barrier_id=identity.durable_barrier_id,
-            revision=state.revision,
+            revision=identity.state_revision,
         )
         recheck = AdmissionRecheck(
             lease=lease,
