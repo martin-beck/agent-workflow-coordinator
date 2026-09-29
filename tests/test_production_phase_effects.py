@@ -229,6 +229,68 @@ class ProductionPhaseEffectsTests(unittest.TestCase):
                 suffix="commit",
             )
 
+    def test_rejects_ambiguous_or_invalid_rollback_configuration(self) -> None:
+        commit = _admission("new")
+        rollback = _admission("rollback")
+        cases = (
+            {},
+            {"rollback_effect": lambda _argument: {}, "rollback_backup": Path("backup")},
+            {"rollback_effect": "not-callable"},
+        )
+        for options in cases:
+            with self.subTest(options=options), self.assertRaises(ProductionPhaseEffectError):
+                bind_production_phase_effects(
+                    _binding(),
+                    _Journal(),
+                    commit,
+                    rollback,
+                    session_revision=3,
+                    admission_reread=dict,
+                    commit_argument=object(),
+                    rollback_argument=object(),
+                    **options,
+                )
+
+    def test_composes_concrete_rollback_backup_branch(self) -> None:
+        commit = _admission("new")
+        rollback = _admission("rollback")
+        with (
+            patch(
+                "tools.production_phase_effects.bind_durable_commit_capability",
+                return_value=_capability(commit),
+            ),
+            patch(
+                "tools.production_phase_effects.bind_concrete_durable_rollback_capability",
+                return_value=_capability(rollback),
+            ) as rollback_bind,
+        ):
+            effects = bind_production_phase_effects(
+                _binding(),
+                _Journal(),
+                commit,
+                rollback,
+                session_revision=3,
+                admission_reread=dict,
+                commit_argument="new-state",
+                rollback_argument="ignored-by-concrete-backup",
+                rollback_backup=Path("backup"),
+                expected_branch="main",
+                expected_head="a" * 40,
+            )
+        rollback_bind.assert_called_once()
+        result = effects.rollback.execute(
+            {
+                "backend": "sqlite",
+                "target": "rollback",
+                "operation_id": "phase-effect-test:rollback",
+                "state_revision": 3,
+                "durable_barrier_id": "barrier-test",
+                "fencing_token": "fence-test",
+                "selector_ref": ".runtime/runtime-selector.json",
+            }
+        )
+        self.assertTrue(result["restored_verified"])
+
     def test_rejects_invalid_binding_callbacks_and_missing_operations(self) -> None:
         with self.assertRaises(ProductionPhaseEffectError):
             bind_production_phase_effects(
