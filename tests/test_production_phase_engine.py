@@ -261,6 +261,22 @@ class ProductionPhaseEngineTests(unittest.TestCase):
         with self.assertRaisesRegex(ProductionPhaseBindingError, "readiness evidence"):
             backend.execute("discover", {"backend": "sqlite", "fencing_token": "fence"})
 
+    def test_bound_backend_snapshot_projects_readiness_before_engine_admission(self) -> None:
+        backend, _adapter, _binding = self._bound_backend("sqlite")
+        backend._readiness_evidence = {
+            "preflight": {
+                "backend": "sqlite",
+                "preflight_admitted": True,
+                "capacity_verified": True,
+                "backend_identity_verified": True,
+            }
+        }
+        result = backend.snapshot(
+            "preflight",
+            {"backend": "sqlite", "fencing_token": "fence"},
+        )
+        self.assertTrue(result["preflight_snapshot"]["preflight_admitted"])
+
     def test_generated_sqlite_dispatch_rechecks_admission_before_effect(self) -> None:
         backend, _adapter, binding = self._bound_backend("sqlite")
         executor = Mock()

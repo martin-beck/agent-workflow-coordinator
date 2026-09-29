@@ -337,6 +337,24 @@ class BoundProductionBackendAdapter:
             )
         if not isinstance(result, dict):
             raise ProductionPhaseBindingError("backend snapshot is not an object")
+        evidence = getattr(self, "_readiness_evidence", {}).get(phase)
+        if evidence is not None and phase in {"discover", "preflight", "quiesce", "reopen"}:
+            immutable = {field: result[field] for field in context if field in result}
+            if any(evidence.get(field) != value for field, value in immutable.items()):
+                raise ProductionPhaseBindingError(
+                    f"readiness evidence identity differs for {phase}"
+                )
+            result.update(evidence)
+            result["phase"] = phase
+            result["backend"] = context["backend"]
+            result["mutates_authority"] = False
+            result["fencing_token"] = context["fencing_token"]
+            if phase == "preflight":
+                result["preflight_snapshot"] = dict(evidence)
+            elif phase == "quiesce":
+                result["quiescence_snapshot"] = dict(evidence)
+            elif phase == "reopen":
+                result["reopen_snapshot"] = dict(evidence)
         return result
 
     def verify_rollback_context(self, context: Mapping[str, object]) -> dict[str, Any]:
@@ -395,11 +413,6 @@ class BoundProductionBackendAdapter:
                     f"admitted readiness evidence is missing for {phase}"
                 )
             snapshot = self.snapshot(phase, context)
-            immutable = {field: snapshot[field] for field in context if field in snapshot}
-            if any(evidence.get(field) != value for field, value in immutable.items()):
-                raise ProductionPhaseBindingError(
-                    f"readiness evidence identity differs for {phase}"
-                )
             result = {**snapshot, **evidence}
             result["phase"] = phase
             result["backend"] = context["backend"]
