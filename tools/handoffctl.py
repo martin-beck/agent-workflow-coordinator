@@ -3038,14 +3038,14 @@ def cmd_upgrade(args: argparse.Namespace) -> int:
     binding_path = Path(args.binding) if args.binding is not None else None
     selected_backend = str(backend_selection()["backend"])
     if args.upgrade_action in {"apply", "rollback"}:
-        if selected_backend != "sqlite":
-            raise RuntimeError(
-                "Git production live binding is not implemented; no coordinator state was mutated"
-            )
         if __package__:
-            from .production_upgrade_binding import resolve_sqlite_live_binding
+            from .production_upgrade_binding import (
+                resolve_git_live_binding,
+                resolve_sqlite_live_binding,
+            )
         else:  # pragma: no cover - direct script execution
             from production_upgrade_binding import (  # type: ignore[import-not-found,no-redef]
+                resolve_git_live_binding,
                 resolve_sqlite_live_binding,
             )
         if binding_path is None:
@@ -3056,20 +3056,35 @@ def cmd_upgrade(args: argparse.Namespace) -> int:
         runtime_binding = _read_runtime_binding(
             binding_path, contract, str(backend_selection()["backend"])
         )
-        live_binding = resolve_sqlite_live_binding(
-            runtime_binding,
-            database=DATABASE,
-            control_database=CONTROL_DATABASE,
-            authority_marker=AUTHORITY_MARKER,
-            authority_lifecycle=AUTHORITY_LIFECYCLE,
-            authority_lock=AUTHORITY_LOCK,
-            control_binding=CONTROL_BINDING,
-            control_lock=CONTROL_LOCK,
-            project_binding=BINDING,
-            backend_config=BACKEND_CONFIG,
-            runtime_selector=RUNTIME / "runtime-selector.json",
-            common_lock=locked,
-        )
+        if selected_backend == "sqlite":
+            live_binding = resolve_sqlite_live_binding(
+                runtime_binding,
+                database=DATABASE,
+                control_database=CONTROL_DATABASE,
+                authority_marker=AUTHORITY_MARKER,
+                authority_lifecycle=AUTHORITY_LIFECYCLE,
+                authority_lock=AUTHORITY_LOCK,
+                control_binding=CONTROL_BINDING,
+                control_lock=CONTROL_LOCK,
+                project_binding=BINDING,
+                backend_config=BACKEND_CONFIG,
+                runtime_selector=RUNTIME / "runtime-selector.json",
+                common_lock=locked,
+            )
+        else:
+            live_binding = resolve_git_live_binding(
+                runtime_binding,
+                repository=ROOT,
+                control_database=CONTROL_DATABASE,
+                authority_marker=AUTHORITY_MARKER,
+                authority_lifecycle=AUTHORITY_LIFECYCLE,
+                authority_lock=AUTHORITY_LOCK,
+                control_binding=CONTROL_BINDING,
+                control_lock=CONTROL_LOCK,
+                project_binding=BINDING,
+                runtime_selector=RUNTIME / "runtime-selector.json",
+                common_lock=locked,
+            )
 
     return execute_upgrade_command(
         str(args.upgrade_action),

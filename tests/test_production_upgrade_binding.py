@@ -1,9 +1,11 @@
 # Copyright (C) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 # SPDX-License-Identifier: MIT
+# ruff: noqa: S603, S607
 
 from __future__ import annotations
 
 import sqlite3
+import subprocess
 import tempfile
 import unittest
 import uuid
@@ -13,7 +15,12 @@ from typing import Any, cast
 from tools.generate_upgrade_contract import generate
 from tools.handoffctl import locked
 from tools.mutation_fence import provision, provision_control_binding
-from tools.production_upgrade_binding import ProductionBindingError, resolve_sqlite_live_binding
+from tools.production_upgrade_binding import (
+    ProductionBindingError,
+    git_authority_revision,
+    resolve_git_live_binding,
+    resolve_sqlite_live_binding,
+)
 from tools.rollback_control_store import SQLiteBarrierSessionStore, SQLiteRollbackControlStore
 from tools.upgrade_authority import inspect_sqlite_release_authority
 from tools.upgrade_binding import LiveUpgradeBinding, UpgradeRuntimeBinding
@@ -225,6 +232,100 @@ class ProductionUpgradeBindingTests(unittest.TestCase):
                     runtime_selector=root / "runtime-selector.json",
                     common_lock=cast(Any, lambda: None),
                 )
+
+    def test_resolver_reconstructs_real_durable_git_scope(self) -> None:
+        contract, envelope = _runtime("git")
+        project_id = str(envelope["project_id"])
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            root.chmod(0o700)
+            repository = root / "authority"
+            repository.mkdir(mode=0o700)
+            subprocess.run(["git", "init", "-b", "main", str(repository)], check=True)
+            subprocess.run(
+                ["git", "-C", str(repository), "config", "user.email", "test@example.invalid"],
+                check=True,
+            )
+            subprocess.run(
+                ["git", "-C", str(repository), "config", "user.name", "Production Test"],
+                check=True,
+            )
+            (repository / "README").write_text("clean\n", encoding="utf-8")
+            subprocess.run(["git", "-C", str(repository), "add", "README"], check=True)
+            subprocess.run(["git", "-C", str(repository), "commit", "-m", "initial"], check=True)
+            repository.chmod(0o700)
+            (repository / ".git").chmod(0o700)
+            (repository / ".git" / "HEAD").chmod(0o600)
+            runtime_root = root / ".runtime"
+            runtime_root.mkdir(mode=0o700)
+            authority_path = repository / ".git" / "HEAD"
+            marker = runtime_root / "authority-marker.json"
+            lifecycle = runtime_root / "authority-lifecycle.json"
+            authority_lock = runtime_root / "authority.lock"
+            control_path = runtime_root / "control.sqlite"
+            control_binding = runtime_root / "control-binding.json"
+            project_binding_path = root / "coordinator.binding.json"
+            project_binding_path.write_text(
+                f'{{"schema_version":1,"project_id":"{project_id}","state_repository":"owner/state","product_repository":"owner/product"}}\n',
+                encoding="utf-8",
+            )
+            selector = runtime_root / "runtime-selector.json"
+            selector.write_text(
+                '{"active_release":"v0.3.6","previous_release":"v0.3.5","schema_version":1}\n',
+                encoding="utf-8",
+            )
+            authority_revision = git_authority_revision(repository, project_id, selector)
+            provision(authority_path, marker, lifecycle, authority_lock, project_id)
+            control = SQLiteRollbackControlStore(control_path, project_id, authority_path)
+            provision_control_binding(
+                control_path, control_binding, control.control_lock_path, project_id
+            )
+            session_record: dict[str, object] = {
+                "schema_version": 1,
+                "project_id": project_id,
+                "attempt_id": "git-production-binding-attempt",
+                "state_revision": 1,
+                "authority_revision_at_acquire": authority_revision,
+                "durable_barrier_id": str(envelope["durable_barrier_id"]),
+                "fencing_token": str(envelope["fencing_token"]),
+                "fencing_owner": str(envelope["fencing_owner"]),
+            }
+            session_record["identity_digest"] = canonical_barrier_session_digest(session_record)
+            identity = BarrierSessionIdentity.from_record(session_record)
+            session = SQLiteBarrierSessionStore(
+                control, lambda: git_authority_revision(repository, project_id, selector)
+            )
+            session.create(identity)
+            session.bind_child(
+                1, BarrierChildIdentity.bind(identity, f"{envelope['operation_id']}:forward", "new")
+            )
+            session.bind_child(
+                2, BarrierChildIdentity.bind(identity, str(envelope["operation_id"]), "rollback")
+            )
+            envelope["authority_revision"] = authority_revision
+            envelope["barrier_identity_digest"] = canonical_barrier_digest(envelope)
+            envelope["envelope_digest"] = canonical_envelope_digest(envelope)
+            binding = UpgradeRuntimeBinding.bind(
+                contract, envelope, session_identity_digest=identity.identity_digest
+            )
+            resolved = resolve_git_live_binding(
+                binding,
+                repository=repository,
+                control_database=control_path,
+                authority_marker=marker,
+                authority_lifecycle=lifecycle,
+                authority_lock=authority_lock,
+                control_binding=control_binding,
+                control_lock=control.control_lock_path,
+                project_binding=project_binding_path,
+                runtime_selector=selector,
+                common_lock=locked,
+            )
+            self.assertIsInstance(resolved, LiveUpgradeBinding)
+            self.assertEqual(identity.state_revision, cast(Any, resolved.lease).revision)
+            self.assertEqual(
+                identity.identity_digest, cast(Any, resolved.runtime).session_identity_digest
+            )
 
     def test_missing_sqlite_state_is_rejected_before_scope_construction(self) -> None:
         contract, envelope = _runtime("sqlite")
