@@ -708,6 +708,7 @@ class SQLiteAuthorityAdapter:
     ) -> None:
         from tools.sqlite_backup import restore_database
 
+        self._check_identity()
         restore_database(
             backup,
             destination,

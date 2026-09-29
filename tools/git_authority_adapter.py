@@ -184,6 +184,58 @@ class GitAuthorityAdapter:
 
         restore_backup(backup, destination, session=_issue(self, backup))
 
+    def restore_authority_bound(
+        self, backup: Path, *, expected_branch: str, expected_head: str
+    ) -> dict[str, object]:
+        """Restore this clean branch to the verified backup commit.
+
+        This is an internal rollback effect.  It requires the caller to bind
+        the current branch/head identity and never participates in public
+        command dispatch.  The backup is verified before the branch reset;
+        any failure after that point is intentionally surfaced as ambiguous by
+        the durable mutation wrapper.
+        """
+        if not isinstance(backup, Path) or not expected_branch or not expected_head:
+            raise GitAuthorityError("Git rollback identity is incomplete")
+        self._check_repository_identity()
+        status = self._git("status", "--porcelain=v1", "--untracked-files=all")
+        branch = self._git("symbolic-ref", "--short", "-q", "HEAD")
+        head = self._git("rev-parse", "--verify", "HEAD")
+        if status or branch != expected_branch or head != expected_head:
+            raise GitAuthorityError("Git rollback authority identity is stale or dirty")
+        verified = self.verify_backup_artifact(backup)
+        commit = verified.get("commit")
+        if verified.get("verified") is not True or not isinstance(commit, str):
+            raise GitAuthorityError("Git rollback backup verification is incomplete")
+        self._check_repository_identity()
+        rollback_ref = f"refs/agent-workflow/rollback/{commit}"
+        self._git("fetch", str(backup / "authority.bundle"), f"{commit}:{rollback_ref}")
+        self._git("reset", "--hard", commit)
+        if (
+            self._git("symbolic-ref", "--short", "-q", "HEAD") != expected_branch
+            or self._git("rev-parse", "--verify", "HEAD") != commit
+            or self._git("status", "--porcelain=v1", "--untracked-files=all")
+        ):
+            raise GitAuthorityError("Git rollback postcondition is invalid")
+        return {
+            "backend": "git",
+            "target": "rollback",
+            "rollback_commit": commit,
+            "verified": True,
+            "backend_identity_verified": True,
+            "mutates_authority": True,
+        }
+
+    def _check_repository_identity(self) -> None:
+        try:
+            root = self._repository.stat()
+            git = (self._repository / ".git").stat()
+            current = (root.st_dev, root.st_ino, git.st_dev, git.st_ino)
+        except OSError as error:
+            raise GitAuthorityError("Git authority repository identity changed") from error
+        if self._repository_identity is None or current != self._repository_identity:
+            raise GitAuthorityError("Git authority repository identity changed")
+
     def bind_commit_capability(
         self,
         admission: Any,
