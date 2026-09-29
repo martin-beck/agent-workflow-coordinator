@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: MIT
 """Construct the production live upgrade proof from canonical coordinator state."""
 
+# mypy: disable-error-code="no-redef"
+
 from __future__ import annotations
 
 from collections.abc import Callable
@@ -9,16 +11,36 @@ from contextlib import AbstractContextManager
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-if TYPE_CHECKING:
-    from tools.handoffctl import CoordinatorLockGuard
+if __package__:
+    from .admission_lease import AdmissionLease, AdmissionRecheck
+    from .lock_domain_scope import LockDomainScope
+    from .mutation_fence import MutationFence
+    from .rollback_control_store import SQLiteBarrierSessionStore, SQLiteRollbackControlStore
+    from .upgrade_authority import inspect_sqlite_release_authority, read_runtime_selector
+    from .upgrade_binding import LiveUpgradeBinding, UpgradeBindingError, UpgradeRuntimeBinding
 
-from tools.admission_lease import AdmissionLease, AdmissionRecheck
-from tools.lock_domain_scope import LockDomainScope
-from tools.mutation_fence import MutationFence
-from tools.rollback_control_store import SQLiteBarrierSessionStore, SQLiteRollbackControlStore
-from tools.sqlite_authority_adapter import SQLiteAuthorityAdapter
-from tools.upgrade_authority import inspect_sqlite_release_authority, read_runtime_selector
-from tools.upgrade_binding import LiveUpgradeBinding, UpgradeBindingError, UpgradeRuntimeBinding
+    if TYPE_CHECKING:
+        from .handoffctl import CoordinatorLockGuard
+else:  # pragma: no cover - direct script execution
+    from admission_lease import AdmissionLease, AdmissionRecheck  # type: ignore[import-not-found]
+    from lock_domain_scope import LockDomainScope  # type: ignore[import-not-found]
+    from mutation_fence import MutationFence  # type: ignore[import-not-found]
+    from rollback_control_store import (  # type: ignore[import-not-found]
+        SQLiteBarrierSessionStore,
+        SQLiteRollbackControlStore,
+    )
+    from upgrade_authority import (  # type: ignore[import-not-found]
+        inspect_sqlite_release_authority,
+        read_runtime_selector,
+    )
+    from upgrade_binding import (  # type: ignore[import-not-found]
+        LiveUpgradeBinding,
+        UpgradeBindingError,
+        UpgradeRuntimeBinding,
+    )
+
+    if TYPE_CHECKING:
+        from handoffctl import CoordinatorLockGuard  # type: ignore[import-not-found]
 
 
 class ProductionBindingError(RuntimeError):
@@ -47,6 +69,12 @@ def resolve_sqlite_live_binding(
             "Git authority revision reconstruction is not implemented"
         )
     try:
+        if __package__:
+            from .sqlite_authority_adapter import SQLiteAuthorityAdapter
+        else:  # pragma: no cover - direct script execution
+            from sqlite_authority_adapter import (  # type: ignore[import-not-found]
+                SQLiteAuthorityAdapter,
+            )
         import json
 
         binding = json.loads(project_binding.read_text(encoding="utf-8"))
