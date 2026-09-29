@@ -40,7 +40,6 @@ from tools.rollback_control_store import (
 from tools.runtime_bootstrap import DispatchAdmission
 from tools.sqlite_authority_adapter import (
     SQLiteAuthorityAdapter,
-    SQLiteAuthorityError,
     SQLiteLifecycleExecutor,
 )
 from tools.upgrade_admission import QUIESCENCE_PREDICATES
