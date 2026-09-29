@@ -726,31 +726,37 @@ class ProductionPhaseEngineTests(unittest.TestCase):
 
         for invalid in (None, dict(forward, target="rollback"), dict(forward, extra=True)):
             with self.assertRaises(ProductionPhaseBindingError):
-                _validate_forward_context(binding, cast(Any, invalid))
+                _validate_forward_context(cast(Any, binding), cast(Any, invalid))
         changed = dict(forward, project_id="foreign")
         with self.assertRaises(ProductionPhaseBindingError):
-            _validate_forward_context(binding, changed)
-        with self.assertRaises(ProductionPhaseBindingError):
-            _validate_forward_context(binding, dict(forward, barrier_identity_digest="bad"))
-        with self.assertRaises(ProductionPhaseBindingError):
-            _validate_forward_context(binding, dict(forward, envelope_digest="bad"))
+            _validate_forward_context(cast(Any, binding), changed)
         with self.assertRaises(ProductionPhaseBindingError):
             _validate_forward_context(
-                SimpleNamespace(runtime=SimpleNamespace(runtime_envelope={})), forward
+                cast(Any, binding), dict(forward, barrier_identity_digest="bad")
+            )
+        with self.assertRaises(ProductionPhaseBindingError):
+            _validate_forward_context(cast(Any, binding), dict(forward, envelope_digest="bad"))
+        with self.assertRaises(ProductionPhaseBindingError):
+            _validate_forward_context(
+                cast(Any, SimpleNamespace(runtime=SimpleNamespace(runtime_envelope={}))), forward
             )
 
         admission = SimpleNamespace(identity=SimpleNamespace(release="v0.2.0", digest="a" * 64))
         with self.assertRaises(ProductionPhaseBindingError):
-            _validate_forward_validation_inputs(forward, admission, None)
+            _validate_forward_validation_inputs(forward, cast(Any, admission), cast(Any, None))
         with self.assertRaises(ProductionPhaseBindingError):
-            _validate_forward_validation_inputs(forward, admission, dict(forward, backend="git"))
+            _validate_forward_validation_inputs(
+                forward, cast(Any, admission), dict(forward, backend="git")
+            )
         with self.assertRaises(ProductionPhaseBindingError):
-            _validate_forward_validation_inputs(forward, admission, dict(forward, binding={}))
+            _validate_forward_validation_inputs(
+                forward, cast(Any, admission), dict(forward, binding={})
+            )
         valid_validation = dict(
             forward,
             binding={"release": "v0.2.0", "manifest_digest": "a" * 64},
         )
-        _validate_forward_validation_inputs(forward, admission, valid_validation)
+        _validate_forward_validation_inputs(forward, cast(Any, admission), valid_validation)
 
         commit = CommitAdmissionBundle(
             backend="sqlite",
@@ -764,7 +770,7 @@ class ProductionPhaseEngineTests(unittest.TestCase):
             selector_identity="selector",
             runtime_identity="runtime",
         )
-        for invalid in (None, {"admitted_snapshot": {}}):
+        for invalid in cast(tuple[Any, ...], (None, {"admitted_snapshot": {}})):
             with self.assertRaises(ProductionPhaseBindingError):
                 _validate_forward_commit_evidence(forward, commit, cast(Any, invalid))
         expected_snapshot = dict(forward)
