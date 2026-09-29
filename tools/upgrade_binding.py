@@ -64,6 +64,8 @@ class LiveUpgradeBinding:
     admission_recheck: object
     adapter: object
     _token: object
+    expected_branch: str | None
+    expected_head: str | None
 
     def __init__(self) -> None:
         raise TypeError("LiveUpgradeBinding must be issued by bind()")
@@ -81,22 +83,21 @@ class LiveUpgradeBinding:
         from tools.admission_lease import AdmissionLease, AdmissionRecheck
         from tools.git_authority_adapter import GitAuthorityAdapter
         from tools.lock_domain_scope import LockDomainScope
-        from tools.rollback_control_store import BarrierSessionState
+        from tools.rollback_control_store import BarrierSessionState, SQLiteBarrierSessionStore
         from tools.sqlite_authority_adapter import SQLiteAuthorityAdapter
 
-        if not isinstance(runtime, UpgradeRuntimeBinding):
+        if type(runtime) is not UpgradeRuntimeBinding:
             raise UpgradeBindingError("runtime upgrade binding is required")
-        if not isinstance(session, BarrierSessionState):
+        if type(session) is not BarrierSessionState:
             raise UpgradeBindingError("live barrier session is invalid")
-        if not isinstance(scope, LockDomainScope):
+        if type(scope) is not LockDomainScope:
             raise UpgradeBindingError("live lock-domain scope is invalid")
-        if not isinstance(lease, AdmissionLease):
+        if type(lease) is not AdmissionLease:
             raise UpgradeBindingError("live admission lease is invalid")
-        if not isinstance(admission_recheck, AdmissionRecheck):
+        if type(admission_recheck) is not AdmissionRecheck:
             raise UpgradeBindingError("live admission recheck is invalid")
         if admission_recheck.lease != lease:
             raise UpgradeBindingError("live admission recheck does not match lease")
-        runtime.validate_live_session(session)
         envelope = runtime.runtime_envelope
         expected = {
             "project_id": envelope["project_id"],
@@ -117,23 +118,52 @@ class LiveUpgradeBinding:
             raise UpgradeBindingError(
                 "live lock-domain scope identity does not match runtime"
             ) from error
+        session_store = getattr(scope, "_session_store", None)
+        if type(session_store) is not SQLiteBarrierSessionStore:
+            raise UpgradeBindingError("live scope does not carry a concrete session store")
         if getattr(scope, "_session_identity", None) != session.identity:
             raise UpgradeBindingError("live scope session identity does not match durable session")
         if getattr(scope, "_session_revision", None) != session.revision:
             raise UpgradeBindingError("live scope session revision does not match durable session")
         if getattr(scope, "_lease", None) != lease:
             raise UpgradeBindingError("live scope lease does not match admission lease")
+        try:
+            with scope.hold():
+                observed = session_store.snapshot_owned_by_caller()
+        except Exception as error:
+            raise UpgradeBindingError("live durable session reread was rejected") from error
+        if observed != session:
+            raise UpgradeBindingError("live durable session changed during binding")
+        runtime.validate_live_session(observed)
         backend = envelope["backend"]
-        if backend == "git" and not isinstance(adapter, GitAuthorityAdapter):
+        expected_branch: str | None = None
+        expected_head: str | None = None
+        if backend == "git" and type(adapter) is not GitAuthorityAdapter:
             raise UpgradeBindingError("Git live backend adapter is not concrete")
         if backend == "sqlite":
-            if not isinstance(adapter, SQLiteAuthorityAdapter):
+            if type(adapter) is not SQLiteAuthorityAdapter:
                 raise UpgradeBindingError("SQLite live backend adapter is not concrete")
-            session_store = getattr(scope, "_session_store", None)
             if getattr(session_store, "authority_path", None) != getattr(
                 adapter, "_authority", None
             ):
                 raise UpgradeBindingError("SQLite live backend is bound to a foreign authority")
+        if backend == "git":
+            try:
+                expected_branch = adapter._git("symbolic-ref", "--short", "-q", "HEAD")
+                expected_head = adapter._git("rev-parse", "--verify", "HEAD")
+            except Exception as error:
+                raise UpgradeBindingError("Git live backend reread was rejected") from error
+        try:
+            runtime.reread_backend_bound(
+                adapter,
+                scope,
+                lease,
+                admission_recheck,
+                expected_branch=expected_branch,
+                expected_head=expected_head,
+            )
+        except Exception as error:
+            raise UpgradeBindingError("live backend reread was rejected") from error
         issued = object.__new__(cls)
         object.__setattr__(issued, "runtime", runtime)
         object.__setattr__(issued, "session", session)
@@ -142,12 +172,18 @@ class LiveUpgradeBinding:
         object.__setattr__(issued, "admission_recheck", admission_recheck)
         object.__setattr__(issued, "adapter", adapter)
         object.__setattr__(issued, "_token", _LIVE_BINDING_TOKEN)
+        object.__setattr__(issued, "expected_branch", expected_branch)
+        object.__setattr__(issued, "expected_head", expected_head)
         return issued
 
     def reread_backend(
         self, *, expected_branch: str | None = None, expected_head: str | None = None
     ) -> dict[str, object]:
         """Obtain fresh read-only backend evidence through this binding."""
+        if expected_branch is None:
+            expected_branch = self.expected_branch
+        if expected_head is None:
+            expected_head = self.expected_head
         return self.runtime.reread_backend_bound(
             self.adapter,
             self.scope,
@@ -175,16 +211,22 @@ class LiveUpgradeBinding:
 
     def is_admitted(self) -> bool:
         """Revalidate the sealed binding before a production boundary consumes it."""
+        if type(self) is not LiveUpgradeBinding:
+            return False
         if getattr(self, "_token", None) is not _LIVE_BINDING_TOKEN:
             return False
         try:
-            type(self).bind(
-                self.runtime,
-                self.session,
+            session_store = self.scope._session_store
+            with self.scope.hold():
+                observed = session_store.snapshot_owned_by_caller()
+            self.runtime.validate_live_session(observed)
+            self.runtime.reread_backend_bound(
+                self.adapter,
                 self.scope,
                 self.lease,
                 self.admission_recheck,
-                self.adapter,
+                expected_branch=self.expected_branch,
+                expected_head=self.expected_head,
             )
         except Exception:
             return False

@@ -39,9 +39,7 @@ from tools.upgrade_identity import (
 )
 
 
-def _contract(
-    backend: str = "sqlite", operation_id: str = "upgrade-001"
-) -> dict[str, Any]:
+def _contract(backend: str = "sqlite", operation_id: str = "upgrade-001") -> dict[str, Any]:
     def release(version: str, seed: str) -> dict[str, str]:
         return {
             "version": version,
@@ -255,10 +253,6 @@ class UpgradeBindingTests(unittest.TestCase):
         store.authority_path = None
         scope._session_store = store
         adapter = object.__new__(GitAuthorityAdapter)
-        live = LiveUpgradeBinding.bind(binding, session, scope, lease, recheck, adapter)
-        self.assertIs(live.runtime, binding)
-        self.assertIs(live.adapter, adapter)
-
         with self.assertRaises(UpgradeBindingError):
             LiveUpgradeBinding.bind(
                 binding,
@@ -272,6 +266,8 @@ class UpgradeBindingTests(unittest.TestCase):
             LiveUpgradeBinding.bind(
                 binding, replace(session, status="released"), scope, lease, recheck, adapter
             )
+        with self.assertRaises(TypeError):
+            LiveUpgradeBinding()  # type: ignore[call-arg]
 
     def test_binds_real_sqlite_session_scope_and_adapter(self) -> None:
         contract = _contract()
@@ -322,9 +318,7 @@ class UpgradeBindingTests(unittest.TestCase):
                 identity, f"{runtime['operation_id']}:forward", "new"
             )
             child = BarrierChildIdentity.bind(identity, str(runtime["operation_id"]), "rollback")
-            session = SQLiteBarrierSessionStore(
-                store, lambda: str(runtime["authority_revision"])
-            )
+            session = SQLiteBarrierSessionStore(store, lambda: str(runtime["authority_revision"]))
             session.create(identity)
             session.bind_child(1, forward_child)
             session.bind_child(2, child)
@@ -360,16 +354,43 @@ class UpgradeBindingTests(unittest.TestCase):
             contract_path = root / "contract.json"
             contract_path.write_text(json.dumps(contract), encoding="utf-8")
             with self.assertRaisesRegex(UpgradeCommandError, "execution protocol is incomplete"):
-                execute_upgrade_command(
-                    "apply", contract_path, "sqlite", live_binding=live
-                )
+                execute_upgrade_command("apply", contract_path, "sqlite", live_binding=live)
+            binding_path = root / "binding.json"
+            binding_path.write_text(json.dumps(binding.as_mapping()), encoding="utf-8")
+            with self.assertRaisesRegex(UpgradeCommandError, "execution protocol is incomplete"):
+                execute_upgrade_command("rollback", contract_path, "sqlite", binding_path, live)
             foreign_contract = _contract(operation_id="foreign-operation")
             foreign_path = root / "foreign-contract.json"
             foreign_path.write_text(json.dumps(foreign_contract), encoding="utf-8")
             with self.assertRaisesRegex(UpgradeCommandError, "does not match the contract"):
-                execute_upgrade_command(
-                    "apply", foreign_path, "sqlite", live_binding=live
-                )
+                execute_upgrade_command("apply", foreign_path, "sqlite", live_binding=live)
+            self.assertTrue(live.is_admitted())
+            session.begin_reopen(
+                3,
+                "rollback",
+                {
+                    "operation_id": str(runtime["operation_id"]),
+                    "target": "rollback",
+                    "barrier_identity_digest": identity.identity_digest,
+                    "validated": True,
+                },
+            )
+            self.assertFalse(live.is_admitted())
+            session.complete_reopen(
+                4,
+                {
+                    "authority_revision": str(runtime["authority_revision"]),
+                    "backend": "sqlite",
+                    "backend_roundtrip": "sqlite",
+                    "foreign_key_violations": 0,
+                    "fencing_token": str(runtime["fencing_token"]),
+                    "integrity_check": "ok",
+                    "project_id": str(runtime["project_id"]),
+                    "target": "rollback",
+                    "verified": True,
+                },
+            )
+            self.assertFalse(live.is_admitted())
 
     def test_rejects_malformed_binding_records(self) -> None:
         contract = _contract()
