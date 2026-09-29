@@ -29,11 +29,20 @@ from tools.production_phase_engine import (
     bind_forward_phase_capabilities,
     build_production_phase_binding,
 )
+from tools.rollback_control_store import (
+    SQLiteBarrierSessionStore,
+    SQLiteRollbackControlStore,
+)
 from tools.runtime_bootstrap import DispatchAdmission
 from tools.sqlite_authority_adapter import SQLiteAuthorityAdapter, SQLiteLifecycleExecutor
 from tools.upgrade_admission import QUIESCENCE_PREDICATES
 from tools.upgrade_binding import LiveUpgradeBinding, canonical_contract_digest
-from tools.upgrade_identity import canonical_barrier_digest, canonical_envelope_digest
+from tools.upgrade_identity import (
+    BarrierSessionIdentity,
+    canonical_barrier_digest,
+    canonical_barrier_session_digest,
+    canonical_envelope_digest,
+)
 
 
 def _contract() -> dict[str, object]:
@@ -231,19 +240,40 @@ class ProductionPhaseEngineTests(unittest.TestCase):
         executor.execute_generated_operation.assert_not_called()
 
     def test_constructor_binds_durable_sqlite_lifecycle_executor(self) -> None:
-        binding = object.__new__(LiveUpgradeBinding)
-        adapter = object.__new__(SQLiteAuthorityAdapter)
-        session_store = object()
-        scope = SimpleNamespace(_session_store=session_store)
-        object.__setattr__(binding, "adapter", adapter)
-        object.__setattr__(binding, "scope", scope)
-        with (
-            patch.object(LiveUpgradeBinding, "is_admitted", return_value=True),
-            patch.object(SQLiteLifecycleExecutor, "bind", return_value=Mock()) as bind,
-        ):
-            backend = BoundProductionBackendAdapter(binding, journal=Path("journal.json"))
-        bind.assert_called_once_with(adapter, session_store, Path("journal.json"))
-        self.assertIsNotNone(backend._sqlite_lifecycle_executor)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            authority = root / "authority.sqlite"
+            with closing(sqlite3.connect(authority)) as connection, connection:
+                connection.execute("CREATE TABLE state (id INTEGER PRIMARY KEY, value TEXT)")
+                connection.execute("INSERT INTO state VALUES (1, 'old')")
+            authority.chmod(0o600)
+            project = str(uuid.uuid4())
+            control = SQLiteRollbackControlStore(root / "control.sqlite", project, authority)
+            session = SQLiteBarrierSessionStore(control, lambda: "authority")
+            identity_record: dict[str, object] = {
+                "schema_version": 1,
+                "project_id": project,
+                "attempt_id": "attempt-production",
+                "state_revision": 1,
+                "authority_revision_at_acquire": "authority",
+                "durable_barrier_id": "barrier-production",
+                "fencing_token": "fence-production",
+                "fencing_owner": "owner-production",
+                "identity_digest": "0" * 64,
+            }
+            identity_record["identity_digest"] = canonical_barrier_session_digest(
+                identity_record
+            )
+            identity = BarrierSessionIdentity.from_record(identity_record)
+            session.create(identity)
+            adapter = SQLiteAuthorityAdapter(authority)
+            binding = object.__new__(LiveUpgradeBinding)
+            scope = SimpleNamespace(_session_store=session)
+            object.__setattr__(binding, "adapter", adapter)
+            object.__setattr__(binding, "scope", scope)
+            with patch.object(LiveUpgradeBinding, "is_admitted", return_value=True):
+                backend = BoundProductionBackendAdapter(binding, journal=root / "journal.json")
+            self.assertIsInstance(backend._sqlite_lifecycle_executor, SQLiteLifecycleExecutor)
 
     def test_bound_backend_constructor_and_result_shapes_are_strict(self) -> None:
         binding = object.__new__(LiveUpgradeBinding)
