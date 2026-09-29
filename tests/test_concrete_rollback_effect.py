@@ -265,7 +265,42 @@ class ConcreteRollbackEffectTests(unittest.TestCase):
             with closing(sqlite3.connect(authority)) as connection, connection:
                 connection.execute("UPDATE state SET value='new' WHERE id=1")
 
-            adapter.restore_bound(backup, authority, manifest, BINDING)
+            project = str(uuid.uuid4())
+            control_path = root / "control.sqlite"
+            _seed_rollback_session(control_path, project)
+            journal = SQLiteBarrierSessionStore(
+                SQLiteRollbackControlStore(control_path, project),
+                lambda: "authority-rollback",
+            )
+            admission = CommitAdmissionBundle(
+                backend="sqlite",
+                target="rollback",
+                operation_id="real-sqlite-rollback:rollback",
+                fencing_token="fence-rollback",  # noqa: S106
+                state_revision=2,
+                barrier_id="barrier-rollback",
+                artifact_identity=cast(str, manifest["database_sha256"]),
+                manifest_identity=hashlib.sha256(
+                    json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode()
+                ).hexdigest(),
+                selector_identity="selector-rollback",
+                runtime_identity="runtime-rollback",
+            )
+            with patch.object(LiveUpgradeBinding, "is_admitted", return_value=True):
+                capability = cast(
+                    Any,
+                    bind_concrete_durable_rollback_capability(
+                        _factory_binding(adapter, "sqlite", "real-sqlite-rollback"),
+                        admission,
+                        journal,
+                        backup,
+                        session_revision=2,
+                        sqlite_manifest=manifest,
+                        sqlite_binding=BINDING,
+                    ),
+                )
+            receipt = capability.execute(None)
+            self.assertTrue(receipt.mutates_authority)
 
             with closing(sqlite3.connect(authority)) as connection:
                 self.assertEqual(("old",), connection.execute("SELECT value FROM state").fetchone())
