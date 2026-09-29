@@ -4,14 +4,14 @@
 from __future__ import annotations
 
 import copy
+import json
 import sqlite3
 import tempfile
 import unittest
 import uuid
 from contextlib import closing
-from pathlib import Path
 from dataclasses import replace
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 from typing import Any, cast
 from unittest.mock import MagicMock, patch
 
@@ -22,9 +22,14 @@ from tools.git_authority_adapter import GitAuthorityAdapter
 from tools.handoffctl import locked
 from tools.lock_domain_scope import LockDomainScope
 from tools.mutation_fence import MutationFence, provision, provision_control_binding
-from tools.rollback_control_store import BarrierSessionState, SQLiteBarrierSessionStore, SQLiteRollbackControlStore
+from tools.rollback_control_store import (
+    BarrierSessionState,
+    SQLiteBarrierSessionStore,
+    SQLiteRollbackControlStore,
+)
 from tools.sqlite_authority_adapter import SQLiteAuthorityAdapter
 from tools.upgrade_binding import LiveUpgradeBinding, UpgradeBindingError, UpgradeRuntimeBinding
+from tools.upgrade_commands import UpgradeCommandError, execute_upgrade_command
 from tools.upgrade_identity import (
     BarrierChildIdentity,
     BarrierSessionIdentity,
@@ -34,7 +39,9 @@ from tools.upgrade_identity import (
 )
 
 
-def _contract(backend: str = "sqlite") -> dict[str, Any]:
+def _contract(
+    backend: str = "sqlite", operation_id: str = "upgrade-001"
+) -> dict[str, Any]:
     def release(version: str, seed: str) -> dict[str, str]:
         return {
             "version": version,
@@ -48,7 +55,7 @@ def _contract(backend: str = "sqlite") -> dict[str, Any]:
 
     return generate(
         {
-            "operation_id": "upgrade-001",
+            "operation_id": operation_id,
             "backend": backend,
             "selector_ref": ".runtime/runtime-selector.json",
             "expected_state_revision": 7,
@@ -257,7 +264,7 @@ class UpgradeBindingTests(unittest.TestCase):
                 binding,
                 session,
                 scope,
-                replace(lease, fencing_token="foreign"),
+                replace(lease, fencing_token="foreign"),  # noqa: S106
                 recheck,
                 adapter,
             )
@@ -284,7 +291,12 @@ class UpgradeBindingTests(unittest.TestCase):
             authority_lock = root / "authority.lock"
             control_binding = root / "control-binding.json"
             provision(authority, marker, lifecycle, authority_lock, str(runtime["project_id"]))
-            provision_control_binding(control_path, control_binding, store.control_lock_path, str(runtime["project_id"]))
+            provision_control_binding(
+                control_path,
+                control_binding,
+                store.control_lock_path,
+                str(runtime["project_id"]),
+            )
             fence = MutationFence(
                 authority,
                 marker,
@@ -338,11 +350,26 @@ class UpgradeBindingTests(unittest.TestCase):
             binding = UpgradeRuntimeBinding.bind(
                 contract, runtime, session_identity_digest=identity.identity_digest
             )
-            live = LiveUpgradeBinding.bind(binding, session.snapshot(), scope, lease, recheck, adapter)
+            live = LiveUpgradeBinding.bind(
+                binding, session.snapshot(), scope, lease, recheck, adapter
+            )
             evidence = live.reread_backend()
             self.assertTrue(evidence["sqlite_integrity_verified"])
             self.assertFalse(evidence["mutates_authority"])
             self.assertFalse(session.operation_owned_by_current_thread)
+            contract_path = root / "contract.json"
+            contract_path.write_text(json.dumps(contract), encoding="utf-8")
+            with self.assertRaisesRegex(UpgradeCommandError, "execution protocol is incomplete"):
+                execute_upgrade_command(
+                    "apply", contract_path, "sqlite", live_binding=live
+                )
+            foreign_contract = _contract(operation_id="foreign-operation")
+            foreign_path = root / "foreign-contract.json"
+            foreign_path.write_text(json.dumps(foreign_contract), encoding="utf-8")
+            with self.assertRaisesRegex(UpgradeCommandError, "does not match the contract"):
+                execute_upgrade_command(
+                    "apply", foreign_path, "sqlite", live_binding=live
+                )
 
     def test_rejects_malformed_binding_records(self) -> None:
         contract = _contract()
