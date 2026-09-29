@@ -21,7 +21,7 @@ from contextlib import closing
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
-from typing import cast
+from typing import Any, cast
 from unittest.mock import patch
 
 from tools.authority_neutral_commit import CommitAdmissionBundle
@@ -88,23 +88,26 @@ def _kill_after_git_rollback(
             json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode()
         ).hexdigest(),
     )
-    original = adapter.restore_authority_bound
+    original = cast(Any, adapter.restore_authority_bound)
 
-    def kill_restore(*args: object, **kwargs: object) -> dict[str, object]:
+    def kill_restore(*args: Any, **kwargs: Any) -> dict[str, object]:
         result = original(*args, **kwargs)
         os.kill(os.getpid(), signal.SIGKILL)
-        return result
+        return cast(dict[str, object], result)
 
     with patch.object(adapter, "restore_authority_bound", side_effect=kill_restore):
         with patch.object(LiveUpgradeBinding, "is_admitted", return_value=True):
-            capability = bind_concrete_durable_rollback_capability(
-                _factory_binding(adapter, "git", "real-git-rollback"),
-                admission,
-                journal,
-                Path(backup),
-                session_revision=2,
-                expected_branch="main",
-                expected_head=forward_head,
+            capability = cast(
+                Any,
+                bind_concrete_durable_rollback_capability(
+                    _factory_binding(adapter, "git", "real-git-rollback"),
+                    admission,
+                    journal,
+                    Path(backup),
+                    session_revision=2,
+                    expected_branch="main",
+                    expected_head=forward_head,
+                ),
             )
         capability.execute(None)
 
@@ -136,22 +139,25 @@ def _kill_after_sqlite_rollback(
         runtime_identity="runtime-rollback",
     )
 
-    original = adapter.restore_bound
+    original = cast(Any, adapter.restore_bound)
 
-    def kill_restore(*args: object, **kwargs: object) -> None:
+    def kill_restore(*args: Any, **kwargs: Any) -> None:
         original(*args, **kwargs)
         os.kill(os.getpid(), signal.SIGKILL)
 
     with patch.object(adapter, "restore_bound", side_effect=kill_restore):
         with patch.object(LiveUpgradeBinding, "is_admitted", return_value=True):
-            capability = bind_concrete_durable_rollback_capability(
-                _factory_binding(adapter, "sqlite", "real-sqlite-rollback"),
-                admission,
-                journal,
-                Path(backup),
-                session_revision=2,
-                sqlite_manifest=manifest,
-                sqlite_binding=BINDING,
+            capability = cast(
+                Any,
+                bind_concrete_durable_rollback_capability(
+                    _factory_binding(adapter, "sqlite", "real-sqlite-rollback"),
+                    admission,
+                    journal,
+                    Path(backup),
+                    session_revision=2,
+                    sqlite_manifest=manifest,
+                    sqlite_binding=BINDING,
+                ),
             )
         capability.execute(None)
 
@@ -390,14 +396,17 @@ class ConcreteRollbackEffectTests(unittest.TestCase):
                         expected_branch="main",
                         expected_head=forward_head,
                     )
-                capability = bind_concrete_durable_rollback_capability(
-                    live,
-                    admission,
-                    session,
-                    backup,
-                    session_revision=2,
-                    expected_branch="main",
-                    expected_head=forward_head,
+                capability = cast(
+                    Any,
+                    bind_concrete_durable_rollback_capability(
+                        live,
+                        admission,
+                        session,
+                        backup,
+                        session_revision=2,
+                        expected_branch="main",
+                        expected_head=forward_head,
+                    ),
                 )
             receipt = capability.execute(None)
 
