@@ -51,7 +51,7 @@ from tools.sqlite_storage import (
     bind_sqlite_backend,
     create_database,
 )
-from tools.upgrade_binding import UpgradeRuntimeBinding
+from tools.upgrade_binding import LiveUpgradeBinding, UpgradeBindingError, UpgradeRuntimeBinding
 from tools.upgrade_engine import (
     BoundRollbackCapability,
     GitRollbackObservationCapability,
@@ -61,6 +61,7 @@ from tools.upgrade_engine import (
     UpgradeError,
 )
 from tools.upgrade_identity import (
+    BarrierChildIdentity,
     BarrierSessionIdentity,
     canonical_barrier_digest,
     canonical_barrier_session_digest,
@@ -715,6 +716,8 @@ class GitAuthorityAdapterTests(unittest.TestCase):
             ],
             check=True,
         )
+        self.root.chmod(0o700)
+        (self.root / ".git").chmod(0o700)
         self.adapter = GitAuthorityAdapter(self.root)
         self.coordination = tempfile.TemporaryDirectory()
         coord = Path(self.coordination.name)
@@ -802,6 +805,107 @@ class GitAuthorityAdapterTests(unittest.TestCase):
         self.assertFalse(hasattr(binding, "mutate"))
         self.assertFalse(hasattr(binding, "authorize"))
         binding.assert_current()
+
+    def test_live_upgrade_binding_uses_real_git_adapter_and_durable_scope(self) -> None:
+        def release(version: str, seed: str) -> dict[str, str]:
+            return {
+                "version": version,
+                "source_commit": seed * 40,
+                "tag_ref": f"refs/tags/{version}",
+                "tag_object": chr(ord(seed) + 1) * 40,
+                "signature_sha256": chr(ord(seed) + 2) * 64,
+                "trust_policy_sha256": chr(ord(seed) + 3) * 64,
+                "vendor_manifest_sha256": chr(ord(seed) + 4) * 64,
+            }
+
+        contract = generate(
+            {
+                "operation_id": "op-1",
+                "backend": "git",
+                "selector_ref": ".runtime/runtime-selector.json",
+                "expected_state_revision": 1,
+                "barrier_id": "barrier",
+                "fencing_token": "fence",
+                "from": release("v0.3.5", "a"),
+                "to": release("v0.3.6", "b"),
+            }
+        )
+        runtime: dict[str, object] = {
+            "schema_version": 2,
+            "backend": "git",
+            "project_id": PROJECT,
+            "operation_id": "op-1",
+            "state_revision": 1,
+            "authority_revision": "authority",
+            "fencing_token": "fence",
+            "fencing_owner": "owner",
+            "durable_barrier_id": "barrier",
+            "artifact_root": str(Path(self.coordination.name) / "artifacts"),
+            "source": str(Path(self.coordination.name) / "artifacts" / "source"),
+            "destination": str(Path(self.coordination.name) / "artifacts" / "destination"),
+            "manifest": str(Path(self.coordination.name) / "artifacts" / "manifest.json"),
+            "selector_ref": ".runtime/runtime-selector.json",
+            "target": "rollback",
+        }
+        runtime["barrier_identity_digest"] = canonical_barrier_digest(runtime)
+        runtime["envelope_digest"] = canonical_envelope_digest(runtime)
+        identity = self._session_identity()
+        forward = BarrierChildIdentity.bind(identity, "op-1:forward", "new")
+        rollback = BarrierChildIdentity.bind(identity, "op-1", "rollback")
+        self.session.bind_child(1, forward)
+        self.session.bind_child(2, rollback)
+        scope = LockDomainScope.bind(
+            self.session, self.scope._authority_fence, self.lease, self.recheck, locked
+        )
+        binding = UpgradeRuntimeBinding.bind(
+            contract, runtime, session_identity_digest=identity.identity_digest
+        )
+        live = LiveUpgradeBinding.bind(
+            binding,
+            self.session.snapshot(),
+            scope,
+            self.lease,
+            self.recheck,
+            self.adapter,
+            expected_git_repository=self.root,
+        )
+        evidence = live.reread_backend(
+            expected_branch=self.adapter._git("symbolic-ref", "--short", "-q", "HEAD"),
+            expected_head=self.adapter._git("rev-parse", "HEAD"),
+        )
+        self.assertEqual("git", evidence["backend"])
+        self.assertTrue(evidence["git_clean"])
+        self.assertFalse(evidence["mutates_authority"])
+        with tempfile.TemporaryDirectory() as foreign_directory:
+            foreign_root = Path(foreign_directory)
+            subprocess.run(["git", "init", "-q", str(foreign_root)], check=True)
+            (foreign_root / "foreign-state").write_text("foreign\n")
+            subprocess.run(["git", "-C", str(foreign_root), "add", "foreign-state"], check=True)
+            subprocess.run(
+                [
+                    "git",
+                    "-C",
+                    str(foreign_root),
+                    "-c",
+                    "user.name=test",
+                    "-c",
+                    "user.email=test@example",
+                    "commit",
+                    "-qm",
+                    "foreign",
+                ],
+                check=True,
+            )
+            with self.assertRaisesRegex(UpgradeBindingError, "foreign repository"):
+                LiveUpgradeBinding.bind(
+                    binding,
+                    self.session.snapshot(),
+                    scope,
+                    self.lease,
+                    self.recheck,
+                    GitAuthorityAdapter(foreign_root),
+                    expected_git_repository=self.root,
+                )
 
     def test_sqlite_backend_binding_rejects_foreign_session_and_descriptor_swap(self) -> None:
         other_path = Path(self.coordination.name) / "foreign-control.sqlite"

@@ -10,6 +10,7 @@ import json
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, cast
 
 if __package__:
@@ -41,10 +42,229 @@ BINDING_FIELDS = (
     "runtime_envelope",
 )
 _DIGEST = re.compile(r"[0-9a-f]{64}")
+_LIVE_BINDING_TOKEN = object()
+_LIVE_BINDING_REGISTRY: dict[int, tuple[object, tuple[object, ...]]] = {}
+
+
+def _live_binding_fingerprint(value: object) -> tuple[object, ...]:
+    return (
+        id(getattr(value, "runtime", None)),
+        id(getattr(value, "session", None)),
+        id(getattr(value, "scope", None)),
+        id(getattr(value, "lease", None)),
+        id(getattr(value, "admission_recheck", None)),
+        id(getattr(value, "adapter", None)),
+        getattr(value, "expected_branch", None),
+        getattr(value, "expected_head", None),
+        getattr(value, "expected_git_repository", None),
+        id(getattr(value, "_token", None)),
+    )
 
 
 class UpgradeBindingError(ValueError):
     """A portable contract and host-bound runtime identity do not match."""
+
+
+@dataclass(frozen=True, slots=True, init=False)
+class LiveUpgradeBinding:
+    """One immutable binding of contract, durable session, and backend scope.
+
+    This is an admission identity only.  It deliberately exposes no mutation
+    callback or phase executor; the production phase engine must consume this
+    proof before it can construct any effect capability.
+    """
+
+    runtime: UpgradeRuntimeBinding
+    session: object
+    scope: object
+    lease: object
+    admission_recheck: object
+    adapter: object
+    _token: object
+    expected_branch: str | None
+    expected_head: str | None
+    expected_git_repository: Path | None
+
+    def __init__(self) -> None:
+        raise TypeError("LiveUpgradeBinding must be issued by bind()")
+
+    @classmethod
+    def bind(  # noqa: C901
+        cls,
+        runtime: UpgradeRuntimeBinding,
+        session: object,
+        scope: object,
+        lease: object,
+        admission_recheck: object,
+        adapter: object,
+        *,
+        expected_git_repository: Path | None = None,
+    ) -> LiveUpgradeBinding:
+        from tools.admission_lease import AdmissionLease, AdmissionRecheck
+        from tools.git_authority_adapter import GitAuthorityAdapter
+        from tools.lock_domain_scope import LockDomainScope
+        from tools.rollback_control_store import BarrierSessionState, SQLiteBarrierSessionStore
+        from tools.sqlite_authority_adapter import SQLiteAuthorityAdapter
+
+        if type(runtime) is not UpgradeRuntimeBinding:
+            raise UpgradeBindingError("runtime upgrade binding is required")
+        if type(session) is not BarrierSessionState:
+            raise UpgradeBindingError("live barrier session is invalid")
+        if type(scope) is not LockDomainScope:
+            raise UpgradeBindingError("live lock-domain scope is invalid")
+        if type(lease) is not AdmissionLease:
+            raise UpgradeBindingError("live admission lease is invalid")
+        if type(admission_recheck) is not AdmissionRecheck:
+            raise UpgradeBindingError("live admission recheck is invalid")
+        if admission_recheck.lease != lease:
+            raise UpgradeBindingError("live admission recheck does not match lease")
+        envelope = runtime.runtime_envelope
+        expected = {
+            "project_id": envelope["project_id"],
+            "authority_revision": envelope["authority_revision"],
+            "fencing_token": envelope["fencing_token"],
+            "fencing_owner": envelope["fencing_owner"],
+            "durable_barrier_id": envelope["durable_barrier_id"],
+            "state_revision": envelope["state_revision"],
+        }
+        if any(
+            getattr(lease, "revision" if field == "state_revision" else field) != value
+            for field, value in expected.items()
+        ):
+            raise UpgradeBindingError("live admission lease identity does not match runtime")
+        try:
+            scope.assert_context(expected)
+        except Exception as error:
+            raise UpgradeBindingError(
+                "live lock-domain scope identity does not match runtime"
+            ) from error
+        session_store = getattr(scope, "_session_store", None)
+        if type(session_store) is not SQLiteBarrierSessionStore:
+            raise UpgradeBindingError("live scope does not carry a concrete session store")
+        if getattr(scope, "_session_identity", None) != session.identity:
+            raise UpgradeBindingError("live scope session identity does not match durable session")
+        if getattr(scope, "_session_revision", None) != session.revision:
+            raise UpgradeBindingError("live scope session revision does not match durable session")
+        if getattr(scope, "_lease", None) != lease:
+            raise UpgradeBindingError("live scope lease does not match admission lease")
+        try:
+            with scope.hold():
+                observed = session_store.snapshot_owned_by_caller()
+        except Exception as error:
+            raise UpgradeBindingError("live durable session reread was rejected") from error
+        if observed != session:
+            raise UpgradeBindingError("live durable session changed during binding")
+        runtime.validate_live_session(observed)
+        backend = envelope["backend"]
+        expected_branch: str | None = None
+        expected_head: str | None = None
+        if backend == "git" and type(adapter) is not GitAuthorityAdapter:
+            raise UpgradeBindingError("Git live backend adapter is not concrete")
+        if backend == "git":
+            if not isinstance(expected_git_repository, Path):
+                raise UpgradeBindingError("expected Git repository identity is required")
+            git_adapter = cast(GitAuthorityAdapter, adapter)
+            if git_adapter._repository != expected_git_repository.resolve():
+                raise UpgradeBindingError("Git live backend is bound to a foreign repository")
+        elif expected_git_repository is not None:
+            raise UpgradeBindingError("Git repository identity is invalid for SQLite")
+        if backend == "sqlite":
+            if type(adapter) is not SQLiteAuthorityAdapter:
+                raise UpgradeBindingError("SQLite live backend adapter is not concrete")
+            if getattr(session_store, "authority_path", None) != getattr(
+                adapter, "_authority", None
+            ):
+                raise UpgradeBindingError("SQLite live backend is bound to a foreign authority")
+        if backend == "git":
+            try:
+                git_adapter = cast(GitAuthorityAdapter, adapter)
+                expected_branch = git_adapter._git("symbolic-ref", "--short", "-q", "HEAD")
+                expected_head = git_adapter._git("rev-parse", "--verify", "HEAD")
+            except Exception as error:
+                raise UpgradeBindingError("Git live backend reread was rejected") from error
+        try:
+            runtime.reread_backend_bound(
+                adapter,
+                scope,
+                lease,
+                admission_recheck,
+                expected_branch=expected_branch,
+                expected_head=expected_head,
+            )
+        except Exception as error:
+            raise UpgradeBindingError("live backend reread was rejected") from error
+        issued = object.__new__(cls)
+        object.__setattr__(issued, "runtime", runtime)
+        object.__setattr__(issued, "session", session)
+        object.__setattr__(issued, "scope", scope)
+        object.__setattr__(issued, "lease", lease)
+        object.__setattr__(issued, "admission_recheck", admission_recheck)
+        object.__setattr__(issued, "adapter", adapter)
+        object.__setattr__(issued, "_token", _LIVE_BINDING_TOKEN)
+        object.__setattr__(issued, "expected_branch", expected_branch)
+        object.__setattr__(issued, "expected_head", expected_head)
+        object.__setattr__(issued, "expected_git_repository", expected_git_repository)
+        _LIVE_BINDING_REGISTRY[id(issued)] = (issued, _live_binding_fingerprint(issued))
+        return issued
+
+    def reread_backend(
+        self, *, expected_branch: str | None = None, expected_head: str | None = None
+    ) -> dict[str, object]:
+        """Obtain fresh read-only backend evidence through this binding."""
+        if expected_branch is None:
+            expected_branch = self.expected_branch
+        if expected_head is None:
+            expected_head = self.expected_head
+        return self.runtime.reread_backend_bound(
+            self.adapter,
+            self.scope,
+            self.lease,
+            self.admission_recheck,
+            expected_branch=expected_branch,
+            expected_head=expected_head,
+        )
+
+    def matches_runtime(self, runtime: UpgradeRuntimeBinding) -> bool:
+        """Return whether this live binding is for the exact runtime binding."""
+        return (
+            self.is_admitted()
+            and isinstance(runtime, UpgradeRuntimeBinding)
+            and self.runtime == runtime
+        )
+
+    def matches_contract(self, contract: Mapping[str, object], backend: str) -> bool:
+        """Return whether this binding is admitted for one exact contract."""
+        return (
+            self.is_admitted()
+            and self.runtime.contract_digest == canonical_contract_digest(contract)
+            and self.runtime.contract_backend == backend
+        )
+
+    def is_admitted(self) -> bool:
+        """Revalidate the sealed binding before a production boundary consumes it."""
+        if type(self) is not LiveUpgradeBinding:
+            return False
+        if getattr(self, "_token", None) is not _LIVE_BINDING_TOKEN:
+            return False
+        issued = _LIVE_BINDING_REGISTRY.get(id(self))
+        if issued is None or issued[0] is not self or issued[1] != _live_binding_fingerprint(self):
+            return False
+        try:
+            refreshed = LiveUpgradeBinding.bind(
+                self.runtime,
+                self.session,
+                self.scope,
+                self.lease,
+                self.admission_recheck,
+                self.adapter,
+                expected_git_repository=self.expected_git_repository,
+            )
+        except Exception:
+            return False
+        return (
+            refreshed.expected_branch == self.expected_branch
+            and refreshed.expected_head == self.expected_head
+        )
 
 
 def canonical_contract_digest(contract: Mapping[str, object]) -> str:
@@ -165,7 +385,7 @@ class UpgradeRuntimeBinding:
         )
 
     @classmethod
-    def from_mapping(cls, value: Mapping[str, object]) -> UpgradeRuntimeBinding:
+    def from_mapping(cls, value: Mapping[str, object]) -> UpgradeRuntimeBinding:  # noqa: C901
         if set(value) != set(BINDING_FIELDS):
             raise UpgradeBindingError("runtime binding fields are invalid")
         if value["schema_version"] != BINDING_SCHEMA_VERSION:
@@ -173,6 +393,20 @@ class UpgradeRuntimeBinding:
         envelope = value["runtime_envelope"]
         if not isinstance(envelope, Mapping) or set(envelope) != set(ENVELOPE_FIELDS):
             raise UpgradeBindingError("runtime binding envelope is invalid")
+        if value["contract_operation_id"] != envelope.get("operation_id"):
+            raise UpgradeBindingError("runtime binding operation identity is inconsistent")
+        if value["contract_backend"] != envelope.get("backend"):
+            raise UpgradeBindingError("runtime binding backend identity is inconsistent")
+        for binding_field, envelope_field in (
+            ("contract_selector_ref", "selector_ref"),
+            ("contract_expected_state_revision", "state_revision"),
+            ("contract_barrier_id", "durable_barrier_id"),
+            ("contract_fencing_token", "fencing_token"),
+        ):
+            if value[binding_field] != envelope.get(envelope_field):
+                raise UpgradeBindingError(
+                    f"runtime binding {binding_field} is inconsistent with envelope"
+                )
         for field in (
             "contract_digest",
             "session_identity_digest",

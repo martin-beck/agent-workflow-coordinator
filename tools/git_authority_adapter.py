@@ -135,11 +135,33 @@ class GitAuthorityAdapter:
     requires_bound_rollback = True
     bound_rollback_kind = "git"
 
-    def __init__(self, repository: Path) -> None:
+    def __init__(
+        self,
+        repository: Path,
+        *,
+        repository_identity: tuple[int, int, int, int] | None = None,
+    ) -> None:
         resolved = repository.resolve()
         if not resolved.is_dir():
             raise GitAuthorityError("Git authority repository is unavailable")
         self._repository = resolved
+        git_directory = resolved / ".git"
+        self._repository_identity: tuple[int, int, int, int] | None
+        if repository_identity is not None:
+            self._repository_identity = repository_identity
+        else:
+            try:
+                root_status = resolved.stat()
+                git_status = git_directory.stat()
+            except OSError:
+                self._repository_identity = None
+            else:
+                self._repository_identity = (
+                    root_status.st_dev,
+                    root_status.st_ino,
+                    git_status.st_dev,
+                    git_status.st_ino,
+                )
 
     def lifecycle_session(self) -> LifecycleSession:
         """Return an opaque session bound to this adapter's repository."""
@@ -543,6 +565,27 @@ class GitAuthorityAdapter:
             raise GitAuthorityError("Git authority context is invalid") from error
         if not isinstance(scope, LockDomainScope):
             raise GitAuthorityError("concrete lock-domain scope is required")
+        try:
+            root_status = self._repository.stat()
+            git_status = (self._repository / ".git").stat()
+            current_identity = (
+                root_status.st_dev,
+                root_status.st_ino,
+                git_status.st_dev,
+                git_status.st_ino,
+            )
+            captured_identity = getattr(self, "_repository_identity", None)
+            if captured_identity is not None and current_identity != captured_identity:
+                raise GitAuthorityError("Git authority repository identity changed")
+            from tools.upgrade_authority import read_git_authority_snapshot
+
+            snapshot = read_git_authority_snapshot(self._repository)
+            if snapshot.branch != expected_branch or snapshot.head != expected_head:
+                raise GitAuthorityError("Git authority identity changed")
+        except GitAuthorityError:
+            raise
+        except Exception as error:
+            raise GitAuthorityError("Git authority identity reread was rejected") from error
         expected_identity = {
             "project_id": lease.project_id,
             "authority_revision": lease.authority_revision,

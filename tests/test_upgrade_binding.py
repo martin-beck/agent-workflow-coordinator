@@ -4,10 +4,14 @@
 from __future__ import annotations
 
 import copy
+import json
+import sqlite3
+import tempfile
 import unittest
 import uuid
+from contextlib import closing
 from dataclasses import replace
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 from typing import Any, cast
 from unittest.mock import MagicMock, patch
 
@@ -15,10 +19,17 @@ from tools import upgrade_binding as binding_module
 from tools.admission_lease import AdmissionLease, AdmissionRecheck
 from tools.generate_upgrade_contract import generate
 from tools.git_authority_adapter import GitAuthorityAdapter
+from tools.handoffctl import locked
 from tools.lock_domain_scope import LockDomainScope
-from tools.rollback_control_store import BarrierSessionState
+from tools.mutation_fence import MutationFence, provision, provision_control_binding
+from tools.rollback_control_store import (
+    BarrierSessionState,
+    SQLiteBarrierSessionStore,
+    SQLiteRollbackControlStore,
+)
 from tools.sqlite_authority_adapter import SQLiteAuthorityAdapter
-from tools.upgrade_binding import UpgradeBindingError, UpgradeRuntimeBinding
+from tools.upgrade_binding import LiveUpgradeBinding, UpgradeBindingError, UpgradeRuntimeBinding
+from tools.upgrade_commands import UpgradeCommandError, execute_upgrade_command
 from tools.upgrade_identity import (
     BarrierChildIdentity,
     BarrierSessionIdentity,
@@ -28,7 +39,7 @@ from tools.upgrade_identity import (
 )
 
 
-def _contract(backend: str = "sqlite") -> dict[str, Any]:
+def _contract(backend: str = "sqlite", operation_id: str = "upgrade-001") -> dict[str, Any]:
     def release(version: str, seed: str) -> dict[str, str]:
         return {
             "version": version,
@@ -42,7 +53,7 @@ def _contract(backend: str = "sqlite") -> dict[str, Any]:
 
     return generate(
         {
-            "operation_id": "upgrade-001",
+            "operation_id": operation_id,
             "backend": backend,
             "selector_ref": ".runtime/runtime-selector.json",
             "expected_state_revision": 7,
@@ -197,6 +208,316 @@ class UpgradeBindingTests(unittest.TestCase):
                 )
             )
 
+    def test_binds_live_session_scope_and_backend_without_authorizing_mutation(self) -> None:
+        contract = _contract("git")
+        runtime = _envelope(contract)
+        session_record: dict[str, object] = {
+            "schema_version": 1,
+            "project_id": runtime["project_id"],
+            "attempt_id": "attempt-7",
+            "state_revision": runtime["state_revision"],
+            "authority_revision_at_acquire": runtime["authority_revision"],
+            "durable_barrier_id": runtime["durable_barrier_id"],
+            "fencing_token": runtime["fencing_token"],
+            "fencing_owner": runtime["fencing_owner"],
+        }
+        session_record["identity_digest"] = canonical_barrier_session_digest(session_record)
+        identity = BarrierSessionIdentity.from_record(session_record)
+        binding = UpgradeRuntimeBinding.bind(
+            contract, runtime, session_identity_digest=identity.identity_digest
+        )
+        child = BarrierChildIdentity.bind(identity, str(runtime["operation_id"]), "rollback")
+        session = BarrierSessionState(identity, "held", 2, rollback_child=child)
+        lease = AdmissionLease(
+            project_id=str(runtime["project_id"]),
+            authority_revision=str(runtime["authority_revision"]),
+            fencing_token=str(runtime["fencing_token"]),
+            fencing_owner=str(runtime["fencing_owner"]),
+            durable_barrier_id=str(runtime["durable_barrier_id"]),
+            revision=cast(int, runtime["state_revision"]),
+        )
+        recheck = AdmissionRecheck(
+            lease=lease,
+            project_id=lease.project_id,
+            authority_revision=lease.authority_revision,
+            fencing_token=lease.fencing_token,
+            fencing_owner=lease.fencing_owner,
+            durable_barrier_id=lease.durable_barrier_id,
+            revision=lease.revision,
+        )
+        scope = object.__new__(LockDomainScope)
+        scope._session_identity = identity
+        scope._session_revision = session.revision
+        scope._lease = lease
+        store = MagicMock()
+        store.authority_path = None
+        scope._session_store = store
+        adapter = object.__new__(GitAuthorityAdapter)
+        with self.assertRaises(UpgradeBindingError):
+            LiveUpgradeBinding.bind(
+                binding,
+                session,
+                scope,
+                replace(lease, fencing_token="foreign"),  # noqa: S106
+                recheck,
+                adapter,
+            )
+        with self.assertRaises(UpgradeBindingError):
+            LiveUpgradeBinding.bind(
+                binding, replace(session, status="released"), scope, lease, recheck, adapter
+            )
+        with self.assertRaises(TypeError):
+            LiveUpgradeBinding()
+
+    def test_rejects_nonconcrete_live_binding_components(self) -> None:
+        contract = _contract("sqlite")
+        runtime = _envelope(contract)
+        binding = UpgradeRuntimeBinding.bind(contract, runtime, session_identity_digest="a" * 64)
+        with self.assertRaisesRegex(UpgradeBindingError, "runtime upgrade binding"):
+            LiveUpgradeBinding.bind(
+                cast(Any, object()), object(), object(), object(), object(), object()
+            )
+        with self.assertRaisesRegex(UpgradeBindingError, "live barrier session"):
+            LiveUpgradeBinding.bind(binding, object(), object(), object(), object(), object())
+        session = object.__new__(BarrierSessionState)
+        with self.assertRaisesRegex(UpgradeBindingError, "lock-domain scope"):
+            LiveUpgradeBinding.bind(binding, session, object(), object(), object(), object())
+        scope = object.__new__(LockDomainScope)
+        with self.assertRaisesRegex(UpgradeBindingError, "admission lease"):
+            LiveUpgradeBinding.bind(binding, session, scope, object(), object(), object())
+        lease = object.__new__(AdmissionLease)
+        with self.assertRaisesRegex(UpgradeBindingError, "admission recheck"):
+            LiveUpgradeBinding.bind(binding, session, scope, lease, object(), object())
+
+    def test_rejects_unverified_backend_evidence(self) -> None:
+        contract = _contract("sqlite")
+        runtime = _envelope(contract)
+        binding = UpgradeRuntimeBinding.bind(contract, runtime, session_identity_digest="a" * 64)
+        evidence = {
+            **runtime,
+            "phase": "rollback",
+            "backend_identity_verified": False,
+            "mutates_authority": False,
+            "sqlite_integrity_verified": True,
+            "sqlite_foreign_keys_verified": True,
+        }
+        with self.assertRaisesRegex(UpgradeBindingError, "not verified"):
+            binding.validate_backend_evidence(evidence)
+
+    def test_binds_real_sqlite_session_scope_and_adapter(self) -> None:
+        contract = _contract()
+        runtime = _envelope(contract)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            root.chmod(0o700)
+            authority = root / "authority.sqlite"
+            with closing(sqlite3.connect(authority)) as connection, connection:
+                connection.execute("CREATE TABLE records (id INTEGER PRIMARY KEY, body TEXT)")
+                connection.execute("INSERT INTO records(body) VALUES ('clean')")
+            authority.chmod(0o600)
+            control_path = root / "control.sqlite"
+            store = SQLiteRollbackControlStore(control_path, str(runtime["project_id"]), authority)
+            marker = root / "authority-marker.json"
+            lifecycle = root / "authority-lifecycle.json"
+            authority_lock = root / "authority.lock"
+            control_binding = root / "control-binding.json"
+            provision(authority, marker, lifecycle, authority_lock, str(runtime["project_id"]))
+            provision_control_binding(
+                control_path,
+                control_binding,
+                store.control_lock_path,
+                str(runtime["project_id"]),
+            )
+            fence = MutationFence(
+                authority,
+                marker,
+                lifecycle,
+                authority_lock,
+                control_path,
+                control_binding,
+                store.control_lock_path,
+            )
+            session_record: dict[str, object] = {
+                "schema_version": 1,
+                "project_id": runtime["project_id"],
+                "attempt_id": "attempt-7",
+                "state_revision": runtime["state_revision"],
+                "authority_revision_at_acquire": runtime["authority_revision"],
+                "durable_barrier_id": runtime["durable_barrier_id"],
+                "fencing_token": runtime["fencing_token"],
+                "fencing_owner": runtime["fencing_owner"],
+            }
+            session_record["identity_digest"] = canonical_barrier_session_digest(session_record)
+            identity = BarrierSessionIdentity.from_record(session_record)
+            forward_child = BarrierChildIdentity.bind(
+                identity, f"{runtime['operation_id']}:forward", "new"
+            )
+            child = BarrierChildIdentity.bind(identity, str(runtime["operation_id"]), "rollback")
+            session = SQLiteBarrierSessionStore(store, lambda: str(runtime["authority_revision"]))
+            session.create(identity)
+            session.bind_child(1, forward_child)
+            session.bind_child(2, child)
+            lease = AdmissionLease(
+                project_id=str(runtime["project_id"]),
+                authority_revision=str(runtime["authority_revision"]),
+                fencing_token=str(runtime["fencing_token"]),
+                fencing_owner=str(runtime["fencing_owner"]),
+                durable_barrier_id=str(runtime["durable_barrier_id"]),
+                revision=cast(int, runtime["state_revision"]),
+            )
+            recheck = AdmissionRecheck(
+                lease=lease,
+                project_id=lease.project_id,
+                authority_revision=lease.authority_revision,
+                fencing_token=lease.fencing_token,
+                fencing_owner=lease.fencing_owner,
+                durable_barrier_id=lease.durable_barrier_id,
+                revision=lease.revision,
+            )
+            scope = LockDomainScope.bind(session, fence, lease, recheck, locked)
+            adapter = SQLiteAuthorityAdapter(authority)
+            binding = UpgradeRuntimeBinding.bind(
+                contract, runtime, session_identity_digest=identity.identity_digest
+            )
+            live = LiveUpgradeBinding.bind(
+                binding, session.snapshot(), scope, lease, recheck, adapter
+            )
+            foreign_lease = replace(lease, revision=99)
+            foreign_recheck = replace(recheck, lease=foreign_lease, revision=99)
+            with self.assertRaisesRegex(UpgradeBindingError, "lease identity"):
+                LiveUpgradeBinding.bind(
+                    binding,
+                    session.snapshot(),
+                    scope,
+                    foreign_lease,
+                    foreign_recheck,
+                    adapter,
+                )
+            with (
+                patch.object(scope, "assert_context", side_effect=RuntimeError("drift")),
+                self.assertRaisesRegex(UpgradeBindingError, "scope identity"),
+            ):
+                LiveUpgradeBinding.bind(binding, session.snapshot(), scope, lease, recheck, adapter)
+            original_identity = scope._session_identity
+            scope._session_identity = replace(original_identity, attempt_id="foreign")
+            with self.assertRaisesRegex(UpgradeBindingError, "session identity"):
+                LiveUpgradeBinding.bind(binding, session.snapshot(), scope, lease, recheck, adapter)
+            scope._session_identity = original_identity
+            original_revision = scope._session_revision
+            scope._session_revision = original_revision + 1
+            with self.assertRaisesRegex(UpgradeBindingError, "session revision"):
+                LiveUpgradeBinding.bind(binding, session.snapshot(), scope, lease, recheck, adapter)
+            scope._session_revision = original_revision
+            original_scope_lease = scope._lease
+            scope._lease = replace(lease, fencing_token="foreign")  # noqa: S106
+            with (
+                patch.object(scope, "assert_context", return_value=None),
+                self.assertRaisesRegex(UpgradeBindingError, "scope lease"),
+            ):
+                LiveUpgradeBinding.bind(binding, session.snapshot(), scope, lease, recheck, adapter)
+            scope._lease = original_scope_lease
+            evidence = live.reread_backend()
+            self.assertTrue(live.matches_runtime(binding))
+            self.assertFalse(live.matches_runtime(cast(Any, object())))
+            self.assertTrue(live.matches_contract(contract, "sqlite"))
+            self.assertFalse(live.matches_contract({}, "sqlite"))
+            original_token = live._token
+            object.__setattr__(live, "_token", object())
+            self.assertFalse(live.is_admitted())
+            object.__setattr__(live, "_token", original_token)
+            original_store = scope._session_store
+            scope._session_store = cast(Any, object())
+            with self.assertRaisesRegex(UpgradeBindingError, "concrete session store"):
+                LiveUpgradeBinding.bind(binding, session.snapshot(), scope, lease, recheck, adapter)
+            scope._session_store = original_store
+            with self.assertRaisesRegex(UpgradeBindingError, "Git repository identity"):
+                LiveUpgradeBinding.bind(
+                    binding,
+                    session.snapshot(),
+                    scope,
+                    lease,
+                    recheck,
+                    adapter,
+                    expected_git_repository=Path("/foreign"),
+                )
+            foreign_authority = root / "foreign.sqlite"
+            with sqlite3.connect(foreign_authority):
+                pass
+            foreign_authority.chmod(0o600)
+            foreign_adapter = SQLiteAuthorityAdapter(foreign_authority)
+            with self.assertRaisesRegex(UpgradeBindingError, "foreign authority"):
+                LiveUpgradeBinding.bind(
+                    binding, session.snapshot(), scope, lease, recheck, foreign_adapter
+                )
+            adapter_any: Any = adapter
+            original_snapshot_bound = adapter_any.snapshot_bound
+            adapter_any.snapshot_bound = MagicMock(side_effect=RuntimeError("stale"))
+            with self.assertRaisesRegex(UpgradeBindingError, "reread was rejected"):
+                binding.reread_backend_bound(adapter, scope, lease, recheck)
+            adapter_any.snapshot_bound = MagicMock(return_value=[])
+            with self.assertRaisesRegex(UpgradeBindingError, "invalid evidence"):
+                binding.reread_backend_bound(adapter, scope, lease, recheck)
+            adapter_any.snapshot_bound = original_snapshot_bound
+            self.assertTrue(evidence["sqlite_integrity_verified"])
+            self.assertFalse(evidence["mutates_authority"])
+            self.assertFalse(session.operation_owned_by_current_thread)
+            contract_path = root / "contract.json"
+            contract_path.write_text(json.dumps(contract), encoding="utf-8")
+            with self.assertRaisesRegex(UpgradeCommandError, "execution protocol is incomplete"):
+                execute_upgrade_command("apply", contract_path, "sqlite", live_binding=live)
+            binding_path = root / "binding.json"
+            binding_path.write_text(json.dumps(binding.as_mapping()), encoding="utf-8")
+            with self.assertRaisesRegex(UpgradeCommandError, "execution protocol is incomplete"):
+                execute_upgrade_command("rollback", contract_path, "sqlite", binding_path, live)
+            foreign_contract = _contract(operation_id="foreign-operation")
+            foreign_path = root / "foreign-contract.json"
+            foreign_path.write_text(json.dumps(foreign_contract), encoding="utf-8")
+            with self.assertRaisesRegex(UpgradeCommandError, "does not match the contract"):
+                execute_upgrade_command("apply", foreign_path, "sqlite", live_binding=live)
+            self.assertTrue(live.is_admitted())
+            forged = object.__new__(LiveUpgradeBinding)
+            for field in (
+                "runtime",
+                "session",
+                "scope",
+                "lease",
+                "admission_recheck",
+                "adapter",
+                "_token",
+                "expected_branch",
+                "expected_head",
+                "expected_git_repository",
+            ):
+                object.__setattr__(forged, field, getattr(live, field))
+            object.__setattr__(forged, "adapter", object.__new__(SQLiteAuthorityAdapter))
+            self.assertFalse(forged.is_admitted())
+            session.begin_reopen(
+                3,
+                "rollback",
+                {
+                    "operation_id": str(runtime["operation_id"]),
+                    "target": "rollback",
+                    "barrier_identity_digest": identity.identity_digest,
+                    "validated": True,
+                },
+            )
+            self.assertFalse(live.is_admitted())
+            session.complete_reopen(
+                4,
+                {
+                    "authority_revision": str(runtime["authority_revision"]),
+                    "backend": "sqlite",
+                    "backend_roundtrip": "sqlite",
+                    "foreign_key_violations": 0,
+                    "fencing_token": str(runtime["fencing_token"]),
+                    "integrity_check": "ok",
+                    "project_id": str(runtime["project_id"]),
+                    "target": "rollback",
+                    "verified": True,
+                },
+            )
+            self.assertFalse(live.is_admitted())
+
     def test_rejects_malformed_binding_records(self) -> None:
         contract = _contract()
         binding = UpgradeRuntimeBinding.bind(
@@ -232,6 +553,25 @@ class UpgradeBindingTests(unittest.TestCase):
         for value in mutations:
             with self.subTest(value=value), self.assertRaises(UpgradeBindingError):
                 UpgradeRuntimeBinding.from_mapping(value)
+
+    def test_rejects_inconsistent_persisted_binding_identity(self) -> None:
+        contract = _contract()
+        runtime = _envelope(contract)
+        binding = UpgradeRuntimeBinding.bind(
+            contract, runtime, session_identity_digest="a" * 64
+        ).as_mapping()
+        for field, value in (
+            ("contract_backend", "git"),
+            ("contract_expected_state_revision", 99),
+            ("contract_selector_ref", "foreign-selector.json"),
+            ("contract_barrier_id", "foreign-barrier"),
+            ("contract_fencing_token", "foreign-fence"),
+            ("contract_operation_id", "foreign-operation"),
+        ):
+            changed = dict(binding)
+            changed[field] = value
+            with self.subTest(field=field), self.assertRaises(UpgradeBindingError):
+                UpgradeRuntimeBinding.from_mapping(changed)
 
     def test_rejects_live_session_status_and_identity_drift(self) -> None:
         contract = _contract()

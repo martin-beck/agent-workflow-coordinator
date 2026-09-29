@@ -8,19 +8,22 @@ from __future__ import annotations
 import io
 import json
 import os
+import subprocess
 import tempfile
 import unittest
 from collections.abc import Callable
 from contextlib import redirect_stdout
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from unittest.mock import patch
 
 from tools.generate_upgrade_contract import generate
+from tools.runtime_bootstrap import ExpectedRuntimeIdentity
 from tools.upgrade_binding import UpgradeRuntimeBinding
 from tools.upgrade_commands import (
     MAX_CONTRACT_BYTES,
     UpgradeCommandError,
+    consume_selected_runtime_command,
     execute_upgrade_command,
 )
 from tools.upgrade_contract_runtime import RuntimeContractError, validate_runtime_contract
@@ -93,6 +96,68 @@ class UpgradeCommandTests(unittest.TestCase):
         path.write_text(json.dumps(binding.as_mapping()), encoding="utf-8")
         return path
 
+    def test_runtime_consumption_validates_manifest_and_wraps_launcher_errors(self) -> None:
+        identity = ExpectedRuntimeIdentity(
+            "a" * 40,
+            "refs/tags/v1",
+            "b" * 40,
+            "c" * 64,
+            "d" * 64,
+            "e" * 64,
+        )
+        with self.assertRaisesRegex(UpgradeCommandError, "manifest digest is invalid"):
+            consume_selected_runtime_command(self.path, self.root, identity, "not-a-digest")
+
+        import tools.upgrade_commands as commands
+
+        def launcher(
+            _selector: Path,
+            _releases: Path,
+            expected: Any,
+            verify: Any,
+            _args: Any,
+        ) -> Any:
+            runtime = self.root / "v1"
+            runtime.mkdir()
+            manifest = runtime / "runtime-manifest.json"
+            manifest.write_text("manifest", encoding="utf-8")
+            verified = verify(runtime, expected)
+            self.assertEqual(expected, verified.identity)
+            return subprocess.CompletedProcess(["runtime"], 7)
+
+        import hashlib
+
+        digest = hashlib.sha256(b"manifest").hexdigest()
+        with patch.object(commands, "run_selected_runtime", side_effect=launcher):
+            self.assertEqual(
+                7,
+                consume_selected_runtime_command(self.path, self.root, identity, digest),
+            )
+
+        with (
+            patch.object(commands, "run_selected_runtime", side_effect=RuntimeError("boom")),
+            self.assertRaisesRegex(UpgradeCommandError, "consumption failed"),
+        ):
+            consume_selected_runtime_command(self.path, self.root, identity, digest)
+
+        def missing_manifest(
+            _selector: Path,
+            _releases: Path,
+            expected: Any,
+            verify: Any,
+            _args: Any,
+        ) -> Any:
+            runtime = self.root / "missing"
+            runtime.mkdir()
+            verify(runtime, expected)
+            raise AssertionError("verification should reject missing manifest")
+
+        with (
+            patch.object(commands, "run_selected_runtime", side_effect=missing_manifest),
+            self.assertRaisesRegex(UpgradeCommandError, "manifest is unavailable"),
+        ):
+            consume_selected_runtime_command(self.path, self.root, identity, digest)
+
     def test_check_and_plan_emit_only_sanitized_non_executable_data(self) -> None:
         document = contract()
         self.write(document)
@@ -136,7 +201,7 @@ class UpgradeCommandTests(unittest.TestCase):
         document = contract(operation_id="upgrade-001")
         self.write(document)
         binding = self.write_binding(document)
-        with self.assertRaisesRegex(UpgradeCommandError, "execution protocol is incomplete"):
+        with self.assertRaisesRegex(UpgradeCommandError, "live durable session/backend binding"):
             execute_upgrade_command("rollback", self.path, "sqlite", binding)
         changed = json.loads(binding.read_text(encoding="utf-8"))
         changed["contract_digest"] = "0" * 64
@@ -145,6 +210,12 @@ class UpgradeCommandTests(unittest.TestCase):
             UpgradeCommandError, "binding validation failed|stale|does not match"
         ):
             execute_upgrade_command("rollback", self.path, "sqlite", binding)
+
+    def test_mutation_boundary_requires_matching_live_binding(self) -> None:
+        document = contract(operation_id="upgrade-001")
+        self.write(document)
+        with self.assertRaisesRegex(UpgradeCommandError, "concrete live"):
+            execute_upgrade_command("apply", self.path, "sqlite", live_binding=cast(Any, object()))
 
     def test_contract_file_and_dispatch_boundaries_fail_closed(self) -> None:
         self.write(contract())

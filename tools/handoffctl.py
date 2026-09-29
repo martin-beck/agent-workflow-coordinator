@@ -23,6 +23,11 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import Any, cast
 
+if not __package__:
+    _SCRIPT_ROOT = str(Path(__file__).resolve().parent.parent)
+    if _SCRIPT_ROOT not in sys.path:
+        sys.path.insert(0, _SCRIPT_ROOT)
+
 if __package__:
     from .board_metrics import build_metrics
     from .board_metrics import encode as encode_metrics
@@ -2997,9 +3002,16 @@ def cmd_migrate(args: argparse.Namespace) -> None:  # noqa: C901
 def cmd_upgrade(args: argparse.Namespace) -> int:
     """Dispatch only the reviewed, fail-closed upgrade command boundary."""
     if __package__:
-        from .upgrade_commands import consume_selected_runtime_command, execute_upgrade_command
+        from .upgrade_commands import (
+            _read_contract,
+            _read_runtime_binding,
+            consume_selected_runtime_command,
+            execute_upgrade_command,
+        )
     else:
         from upgrade_commands import (  # type: ignore[import-not-found,no-redef]
+            _read_contract,
+            _read_runtime_binding,
             consume_selected_runtime_command,
             execute_upgrade_command,
         )
@@ -3027,11 +3039,64 @@ def cmd_upgrade(args: argparse.Namespace) -> int:
             tuple(args.runtime_command),
         )
 
+    live_binding = None
+    binding_path = Path(args.binding) if args.binding is not None else None
+    selected_backend = str(backend_selection()["backend"])
+    if args.upgrade_action in {"apply", "rollback"}:
+        if __package__:
+            from .production_upgrade_binding import (
+                resolve_git_live_binding,
+                resolve_sqlite_live_binding,
+            )
+        else:  # pragma: no cover - direct script execution
+            from production_upgrade_binding import (  # type: ignore[import-not-found,no-redef]
+                resolve_git_live_binding,
+                resolve_sqlite_live_binding,
+            )
+        if binding_path is None:
+            raise RuntimeError(
+                "mutating upgrade actions require --binding; no coordinator state was mutated"
+            )
+        contract = _read_contract(Path(args.contract))
+        runtime_binding = _read_runtime_binding(
+            binding_path, contract, str(backend_selection()["backend"])
+        )
+        if selected_backend == "sqlite":
+            live_binding = resolve_sqlite_live_binding(
+                runtime_binding,
+                database=DATABASE,
+                control_database=CONTROL_DATABASE,
+                authority_marker=AUTHORITY_MARKER,
+                authority_lifecycle=AUTHORITY_LIFECYCLE,
+                authority_lock=AUTHORITY_LOCK,
+                control_binding=CONTROL_BINDING,
+                control_lock=CONTROL_LOCK,
+                project_binding=BINDING,
+                backend_config=BACKEND_CONFIG,
+                runtime_selector=RUNTIME / "runtime-selector.json",
+                common_lock=locked,
+            )
+        else:
+            live_binding = resolve_git_live_binding(
+                runtime_binding,
+                repository=ROOT,
+                control_database=CONTROL_DATABASE,
+                authority_marker=AUTHORITY_MARKER,
+                authority_lifecycle=AUTHORITY_LIFECYCLE,
+                authority_lock=AUTHORITY_LOCK,
+                control_binding=CONTROL_BINDING,
+                control_lock=CONTROL_LOCK,
+                project_binding=BINDING,
+                runtime_selector=RUNTIME / "runtime-selector.json",
+                common_lock=locked,
+            )
+
     return execute_upgrade_command(
         str(args.upgrade_action),
         Path(args.contract),
-        str(backend_selection()["backend"]),
-        Path(args.binding) if args.binding is not None else None,
+        selected_backend,
+        binding_path,
+        live_binding,
     )
 
 

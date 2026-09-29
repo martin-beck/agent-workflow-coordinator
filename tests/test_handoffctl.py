@@ -2748,6 +2748,32 @@ class HandoffTest(unittest.TestCase):
         ):
             self.assertEqual(1, CORE.main())
 
+    def test_cmd_upgrade_dispatches_both_live_binding_resolvers(self) -> None:
+        commands = importlib.import_module("upgrade_commands")
+        production = importlib.import_module("production_upgrade_binding")
+        args = argparse.Namespace(
+            upgrade_action="apply",
+            contract="contract.json",
+            binding="binding.json",
+        )
+        for backend, resolver_name in (
+            ("sqlite", "resolve_sqlite_live_binding"),
+            ("git", "resolve_git_live_binding"),
+        ):
+            with (
+                self.subTest(backend=backend),
+                patch.object(CORE, "backend_selection", return_value={"backend": backend}),
+                patch.object(commands, "_read_contract", return_value={"contract": True}),
+                patch.object(commands, "_read_runtime_binding", return_value="runtime"),
+                patch.object(production, resolver_name, return_value="live") as resolver,
+                patch.object(commands, "execute_upgrade_command", return_value=0) as execute,
+            ):
+                self.assertEqual(0, CORE.cmd_upgrade(args))
+            resolver.assert_called_once()
+            execute.assert_called_once_with(
+                "apply", Path("contract.json"), backend, Path("binding.json"), "live"
+            )
+
     def test_oracle_gate_dispatch_and_transition_errors_are_normalized(self) -> None:
         digest = "sha256:" + "a" * 64
         values = CORE._artifact_values([f"plan/before={digest}"], "--before")
