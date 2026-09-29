@@ -37,6 +37,7 @@ class ProductionPhaseBinding:
     contract: Mapping[str, object]
     operations: Mapping[str, Mapping[str, object]]
     context: PhaseContext
+    live_binding: LiveUpgradeBinding
     backend: BoundProductionBackendAdapter
     rollback: BoundRollbackCapability
     engine: UpgradeEngine
@@ -218,4 +219,6 @@ def build_production_phase_binding(
         )
     except Exception as error:
         raise ProductionPhaseBindingError("production phase engine binding was rejected") from error
-    return ProductionPhaseBinding(validated, operations, context, backend, rollback, engine)
+    return ProductionPhaseBinding(
+        validated, operations, context, live_binding, backend, rollback, engine
+    )
