@@ -22,13 +22,14 @@ class ProductionEffectBindingError(ValueError):
     """A durable backend effect cannot be bound to the live identity."""
 
 
-def _validate_common(
+def _validate_common(  # noqa: C901
     binding: LiveUpgradeBinding,
     admission: CommitAdmissionBundle,
     session_revision: int,
     admission_reread: object,
     *,
     expected_target: str,
+    expected_suffix: str,
     require_reread: bool = True,
 ) -> None:
     if type(binding) is not LiveUpgradeBinding or not binding.is_admitted():
@@ -40,6 +41,10 @@ def _validate_common(
     if type(session_revision) is not int or session_revision < 1:
         raise ProductionEffectBindingError("effect session revision is invalid")
     envelope = binding.runtime.runtime_envelope
+    if envelope.get("target") != "rollback":
+        raise ProductionEffectBindingError("canonical live binding target is invalid")
+    if not admission.operation_id.endswith(f":{expected_suffix}"):
+        raise ProductionEffectBindingError("effect operation suffix is invalid")
     expected = {
         "backend": admission.backend,
         "operation_id": admission.operation_id.rsplit(":", 1)[0],
@@ -76,6 +81,7 @@ def bind_durable_commit_capability(
         session_revision,
         admission_reread,
         expected_target="new",
+        expected_suffix="commit",
     )
     adapter = cast(Any, binding.adapter)
     try:
@@ -123,6 +129,7 @@ def bind_durable_rollback_capability(
         session_revision,
         rollback_effect,
         expected_target="rollback",
+        expected_suffix="rollback",
         require_reread=False,
     )
     try:

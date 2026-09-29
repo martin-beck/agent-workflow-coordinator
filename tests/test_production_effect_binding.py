@@ -28,6 +28,7 @@ def _binding(backend: str) -> LiveUpgradeBinding:
             "state_revision": 3,
             "durable_barrier_id": "barrier-test",
             "fencing_token": "fence-test",
+            "target": "rollback",
         }
     )
     for field, value in {
@@ -131,6 +132,39 @@ class ProductionEffectBindingTests(unittest.TestCase):
                 admission_reread=dict,
             )
         adapter_method.assert_not_called()
+
+    def test_rejects_wrong_operation_suffix_and_live_target_drift(self) -> None:
+        binding = _binding("sqlite")
+        wrong_suffix = CommitAdmissionBundle(
+            backend="sqlite",
+            target="new",
+            operation_id="production-effect-test:rollback",
+            fencing_token="fence-test",  # noqa: S106
+            state_revision=3,
+            barrier_id="barrier-test",
+            artifact_identity="artifact-test",
+            manifest_identity="manifest-test",
+            selector_identity="selector-test",
+            runtime_identity="runtime-test",
+        )
+        with patch.object(LiveUpgradeBinding, "is_admitted", return_value=True):
+            with self.assertRaises(ProductionEffectBindingError):
+                bind_durable_commit_capability(
+                    binding,
+                    wrong_suffix,
+                    object(),
+                    session_revision=3,
+                    admission_reread=dict,
+                )
+            binding.runtime.runtime_envelope["target"] = "new"
+            with self.assertRaises(ProductionEffectBindingError):
+                bind_durable_commit_capability(
+                    binding,
+                    _admission("sqlite"),
+                    object(),
+                    session_revision=3,
+                    admission_reread=dict,
+                )
 
     def test_binds_rollback_effect_internally_for_both_concrete_backends(self) -> None:
         for backend, adapter_type in (
