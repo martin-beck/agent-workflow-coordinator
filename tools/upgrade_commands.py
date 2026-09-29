@@ -275,17 +275,22 @@ def execute_upgrade_command(
                 "mutating upgrade actions require a live durable session/backend binding; "
                 "no coordinator state was mutated"
             )
-        if not isinstance(live_binding, LiveUpgradeBinding) or not live_binding.is_admitted():
+        if type(live_binding) is not LiveUpgradeBinding or not LiveUpgradeBinding.is_admitted(
+            live_binding
+        ):
             raise UpgradeCommandError(
                 "mutating upgrade actions require a concrete live durable session/backend "
                 "binding; no coordinator state was mutated"
             )
-        if not live_binding.matches_contract(document, selected_backend):
+        if (
+            live_binding.runtime.contract_digest != canonical_contract_digest(document)
+            or live_binding.runtime.contract_backend != selected_backend
+        ):
             raise UpgradeCommandError(
                 "live durable session/backend binding does not match the contract; "
                 "no coordinator state was mutated"
             )
-        if runtime_binding is not None and not live_binding.matches_runtime(runtime_binding):
+        if runtime_binding is not None and live_binding.runtime != runtime_binding:
             raise UpgradeCommandError(
                 "live durable session/backend binding does not match the runtime binding; "
                 "no coordinator state was mutated"
