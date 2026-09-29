@@ -283,9 +283,7 @@ class GitCommitCapabilityTests(unittest.TestCase):
         _git(self.root, "add", "state")
         consumed.commit("op-1 authority commit")
         with self.assertRaises(GitMutationError):
-            consumed.stage_and_commit(
-                {"message": "m", "path": "state", "content": "again\n"}
-            )
+            consumed.stage_and_commit({"message": "m", "path": "state", "content": "again\n"})
 
     def test_capability_is_single_use_but_fresh_capability_reopens(self) -> None:
         (self.root / "state").write_text("first\n", encoding="utf-8")
