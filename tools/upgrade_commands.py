@@ -23,6 +23,7 @@ else:  # pragma: no cover - direct script execution
 
 if __package__:
     from .upgrade_binding import (
+        LiveUpgradeBinding,
         UpgradeBindingError,
         UpgradeRuntimeBinding,
         canonical_contract_digest,
@@ -30,6 +31,7 @@ if __package__:
     from .upgrade_contract_runtime import RuntimeContractError, validate_runtime_contract
 else:  # pragma: no cover - direct script execution
     from upgrade_binding import (  # type: ignore[import-not-found,no-redef]
+        LiveUpgradeBinding,
         UpgradeBindingError,
         UpgradeRuntimeBinding,
         canonical_contract_digest,
@@ -251,6 +253,7 @@ def execute_upgrade_command(
     contract_path: Path,
     selected_backend: str,
     binding_path: Path | None = None,
+    live_binding: LiveUpgradeBinding | None = None,
 ) -> int:
     """Validate and report, while rejecting every unimplemented mutation path."""
     if action not in READ_ONLY_ACTIONS | MUTATING_ACTIONS:
@@ -264,7 +267,24 @@ def execute_upgrade_command(
                     "rollback requires a validated runtime binding; "
                     "no coordinator state was mutated"
                 )
-            _read_runtime_binding(binding_path, document, selected_backend)
+            runtime_binding = _read_runtime_binding(binding_path, document, selected_backend)
+        else:
+            runtime_binding = None
+        if live_binding is None:
+            raise UpgradeCommandError(
+                "mutating upgrade actions require a live durable session/backend binding; "
+                "no coordinator state was mutated"
+            )
+        if not isinstance(live_binding, LiveUpgradeBinding):
+            raise UpgradeCommandError(
+                "mutating upgrade actions require a concrete live durable session/backend "
+                "binding; no coordinator state was mutated"
+            )
+        if runtime_binding is not None and not live_binding.matches_runtime(runtime_binding):
+            raise UpgradeCommandError(
+                "live durable session/backend binding does not match the runtime binding; "
+                "no coordinator state was mutated"
+            )
         raise UpgradeCommandError(
             "upgrade execution protocol is incomplete; no coordinator state was mutated"
         )
