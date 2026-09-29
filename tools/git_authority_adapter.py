@@ -135,24 +135,33 @@ class GitAuthorityAdapter:
     requires_bound_rollback = True
     bound_rollback_kind = "git"
 
-    def __init__(self, repository: Path) -> None:
+    def __init__(
+        self,
+        repository: Path,
+        *,
+        repository_identity: tuple[int, int, int, int] | None = None,
+    ) -> None:
         resolved = repository.resolve()
         if not resolved.is_dir():
             raise GitAuthorityError("Git authority repository is unavailable")
         self._repository = resolved
         git_directory = resolved / ".git"
-        try:
-            root_status = resolved.stat()
-            git_status = git_directory.stat()
-        except OSError:
-            self._repository_identity: tuple[int, int, int, int] | None = None
+        self._repository_identity: tuple[int, int, int, int] | None
+        if repository_identity is not None:
+            self._repository_identity = repository_identity
         else:
-            self._repository_identity = (
-                root_status.st_dev,
-                root_status.st_ino,
-                git_status.st_dev,
-                git_status.st_ino,
-            )
+            try:
+                root_status = resolved.stat()
+                git_status = git_directory.stat()
+            except OSError:
+                self._repository_identity = None
+            else:
+                self._repository_identity = (
+                    root_status.st_dev,
+                    root_status.st_ino,
+                    git_status.st_dev,
+                    git_status.st_ino,
+                )
 
     def lifecycle_session(self) -> LifecycleSession:
         """Return an opaque session bound to this adapter's repository."""
