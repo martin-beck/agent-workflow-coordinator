@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, cast
 
 from tools.authority_neutral_commit import CommitAdmissionBundle
@@ -27,6 +28,7 @@ from tools.production_effect_binding import (
     bind_durable_rollback_capability,
 )
 from tools.production_phase_engine import ProductionPhaseBinding
+from tools.production_rollback_effect import bind_concrete_durable_rollback_capability
 
 
 class ProductionPhaseEffectError(ValueError):
@@ -122,7 +124,7 @@ def _adapter_context(
     }
 
 
-def bind_production_phase_effects(
+def bind_production_phase_effects(  # noqa: C901
     binding: ProductionPhaseBinding,
     journal: object,
     commit_admission: CommitAdmissionBundle,
@@ -132,7 +134,12 @@ def bind_production_phase_effects(
     admission_reread: Callable[[], Mapping[str, object]],
     commit_argument: object,
     rollback_argument: object,
-    rollback_effect: Callable[[object], object],
+    rollback_effect: Callable[[object], object] | None = None,
+    rollback_backup: Path | None = None,
+    expected_branch: str | None = None,
+    expected_head: str | None = None,
+    sqlite_manifest: Mapping[str, object] | None = None,
+    sqlite_binding: Mapping[str, object] | None = None,
     runner: Any | None = None,
     connector: Any | None = None,
 ) -> ProductionPhaseEffects:
@@ -144,8 +151,14 @@ def bind_production_phase_effects(
     """
     if type(binding) is not ProductionPhaseBinding:
         raise ProductionPhaseEffectError("production phase binding is invalid")
-    if not callable(admission_reread) or not callable(rollback_effect):
+    if not callable(admission_reread):
         raise ProductionPhaseEffectError("phase effect callbacks are invalid")
+    if rollback_effect is None and rollback_backup is None:
+        raise ProductionPhaseEffectError("a concrete rollback backup or effect is required")
+    if rollback_effect is not None and rollback_backup is not None:
+        raise ProductionPhaseEffectError("rollback backup and callback are mutually exclusive")
+    if rollback_effect is not None and not callable(rollback_effect):
+        raise ProductionPhaseEffectError("phase rollback effect is invalid")
     commit_operation = binding.operations.get("commit")
     rollback_operation = binding.operations.get("rollback")
     if not isinstance(commit_operation, Mapping) or not isinstance(rollback_operation, Mapping):
@@ -166,13 +179,29 @@ def bind_production_phase_effects(
             runner=runner,
             connector=connector,
         )
-        rollback_capability = bind_durable_rollback_capability(
-            binding=binding.live_binding,
-            admission=rollback_admission,
-            journal=journal,
-            rollback_effect=rollback_effect,
-            session_revision=session_revision,
-        )
+        if rollback_backup is not None:
+            rollback_capability = bind_concrete_durable_rollback_capability(
+                binding.live_binding,
+                rollback_admission,
+                journal,
+                rollback_backup,
+                session_revision=session_revision,
+                expected_branch=expected_branch,
+                expected_head=expected_head,
+                sqlite_manifest=sqlite_manifest,
+                sqlite_binding=sqlite_binding,
+            )
+            rollback_adapter_argument: object = None
+        else:
+            rollback_effect_callable = cast(Callable[[object], object], rollback_effect)
+            rollback_capability = bind_durable_rollback_capability(
+                binding=binding.live_binding,
+                admission=rollback_admission,
+                journal=journal,
+                rollback_effect=rollback_effect_callable,
+                session_revision=session_revision,
+            )
+            rollback_adapter_argument = rollback_argument
         commit_adapter = BoundCommitPhaseAdapter(
             commit_operation,
             _adapter_context(commit_operation, commit_inputs, target="new"),
@@ -183,7 +212,7 @@ def bind_production_phase_effects(
             rollback_operation,
             _adapter_context(rollback_operation, rollback_inputs, target="rollback"),
             cast(DurableRollbackExecutor, rollback_capability),
-            rollback_argument,
+            rollback_adapter_argument,
         )
     except ProductionPhaseEffectError:
         raise
