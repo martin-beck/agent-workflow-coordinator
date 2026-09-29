@@ -39,7 +39,13 @@ from tools.upgrade_admission import (
     admit_reopen,
     recheck_before_replacement,
 )
-from tools.upgrade_identity import ENVELOPE_FIELDS, UpgradeIdentityError, validate_envelope
+from tools.upgrade_identity import (
+    ENVELOPE_FIELDS,
+    UpgradeIdentityError,
+    canonical_barrier_digest,
+    canonical_envelope_digest,
+    validate_envelope,
+)
 
 try:
     import fcntl
@@ -279,6 +285,11 @@ _COMMIT_PHASE_EVIDENCE_FIELDS = frozenset(
         "current_snapshot",
     }
 )
+_BOUND_CAPABILITY_IDENTITY_FIELDS = tuple(
+    field
+    for field in CONTEXT_FIELDS
+    if field not in {"target", "barrier_identity_digest", "envelope_digest"}
+)
 
 
 def backup_identity_digest(
@@ -374,9 +385,8 @@ class BoundRollbackCapability:
             raise UpgradeError("Git rollback branch binding is invalid")
         if expected_head is not None and not isinstance(expected_head, str):
             raise UpgradeError("Git rollback head binding is invalid")
-        fields = tuple(field for field in CONTEXT_FIELDS if field != "target")
         return cls(
-            tuple(asdict(context)[field] for field in fields),
+            tuple(asdict(context)[field] for field in _BOUND_CAPABILITY_IDENTITY_FIELDS),
             verifier,
             scope,
             lease,
@@ -388,15 +398,20 @@ class BoundRollbackCapability:
 
     def matches(self, context: PhaseContext) -> bool:
         values = asdict(context)
-        fields = tuple(field for field in CONTEXT_FIELDS if field != "target")
-        return self.identity == tuple(values[field] for field in fields)
+        return self.identity == tuple(values[field] for field in _BOUND_CAPABILITY_IDENTITY_FIELDS)
 
     def verify(self, context: Mapping[str, object]) -> Mapping[str, object]:
         """Invoke concrete bound verification, but never authorize rollback."""
         if set(context) != set(CONTEXT_FIELDS):
             raise UpgradeError("bound rollback capability context is incomplete")
-        identity_fields = tuple(field for field in CONTEXT_FIELDS if field != "target")
-        if self.identity != tuple(context[field] for field in identity_fields):
+        if self.backend_kind in {"git", "sqlite"}:
+            try:
+                validate_envelope(context)
+            except UpgradeIdentityError as error:
+                raise UpgradeError(
+                    "bound rollback capability context identity is invalid"
+                ) from error
+        if self.identity != tuple(context[field] for field in _BOUND_CAPABILITY_IDENTITY_FIELDS):
             raise UpgradeError("bound rollback capability context identity mismatch")
         concrete_backend = self.backend_kind in {"git", "sqlite"}
         if concrete_backend:
@@ -526,7 +541,8 @@ class RollbackAuthorizationCapability:
             raise UpgradeError("rollback authorization requires bound evidence")
         if not evidence_capability.matches(context):
             raise UpgradeError("rollback authorization identity mismatch")
-        return cls(evidence_capability.identity, evidence_capability)
+        fields = tuple(field for field in CONTEXT_FIELDS if field != "target")
+        return cls(tuple(asdict(context)[field] for field in fields), evidence_capability)
 
     def validate(  # noqa: C901
         self, context: Mapping[str, object], evidence: Mapping[str, object] | RollbackBackupEvidence
@@ -1194,6 +1210,13 @@ class UpgradeEngine:
             if snapshot.get(field) != expected[field]:
                 raise UpgradeError(f"admission snapshot identity mismatch: {field}")
 
+    def _rollback_context(self) -> dict[str, object]:
+        """Derive the canonical rollback child from the current engine context."""
+        context = {**asdict(self.context), "target": "rollback"}
+        context["barrier_identity_digest"] = canonical_barrier_digest(context)
+        context["envelope_digest"] = canonical_envelope_digest(context)
+        return context
+
     def _operation_scope(self) -> AbstractContextManager[None]:
         operation_lock = getattr(self.backend_adapter, "operation_lock", None)
         if callable(operation_lock):
@@ -1351,7 +1374,7 @@ class UpgradeEngine:
                 # scope/lease binding.  Do not fall back to their unbound snapshot.
                 if not isinstance(self.rollback_bound_verifier, BoundRollbackCapability):
                     raise UpgradeError("rollback requires a trusted bound backend capability")
-                rollback_context = {**asdict(self.context), "target": "rollback"}
+                rollback_context = self._rollback_context()
                 try:
                     snapshot = dict(
                         self.rollback_bound_verifier.verify(
@@ -1409,7 +1432,7 @@ class UpgradeEngine:
                 raise UpgradeError("rollback inspection requires a trusted bound capability")
             context = cast(
                 Mapping[str, object],
-                _freeze({**asdict(self.context), "target": "rollback"}),
+                _freeze(self._rollback_context()),
             )
             try:
                 result: Mapping[str, object]

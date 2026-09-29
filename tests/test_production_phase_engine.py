@@ -3,51 +3,63 @@
 
 from __future__ import annotations
 
+import sqlite3
+import tempfile
 import unittest
 import uuid
+from contextlib import closing
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import Mock, patch
 
+from tools.authority_mutation import DurableBoundBackendMutation
+from tools.authority_neutral_commit import CommitAdmissionBundle
 from tools.generate_upgrade_contract import generate
 from tools.production_phase_engine import (
     BoundProductionBackendAdapter,
+    ForwardCommitCapabilityInputs,
+    ForwardPhaseCapabilityInputs,
     ProductionPhaseBindingError,
     _phase_operations,
     build_production_phase_binding,
 )
+from tools.runtime_bootstrap import DispatchAdmission
 from tools.sqlite_authority_adapter import SQLiteAuthorityAdapter
+from tools.upgrade_admission import QUIESCENCE_PREDICATES
 from tools.upgrade_binding import LiveUpgradeBinding, canonical_contract_digest
 from tools.upgrade_identity import canonical_barrier_digest, canonical_envelope_digest
 
 
 def _contract() -> dict[str, object]:
-    return generate(
-        {
-            "operation_id": "phase-factory-test",
-            "backend": "sqlite",
-            "selector_ref": ".runtime/runtime-selector.json",
-            "expected_state_revision": 1,
-            "barrier_id": "barrier-test",
-            "fencing_token": "fence-test",
-            "from": {
-                "version": "v0.1.0",
-                "source_commit": "a" * 40,
-                "tag_ref": "refs/tags/v0.1.0",
-                "tag_object": "b" * 40,
-                "trust_policy_sha256": "c" * 64,
-                "vendor_manifest_sha256": "d" * 64,
-            },
-            "to": {
-                "version": "v0.2.0",
-                "source_commit": "e" * 40,
-                "tag_ref": "refs/tags/v0.2.0",
-                "tag_object": "f" * 40,
-                "trust_policy_sha256": "0" * 64,
-                "vendor_manifest_sha256": "1" * 64,
-            },
-        }
+    return cast(
+        dict[str, object],
+        generate(
+            {
+                "operation_id": "phase-factory-test",
+                "backend": "sqlite",
+                "selector_ref": ".runtime/runtime-selector.json",
+                "expected_state_revision": 1,
+                "barrier_id": "barrier-test",
+                "fencing_token": "fence-test",
+                "from": {
+                    "version": "v0.1.0",
+                    "source_commit": "a" * 40,
+                    "tag_ref": "refs/tags/v0.1.0",
+                    "tag_object": "b" * 40,
+                    "trust_policy_sha256": "c" * 64,
+                    "vendor_manifest_sha256": "d" * 64,
+                },
+                "to": {
+                    "version": "v0.2.0",
+                    "source_commit": "e" * 40,
+                    "tag_ref": "refs/tags/v0.2.0",
+                    "tag_object": "f" * 40,
+                    "trust_policy_sha256": "0" * 64,
+                    "vendor_manifest_sha256": "1" * 64,
+                },
+            }
+        ),
     )
 
 
@@ -192,7 +204,7 @@ class ProductionPhaseEngineTests(unittest.TestCase):
 
     def test_factory_rejects_invalid_contract_and_binding_digest(self) -> None:
         with self.assertRaises(ProductionPhaseBindingError):
-            build_production_phase_binding({}, object(), Path("journal.json"))  # type: ignore[arg-type]
+            build_production_phase_binding({}, cast(Any, object()), Path("journal.json"))
         contract = _contract()
         binding = object.__new__(LiveUpgradeBinding)
         runtime = SimpleNamespace(
@@ -223,7 +235,7 @@ class ProductionPhaseEngineTests(unittest.TestCase):
 
     def test_factory_rejects_foreign_or_unissued_binding_before_engine_creation(self) -> None:
         with self.assertRaises(ProductionPhaseBindingError):
-            build_production_phase_binding(_contract(), object(), Path("journal.json"))  # type: ignore[arg-type]
+            build_production_phase_binding(_contract(), cast(Any, object()), Path("journal.json"))
 
     def test_factory_rejects_tampered_phase_identity(self) -> None:
         contract = _contract()
@@ -286,6 +298,321 @@ class ProductionPhaseEngineTests(unittest.TestCase):
 
         self.assertEqual(result.engine.check()["operation_id"], contract["operation_id"])
         self.assertEqual(result.operations["reopen"]["operation_id"], "phase-factory-test:reopen")
+
+    def test_factory_binds_forward_readonly_capabilities_to_target_neutral_session(self) -> None:
+        contract = _contract()
+        root = "/artifacts"
+        rollback_envelope: dict[str, object] = {
+            "schema_version": 2,
+            "backend": "sqlite",
+            "project_id": str(uuid.uuid4()),
+            "operation_id": contract["operation_id"],
+            "state_revision": 1,
+            "authority_revision": "authority-test",
+            "fencing_token": "fence-test",
+            "fencing_owner": "owner-test",
+            "durable_barrier_id": "barrier-test",
+            "artifact_root": root,
+            "source": f"{root}/source",
+            "destination": f"{root}/destination",
+            "manifest": f"{root}/manifest.json",
+            "selector_ref": ".runtime/runtime-selector.json",
+            "target": "rollback",
+        }
+        rollback_envelope["barrier_identity_digest"] = canonical_barrier_digest(rollback_envelope)
+        rollback_envelope["envelope_digest"] = canonical_envelope_digest(rollback_envelope)
+        forward_envelope = dict(rollback_envelope, target="new")
+        forward_envelope["barrier_identity_digest"] = canonical_barrier_digest(forward_envelope)
+        forward_envelope["envelope_digest"] = canonical_envelope_digest(forward_envelope)
+        runtime = SimpleNamespace(
+            contract_digest=canonical_contract_digest(contract),
+            contract_backend="sqlite",
+            runtime_envelope=rollback_envelope,
+        )
+        binding = object.__new__(LiveUpgradeBinding)
+        for field, value in {
+            "runtime": runtime,
+            "session": object(),
+            "scope": object(),
+            "lease": object(),
+            "admission_recheck": object(),
+            "adapter": object.__new__(SQLiteAuthorityAdapter),
+            "_token": object(),
+            "expected_branch": None,
+            "expected_head": None,
+            "expected_git_repository": None,
+        }.items():
+            object.__setattr__(binding, field, value)
+        admission_identity = SimpleNamespace(release="v0.2.0", digest="a" * 64)
+        backup_context = dict(forward_envelope, binding={})
+        stage_context = dict(
+            forward_envelope,
+            runtime_root=f"{root}/destination",
+            manifest_digest="a" * 64,
+            binding={"release": "v0.2.0", "manifest_digest": "a" * 64},
+        )
+        validation_context = dict(
+            forward_envelope,
+            binding={"release": "v0.2.0", "manifest_digest": "a" * 64},
+        )
+        admission = object.__new__(DispatchAdmission)
+        object.__setattr__(admission, "identity", admission_identity)
+        commit_admission = CommitAdmissionBundle(
+            backend="sqlite",
+            target="new",
+            operation_id="phase-factory-test:commit",
+            fencing_token="fence-test",  # noqa: S106
+            state_revision=1,
+            barrier_id="barrier-test",
+            artifact_identity="artifact",
+            manifest_identity="manifest",
+            selector_identity="selector",
+            runtime_identity="runtime",
+        )
+        commit_snapshot = dict(forward_envelope)
+        commit_snapshot.update(dict.fromkeys(QUIESCENCE_PREDICATES, True))
+        commit_snapshot["barrier_status"] = "held"
+        commit_evidence = {
+            "quiesced": True,
+            "backup_verified": True,
+            "selector_verified": True,
+            "selector_commit_atomic": True,
+            "fencing_verified": True,
+            "selector_before_verified": True,
+            "selector_after_verified": True,
+            "admitted_snapshot": commit_snapshot,
+            "current_snapshot": commit_snapshot,
+        }
+
+        with (
+            patch.object(LiveUpgradeBinding, "is_admitted", return_value=True),
+            patch.object(LiveUpgradeBinding, "matches_contract", return_value=True),
+            patch(
+                "tools.production_phase_engine.bind_durable_commit_capability",
+                return_value=cast(Any, object.__new__(DurableBoundBackendMutation)),
+            ),
+        ):
+            result = build_production_phase_binding(
+                contract,
+                binding,
+                Path("journal.json"),
+                forward_inputs=ForwardPhaseCapabilityInputs(
+                    forward_envelope,
+                    backup_context,
+                    stage_context,
+                    admission,
+                    validation_context,
+                    ForwardCommitCapabilityInputs(
+                        commit_admission,
+                        1,
+                        lambda: dict(forward_envelope),
+                        "commit-argument",
+                        commit_evidence,
+                        object(),
+                    ),
+                ),
+            )
+
+        self.assertIsNotNone(result.forward_capabilities)
+        self.assertEqual(result.engine.context.target, "new")
+        self.assertIsNotNone(result.engine._backup_phase_adapter)
+        self.assertIsNotNone(result.engine._stage_phase_adapter)
+        self.assertIsNotNone(result.engine._validation_phase_adapter)
+        self.assertIsNotNone(result.commit_capability)
+        self.assertIsNotNone(result.engine._commit_phase_adapter)
+
+    def test_forward_capability_binding_rejects_rollback_context_reuse(self) -> None:
+        contract = _contract()
+        binding = object.__new__(LiveUpgradeBinding)
+        runtime = SimpleNamespace(
+            contract_digest=canonical_contract_digest(contract),
+            contract_backend="sqlite",
+            runtime_envelope={"target": "rollback"},
+        )
+        object.__setattr__(binding, "runtime", runtime)
+        with (
+            patch.object(LiveUpgradeBinding, "is_admitted", return_value=True),
+            self.assertRaises(ProductionPhaseBindingError),
+        ):
+            build_production_phase_binding(
+                contract,
+                binding,
+                Path("journal.json"),
+                forward_inputs=ForwardPhaseCapabilityInputs(
+                    {"target": "rollback"}, {}, {}, object.__new__(DispatchAdmission), {}
+                ),
+            )
+
+    def test_factory_consumes_real_sqlite_commit_capability(self) -> None:
+        contract = _contract()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            database = root / "authority.sqlite"
+            with closing(sqlite3.connect(database)) as connection, connection:
+                connection.execute("PRAGMA journal_mode=WAL")
+                connection.execute(
+                    "CREATE TABLE state (id INTEGER PRIMARY KEY, value TEXT NOT NULL)"
+                )
+                connection.execute("INSERT INTO state VALUES (1, 'old')")
+            database.chmod(0o600)
+            with closing(sqlite3.connect(database)) as keepalive:
+                keepalive.execute("PRAGMA wal_autocheckpoint=0")
+                keepalive.commit()
+            project = str(uuid.uuid4())
+            rollback_envelope: dict[str, object] = {
+                "schema_version": 2,
+                "backend": "sqlite",
+                "project_id": project,
+                "operation_id": contract["operation_id"],
+                "state_revision": 1,
+                "authority_revision": "authority-test",
+                "fencing_token": "fence-test",
+                "fencing_owner": "owner-test",
+                "durable_barrier_id": "barrier-test",
+                "artifact_root": str(root / "artifacts"),
+                "source": str(root / "source"),
+                "destination": str(root / "artifacts" / "destination"),
+                "manifest": str(root / "artifacts" / "manifest.json"),
+                "selector_ref": ".runtime/runtime-selector.json",
+                "target": "rollback",
+            }
+            Path(cast(str, rollback_envelope["artifact_root"])).mkdir()
+            rollback_envelope["barrier_identity_digest"] = canonical_barrier_digest(
+                rollback_envelope
+            )
+            rollback_envelope["envelope_digest"] = canonical_envelope_digest(rollback_envelope)
+            forward_envelope = dict(rollback_envelope, target="new")
+            forward_envelope["barrier_identity_digest"] = canonical_barrier_digest(forward_envelope)
+            forward_envelope["envelope_digest"] = canonical_envelope_digest(forward_envelope)
+            runtime = SimpleNamespace(
+                contract_digest=canonical_contract_digest(contract),
+                contract_backend="sqlite",
+                runtime_envelope=rollback_envelope,
+            )
+            binding = object.__new__(LiveUpgradeBinding)
+            for field, value in {
+                "runtime": runtime,
+                "session": object(),
+                "scope": object(),
+                "lease": object(),
+                "admission_recheck": object(),
+                "adapter": SQLiteAuthorityAdapter(database),
+                "_token": object(),
+                "expected_branch": None,
+                "expected_head": None,
+                "expected_git_repository": None,
+            }.items():
+                object.__setattr__(binding, field, value)
+            validation_admission = object.__new__(DispatchAdmission)
+            object.__setattr__(
+                validation_admission,
+                "identity",
+                SimpleNamespace(release="v0.2.0", digest="a" * 64),
+            )
+            commit_admission = CommitAdmissionBundle(
+                backend="sqlite",
+                target="new",
+                operation_id="phase-factory-test:commit",
+                fencing_token="fence-test",  # noqa: S106
+                state_revision=1,
+                barrier_id="barrier-test",
+                artifact_identity="artifact",
+                manifest_identity="manifest",
+                selector_identity="selector",
+                runtime_identity="runtime",
+            )
+            commit_snapshot = dict(forward_envelope)
+            commit_snapshot.update(dict.fromkeys(QUIESCENCE_PREDICATES, True))
+            commit_snapshot["barrier_status"] = "held"
+            commit_evidence = {
+                "quiesced": True,
+                "backup_verified": True,
+                "selector_verified": True,
+                "selector_commit_atomic": True,
+                "fencing_verified": True,
+                "selector_before_verified": True,
+                "selector_after_verified": True,
+                "admitted_snapshot": commit_snapshot,
+                "current_snapshot": commit_snapshot,
+            }
+
+            class Journal:
+                def prepare_authority_effect(self, *_args: object, **_kwargs: object) -> str:
+                    return "factory-effect"
+
+                def finish_authority_effect(
+                    self, _intent: object, outcome: str, _receipt: object = None
+                ) -> None:
+                    self.outcome = outcome
+
+            effect_journal = Journal()
+
+            def reread() -> dict[str, object]:
+                return {
+                    "backend": "sqlite",
+                    "target": "new",
+                    "operation_id": commit_admission.operation_id,
+                    "state_revision": 1,
+                    "barrier_id": "barrier-test",
+                    "fencing_token": "fence-test",
+                    "artifact_identity": "artifact",
+                    "manifest_identity": "manifest",
+                    "selector_identity": "selector",
+                    "runtime_identity": "runtime",
+                }
+
+            def update(connection: sqlite3.Connection) -> None:
+                connection.execute("UPDATE state SET value='new' WHERE id=1")
+
+            phase_inputs = ForwardPhaseCapabilityInputs(
+                forward_envelope,
+                dict(forward_envelope, binding={}),
+                dict(
+                    forward_envelope,
+                    runtime_root=str(root / "artifacts" / "destination"),
+                    manifest_digest="a" * 64,
+                    binding={},
+                ),
+                validation_admission,
+                dict(
+                    forward_envelope,
+                    binding={"release": "v0.2.0", "manifest_digest": "a" * 64},
+                ),
+                ForwardCommitCapabilityInputs(
+                    commit_admission,
+                    1,
+                    reread,
+                    update,
+                    commit_evidence,
+                    effect_journal,
+                ),
+            )
+            with (
+                patch.object(LiveUpgradeBinding, "is_admitted", return_value=True),
+                patch.object(LiveUpgradeBinding, "matches_contract", return_value=True),
+            ):
+                result = build_production_phase_binding(
+                    contract,
+                    binding,
+                    root / "engine-journal.json",
+                    forward_inputs=phase_inputs,
+                )
+            assert result.engine._commit_phase_adapter is not None
+            commit_result = result.engine._commit_phase_adapter.execute(
+                "commit",
+                {
+                    "backend": "sqlite",
+                    "target": "new",
+                    "operation_id": "phase-factory-test:commit",
+                    "state_revision": 1,
+                    "durable_barrier_id": "barrier-test",
+                    "fencing_token": "fence-test",
+                },
+            )
+            self.assertTrue(commit_result["authority_effect_verified"])
+            self.assertEqual("committed", effect_journal.outcome)
+            with closing(sqlite3.connect(database)) as connection:
+                self.assertEqual(("new",), connection.execute("SELECT value FROM state").fetchone())
 
 
 if __name__ == "__main__":

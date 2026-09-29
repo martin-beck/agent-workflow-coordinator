@@ -9,12 +9,21 @@ SQLite adapters' fail-closed ``execute`` methods.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
 
+from tools.authority_neutral_backup import BoundBackupPhaseAdapter
+from tools.authority_neutral_commit import CommitAdmissionBundle
+from tools.authority_neutral_stage import BoundStagePhaseAdapter
+from tools.authority_neutral_validation import BoundValidationPhaseAdapter
 from tools.git_authority_adapter import GitAuthorityAdapter
+from tools.production_effect_binding import (
+    ProductionEffectBindingError,
+    bind_durable_commit_capability,
+)
+from tools.runtime_bootstrap import DispatchAdmission
 from tools.sqlite_authority_adapter import SQLiteAuthorityAdapter
 from tools.upgrade_binding import LiveUpgradeBinding, canonical_contract_digest
 from tools.upgrade_contract_runtime import PHASES, validate_runtime_contract
@@ -24,10 +33,218 @@ from tools.upgrade_engine import (
     UpgradeEngine,
     UpgradeError,
 )
+from tools.upgrade_identity import canonical_barrier_digest, canonical_envelope_digest
 
 
 class ProductionPhaseBindingError(ValueError):
     """A generated phase set cannot be bound to the admitted live identity."""
+
+
+@dataclass(frozen=True, slots=True)
+class ForwardPhaseCapabilityInputs:
+    """Caller-issued evidence needed to bind forward read-only phases.
+
+    The live binding remains the rollback child issued by the durable barrier;
+    this separate target-``new`` context is derived and checked against the
+    same target-neutral session identity.  No field is inferred from a path or
+    from the generated contract.
+    """
+
+    engine_context: Mapping[str, object]
+    backup_context: Mapping[str, object]
+    stage_context: Mapping[str, object]
+    validation_admission: DispatchAdmission
+    validation_context: Mapping[str, object]
+    commit: ForwardCommitCapabilityInputs | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ForwardCommitCapabilityInputs:
+    """Backend-owned commit admission and effect arguments."""
+
+    admission: CommitAdmissionBundle
+    session_revision: int
+    admission_reread: Callable[[], Mapping[str, object]]
+    argument: object
+    evidence: Mapping[str, object]
+    effect_journal: object
+    runner: Any | None = None
+    connector: Any | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ForwardPhaseCapabilities:
+    """Identity-bound, non-mutating phase capabilities."""
+
+    backup: BoundBackupPhaseAdapter
+    stage: BoundStagePhaseAdapter
+    validation: BoundValidationPhaseAdapter
+
+
+def _validate_forward_context(
+    binding: LiveUpgradeBinding, context: Mapping[str, object]
+) -> dict[str, object]:
+    """Validate a forward envelope against the admitted rollback session."""
+    if not isinstance(context, Mapping):
+        raise ProductionPhaseBindingError("forward engine context is invalid")
+    try:
+        value = dict(context)
+        if value.get("target") != "new":
+            raise ProductionPhaseBindingError("forward engine target must be new")
+        if set(value) != {
+            "schema_version",
+            "backend",
+            "project_id",
+            "operation_id",
+            "state_revision",
+            "authority_revision",
+            "fencing_token",
+            "fencing_owner",
+            "durable_barrier_id",
+            "artifact_root",
+            "source",
+            "destination",
+            "manifest",
+            "selector_ref",
+            "barrier_identity_digest",
+            "target",
+            "envelope_digest",
+        }:
+            raise ProductionPhaseBindingError("forward engine context fields are incomplete")
+        rollback = binding.runtime.runtime_envelope
+        shared = (
+            "schema_version",
+            "backend",
+            "project_id",
+            "operation_id",
+            "state_revision",
+            "authority_revision",
+            "fencing_token",
+            "fencing_owner",
+            "durable_barrier_id",
+            "artifact_root",
+            "source",
+            "destination",
+            "manifest",
+            "selector_ref",
+        )
+        if any(value[field] != rollback[field] for field in shared):
+            raise ProductionPhaseBindingError("forward engine identity differs from live binding")
+        if value["barrier_identity_digest"] != canonical_barrier_digest(value):
+            raise ProductionPhaseBindingError("forward barrier identity digest is invalid")
+        if value["envelope_digest"] != canonical_envelope_digest(value):
+            raise ProductionPhaseBindingError("forward envelope digest is invalid")
+        return value
+    except KeyError as error:
+        raise ProductionPhaseBindingError("forward engine identity is incomplete") from error
+
+
+def bind_forward_phase_capabilities(
+    binding: LiveUpgradeBinding,
+    operations: Mapping[str, Mapping[str, object]],
+    inputs: ForwardPhaseCapabilityInputs,
+) -> ForwardPhaseCapabilities:
+    """Bind backup, stage, and validation to one exact target-new context.
+
+    Commit and rollback effects remain separate capability seams.  This helper
+    only binds the already read-only/verification phases and rejects any
+    operation or context identity drift before constructing them.
+    """
+    if type(binding) is not LiveUpgradeBinding or not binding.is_admitted():
+        raise ProductionPhaseBindingError("an admitted live upgrade binding is required")
+    if type(inputs) is not ForwardPhaseCapabilityInputs:
+        raise ProductionPhaseBindingError("forward phase inputs are invalid")
+    context = _validate_forward_context(binding, inputs.engine_context)
+    for phase in ("backup", "stage", "validate"):
+        if not isinstance(operations.get(phase), Mapping):
+            raise ProductionPhaseBindingError(f"generated {phase} operation is missing")
+        operation = operations[phase]
+        if operation.get("operation_id") != f"{context['operation_id']}:{phase}":
+            raise ProductionPhaseBindingError(f"generated {phase} operation identity is invalid")
+    try:
+        backup = BoundBackupPhaseAdapter(
+            BoundProductionBackendAdapter(binding),
+            operations["backup"],
+            inputs.backup_context,
+        )
+        stage = BoundStagePhaseAdapter(
+            BoundProductionBackendAdapter(binding),
+            operations["stage"],
+            inputs.stage_context,
+        )
+        validation = BoundValidationPhaseAdapter(
+            BoundProductionBackendAdapter(binding),
+            inputs.validation_admission,
+            operations["validate"],
+            inputs.validation_context,
+        )
+    except Exception as error:
+        raise ProductionPhaseBindingError(
+            "forward phase capability binding was rejected"
+        ) from error
+    return ForwardPhaseCapabilities(backup, stage, validation)
+
+
+def _validate_forward_validation_inputs(
+    engine_context: Mapping[str, object],
+    admission: DispatchAdmission,
+    validation_context: Mapping[str, object],
+) -> None:
+    if not isinstance(validation_context, Mapping):
+        raise ProductionPhaseBindingError("validation context is invalid")
+    for field, expected in engine_context.items():
+        if validation_context.get(field) != expected:
+            raise ProductionPhaseBindingError(
+                f"validation context identity differs from engine context: {field}"
+            )
+    descriptor = validation_context.get("binding")
+    identity = getattr(admission, "identity", None)
+    release = getattr(identity, "release", None)
+    manifest_digest = getattr(identity, "digest", None)
+    if (
+        not isinstance(descriptor, Mapping)
+        or not isinstance(release, str)
+        or not isinstance(manifest_digest, str)
+        or descriptor.get("release") != release
+        or descriptor.get("manifest_digest") != manifest_digest
+    ):
+        raise ProductionPhaseBindingError("validation admission identity is not bound")
+
+
+def _validate_forward_commit_evidence(
+    engine_context: Mapping[str, object],
+    admission: CommitAdmissionBundle,
+    evidence: Mapping[str, object],
+) -> None:
+    if not isinstance(evidence, Mapping):
+        raise ProductionPhaseBindingError("commit evidence is invalid")
+    admission_expected = {
+        "backend": engine_context.get("backend"),
+        "target": "new",
+        "operation_id": f"{engine_context.get('operation_id')}:commit",
+        "state_revision": engine_context.get("state_revision"),
+        "barrier_id": engine_context.get("durable_barrier_id"),
+        "fencing_token": engine_context.get("fencing_token"),
+    }
+    admission_identity = {
+        "backend": admission.backend,
+        "target": admission.target,
+        "operation_id": admission.operation_id,
+        "state_revision": admission.state_revision,
+        "barrier_id": admission.barrier_id,
+        "fencing_token": admission.fencing_token,
+    }
+    if admission_identity != admission_expected:
+        raise ProductionPhaseBindingError("commit admission identity differs from engine context")
+    for name in ("admitted_snapshot", "current_snapshot"):
+        snapshot = evidence.get(name)
+        if not isinstance(snapshot, Mapping):
+            raise ProductionPhaseBindingError("commit evidence snapshot is invalid")
+        for field, context_expected in engine_context.items():
+            if field in snapshot and snapshot[field] != context_expected:
+                raise ProductionPhaseBindingError(
+                    f"commit evidence snapshot identity differs: {field}"
+                )
 
 
 @dataclass(frozen=True, slots=True)
@@ -41,6 +258,8 @@ class ProductionPhaseBinding:
     backend: BoundProductionBackendAdapter
     rollback: BoundRollbackCapability
     engine: UpgradeEngine
+    forward_capabilities: ForwardPhaseCapabilities | None = None
+    commit_capability: object | None = None
 
 
 class BoundProductionBackendAdapter:
@@ -173,12 +392,13 @@ def _phase_operations(contract: Mapping[str, object]) -> dict[str, Mapping[str, 
     return operations
 
 
-def build_production_phase_binding(
+def build_production_phase_binding(  # noqa: C901
     contract: Mapping[str, object],
     live_binding: LiveUpgradeBinding,
     journal: Path,
     *,
     lock_path: Path | None = None,
+    forward_inputs: ForwardPhaseCapabilityInputs | None = None,
 ) -> ProductionPhaseBinding:
     """Construct the bound engine without authorizing any mutation."""
     try:
@@ -199,6 +419,74 @@ def build_production_phase_binding(
     except (TypeError, UpgradeError) as error:
         raise ProductionPhaseBindingError("live runtime envelope is not a phase context") from error
     backend = BoundProductionBackendAdapter(live_binding)
+    forward_capabilities: ForwardPhaseCapabilities | None = None
+    commit_capability: object | None = None
+    engine_context: Mapping[str, object] = envelope
+    engine_kwargs: dict[str, Any] = {}
+    if forward_inputs is not None:
+        forward_capabilities = bind_forward_phase_capabilities(
+            live_binding, operations, forward_inputs
+        )
+        engine_context = _validate_forward_context(live_binding, forward_inputs.engine_context)
+        _validate_forward_validation_inputs(
+            engine_context,
+            forward_inputs.validation_admission,
+            forward_inputs.validation_context,
+        )
+        engine_kwargs = {
+            "backup_operation": operations["backup"],
+            "backup_context": forward_inputs.backup_context,
+            "stage_operation": operations["stage"],
+            "stage_context": forward_inputs.stage_context,
+            "validation_admission": forward_inputs.validation_admission,
+            "validation_operation": operations["validate"],
+            "validation_context": forward_inputs.validation_context,
+        }
+        if forward_inputs.commit is not None:
+            commit_operation = operations["commit"]
+            admission = forward_inputs.commit.admission
+            if commit_operation.get("opcode") != "authority.atomic_replace":
+                raise ProductionPhaseBindingError("generated commit operation is unsupported")
+            if admission.operation_id != commit_operation.get("operation_id"):
+                raise ProductionPhaseBindingError("commit admission operation identity is invalid")
+            _validate_forward_commit_evidence(
+                engine_context,
+                admission,
+                forward_inputs.commit.evidence,
+            )
+            commit_inputs = commit_operation.get("inputs")
+            if not isinstance(commit_inputs, Mapping):
+                raise ProductionPhaseBindingError("generated commit inputs are invalid")
+            commit_context = {
+                "backend": admission.backend,
+                "target": "new",
+                "selector_ref": commit_inputs.get("selector_ref"),
+                "operation_id": admission.operation_id,
+                "state_revision": admission.state_revision,
+                "durable_barrier_id": admission.barrier_id,
+                "fencing_token": admission.fencing_token,
+            }
+            try:
+                commit_capability = bind_durable_commit_capability(
+                    live_binding,
+                    admission,
+                    forward_inputs.commit.effect_journal,
+                    session_revision=forward_inputs.commit.session_revision,
+                    admission_reread=forward_inputs.commit.admission_reread,
+                    runner=forward_inputs.commit.runner,
+                    connector=forward_inputs.commit.connector,
+                )
+            except (ProductionEffectBindingError, TypeError, ValueError) as error:
+                raise ProductionPhaseBindingError(
+                    "forward commit capability binding was rejected"
+                ) from error
+            engine_kwargs.update(
+                commit_operation=commit_operation,
+                commit_context=commit_context,
+                commit_executor=commit_capability,
+                commit_argument=forward_inputs.commit.argument,
+                commit_evidence=forward_inputs.commit.evidence,
+            )
     try:
         rollback = BoundRollbackCapability.bind(
             context,
@@ -212,13 +500,22 @@ def build_production_phase_binding(
         engine = UpgradeEngine(
             cast(str, validated["operation_id"]),
             journal,
-            envelope,
+            engine_context,
             lock_path,
             backend_adapter=backend,
             rollback_bound_verifier=rollback,
+            **engine_kwargs,
         )
     except Exception as error:
         raise ProductionPhaseBindingError("production phase engine binding was rejected") from error
     return ProductionPhaseBinding(
-        validated, operations, context, live_binding, backend, rollback, engine
+        validated,
+        operations,
+        context,
+        live_binding,
+        backend,
+        rollback,
+        engine,
+        forward_capabilities,
+        commit_capability,
     )
