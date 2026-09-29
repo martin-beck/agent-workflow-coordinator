@@ -1295,6 +1295,15 @@ class UpgradeEngine:
                         _freeze({**dict(frozen_context), "operation_id": commit_operation_id}),
                     )
                 adapter_result = executor.execute(phase, dispatch_context)
+                if phase == "commit":
+                    refresh = getattr(self.backend_adapter, "refresh_after_commit", None)
+                    if callable(refresh):
+                        try:
+                            refresh()
+                        except Exception as error:
+                            raise CommitDispatchError(
+                                "post-commit identity refresh is ambiguous"
+                            ) from error
                 result = dict(adapter_result)
                 if phase == "commit" and self._commit_phase_adapter is not None:
                     result.update(self._commit_phase_evidence)
