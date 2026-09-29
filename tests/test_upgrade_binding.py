@@ -18,7 +18,7 @@ from tools.git_authority_adapter import GitAuthorityAdapter
 from tools.lock_domain_scope import LockDomainScope
 from tools.rollback_control_store import BarrierSessionState
 from tools.sqlite_authority_adapter import SQLiteAuthorityAdapter
-from tools.upgrade_binding import UpgradeBindingError, UpgradeRuntimeBinding
+from tools.upgrade_binding import LiveUpgradeBinding, UpgradeBindingError, UpgradeRuntimeBinding
 from tools.upgrade_identity import (
     BarrierChildIdentity,
     BarrierSessionIdentity,
@@ -197,6 +197,69 @@ class UpgradeBindingTests(unittest.TestCase):
                 )
             )
 
+    def test_binds_live_session_scope_and_backend_without_authorizing_mutation(self) -> None:
+        contract = _contract("git")
+        runtime = _envelope(contract)
+        session_record: dict[str, object] = {
+            "schema_version": 1,
+            "project_id": runtime["project_id"],
+            "attempt_id": "attempt-7",
+            "state_revision": runtime["state_revision"],
+            "authority_revision_at_acquire": runtime["authority_revision"],
+            "durable_barrier_id": runtime["durable_barrier_id"],
+            "fencing_token": runtime["fencing_token"],
+            "fencing_owner": runtime["fencing_owner"],
+        }
+        session_record["identity_digest"] = canonical_barrier_session_digest(session_record)
+        identity = BarrierSessionIdentity.from_record(session_record)
+        binding = UpgradeRuntimeBinding.bind(
+            contract, runtime, session_identity_digest=identity.identity_digest
+        )
+        child = BarrierChildIdentity.bind(identity, str(runtime["operation_id"]), "rollback")
+        session = BarrierSessionState(identity, "held", 2, rollback_child=child)
+        lease = AdmissionLease(
+            project_id=str(runtime["project_id"]),
+            authority_revision=str(runtime["authority_revision"]),
+            fencing_token=str(runtime["fencing_token"]),
+            fencing_owner=str(runtime["fencing_owner"]),
+            durable_barrier_id=str(runtime["durable_barrier_id"]),
+            revision=cast(int, runtime["state_revision"]),
+        )
+        recheck = AdmissionRecheck(
+            lease=lease,
+            project_id=lease.project_id,
+            authority_revision=lease.authority_revision,
+            fencing_token=lease.fencing_token,
+            fencing_owner=lease.fencing_owner,
+            durable_barrier_id=lease.durable_barrier_id,
+            revision=lease.revision,
+        )
+        scope = object.__new__(LockDomainScope)
+        scope._session_identity = identity
+        scope._session_revision = session.revision
+        scope._lease = lease
+        store = MagicMock()
+        store.authority_path = None
+        scope._session_store = store
+        adapter = object.__new__(GitAuthorityAdapter)
+        live = LiveUpgradeBinding.bind(binding, session, scope, lease, recheck, adapter)
+        self.assertIs(live.runtime, binding)
+        self.assertIs(live.adapter, adapter)
+
+        with self.assertRaises(UpgradeBindingError):
+            LiveUpgradeBinding.bind(
+                binding,
+                session,
+                scope,
+                replace(lease, fencing_token="foreign"),
+                recheck,
+                adapter,
+            )
+        with self.assertRaises(UpgradeBindingError):
+            LiveUpgradeBinding.bind(
+                binding, replace(session, status="released"), scope, lease, recheck, adapter
+            )
+
     def test_rejects_malformed_binding_records(self) -> None:
         contract = _contract()
         binding = UpgradeRuntimeBinding.bind(
@@ -232,6 +295,25 @@ class UpgradeBindingTests(unittest.TestCase):
         for value in mutations:
             with self.subTest(value=value), self.assertRaises(UpgradeBindingError):
                 UpgradeRuntimeBinding.from_mapping(value)
+
+    def test_rejects_inconsistent_persisted_binding_identity(self) -> None:
+        contract = _contract()
+        runtime = _envelope(contract)
+        binding = UpgradeRuntimeBinding.bind(
+            contract, runtime, session_identity_digest="a" * 64
+        ).as_mapping()
+        for field, value in (
+            ("contract_backend", "git"),
+            ("contract_expected_state_revision", 99),
+            ("contract_selector_ref", "foreign-selector.json"),
+            ("contract_barrier_id", "foreign-barrier"),
+            ("contract_fencing_token", "foreign-fence"),
+            ("contract_operation_id", "foreign-operation"),
+        ):
+            changed = dict(binding)
+            changed[field] = value
+            with self.subTest(field=field), self.assertRaises(UpgradeBindingError):
+                UpgradeRuntimeBinding.from_mapping(changed)
 
     def test_rejects_live_session_status_and_identity_drift(self) -> None:
         contract = _contract()

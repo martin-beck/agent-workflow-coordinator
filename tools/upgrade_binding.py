@@ -47,6 +47,104 @@ class UpgradeBindingError(ValueError):
     """A portable contract and host-bound runtime identity do not match."""
 
 
+@dataclass(frozen=True, slots=True)
+class LiveUpgradeBinding:
+    """One immutable binding of contract, durable session, and backend scope.
+
+    This is an admission identity only.  It deliberately exposes no mutation
+    callback or phase executor; the production phase engine must consume this
+    proof before it can construct any effect capability.
+    """
+
+    runtime: "UpgradeRuntimeBinding"
+    session: object
+    scope: object
+    lease: object
+    admission_recheck: object
+    adapter: object
+
+    @classmethod
+    def bind(
+        cls,
+        runtime: "UpgradeRuntimeBinding",
+        session: object,
+        scope: object,
+        lease: object,
+        admission_recheck: object,
+        adapter: object,
+    ) -> "LiveUpgradeBinding":
+        from tools.admission_lease import AdmissionLease, AdmissionRecheck
+        from tools.git_authority_adapter import GitAuthorityAdapter
+        from tools.lock_domain_scope import LockDomainScope
+        from tools.rollback_control_store import BarrierSessionState
+        from tools.sqlite_authority_adapter import SQLiteAuthorityAdapter
+
+        if not isinstance(runtime, UpgradeRuntimeBinding):
+            raise UpgradeBindingError("runtime upgrade binding is required")
+        if not isinstance(session, BarrierSessionState):
+            raise UpgradeBindingError("live barrier session is invalid")
+        if not isinstance(scope, LockDomainScope):
+            raise UpgradeBindingError("live lock-domain scope is invalid")
+        if not isinstance(lease, AdmissionLease):
+            raise UpgradeBindingError("live admission lease is invalid")
+        if not isinstance(admission_recheck, AdmissionRecheck):
+            raise UpgradeBindingError("live admission recheck is invalid")
+        if admission_recheck.lease != lease:
+            raise UpgradeBindingError("live admission recheck does not match lease")
+        runtime.validate_live_session(session)
+        envelope = runtime.runtime_envelope
+        expected = {
+            "project_id": envelope["project_id"],
+            "authority_revision": envelope["authority_revision"],
+            "fencing_token": envelope["fencing_token"],
+            "fencing_owner": envelope["fencing_owner"],
+            "durable_barrier_id": envelope["durable_barrier_id"],
+            "state_revision": envelope["state_revision"],
+        }
+        if any(
+            getattr(lease, "revision" if field == "state_revision" else field) != value
+            for field, value in expected.items()
+        ):
+            raise UpgradeBindingError("live admission lease identity does not match runtime")
+        try:
+            scope.assert_context(expected)
+        except Exception as error:
+            raise UpgradeBindingError(
+                "live lock-domain scope identity does not match runtime"
+            ) from error
+        if getattr(scope, "_session_identity", None) != session.identity:
+            raise UpgradeBindingError("live scope session identity does not match durable session")
+        if getattr(scope, "_session_revision", None) != session.revision:
+            raise UpgradeBindingError("live scope session revision does not match durable session")
+        if getattr(scope, "_lease", None) != lease:
+            raise UpgradeBindingError("live scope lease does not match admission lease")
+        backend = envelope["backend"]
+        if backend == "git" and not isinstance(adapter, GitAuthorityAdapter):
+            raise UpgradeBindingError("Git live backend adapter is not concrete")
+        if backend == "sqlite":
+            if not isinstance(adapter, SQLiteAuthorityAdapter):
+                raise UpgradeBindingError("SQLite live backend adapter is not concrete")
+            session_store = getattr(scope, "_session_store", None)
+            if getattr(session_store, "authority_path", None) != getattr(
+                adapter, "_authority", None
+            ):
+                raise UpgradeBindingError("SQLite live backend is bound to a foreign authority")
+        return cls(runtime, session, scope, lease, admission_recheck, adapter)
+
+    def reread_backend(
+        self, *, expected_branch: str | None = None, expected_head: str | None = None
+    ) -> dict[str, object]:
+        """Obtain fresh read-only backend evidence through this binding."""
+        return self.runtime.reread_backend_bound(
+            self.adapter,
+            self.scope,
+            self.lease,
+            self.admission_recheck,
+            expected_branch=expected_branch,
+            expected_head=expected_head,
+        )
+
+
 def canonical_contract_digest(contract: Mapping[str, object]) -> str:
     """Return the digest of the exact validated portable contract."""
     try:
@@ -173,6 +271,20 @@ class UpgradeRuntimeBinding:
         envelope = value["runtime_envelope"]
         if not isinstance(envelope, Mapping) or set(envelope) != set(ENVELOPE_FIELDS):
             raise UpgradeBindingError("runtime binding envelope is invalid")
+        if value["contract_operation_id"] != envelope.get("operation_id"):
+            raise UpgradeBindingError("runtime binding operation identity is inconsistent")
+        if value["contract_backend"] != envelope.get("backend"):
+            raise UpgradeBindingError("runtime binding backend identity is inconsistent")
+        for binding_field, envelope_field in (
+            ("contract_selector_ref", "selector_ref"),
+            ("contract_expected_state_revision", "state_revision"),
+            ("contract_barrier_id", "durable_barrier_id"),
+            ("contract_fencing_token", "fencing_token"),
+        ):
+            if value[binding_field] != envelope.get(envelope_field):
+                raise UpgradeBindingError(
+                    f"runtime binding {binding_field} is inconsistent with envelope"
+                )
         for field in (
             "contract_digest",
             "session_identity_digest",
