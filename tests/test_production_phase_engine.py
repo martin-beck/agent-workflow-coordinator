@@ -30,7 +30,7 @@ from tools.production_phase_engine import (
     build_production_phase_binding,
 )
 from tools.runtime_bootstrap import DispatchAdmission
-from tools.sqlite_authority_adapter import SQLiteAuthorityAdapter
+from tools.sqlite_authority_adapter import SQLiteAuthorityAdapter, SQLiteLifecycleExecutor
 from tools.upgrade_admission import QUIESCENCE_PREDICATES
 from tools.upgrade_binding import LiveUpgradeBinding, canonical_contract_digest
 from tools.upgrade_identity import canonical_barrier_digest, canonical_envelope_digest
@@ -219,6 +219,31 @@ class ProductionPhaseEngineTests(unittest.TestCase):
 
         with self.assertRaises(ProductionPhaseBindingError):
             backend.snapshot("discover", {"backend": "sqlite"})
+
+    def test_generated_sqlite_dispatch_rechecks_admission_before_effect(self) -> None:
+        backend, _adapter, binding = self._bound_backend("sqlite")
+        executor = Mock()
+        backend._sqlite_lifecycle_executor = executor
+        binding.is_admitted.return_value = False
+
+        with self.assertRaises(ProductionPhaseBindingError):
+            backend.execute_generated_operation({}, Path("backup.sqlite"), {})
+        executor.execute_generated_operation.assert_not_called()
+
+    def test_constructor_binds_durable_sqlite_lifecycle_executor(self) -> None:
+        binding = object.__new__(LiveUpgradeBinding)
+        adapter = object.__new__(SQLiteAuthorityAdapter)
+        session_store = object()
+        scope = SimpleNamespace(_session_store=session_store)
+        object.__setattr__(binding, "adapter", adapter)
+        object.__setattr__(binding, "scope", scope)
+        with (
+            patch.object(LiveUpgradeBinding, "is_admitted", return_value=True),
+            patch.object(SQLiteLifecycleExecutor, "bind", return_value=Mock()) as bind,
+        ):
+            backend = BoundProductionBackendAdapter(binding, journal=Path("journal.json"))
+        bind.assert_called_once_with(adapter, session_store, Path("journal.json"))
+        self.assertIsNotNone(backend._sqlite_lifecycle_executor)
 
     def test_bound_backend_constructor_and_result_shapes_are_strict(self) -> None:
         binding = object.__new__(LiveUpgradeBinding)

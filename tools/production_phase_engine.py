@@ -390,6 +390,7 @@ class BoundProductionBackendAdapter:
         binding: dict[str, Any],
     ) -> dict[str, Any]:
         """Consume a generated SQLite backup through its durable lifecycle executor."""
+        self._admit()
         if self.bound_rollback_kind == "sqlite":
             executor = self._sqlite_lifecycle_executor
             if executor is None:
