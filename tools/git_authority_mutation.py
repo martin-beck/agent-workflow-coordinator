@@ -10,9 +10,11 @@ It is the independently testable effect seam for the Git mutation gate.
 
 from __future__ import annotations
 
+import os
 import re
 import stat
 import subprocess
+import tempfile
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -206,6 +208,91 @@ class GitCommitCapability:
             raise GitMutationRejectedError("Git admission reread was rejected") from error
         if not isinstance(current, Mapping) or not self._admission.matches(current):
             raise GitMutationRejectedError("Git admission identity changed before commit")
+
+    def stage_and_commit(self, argument: Mapping[str, object]) -> GitCommitResult:  # noqa: C901
+        """Stage one admitted selector payload inside the durable effect boundary.
+
+        The durable wrapper prepares its intent before invoking this method.
+        Consequently a worker death after the working-tree replacement or
+        ``git add`` is recovered as an unresolved effect, never as a success.
+        The ordinary string ``commit`` path remains available for callers that
+        provide their own pre-staged change.
+        """
+        if self._consumed:
+            raise GitMutationError("Git mutation capability already consumed")
+        if not isinstance(argument, Mapping) or set(argument) != {
+            "message",
+            "path",
+            "content",
+        }:
+            raise GitMutationRejectedError("Git staged commit argument is invalid")
+        message = argument.get("message")
+        relative = argument.get("path")
+        content = argument.get("content")
+        if not isinstance(message, str):
+            raise GitMutationRejectedError("Git staged commit message is invalid")
+        message = self._validate_text(message, "commit message")
+        if (
+            not isinstance(relative, str)
+            or not relative
+            or Path(relative).is_absolute()
+            or ".." in Path(relative).parts
+            or relative.startswith(".git/")
+            or relative == ".git"
+        ):
+            raise GitMutationRejectedError("Git staged commit path is invalid")
+        if not isinstance(content, str) or len(content.encode("utf-8")) > 1024 * 1024:
+            raise GitMutationRejectedError("Git staged commit content is invalid")
+        self._assert_before_clean()
+        self._assert_admission_current()
+        target = (self._repository / relative).resolve()
+        try:
+            target.relative_to(self._repository)
+            status = target.lstat()
+        except (OSError, ValueError) as error:
+            raise GitMutationRejectedError("Git staged commit target is unavailable") from error
+        ancestor = self._repository
+        for component in Path(relative).parts[:-1]:
+            ancestor /= component
+            if ancestor.is_symlink() or (ancestor.exists() and not ancestor.is_dir()):
+                raise GitMutationRejectedError("Git staged commit parent is unsafe")
+        if stat.S_ISLNK(status.st_mode) or not stat.S_ISREG(status.st_mode):
+            raise GitMutationRejectedError("Git staged commit target is unsafe")
+        descriptor, temporary = tempfile.mkstemp(prefix=".agent-workflow-stage-", dir=target.parent)
+        temporary_path = Path(temporary)
+        try:
+            with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+                stream.write(content)
+                stream.flush()
+                os.fsync(stream.fileno())
+            temporary_path.chmod(stat.S_IMODE(status.st_mode))
+            temporary_path.replace(target)
+            directory = os.open(target.parent, os.O_DIRECTORY)
+            try:
+                os.fsync(directory)
+            finally:
+                os.close(directory)
+            self._git("add", "--", relative)
+        except GitMutationError as error:
+            raise GitMutationAmbiguousError("Git staged commit outcome is ambiguous") from error
+        except BaseException as error:
+            raise GitMutationAmbiguousError("Git staged commit outcome is ambiguous") from error
+        finally:
+            temporary_path.unlink(missing_ok=True)
+        # The commit method rechecks the exact branch/head and the now-staged
+        # index before invoking Git's ref mutation.
+        return self.commit(message)
+
+    def _assert_before_clean(self) -> tuple[str, str]:
+        self._assert_repository_identity()
+        branch = self._git("symbolic-ref", "--short", "-q", "HEAD")
+        head = self._git("rev-parse", "--verify", "HEAD^{commit}")
+        if branch != self._expected_branch or head != self._expected_head:
+            raise GitMutationRejectedError("Git authority identity changed before staging")
+        status = self._git("status", "--porcelain=v1", "--untracked-files=all")
+        if status:
+            raise GitMutationRejectedError("Git authority is not clean before staging")
+        return branch, head
 
     @staticmethod
     def _decode_commit_result(result: subprocess.CompletedProcess[str]) -> str | None:

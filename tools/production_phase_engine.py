@@ -147,6 +147,7 @@ def bind_forward_phase_capabilities(
     binding: LiveUpgradeBinding,
     operations: Mapping[str, Mapping[str, object]],
     inputs: ForwardPhaseCapabilityInputs,
+    backend: BoundProductionBackendAdapter | None = None,
 ) -> ForwardPhaseCapabilities:
     """Bind backup, stage, and validation to one exact target-new context.
 
@@ -166,18 +167,19 @@ def bind_forward_phase_capabilities(
         if operation.get("operation_id") != f"{context['operation_id']}:{phase}":
             raise ProductionPhaseBindingError(f"generated {phase} operation identity is invalid")
     try:
+        shared_backend = backend or BoundProductionBackendAdapter(binding)
         backup = BoundBackupPhaseAdapter(
-            BoundProductionBackendAdapter(binding),
+            shared_backend,
             operations["backup"],
             inputs.backup_context,
         )
         stage = BoundStagePhaseAdapter(
-            BoundProductionBackendAdapter(binding),
+            shared_backend,
             operations["stage"],
             inputs.stage_context,
         )
         validation = BoundValidationPhaseAdapter(
-            BoundProductionBackendAdapter(binding),
+            shared_backend,
             inputs.validation_admission,
             operations["validate"],
             inputs.validation_context,
@@ -329,6 +331,34 @@ class BoundProductionBackendAdapter:
     def _admit(self) -> None:
         if not self._binding.is_admitted():
             raise ProductionPhaseBindingError("live upgrade binding is no longer admitted")
+
+    def refresh_after_commit(self) -> None:
+        """Advance Git observation identity after the bound commit effect."""
+        if self.bound_rollback_kind != "git":
+            return
+        current_head = self._adapter._git("rev-parse", "--verify", "HEAD")
+        if current_head == self._binding.expected_head:
+            return
+        try:
+            self._adapter._git(
+                "merge-base", "--is-ancestor", cast(str, self._binding.expected_head), current_head
+            )
+            refreshed = LiveUpgradeBinding.bind(
+                self._binding.runtime,
+                self._binding.session,
+                self._binding.scope,
+                self._binding.lease,
+                self._binding.admission_recheck,
+                self._binding.adapter,
+                expected_git_repository=self._binding.expected_git_repository,
+            )
+        except Exception as error:
+            raise ProductionPhaseBindingError(
+                "Git post-commit binding refresh was rejected"
+            ) from error
+        if refreshed.expected_head != current_head:
+            raise ProductionPhaseBindingError("Git post-commit head reread is inconsistent")
+        self._binding = refreshed
 
     def snapshot(self, phase: str, context: Mapping[str, object]) -> dict[str, Any]:  # noqa: C901
         self._admit()
@@ -547,6 +577,19 @@ class BoundProductionBackendAdapter:
             return executor.execute_generated_operation(operation, destination, binding)
         raise ProductionPhaseBindingError("generated operation is unsupported for Git")
 
+    def execute_generated_backup(
+        self, operation: Mapping[str, object], context: Mapping[str, object]
+    ) -> dict[str, Any]:
+        """Dispatch the admitted Git backup opcode through the concrete adapter."""
+        self._admit()
+        if self.bound_rollback_kind != "git":
+            raise ProductionPhaseBindingError("generated Git backup is unsupported for SQLite")
+        backend_context = {key: value for key, value in context.items() if key != "binding"}
+        result = self._adapter.execute_generated_backup(operation, backend_context)
+        if not isinstance(result, dict):
+            raise ProductionPhaseBindingError("generated Git backup result is not an object")
+        return result
+
 
 def _phase_operations(contract: Mapping[str, object]) -> dict[str, Mapping[str, object]]:
     phases = contract.get("phases")
@@ -612,7 +655,7 @@ def build_production_phase_binding(  # noqa: C901
     engine_kwargs: dict[str, Any] = {}
     if forward_inputs is not None:
         forward_capabilities = bind_forward_phase_capabilities(
-            live_binding, operations, forward_inputs
+            live_binding, operations, forward_inputs, backend
         )
         engine_context = _validate_forward_context(live_binding, forward_inputs.engine_context)
         _validate_forward_validation_inputs(

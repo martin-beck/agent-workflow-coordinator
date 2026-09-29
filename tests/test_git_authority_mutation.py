@@ -214,6 +214,36 @@ class GitCommitCapabilityTests(unittest.TestCase):
         self.assertTrue(result.mutates_authority)
         self.assertEqual("", _git(self.root, "status", "--porcelain=v1", "--untracked-files=all"))
 
+    def test_stage_and_commit_binds_selector_payload_inside_effect(self) -> None:
+        runtime = self.root / ".runtime"
+        runtime.mkdir(mode=0o700)
+        selector = runtime / "runtime-selector.json"
+        selector.write_text(
+            '{"schema_version":1,"active_release":"v0.1.0","previous_release":"v0.0.9"}\n',
+            encoding="utf-8",
+        )
+        _git(self.root, "add", ".runtime/runtime-selector.json")
+        _git(self.root, "commit", "-m", "add runtime selector")
+        before = _git(self.root, "rev-parse", "HEAD")
+        admission = self._admission()
+        result = GitCommitCapability(
+            self.root,
+            admission=admission,
+            admission_reread=lambda: admission.__dict__,
+            expected_branch="main",
+            expected_head=before,
+        ).stage_and_commit(
+            {
+                "message": "op-1 select staged runtime",
+                "path": ".runtime/runtime-selector.json",
+                "content": '{"schema_version":1,"active_release":"v0.2.0",'
+                '"previous_release":"v0.1.0"}\n',
+            }
+        )
+        self.assertNotEqual(before, result.after_head)
+        self.assertIn('"active_release":"v0.2.0"', selector.read_text(encoding="utf-8"))
+        self.assertEqual("", _git(self.root, "status", "--porcelain=v1", "--untracked-files=all"))
+
     def test_capability_is_single_use_but_fresh_capability_reopens(self) -> None:
         (self.root / "state").write_text("first\n", encoding="utf-8")
         _git(self.root, "add", "state")

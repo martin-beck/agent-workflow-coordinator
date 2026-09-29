@@ -324,7 +324,11 @@ class GitAuthorityAdapter:
                 admission,
                 journal,
                 session_revision=session_revision,
-                backend_effect=lambda message: capability.commit(message),
+                backend_effect=lambda argument: (
+                    capability.stage_and_commit(argument)
+                    if isinstance(argument, Mapping)
+                    else capability.commit(argument)
+                ),
             )
         except AuthorityMutationError as error:
             raise GitAuthorityError("Git durable commit capability binding was rejected") from error

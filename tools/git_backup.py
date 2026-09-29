@@ -190,11 +190,12 @@ def _verify_archive_equivalence(path: Path, checkout: Path) -> None:
     try:
         with tarfile.open(path) as archive:
             members = archive.getmembers()
-            names = [member.name for member in members]
+            file_members = [member for member in members if member.isfile()]
+            names = [member.name for member in file_members]
             tracked = _run(["git", "ls-files"], checkout).splitlines()
             if names != tracked:
                 raise BackupError("clean restore archive file set mismatch")
-            for member in members:
+            for member in file_members:
                 target = checkout / member.name
                 if not target.is_file() or target.is_symlink():
                     raise BackupError("clean restore archive file is unsafe")
