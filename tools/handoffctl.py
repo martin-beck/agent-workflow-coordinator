@@ -3054,6 +3054,8 @@ def cmd_upgrade(args: argparse.Namespace) -> int:
             authority_marker=AUTHORITY_MARKER,
             authority_lifecycle=AUTHORITY_LIFECYCLE,
             authority_lock=AUTHORITY_LOCK,
+            control_binding=CONTROL_BINDING,
+            control_lock=CONTROL_LOCK,
             project_binding=BINDING,
             backend_config=BACKEND_CONFIG,
             runtime_selector=RUNTIME / "runtime-selector.json",
