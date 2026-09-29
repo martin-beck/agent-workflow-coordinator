@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import unittest
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 from unittest.mock import patch
 
 from tools.authority_mutation import DurableBoundBackendMutation
@@ -182,7 +182,7 @@ class ProductionPhaseEffectsTests(unittest.TestCase):
     def test_rejects_malformed_generated_operation_inputs(self) -> None:
         operation = _operation("new")
         base_inputs = cast(dict[str, object], operation["inputs"])
-        cases: tuple[dict[str, object], ...] = (
+        cases: tuple[dict[str, Any], ...] = (
             {**operation, "inputs": None},
             {**operation, "inputs": {"backend": "sqlite"}},
             {
@@ -232,7 +232,7 @@ class ProductionPhaseEffectsTests(unittest.TestCase):
     def test_rejects_ambiguous_or_invalid_rollback_configuration(self) -> None:
         commit = _admission("new")
         rollback = _admission("rollback")
-        cases = (
+        cases: tuple[dict[str, Any], ...] = (
             {},
             {"rollback_effect": lambda _argument: {}, "rollback_backup": Path("backup")},
             {"rollback_effect": "not-callable"},
