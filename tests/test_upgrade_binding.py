@@ -269,6 +269,41 @@ class UpgradeBindingTests(unittest.TestCase):
         with self.assertRaises(TypeError):
             LiveUpgradeBinding()
 
+    def test_rejects_nonconcrete_live_binding_components(self) -> None:
+        contract = _contract("sqlite")
+        runtime = _envelope(contract)
+        binding = UpgradeRuntimeBinding.bind(contract, runtime, session_identity_digest="a" * 64)
+        with self.assertRaisesRegex(UpgradeBindingError, "runtime upgrade binding"):
+            LiveUpgradeBinding.bind(
+                cast(Any, object()), object(), object(), object(), object(), object()
+            )
+        with self.assertRaisesRegex(UpgradeBindingError, "live barrier session"):
+            LiveUpgradeBinding.bind(binding, object(), object(), object(), object(), object())
+        session = object.__new__(BarrierSessionState)
+        with self.assertRaisesRegex(UpgradeBindingError, "lock-domain scope"):
+            LiveUpgradeBinding.bind(binding, session, object(), object(), object(), object())
+        scope = object.__new__(LockDomainScope)
+        with self.assertRaisesRegex(UpgradeBindingError, "admission lease"):
+            LiveUpgradeBinding.bind(binding, session, scope, object(), object(), object())
+        lease = object.__new__(AdmissionLease)
+        with self.assertRaisesRegex(UpgradeBindingError, "admission recheck"):
+            LiveUpgradeBinding.bind(binding, session, scope, lease, object(), object())
+
+    def test_rejects_unverified_backend_evidence(self) -> None:
+        contract = _contract("sqlite")
+        runtime = _envelope(contract)
+        binding = UpgradeRuntimeBinding.bind(contract, runtime, session_identity_digest="a" * 64)
+        evidence = {
+            **runtime,
+            "phase": "rollback",
+            "backend_identity_verified": False,
+            "mutates_authority": False,
+            "sqlite_integrity_verified": True,
+            "sqlite_foreign_keys_verified": True,
+        }
+        with self.assertRaisesRegex(UpgradeBindingError, "not verified"):
+            binding.validate_backend_evidence(evidence)
+
     def test_binds_real_sqlite_session_scope_and_adapter(self) -> None:
         contract = _contract()
         runtime = _envelope(contract)
