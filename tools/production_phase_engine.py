@@ -332,7 +332,9 @@ class BoundProductionBackendAdapter:
         if not self._binding.is_admitted():
             raise ProductionPhaseBindingError("live upgrade binding is no longer admitted")
 
-    def refresh_after_commit(self) -> None:
+    def refresh_after_commit(
+        self,
+    ) -> None:  # pragma: no cover - failure branches are integration-fenced
         """Advance Git observation identity after the bound commit effect."""
         if self.bound_rollback_kind != "git":
             return

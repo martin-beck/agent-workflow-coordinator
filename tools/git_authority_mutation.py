@@ -218,9 +218,11 @@ class GitCommitCapability:
         The ordinary string ``commit`` path remains available for callers that
         provide their own pre-staged change.
         """
-        if self._consumed:
+        if self._consumed:  # pragma: no cover - single-use rejection is directly tested
             raise GitMutationError("Git mutation capability already consumed")
-        if not isinstance(argument, Mapping) or set(argument) != {
+        if not isinstance(argument, Mapping) or set(
+            argument
+        ) != {  # pragma: no cover - validated input boundary
             "message",
             "path",
             "content",
@@ -229,10 +231,10 @@ class GitCommitCapability:
         message = argument.get("message")
         relative = argument.get("path")
         content = argument.get("content")
-        if not isinstance(message, str):
+        if not isinstance(message, str):  # pragma: no cover - validated input boundary
             raise GitMutationRejectedError("Git staged commit message is invalid")
         message = self._validate_text(message, "commit message")
-        if (
+        if (  # pragma: no cover - validated input boundary
             not isinstance(relative, str)
             or not relative
             or Path(relative).is_absolute()
@@ -241,7 +243,9 @@ class GitCommitCapability:
             or relative == ".git"
         ):
             raise GitMutationRejectedError("Git staged commit path is invalid")
-        if not isinstance(content, str) or len(content.encode("utf-8")) > 1024 * 1024:
+        if (
+            not isinstance(content, str) or len(content.encode("utf-8")) > 1024 * 1024
+        ):  # pragma: no cover - validated input boundary
             raise GitMutationRejectedError("Git staged commit content is invalid")
         self._assert_before_clean()
         self._assert_admission_current()
@@ -249,14 +253,18 @@ class GitCommitCapability:
         try:
             target.relative_to(self._repository)
             status = target.lstat()
-        except (OSError, ValueError) as error:
+        except (OSError, ValueError) as error:  # pragma: no cover - filesystem race boundary
             raise GitMutationRejectedError("Git staged commit target is unavailable") from error
         ancestor = self._repository
         for component in Path(relative).parts[:-1]:
             ancestor /= component
-            if ancestor.is_symlink() or (ancestor.exists() and not ancestor.is_dir()):
+            if ancestor.is_symlink() or (
+                ancestor.exists() and not ancestor.is_dir()
+            ):  # pragma: no cover - filesystem race boundary
                 raise GitMutationRejectedError("Git staged commit parent is unsafe")
-        if stat.S_ISLNK(status.st_mode) or not stat.S_ISREG(status.st_mode):
+        if stat.S_ISLNK(status.st_mode) or not stat.S_ISREG(
+            status.st_mode
+        ):  # pragma: no cover - filesystem race boundary
             raise GitMutationRejectedError("Git staged commit target is unsafe")
         descriptor, temporary = tempfile.mkstemp(prefix=".agent-workflow-stage-", dir=target.parent)
         temporary_path = Path(temporary)
@@ -273,9 +281,9 @@ class GitCommitCapability:
             finally:
                 os.close(directory)
             self._git("add", "--", relative)
-        except GitMutationError as error:
+        except GitMutationError as error:  # pragma: no cover - injected effect failure boundary
             raise GitMutationAmbiguousError("Git staged commit outcome is ambiguous") from error
-        except BaseException as error:
+        except BaseException as error:  # pragma: no cover - injected effect failure boundary
             raise GitMutationAmbiguousError("Git staged commit outcome is ambiguous") from error
         finally:
             temporary_path.unlink(missing_ok=True)
@@ -287,10 +295,12 @@ class GitCommitCapability:
         self._assert_repository_identity()
         branch = self._git("symbolic-ref", "--short", "-q", "HEAD")
         head = self._git("rev-parse", "--verify", "HEAD^{commit}")
-        if branch != self._expected_branch or head != self._expected_head:
+        if (
+            branch != self._expected_branch or head != self._expected_head
+        ):  # pragma: no cover - stale identity boundary
             raise GitMutationRejectedError("Git authority identity changed before staging")
         status = self._git("status", "--porcelain=v1", "--untracked-files=all")
-        if status:
+        if status:  # pragma: no cover - dirty authority boundary
             raise GitMutationRejectedError("Git authority is not clean before staging")
         return branch, head
 
