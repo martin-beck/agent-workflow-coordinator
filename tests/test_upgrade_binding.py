@@ -365,6 +365,22 @@ class UpgradeBindingTests(unittest.TestCase):
             with self.assertRaisesRegex(UpgradeCommandError, "does not match the contract"):
                 execute_upgrade_command("apply", foreign_path, "sqlite", live_binding=live)
             self.assertTrue(live.is_admitted())
+            forged = object.__new__(LiveUpgradeBinding)
+            for field in (
+                "runtime",
+                "session",
+                "scope",
+                "lease",
+                "admission_recheck",
+                "adapter",
+                "_token",
+                "expected_branch",
+                "expected_head",
+                "expected_git_repository",
+            ):
+                object.__setattr__(forged, field, getattr(live, field))
+            object.__setattr__(forged, "adapter", object.__new__(SQLiteAuthorityAdapter))
+            self.assertFalse(forged.is_admitted())
             session.begin_reopen(
                 3,
                 "rollback",
