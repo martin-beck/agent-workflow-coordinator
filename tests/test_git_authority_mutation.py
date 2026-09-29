@@ -244,6 +244,47 @@ class GitCommitCapabilityTests(unittest.TestCase):
         self.assertIn('"active_release":"v0.2.0"', selector.read_text(encoding="utf-8"))
         self.assertEqual("", _git(self.root, "status", "--porcelain=v1", "--untracked-files=all"))
 
+    def test_stage_and_commit_rejects_invalid_payloads_and_staging_failure(self) -> None:
+        admission = self._admission()
+        head = _git(self.root, "rev-parse", "HEAD")
+
+        def capability(runner: Any = subprocess.run) -> GitCommitCapability:
+            return GitCommitCapability(
+                self.root,
+                admission=admission,
+                admission_reread=lambda: admission.__dict__,
+                expected_branch="main",
+                expected_head=head,
+                runner=runner,
+            )
+
+        for argument in (
+            {"message": "m", "path": "state"},
+            {"message": 1, "path": "state", "content": "new\n"},
+            {"message": "m", "path": "../state", "content": "new\n"},
+            {"message": "m", "path": "state", "content": "new\n" * (1024 * 1024)},
+        ):
+            with self.assertRaises(GitMutationRejectedError):
+                capability().stage_and_commit(argument)
+
+        def failing_runner(*_args: object, **_kwargs: object) -> subprocess.CompletedProcess[str]:
+            command = cast(list[str], _args[0])
+            if "add" not in command:
+                return subprocess.run(command, **cast(Any, _kwargs))
+            return subprocess.CompletedProcess([], 1, stdout="", stderr="staging failed")
+
+        with self.assertRaises(GitMutationAmbiguousError):
+            capability(failing_runner).stage_and_commit(
+                {"message": "m", "path": "state", "content": "new\n"}
+            )
+
+        consumed = capability()
+        (self.root / "state").write_text("new\n", encoding="utf-8")
+        _git(self.root, "add", "state")
+        consumed.commit("op-1 authority commit")
+        with self.assertRaises(GitMutationError):
+            consumed.stage_and_commit({"message": "m", "path": "state", "content": "again\n"})
+
     def test_capability_is_single_use_but_fresh_capability_reopens(self) -> None:
         (self.root / "state").write_text("first\n", encoding="utf-8")
         _git(self.root, "add", "state")
