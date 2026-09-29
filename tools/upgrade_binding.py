@@ -167,7 +167,8 @@ class LiveUpgradeBinding:
         if backend == "git":
             if not isinstance(expected_git_repository, Path):
                 raise UpgradeBindingError("expected Git repository identity is required")
-            if adapter._repository != expected_git_repository.resolve():
+            git_adapter = cast(GitAuthorityAdapter, adapter)
+            if git_adapter._repository != expected_git_repository.resolve():
                 raise UpgradeBindingError("Git live backend is bound to a foreign repository")
         elif expected_git_repository is not None:
             raise UpgradeBindingError("Git repository identity is invalid for SQLite")
@@ -180,8 +181,9 @@ class LiveUpgradeBinding:
                 raise UpgradeBindingError("SQLite live backend is bound to a foreign authority")
         if backend == "git":
             try:
-                expected_branch = adapter._git("symbolic-ref", "--short", "-q", "HEAD")
-                expected_head = adapter._git("rev-parse", "--verify", "HEAD")
+                git_adapter = cast(GitAuthorityAdapter, adapter)
+                expected_branch = git_adapter._git("symbolic-ref", "--short", "-q", "HEAD")
+                expected_head = git_adapter._git("rev-parse", "--verify", "HEAD")
             except Exception as error:
                 raise UpgradeBindingError("Git live backend reread was rejected") from error
         try:
