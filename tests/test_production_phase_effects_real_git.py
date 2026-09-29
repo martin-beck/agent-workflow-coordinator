@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import sqlite3
 import subprocess
 import tempfile
 import unittest
@@ -118,18 +119,42 @@ class RealGitPhaseEffectsTests(unittest.TestCase):
 
             self.assertTrue(receipt.mutates_authority)
             self.assertNotEqual(expected_head, _git(root, "rev-parse", "HEAD"))
+            self.assertEqual("new\n", (root / "state").read_text(encoding="utf-8"))
+            self.assertEqual(
+                "real-git-test authority commit", _git(root, "log", "-1", "--format=%s")
+            )
             self.assertEqual("", _git(root, "status", "--porcelain=v1", "--untracked-files=all"))
             reopened = SQLiteRollbackControlStore(control.path, project)
             reopened_state = SQLiteBarrierSessionStore(reopened).snapshot()
             self.assertIsNotNone(reopened_state)
             assert reopened_state is not None
             self.assertEqual("held", reopened_state.status)
-            with closing(__import__("sqlite3").connect(control.path)) as check:
+            with closing(sqlite3.connect(control.path)) as check:
                 outcomes = check.execute(
-                    "SELECT operation_id, outcome FROM authority_effect_intent WHERE project_id=?",
+                    "SELECT operation_id, backend, target, session_revision, identity_digest, "
+                    "fencing_token, artifact_identity, manifest_identity, selector_identity, "
+                    "runtime_identity, outcome FROM authority_effect_intent "
+                    "WHERE project_id=?",
                     (project,),
                 ).fetchall()
-            self.assertEqual([("real-git-test:commit", "committed")], outcomes)
+            self.assertEqual(
+                [
+                    (
+                        "real-git-test:commit",
+                        "git",
+                        "new",
+                        3,
+                        identity.identity_digest,
+                        "fence-real",
+                        "artifact-real",
+                        "manifest-real",
+                        "selector-real",
+                        "runtime-real",
+                        "committed",
+                    )
+                ],
+                outcomes,
+            )
 
 
 if __name__ == "__main__":
