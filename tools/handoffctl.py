@@ -23,6 +23,11 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import Any, cast
 
+if not __package__:
+    _SCRIPT_ROOT = str(Path(__file__).resolve().parent.parent)
+    if _SCRIPT_ROOT not in sys.path:
+        sys.path.insert(0, _SCRIPT_ROOT)
+
 if __package__:
     from .board_metrics import build_metrics
     from .board_metrics import encode as encode_metrics
