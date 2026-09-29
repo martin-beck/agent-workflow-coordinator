@@ -232,8 +232,16 @@ def resolve_git_live_binding(
         fence.verify_binding()
         fence.bind_session_identity(identity)
         scope = LockDomainScope.bind(session_store, fence, lease, recheck, common_lock)
-        adapter = GitAuthorityAdapter(repository)
         observed = read_git_authority_snapshot(repository)
+        root_status = observed.repository.stat()
+        git_status = (observed.repository / ".git").stat()
+        repository_identity = (
+            root_status.st_dev,
+            root_status.st_ino,
+            git_status.st_dev,
+            git_status.st_ino,
+        )
+        adapter = GitAuthorityAdapter(repository, repository_identity=repository_identity)
         return LiveUpgradeBinding.bind(
             runtime,
             state,
