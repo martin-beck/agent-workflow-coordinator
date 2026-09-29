@@ -281,17 +281,11 @@ class ProductionPhaseEngineTests(unittest.TestCase):
                 "fencing_owner": runtime_envelope["fencing_owner"],
                 "identity_digest": "0" * 64,
             }
-            identity_record["identity_digest"] = canonical_barrier_session_digest(
-                identity_record
-            )
+            identity_record["identity_digest"] = canonical_barrier_session_digest(identity_record)
             identity = BarrierSessionIdentity.from_record(identity_record)
             session.create(identity)
-            session.bind_child(
-                1, BarrierChildIdentity.bind(identity, "upgrade-001:forward", "new")
-            )
-            session.bind_child(
-                2, BarrierChildIdentity.bind(identity, "upgrade-001", "rollback")
-            )
+            session.bind_child(1, BarrierChildIdentity.bind(identity, "upgrade-001:forward", "new"))
+            session.bind_child(2, BarrierChildIdentity.bind(identity, "upgrade-001", "rollback"))
             marker = root / "authority-marker.json"
             lifecycle = root / "authority-lifecycle.json"
             authority_lock = root / "authority.lock"
@@ -328,7 +322,8 @@ class ProductionPhaseEngineTests(unittest.TestCase):
             )
             scope = LockDomainScope.bind(session, fence, lease, recheck, locked)
             runtime = UpgradeRuntimeBinding.bind(
-                runtime_contract, runtime_envelope,
+                runtime_contract,
+                runtime_envelope,
                 session_identity_digest=identity.identity_digest,
             )
             adapter = SQLiteAuthorityAdapter(authority)
