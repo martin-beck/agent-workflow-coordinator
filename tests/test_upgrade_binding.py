@@ -4,8 +4,12 @@
 from __future__ import annotations
 
 import copy
+import sqlite3
+import tempfile
 import unittest
 import uuid
+from contextlib import closing
+from pathlib import Path
 from dataclasses import replace
 from pathlib import PurePosixPath
 from typing import Any, cast
@@ -15,8 +19,10 @@ from tools import upgrade_binding as binding_module
 from tools.admission_lease import AdmissionLease, AdmissionRecheck
 from tools.generate_upgrade_contract import generate
 from tools.git_authority_adapter import GitAuthorityAdapter
+from tools.handoffctl import locked
 from tools.lock_domain_scope import LockDomainScope
-from tools.rollback_control_store import BarrierSessionState
+from tools.mutation_fence import MutationFence, provision, provision_control_binding
+from tools.rollback_control_store import BarrierSessionState, SQLiteBarrierSessionStore, SQLiteRollbackControlStore
 from tools.sqlite_authority_adapter import SQLiteAuthorityAdapter
 from tools.upgrade_binding import LiveUpgradeBinding, UpgradeBindingError, UpgradeRuntimeBinding
 from tools.upgrade_identity import (
@@ -259,6 +265,84 @@ class UpgradeBindingTests(unittest.TestCase):
             LiveUpgradeBinding.bind(
                 binding, replace(session, status="released"), scope, lease, recheck, adapter
             )
+
+    def test_binds_real_sqlite_session_scope_and_adapter(self) -> None:
+        contract = _contract()
+        runtime = _envelope(contract)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            root.chmod(0o700)
+            authority = root / "authority.sqlite"
+            with closing(sqlite3.connect(authority)) as connection, connection:
+                connection.execute("CREATE TABLE records (id INTEGER PRIMARY KEY, body TEXT)")
+                connection.execute("INSERT INTO records(body) VALUES ('clean')")
+            authority.chmod(0o600)
+            control_path = root / "control.sqlite"
+            store = SQLiteRollbackControlStore(control_path, str(runtime["project_id"]), authority)
+            marker = root / "authority-marker.json"
+            lifecycle = root / "authority-lifecycle.json"
+            authority_lock = root / "authority.lock"
+            control_binding = root / "control-binding.json"
+            provision(authority, marker, lifecycle, authority_lock, str(runtime["project_id"]))
+            provision_control_binding(control_path, control_binding, store.control_lock_path, str(runtime["project_id"]))
+            fence = MutationFence(
+                authority,
+                marker,
+                lifecycle,
+                authority_lock,
+                control_path,
+                control_binding,
+                store.control_lock_path,
+            )
+            session_record: dict[str, object] = {
+                "schema_version": 1,
+                "project_id": runtime["project_id"],
+                "attempt_id": "attempt-7",
+                "state_revision": runtime["state_revision"],
+                "authority_revision_at_acquire": runtime["authority_revision"],
+                "durable_barrier_id": runtime["durable_barrier_id"],
+                "fencing_token": runtime["fencing_token"],
+                "fencing_owner": runtime["fencing_owner"],
+            }
+            session_record["identity_digest"] = canonical_barrier_session_digest(session_record)
+            identity = BarrierSessionIdentity.from_record(session_record)
+            forward_child = BarrierChildIdentity.bind(
+                identity, f"{runtime['operation_id']}:forward", "new"
+            )
+            child = BarrierChildIdentity.bind(identity, str(runtime["operation_id"]), "rollback")
+            session = SQLiteBarrierSessionStore(
+                store, lambda: str(runtime["authority_revision"])
+            )
+            session.create(identity)
+            session.bind_child(1, forward_child)
+            session.bind_child(2, child)
+            lease = AdmissionLease(
+                project_id=str(runtime["project_id"]),
+                authority_revision=str(runtime["authority_revision"]),
+                fencing_token=str(runtime["fencing_token"]),
+                fencing_owner=str(runtime["fencing_owner"]),
+                durable_barrier_id=str(runtime["durable_barrier_id"]),
+                revision=cast(int, runtime["state_revision"]),
+            )
+            recheck = AdmissionRecheck(
+                lease=lease,
+                project_id=lease.project_id,
+                authority_revision=lease.authority_revision,
+                fencing_token=lease.fencing_token,
+                fencing_owner=lease.fencing_owner,
+                durable_barrier_id=lease.durable_barrier_id,
+                revision=lease.revision,
+            )
+            scope = LockDomainScope.bind(session, fence, lease, recheck, locked)
+            adapter = SQLiteAuthorityAdapter(authority)
+            binding = UpgradeRuntimeBinding.bind(
+                contract, runtime, session_identity_digest=identity.identity_digest
+            )
+            live = LiveUpgradeBinding.bind(binding, session.snapshot(), scope, lease, recheck, adapter)
+            evidence = live.reread_backend()
+            self.assertTrue(evidence["sqlite_integrity_verified"])
+            self.assertFalse(evidence["mutates_authority"])
+            self.assertFalse(session.operation_owned_by_current_thread)
 
     def test_rejects_malformed_binding_records(self) -> None:
         contract = _contract()
