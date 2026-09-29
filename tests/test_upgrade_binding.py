@@ -347,6 +347,66 @@ class UpgradeBindingTests(unittest.TestCase):
             live = LiveUpgradeBinding.bind(
                 binding, session.snapshot(), scope, lease, recheck, adapter
             )
+            invalid_arguments = (
+                (object(), session.snapshot(), scope, lease, recheck),
+                (binding, object(), scope, lease, recheck),
+                (binding, session.snapshot(), object(), lease, recheck),
+                (binding, session.snapshot(), scope, object(), recheck),
+                (binding, session.snapshot(), scope, lease, object()),
+            )
+            for invalid in invalid_arguments:
+                with self.assertRaises(UpgradeBindingError):
+                    LiveUpgradeBinding.bind(*cast(Any, (*invalid, adapter)))
+            foreign_lease = replace(lease, fencing_token="foreign")  # noqa: S106
+            foreign_recheck = AdmissionRecheck(
+                lease=foreign_lease,
+                project_id=foreign_lease.project_id,
+                authority_revision=foreign_lease.authority_revision,
+                fencing_token=foreign_lease.fencing_token,
+                fencing_owner=foreign_lease.fencing_owner,
+                durable_barrier_id=foreign_lease.durable_barrier_id,
+                revision=foreign_lease.revision,
+            )
+            with self.assertRaises(UpgradeBindingError):
+                LiveUpgradeBinding.bind(
+                    binding, session.snapshot(), scope, lease, foreign_recheck, adapter
+                )
+            with (
+                patch.object(scope, "assert_context", side_effect=RuntimeError("drift")),
+                self.assertRaises(UpgradeBindingError),
+            ):
+                LiveUpgradeBinding.bind(binding, session.snapshot(), scope, lease, recheck, adapter)
+            original_store = scope._session_store
+            scope._session_store = cast(Any, object())
+            with self.assertRaises(UpgradeBindingError):
+                LiveUpgradeBinding.bind(binding, session.snapshot(), scope, lease, recheck, adapter)
+            scope._session_store = original_store
+            original_identity = scope._session_identity
+            scope._session_identity = replace(original_identity, attempt_id="foreign-attempt")
+            with self.assertRaises(UpgradeBindingError):
+                LiveUpgradeBinding.bind(binding, session.snapshot(), scope, lease, recheck, adapter)
+            scope._session_identity = original_identity
+            original_revision = scope._session_revision
+            scope._session_revision = original_revision + 1
+            with self.assertRaises(UpgradeBindingError):
+                LiveUpgradeBinding.bind(binding, session.snapshot(), scope, lease, recheck, adapter)
+            scope._session_revision = original_revision
+            original_scope_lease = scope._lease
+            scope._lease = replace(lease, fencing_token="foreign")  # noqa: S106
+            with self.assertRaises(UpgradeBindingError):
+                LiveUpgradeBinding.bind(binding, session.snapshot(), scope, lease, recheck, adapter)
+            scope._lease = original_scope_lease
+            with (
+                patch.object(
+                    session,
+                    "snapshot_owned_by_caller",
+                    return_value=replace(
+                        cast(BarrierSessionState, session.snapshot()), status="released"
+                    ),
+                ),
+                self.assertRaises(UpgradeBindingError),
+            ):
+                LiveUpgradeBinding.bind(binding, session.snapshot(), scope, lease, recheck, adapter)
             evidence = live.reread_backend()
             self.assertTrue(evidence["sqlite_integrity_verified"])
             self.assertFalse(evidence["mutates_authority"])

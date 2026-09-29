@@ -110,7 +110,7 @@
       "tests/test_sqlite_storage.py": "851895c7f62925974f2450cb59420ebc8e0721992e5206f8b453953a63077fe5",
       "tests/test_sqlite_wal_lifecycle.py": "2639f4e62ce690051d940f36cd05c9cdbad4b854007bfd1aa8eaad221079fd4c",
       "tests/test_upgrade_admission.py": "e6d763f323e0ed5b98c07d9a1cb409899d1d53d176facd2c500174e367f457f7",
-      "tests/test_upgrade_binding.py": "db6c4f3bb7d76d7bb492a31f75f44ff6c5a0f4a153e3097b4e70a479f2a4ac93",
+      "tests/test_upgrade_binding.py": "06a6569d7501aa1195eb42874a9fab2ffa2796eed44c52064b1bf189dcf3b474",
       "tests/test_upgrade_commands.py": "279a78652f511fa8b711412f492d71c77c0b170833e76de3d93640dbb116f30a",
       "tests/test_upgrade_contract.py": "496b26506652c2c4d5aaa05ef1310148931b413274fe0a69936372f503bb5c70",
       "tests/test_upgrade_identity.py": "d677ab21c8048fdda10e8b302082c05b0aa387a8e0ba1f81e189f84011cc89f3",
