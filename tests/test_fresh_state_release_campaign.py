@@ -12,9 +12,20 @@ import unittest
 from pathlib import Path
 from typing import Any
 
-from tests.test_upgrade_campaign import FAILURE_POINTS, _execute_generated_operations
 from tools.generate_upgrade_contract import generate
 from tools.verify_release_identity import verify_transition
+
+FAILURE_POINTS = (
+    "discover",
+    "preflight",
+    "quiesce",
+    "backup",
+    "stage",
+    "commit",
+    "validate",
+    "reopen",
+    None,
+)
 
 
 def _git(root: Path, *args: str) -> str:
@@ -34,6 +45,62 @@ def _bytes_at(root: Path, revision: str, path: str) -> bytes:
         capture_output=True,
     )
     return result.stdout
+
+
+def _execute_generated_operations(
+    document: dict[str, Any], failure: str | None = None
+) -> list[dict[str, str]]:
+    """Execute each generated phase and record its bounded rollback outcome."""
+    handlers = {
+        "release.inspect": "discover",
+        "admission.check": "preflight",
+        "barrier.acquire": "quiesce",
+        "backend.backup": "backup",
+        "runtime.stage": "stage",
+        "authority.atomic_replace": "commit",
+        "runtime.validate": "validate",
+        "barrier.reopen": "reopen",
+    }
+    completed: set[str] = set()
+    records: list[dict[str, str]] = []
+    for phase in document["phases"]:
+        phase_id = str(phase["id"])
+        if set(phase["requires"]) != {
+            str(previous["id"])
+            for previous in document["phases"]
+            if str(previous["id"]) in set(phase["requires"])
+        }:
+            raise AssertionError("generated dependency record is inconsistent")
+        if not set(phase["requires"]).issubset(completed):
+            raise AssertionError("generated phase dependency was not completed")
+        operation = phase["operation"]
+        if handlers.get(str(operation["opcode"])) != phase_id:
+            raise AssertionError("generated opcode has no phase dispatcher")
+        records.append(
+            {
+                "operation_id": str(operation["operation_id"]),
+                "opcode": str(operation["opcode"]),
+                "outcome": "failed" if failure == phase_id else "completed",
+            }
+        )
+        if failure == phase_id:
+            if phase_id not in {"stage", "commit", "validate", "reopen"}:
+                break
+            rollback = document["rollback"]["operation"]
+            records.append(
+                {
+                    "operation_id": str(rollback["operation_id"]),
+                    "opcode": str(rollback["opcode"]),
+                    "outcome": "completed",
+                }
+            )
+            break
+        completed.add(phase_id)
+    if failure in {"stage", "commit", "validate", "reopen"} and records[-1]["operation_id"] != (
+        f"{document['operation_id']}:rollback"
+    ):
+        raise AssertionError("failed generated operation did not link rollback record")
+    return records
 
 
 def _release_identity(root: Path, version: str) -> dict[str, str]:
@@ -91,9 +158,7 @@ def _campaign_transition(root: Path) -> tuple[dict[str, Any], bool]:
             "trust_policy_sha256": hashlib.sha256(
                 _bytes_at(root, head, "docs/QUALITY.md")
             ).hexdigest(),
-            "vendor_manifest_sha256": hashlib.sha256(
-                _bytes_at(root, head, "uv.lock")
-            ).hexdigest(),
+            "vendor_manifest_sha256": hashlib.sha256(_bytes_at(root, head, "uv.lock")).hexdigest(),
         }
     return (
         {
