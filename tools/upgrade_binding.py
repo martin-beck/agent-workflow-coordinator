@@ -144,6 +144,10 @@ class LiveUpgradeBinding:
             expected_head=expected_head,
         )
 
+    def matches_runtime(self, runtime: "UpgradeRuntimeBinding") -> bool:
+        """Return whether this live binding is for the exact runtime binding."""
+        return isinstance(runtime, UpgradeRuntimeBinding) and self.runtime == runtime
+
 
 def canonical_contract_digest(contract: Mapping[str, object]) -> str:
     """Return the digest of the exact validated portable contract."""
