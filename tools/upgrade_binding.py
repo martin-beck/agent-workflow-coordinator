@@ -10,6 +10,7 @@ import json
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, cast
 
 if __package__:
@@ -66,6 +67,7 @@ class LiveUpgradeBinding:
     _token: object
     expected_branch: str | None
     expected_head: str | None
+    expected_git_repository: Path | None
 
     def __init__(self) -> None:
         raise TypeError("LiveUpgradeBinding must be issued by bind()")
@@ -79,6 +81,8 @@ class LiveUpgradeBinding:
         lease: object,
         admission_recheck: object,
         adapter: object,
+        *,
+        expected_git_repository: Path | None = None,
     ) -> LiveUpgradeBinding:
         from tools.admission_lease import AdmissionLease, AdmissionRecheck
         from tools.git_authority_adapter import GitAuthorityAdapter
@@ -140,6 +144,13 @@ class LiveUpgradeBinding:
         expected_head: str | None = None
         if backend == "git" and type(adapter) is not GitAuthorityAdapter:
             raise UpgradeBindingError("Git live backend adapter is not concrete")
+        if backend == "git":
+            if not isinstance(expected_git_repository, Path):
+                raise UpgradeBindingError("expected Git repository identity is required")
+            if adapter._repository != expected_git_repository.resolve():
+                raise UpgradeBindingError("Git live backend is bound to a foreign repository")
+        elif expected_git_repository is not None:
+            raise UpgradeBindingError("Git repository identity is invalid for SQLite")
         if backend == "sqlite":
             if type(adapter) is not SQLiteAuthorityAdapter:
                 raise UpgradeBindingError("SQLite live backend adapter is not concrete")
@@ -174,6 +185,7 @@ class LiveUpgradeBinding:
         object.__setattr__(issued, "_token", _LIVE_BINDING_TOKEN)
         object.__setattr__(issued, "expected_branch", expected_branch)
         object.__setattr__(issued, "expected_head", expected_head)
+        object.__setattr__(issued, "expected_git_repository", expected_git_repository)
         return issued
 
     def reread_backend(
@@ -216,21 +228,21 @@ class LiveUpgradeBinding:
         if getattr(self, "_token", None) is not _LIVE_BINDING_TOKEN:
             return False
         try:
-            session_store = self.scope._session_store
-            with self.scope.hold():
-                observed = session_store.snapshot_owned_by_caller()
-            self.runtime.validate_live_session(observed)
-            self.runtime.reread_backend_bound(
-                self.adapter,
+            refreshed = LiveUpgradeBinding.bind(
+                self.runtime,
+                self.session,
                 self.scope,
                 self.lease,
                 self.admission_recheck,
-                expected_branch=self.expected_branch,
-                expected_head=self.expected_head,
+                self.adapter,
+                expected_git_repository=self.expected_git_repository,
             )
         except Exception:
             return False
-        return True
+        return (
+            refreshed.expected_branch == self.expected_branch
+            and refreshed.expected_head == self.expected_head
+        )
 
 
 def canonical_contract_digest(contract: Mapping[str, object]) -> str:
