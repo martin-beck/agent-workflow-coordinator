@@ -8,6 +8,7 @@ import tempfile
 import unittest
 import uuid
 from contextlib import closing
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -22,6 +23,10 @@ from tools.production_phase_engine import (
     ForwardPhaseCapabilityInputs,
     ProductionPhaseBindingError,
     _phase_operations,
+    _validate_forward_commit_evidence,
+    _validate_forward_context,
+    _validate_forward_validation_inputs,
+    bind_forward_phase_capabilities,
     build_production_phase_binding,
 )
 from tools.runtime_bootstrap import DispatchAdmission
@@ -64,6 +69,85 @@ def _contract() -> dict[str, object]:
 
 
 class ProductionPhaseEngineTests(unittest.TestCase):
+    def _factory_forward_fixture(
+        self,
+    ) -> tuple[dict[str, object], LiveUpgradeBinding, ForwardPhaseCapabilityInputs]:
+        contract = _contract()
+        envelope: dict[str, object] = {
+            "schema_version": 2,
+            "backend": "sqlite",
+            "project_id": str(uuid.uuid4()),
+            "operation_id": contract["operation_id"],
+            "state_revision": 1,
+            "authority_revision": "authority",
+            "fencing_token": "fence-test",
+            "fencing_owner": "owner",
+            "durable_barrier_id": "barrier-test",
+            "artifact_root": "/artifacts",
+            "source": "/artifacts/source",
+            "destination": "/artifacts/destination",
+            "manifest": "/artifacts/manifest.json",
+            "selector_ref": ".runtime/runtime-selector.json",
+            "target": "rollback",
+        }
+        envelope["barrier_identity_digest"] = canonical_barrier_digest(envelope)
+        envelope["envelope_digest"] = canonical_envelope_digest(envelope)
+        forward = dict(envelope, target="new")
+        forward["barrier_identity_digest"] = canonical_barrier_digest(forward)
+        forward["envelope_digest"] = canonical_envelope_digest(forward)
+        runtime = SimpleNamespace(
+            contract_digest=canonical_contract_digest(contract),
+            contract_backend="sqlite",
+            runtime_envelope=envelope,
+        )
+        binding = object.__new__(LiveUpgradeBinding)
+        for field, value in {
+            "runtime": runtime,
+            "session": object(),
+            "scope": object(),
+            "lease": object(),
+            "admission_recheck": object(),
+            "adapter": object.__new__(SQLiteAuthorityAdapter),
+            "_token": object(),
+            "expected_branch": None,
+            "expected_head": None,
+            "expected_git_repository": None,
+        }.items():
+            object.__setattr__(binding, field, value)
+        admission = object.__new__(DispatchAdmission)
+        object.__setattr__(
+            admission, "identity", SimpleNamespace(release="v0.2.0", digest="a" * 64)
+        )
+        commit = CommitAdmissionBundle(
+            backend="sqlite",
+            target="new",
+            operation_id="phase-factory-test:commit",
+            fencing_token="fence-test",  # noqa: S106
+            state_revision=1,
+            barrier_id="barrier-test",
+            artifact_identity="artifact",
+            manifest_identity="manifest",
+            selector_identity="selector",
+            runtime_identity="runtime",
+        )
+        snapshot = dict(forward)
+        snapshot.update(dict.fromkeys(QUIESCENCE_PREDICATES, True))
+        snapshot["barrier_status"] = "held"
+        evidence = {"admitted_snapshot": snapshot, "current_snapshot": snapshot}
+        inputs = ForwardPhaseCapabilityInputs(
+            forward,
+            dict(forward, binding={}),
+            dict(
+                forward, runtime_root="/artifacts/destination", manifest_digest="a" * 64, binding={}
+            ),
+            admission,
+            dict(forward, binding={"release": "v0.2.0", "manifest_digest": "a" * 64}),
+            ForwardCommitCapabilityInputs(
+                commit, 1, lambda: dict(forward), "argument", evidence, object()
+            ),
+        )
+        return contract, binding, inputs
+
     def _bound_backend(
         self, kind: str
     ) -> tuple[BoundProductionBackendAdapter, Mock, SimpleNamespace]:
@@ -613,6 +697,222 @@ class ProductionPhaseEngineTests(unittest.TestCase):
             self.assertEqual("committed", effect_journal.outcome)
             with closing(sqlite3.connect(database)) as connection:
                 self.assertEqual(("new",), connection.execute("SELECT value FROM state").fetchone())
+
+    def test_forward_validation_and_commit_rejection_shapes_are_exhaustive(self) -> None:
+        contract = _contract()
+        rollback: dict[str, object] = {
+            "schema_version": 2,
+            "backend": "sqlite",
+            "project_id": "project",
+            "operation_id": contract["operation_id"],
+            "state_revision": 1,
+            "authority_revision": "authority",
+            "fencing_token": "fence-test",
+            "fencing_owner": "owner",
+            "durable_barrier_id": "barrier-test",
+            "artifact_root": "/artifacts",
+            "source": "/artifacts/source",
+            "destination": "/artifacts/destination",
+            "manifest": "/artifacts/manifest.json",
+            "selector_ref": ".runtime/runtime-selector.json",
+            "target": "rollback",
+        }
+        rollback["barrier_identity_digest"] = canonical_barrier_digest(rollback)
+        rollback["envelope_digest"] = canonical_envelope_digest(rollback)
+        forward = dict(rollback, target="new")
+        forward["barrier_identity_digest"] = canonical_barrier_digest(forward)
+        forward["envelope_digest"] = canonical_envelope_digest(forward)
+        binding = SimpleNamespace(runtime=SimpleNamespace(runtime_envelope=rollback))
+
+        for invalid in (None, dict(forward, target="rollback"), dict(forward, extra=True)):
+            with self.assertRaises(ProductionPhaseBindingError):
+                _validate_forward_context(binding, cast(Any, invalid))
+        changed = dict(forward, project_id="foreign")
+        with self.assertRaises(ProductionPhaseBindingError):
+            _validate_forward_context(binding, changed)
+        with self.assertRaises(ProductionPhaseBindingError):
+            _validate_forward_context(binding, dict(forward, barrier_identity_digest="bad"))
+        with self.assertRaises(ProductionPhaseBindingError):
+            _validate_forward_context(binding, dict(forward, envelope_digest="bad"))
+        with self.assertRaises(ProductionPhaseBindingError):
+            _validate_forward_context(
+                SimpleNamespace(runtime=SimpleNamespace(runtime_envelope={})), forward
+            )
+
+        admission = SimpleNamespace(identity=SimpleNamespace(release="v0.2.0", digest="a" * 64))
+        with self.assertRaises(ProductionPhaseBindingError):
+            _validate_forward_validation_inputs(forward, admission, None)
+        with self.assertRaises(ProductionPhaseBindingError):
+            _validate_forward_validation_inputs(forward, admission, dict(forward, backend="git"))
+        with self.assertRaises(ProductionPhaseBindingError):
+            _validate_forward_validation_inputs(forward, admission, dict(forward, binding={}))
+        valid_validation = dict(
+            forward,
+            binding={"release": "v0.2.0", "manifest_digest": "a" * 64},
+        )
+        _validate_forward_validation_inputs(forward, admission, valid_validation)
+
+        commit = CommitAdmissionBundle(
+            backend="sqlite",
+            target="new",
+            operation_id="phase-factory-test:commit",
+            fencing_token="fence-test",  # noqa: S106
+            state_revision=1,
+            barrier_id="barrier-test",
+            artifact_identity="artifact",
+            manifest_identity="manifest",
+            selector_identity="selector",
+            runtime_identity="runtime",
+        )
+        for invalid in (None, {"admitted_snapshot": {}}):
+            with self.assertRaises(ProductionPhaseBindingError):
+                _validate_forward_commit_evidence(forward, commit, cast(Any, invalid))
+        expected_snapshot = dict(forward)
+        with self.assertRaises(ProductionPhaseBindingError):
+            _validate_forward_commit_evidence(
+                forward,
+                commit,
+                {"admitted_snapshot": expected_snapshot, "current_snapshot": {"backend": "git"}},
+            )
+        _validate_forward_commit_evidence(
+            forward,
+            commit,
+            {"admitted_snapshot": expected_snapshot, "current_snapshot": expected_snapshot},
+        )
+
+    def test_forward_capability_factory_rejects_missing_operations_and_commit_wiring(self) -> None:
+        contract = _contract()
+        operations = _phase_operations(contract)
+        binding = object.__new__(LiveUpgradeBinding)
+        runtime = SimpleNamespace(
+            contract_digest=canonical_contract_digest(contract), runtime_envelope={}
+        )
+        object.__setattr__(binding, "runtime", runtime)
+        with (
+            patch.object(LiveUpgradeBinding, "is_admitted", return_value=False),
+            self.assertRaises(ProductionPhaseBindingError),
+        ):
+            bind_forward_phase_capabilities(binding, operations, cast(Any, object()))
+        valid_binding = object.__new__(LiveUpgradeBinding)
+        object.__setattr__(
+            valid_binding, "runtime", SimpleNamespace(runtime_envelope={"target": "new"})
+        )
+        inputs = ForwardPhaseCapabilityInputs({}, {}, {}, cast(Any, object()), {})
+        with (
+            patch.object(LiveUpgradeBinding, "is_admitted", return_value=True),
+            self.assertRaises(ProductionPhaseBindingError),
+        ):
+            bind_forward_phase_capabilities(valid_binding, {}, inputs)
+
+        _ = operations
+        _ = inputs
+
+    def test_factory_commit_and_engine_rejection_paths_are_bound(self) -> None:
+        contract, binding, inputs = self._factory_forward_fixture()
+        cases = (
+            dict(
+                _phase_operations(contract),
+                commit=dict(_phase_operations(contract)["commit"], opcode="unsupported"),
+            ),
+            dict(
+                _phase_operations(contract),
+                commit=dict(_phase_operations(contract)["commit"], operation_id="foreign"),
+            ),
+            dict(
+                _phase_operations(contract),
+                commit=dict(_phase_operations(contract)["commit"], inputs=None),
+            ),
+        )
+        with (
+            patch.object(LiveUpgradeBinding, "is_admitted", return_value=True),
+            patch.object(LiveUpgradeBinding, "matches_contract", return_value=True),
+        ):
+            for operations in cases:
+                with (
+                    patch(
+                        "tools.production_phase_engine._phase_operations", return_value=operations
+                    ),
+                    self.assertRaises(ProductionPhaseBindingError),
+                ):
+                    build_production_phase_binding(
+                        contract, binding, Path("journal.json"), forward_inputs=inputs
+                    )
+            with (
+                patch(
+                    "tools.production_phase_engine.bind_durable_commit_capability",
+                    side_effect=TypeError("bad"),
+                ),
+                self.assertRaises(ProductionPhaseBindingError),
+            ):
+                build_production_phase_binding(
+                    contract, binding, Path("journal.json"), forward_inputs=inputs
+                )
+            stale = object.__getattribute__(binding, "runtime")
+            stale.contract_digest = "0" * 64
+            with self.assertRaises(ProductionPhaseBindingError):
+                build_production_phase_binding(contract, binding, Path("journal.json"))
+
+    def test_factory_rejects_backend_adapter_and_engine_construction_failures(self) -> None:
+        binding = object.__new__(LiveUpgradeBinding)
+        object.__setattr__(binding, "adapter", object())
+        with (
+            patch.object(LiveUpgradeBinding, "is_admitted", return_value=True),
+            self.assertRaises(ProductionPhaseBindingError),
+        ):
+            BoundProductionBackendAdapter(binding)
+        contract, valid_binding, inputs = self._factory_forward_fixture()
+        with (
+            patch.object(LiveUpgradeBinding, "is_admitted", return_value=True),
+            patch.object(LiveUpgradeBinding, "matches_contract", return_value=True),
+            patch(
+                "tools.production_phase_engine.UpgradeEngine", side_effect=TypeError("bad engine")
+            ),
+            self.assertRaises(ProductionPhaseBindingError),
+        ):
+            build_production_phase_binding(
+                contract, valid_binding, Path("journal.json"), forward_inputs=inputs
+            )
+
+    def test_forward_capability_binding_rejects_each_operation_boundary(self) -> None:
+        contract, binding, inputs = self._factory_forward_fixture()
+        operations = _phase_operations(contract)
+        with patch.object(LiveUpgradeBinding, "is_admitted", return_value=True):
+            with self.assertRaises(ProductionPhaseBindingError):
+                bind_forward_phase_capabilities(binding, operations, cast(Any, object()))
+            missing = dict(operations)
+            missing["backup"] = cast(Any, None)
+            with self.assertRaises(ProductionPhaseBindingError):
+                bind_forward_phase_capabilities(binding, missing, inputs)
+            foreign = dict(operations)
+            foreign["stage"] = dict(operations["stage"], operation_id="foreign")
+            with self.assertRaises(ProductionPhaseBindingError):
+                bind_forward_phase_capabilities(binding, foreign, inputs)
+            with (
+                patch(
+                    "tools.production_phase_engine.BoundBackupPhaseAdapter",
+                    side_effect=TypeError("rejected"),
+                ),
+                self.assertRaises(ProductionPhaseBindingError),
+            ):
+                bind_forward_phase_capabilities(binding, operations, inputs)
+            no_commit = replace(inputs, commit=None)
+            with patch.object(LiveUpgradeBinding, "matches_contract", return_value=True):
+                build_production_phase_binding(
+                    contract, binding, Path("journal.json"), forward_inputs=no_commit
+                )
+
+    def test_commit_admission_identity_and_backend_constructor_reject(self) -> None:
+        _contract_value, _binding, inputs = self._factory_forward_fixture()
+        commit = inputs.commit
+        assert commit is not None
+        bad_admission = replace(commit.admission, backend="git")
+        with self.assertRaises(ProductionPhaseBindingError):
+            _validate_forward_commit_evidence(inputs.engine_context, bad_admission, commit.evidence)
+        with (
+            patch.object(LiveUpgradeBinding, "is_admitted", return_value=False),
+            self.assertRaises(ProductionPhaseBindingError),
+        ):
+            BoundProductionBackendAdapter(object.__new__(LiveUpgradeBinding))
 
 
 if __name__ == "__main__":
