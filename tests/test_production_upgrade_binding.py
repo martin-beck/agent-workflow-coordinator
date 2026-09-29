@@ -3,16 +3,28 @@
 
 from __future__ import annotations
 
+import sqlite3
 import tempfile
 import unittest
 import uuid
 from pathlib import Path, PurePosixPath
+from types import SimpleNamespace
 from typing import Any, cast
+from unittest.mock import patch
 
 from tools.generate_upgrade_contract import generate
+from tools.handoffctl import locked
+from tools.mutation_fence import provision, provision_control_binding
 from tools.production_upgrade_binding import ProductionBindingError, resolve_sqlite_live_binding
-from tools.upgrade_binding import UpgradeRuntimeBinding
-from tools.upgrade_identity import canonical_barrier_digest, canonical_envelope_digest
+from tools.rollback_control_store import SQLiteBarrierSessionStore, SQLiteRollbackControlStore
+from tools.upgrade_binding import LiveUpgradeBinding, UpgradeRuntimeBinding
+from tools.upgrade_identity import (
+    BarrierChildIdentity,
+    BarrierSessionIdentity,
+    canonical_barrier_digest,
+    canonical_barrier_session_digest,
+    canonical_envelope_digest,
+)
 
 
 def _runtime(backend: str) -> tuple[dict[str, object], dict[str, object]]:
@@ -69,6 +81,93 @@ def _runtime(backend: str) -> tuple[dict[str, object], dict[str, object]]:
 
 
 class ProductionUpgradeBindingTests(unittest.TestCase):
+    def test_resolver_reconstructs_real_durable_sqlite_scope(self) -> None:
+        contract, envelope = _runtime("sqlite")
+        project_id = str(envelope["project_id"])
+        authority_revision = str(envelope["authority_revision"])
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            root.chmod(0o700)
+            runtime_root = root / ".runtime"
+            runtime_root.mkdir(mode=0o700)
+            authority = root / "authority.sqlite"
+            with sqlite3.connect(authority) as connection:
+                connection.execute("CREATE TABLE records (id INTEGER PRIMARY KEY, body TEXT)")
+                connection.commit()
+            authority.chmod(0o600)
+            control_path = runtime_root / "coordinator.control.sqlite3"
+            marker = runtime_root / "coordinator.authority-marker.json"
+            lifecycle = runtime_root / "coordinator.authority-lifecycle.json"
+            authority_lock = runtime_root / "coordinator.authority.lock"
+            control_binding = runtime_root / "coordinator.control-binding.json"
+            provision(authority, marker, lifecycle, authority_lock, project_id)
+            control = SQLiteRollbackControlStore(control_path, project_id, authority)
+            provision_control_binding(
+                control_path, control_binding, control.control_lock_path, project_id
+            )
+            session_record: dict[str, object] = {
+                "schema_version": 1,
+                "project_id": project_id,
+                "attempt_id": "production-binding-attempt",
+                "state_revision": 1,
+                "authority_revision_at_acquire": authority_revision,
+                "durable_barrier_id": str(envelope["durable_barrier_id"]),
+                "fencing_token": str(envelope["fencing_token"]),
+                "fencing_owner": str(envelope["fencing_owner"]),
+            }
+            session_record["identity_digest"] = canonical_barrier_session_digest(session_record)
+            identity = BarrierSessionIdentity.from_record(session_record)
+            session = SQLiteBarrierSessionStore(control, lambda: authority_revision)
+            session.create(identity)
+            forward = BarrierChildIdentity.bind(
+                identity, f"{envelope['operation_id']}:forward", "new"
+            )
+            child = BarrierChildIdentity.bind(identity, str(envelope["operation_id"]), "rollback")
+            session.bind_child(1, forward)
+            session.bind_child(2, child)
+            binding = UpgradeRuntimeBinding.bind(
+                contract, envelope, session_identity_digest=identity.identity_digest
+            )
+            project_binding_path = root / "coordinator.binding.json"
+            project_binding_path.write_text(
+                f'{{"schema_version":1,"project_id":"{project_id}","state_repository":"owner/state","product_repository":"owner/product"}}\n',
+                encoding="utf-8",
+            )
+            backend_config = root / "coordinator.backend.json"
+            backend_config.write_text(
+                f'{{"backend":"sqlite","project_id":"{project_id}","schema_version":1}}\n',
+                encoding="utf-8",
+            )
+            selector = runtime_root / "runtime-selector.json"
+            selector.write_text(
+                '{"active_release":"v0.3.6","previous_release":"v0.3.5","schema_version":1}\n',
+                encoding="utf-8",
+            )
+            result = object()
+            with (
+                patch(
+                    "tools.production_upgrade_binding.inspect_sqlite_release_authority",
+                    return_value=SimpleNamespace(authority_revision=authority_revision),
+                ),
+                patch.object(LiveUpgradeBinding, "bind", return_value=result) as bind,
+            ):
+                resolved = resolve_sqlite_live_binding(
+                    binding,
+                    database=authority,
+                    control_database=control_path,
+                    authority_marker=marker,
+                    authority_lifecycle=lifecycle,
+                    authority_lock=authority_lock,
+                    control_binding=control_binding,
+                    control_lock=control.control_lock_path,
+                    project_binding=project_binding_path,
+                    backend_config=backend_config,
+                    runtime_selector=selector,
+                    common_lock=locked,
+                )
+            self.assertIs(result, resolved)
+            bind.assert_called_once()
+
     def test_git_resolution_is_explicitly_fail_closed(self) -> None:
         contract, envelope = _runtime("git")
         runtime = UpgradeRuntimeBinding.bind(contract, envelope, session_identity_digest="a" * 64)
