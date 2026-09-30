@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.53
+
+- Keep downstream-owned formal qualification artifacts out of coordinator vendor snapshots.
+
 ## 0.3.52
 
 - Align runtime and package version metadata after the rejected v0.3.51 state-worktree tag.
