@@ -852,8 +852,14 @@ def project_scan() -> State:
     settings = config()
     base = Path(settings["projects_root"])
     repo = base / settings["product_worktree"]
-    raw = run(["git", "-C", str(repo), "worktree", "list", "--porcelain"]).stdout
-    paths = [Path(line[9:]) for line in raw.splitlines() if line.startswith("worktree ")]
+    paths: list[Path] = []
+    for checkout in (repo, ROOT):
+        raw = run(["git", "-C", str(checkout), "worktree", "list", "--porcelain"]).stdout
+        for line in raw.splitlines():
+            if line.startswith("worktree "):
+                path = Path(line[9:])
+                if path not in paths:
+                    paths.append(path)
     worktrees = []
     for path in paths:
         head = run(["git", "-C", str(path), "rev-parse", "HEAD"]).stdout.strip()
