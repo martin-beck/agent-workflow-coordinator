@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.52
+
+- Align runtime and package version metadata after the rejected v0.3.51 state-worktree tag.
+
+
 ## 0.3.27
 
 - Add the independently reviewed, internally bound commit-phase dispatch seam;
