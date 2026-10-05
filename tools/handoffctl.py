@@ -1154,6 +1154,39 @@ def parse_claim_expiry(expiry: object) -> dt.datetime:
     return parsed.astimezone(dt.UTC)
 
 
+def validate_recovery_evidence(path: object, meta: Meta) -> None:
+    """Require structured evidence that the former worker is absent."""
+    if not isinstance(path, Path):
+        raise RuntimeError("snapshot-less recovery requires --recovery-evidence")
+    try:
+        evidence = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise RuntimeError("recovery evidence is unreadable or invalid JSON") from error
+    required = {"schema_version", "task", "expected_revision", "owner", "worker_pid", "worker_start_time", "worker_absent"}
+    if not isinstance(evidence, dict) or set(evidence) != required:
+        raise RuntimeError("recovery evidence must contain exactly the documented fields")
+    if (
+        evidence["schema_version"] != 1
+        or evidence["task"] != meta["id"]
+        or evidence["expected_revision"] != meta["task_revision"]
+        or evidence["owner"] != meta["owner"]
+        or evidence["worker_absent"] is not True
+        or type(evidence["worker_pid"]) is not int
+        or evidence["worker_pid"] <= 0
+        or type(evidence["worker_start_time"]) is not int
+        or evidence["worker_start_time"] < 0
+    ):
+        raise RuntimeError("recovery evidence does not match the expired claim")
+    proc = Path("/proc") / str(evidence["worker_pid"])
+    if proc.exists():
+        try:
+            start_time = int((proc / "stat").read_text(encoding="utf-8").split()[21])
+        except (OSError, IndexError, ValueError) as error:
+            raise RuntimeError("cannot independently verify former worker absence") from error
+        if start_time == evidence["worker_start_time"]:
+            raise RuntimeError("former worker process is still alive")
+
+
 def active_expiry_errors(task_id: str, expiry: object) -> list[str]:
     if not expiry:
         return [f"{task_id}: active without claim"]
@@ -1908,6 +1941,8 @@ def apply_recover_expired(args: argparse.Namespace, meta: Meta, _tasks: list[Tas
         if session["task_revision"] > meta["task_revision"]:
             raise RuntimeError("session snapshot revision is newer than the task")
         meta["next_action"] = str(session["next_action"])
+    else:
+        validate_recovery_evidence(getattr(args, "recovery_evidence", None), meta)
     meta["status"] = "open"
     meta["owner"] = ""
     meta["claim_expires"] = ""
@@ -3322,6 +3357,11 @@ def main() -> int:
     item.add_argument("task")
     item.add_argument("--expected-revision", type=int, required=True)
     item.add_argument("--note", required=True)
+    item.add_argument(
+        "--recovery-evidence",
+        type=Path,
+        help="structured evidence proving the expired worker process is absent when no snapshot exists",
+    )
     item = commands.add_parser("update")
     item.add_argument("task")
     item.add_argument("--owner", required=True)

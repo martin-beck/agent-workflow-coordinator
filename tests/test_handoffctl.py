@@ -2499,10 +2499,28 @@ class HandoffTest(unittest.TestCase):
             claim_expires="2000-01-01T00:00:00+00:00",
             next_action="Inspect the durable task handoff.",
         )
+        evidence = self.root / "recovery-evidence.json"
+        evidence.write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "task": "AR-0001",
+                    "expected_revision": 1,
+                    "owner": "worker-a",
+                    "worker_pid": 99999999,
+                    "worker_start_time": 0,
+                    "worker_absent": True,
+                }
+            ),
+            encoding="utf-8",
+        )
         with patch.object(CORE, "commit", return_value=True):
             CORE.mutate(
                 argparse.Namespace(
-                    task="AR-0001", expected_revision=1, note="No live process remains."
+                    task="AR-0001",
+                    expected_revision=1,
+                    note="No live process remains.",
+                    recovery_evidence=evidence,
                 ),
                 "recover-expired",
             )
@@ -2511,6 +2529,24 @@ class HandoffTest(unittest.TestCase):
         self.assertEqual("", recovered["owner"])
         self.assertEqual("Inspect the durable task handoff.", recovered["next_action"])
         self.assertIn("without a session\n  snapshot", body)
+
+    def test_recover_expired_rejects_missing_recovery_evidence(self) -> None:
+        self.make_task(
+            status="in_progress",
+            owner="worker-a",
+            claim_expires="2000-01-01T00:00:00+00:00",
+            next_action="Keep the task handoff.",
+        )
+        with (
+            patch.object(CORE, "commit", return_value=True),
+            self.assertRaisesRegex(RuntimeError, "requires --recovery-evidence"),
+        ):
+            CORE.mutate(
+                argparse.Namespace(
+                    task="AR-0001", expected_revision=1, note="x", recovery_evidence=None
+                ),
+                "recover-expired",
+            )
 
     def test_run_preflight_and_durable_journal_precede_reconcile(self) -> None:
         self.make_task(
