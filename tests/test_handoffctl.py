@@ -218,6 +218,22 @@ class HandoffTest(unittest.TestCase):
         CORE.atomic(self.root / "CURRENT.md", CORE.render_current(tasks))
         CORE.atomic(self.root / "STATUS.md", CORE.render_status_view(tasks))
 
+    def write_recovery_evidence(self, **changes: object) -> Path:
+        """Write a bound no-worker evidence fixture for the current task."""
+        evidence: dict[str, object] = {
+            "schema_version": 1,
+            "task": "AR-0001",
+            "expected_revision": 1,
+            "owner": "worker-a",
+            "worker_pid": 99999999,
+            "worker_start_time": 0,
+            "worker_absent": True,
+        }
+        evidence.update(changes)
+        path = self.root / "recovery-evidence.json"
+        path.write_text(json.dumps(evidence), encoding="utf-8")
+        return path
+
     def test_project_profile_is_strict_and_controls_optional_status(self) -> None:
         settings = CORE.project_settings()
         self.assertEqual("Test Project", settings["project_title"])
@@ -2547,6 +2563,103 @@ class HandoffTest(unittest.TestCase):
                 ),
                 "recover-expired",
             )
+
+    def test_recover_expired_rejects_hostile_recovery_evidence(self) -> None:
+        self.make_task(
+            status="in_progress",
+            owner="worker-a",
+            claim_expires="2000-01-01T00:00:00+00:00",
+        )
+        hostile = (
+            {"extra": "unexpected"},
+            {"owner": "worker-b"},
+            {"expected_revision": 2},
+            {"worker_absent": False},
+        )
+        for change in hostile:
+            with self.subTest(change=change):
+                evidence = self.write_recovery_evidence(**change)
+                with (
+                    patch.object(CORE, "commit", return_value=True),
+                    self.assertRaisesRegex(RuntimeError, "recovery evidence"),
+                ):
+                    CORE.mutate(
+                        argparse.Namespace(
+                            task="AR-0001",
+                            expected_revision=1,
+                            note="x",
+                            recovery_evidence=evidence,
+                        ),
+                        "recover-expired",
+                    )
+                self.assertEqual(
+                    "in_progress", CORE.read_task(CORE.locate("AR-0001")[0])[0]["status"]
+                )
+
+    def test_recover_expired_rejects_live_pid_and_accepts_pid_reuse(self) -> None:
+        self.make_task(
+            status="in_progress",
+            owner="worker-a",
+            claim_expires="2000-01-01T00:00:00+00:00",
+        )
+        pid = 424242
+        evidence = self.write_recovery_evidence(worker_pid=pid, worker_start_time=77)
+        original_exists = CORE.Path.exists
+        original_read_text = CORE.Path.read_text
+
+        def fake_exists(path: Path) -> bool:
+            return str(path) == f"/proc/{pid}" or original_exists(path)
+
+        def fake_read_text(path: Path, *args: object, **kwargs: object) -> str:
+            if str(path) == f"/proc/{pid}/stat":
+                return f"{pid} (worker) S 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 77"
+            return original_read_text(path, *args, **kwargs)
+
+        with (
+            patch.object(CORE.Path, "exists", autospec=True, side_effect=fake_exists),
+            patch.object(CORE.Path, "read_text", autospec=True, side_effect=fake_read_text),
+            patch.object(CORE, "commit", return_value=True),
+            self.assertRaisesRegex(RuntimeError, "still alive"),
+        ):
+            CORE.mutate(
+                argparse.Namespace(
+                    task="AR-0001", expected_revision=1, note="x", recovery_evidence=evidence
+                ),
+                "recover-expired",
+            )
+
+        evidence = self.write_recovery_evidence(worker_pid=pid, worker_start_time=78)
+        with (
+            patch.object(CORE.Path, "exists", autospec=True, side_effect=fake_exists),
+            patch.object(CORE.Path, "read_text", autospec=True, side_effect=fake_read_text),
+            patch.object(CORE, "commit", return_value=True),
+        ):
+            CORE.mutate(
+                argparse.Namespace(
+                    task="AR-0001", expected_revision=1, note="x", recovery_evidence=evidence
+                ),
+                "recover-expired",
+            )
+        self.assertEqual("open", CORE.read_task(CORE.locate("AR-0001")[0])[0]["status"])
+
+    def test_recover_expired_fences_stale_owner_evidence(self) -> None:
+        self.make_task(
+            status="in_progress",
+            owner="worker-a",
+            claim_expires="2000-01-01T00:00:00+00:00",
+        )
+        evidence = self.write_recovery_evidence(owner="worker-a-old")
+        with (
+            patch.object(CORE, "commit", return_value=True),
+            self.assertRaisesRegex(RuntimeError, "does not match the expired claim"),
+        ):
+            CORE.mutate(
+                argparse.Namespace(
+                    task="AR-0001", expected_revision=1, note="x", recovery_evidence=evidence
+                ),
+                "recover-expired",
+            )
+        self.assertEqual("worker-a", CORE.read_task(CORE.locate("AR-0001")[0])[0]["owner"])
 
     def test_run_preflight_and_durable_journal_precede_reconcile(self) -> None:
         self.make_task(

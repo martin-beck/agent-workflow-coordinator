@@ -28,6 +28,8 @@ VARIABLES
     owner,
     revision,
     projectionRevision,
+    leaseExpired,
+    recoveryEvidenceValid,
     pc,
     target,
     lockOwner,
@@ -35,7 +37,8 @@ VARIABLES
     unrelatedFinding
 
 vars ==
-    <<status, owner, revision, projectionRevision, pc, target, lockOwner,
+    <<status, owner, revision, projectionRevision, leaseExpired,
+      recoveryEvidenceValid, pc, target, lockOwner,
       result, unrelatedFinding>>
 
 OwnerIsUnique(o) ==
@@ -48,6 +51,8 @@ Init ==
     /\ OwnerIsUnique(owner)
     /\ revision = [t \in Tasks |-> 0]
     /\ projectionRevision = revision
+    /\ leaseExpired = [t \in Tasks |-> TRUE]
+    /\ recoveryEvidenceValid = [p \in Processes |-> TRUE]
     /\ pc = [p \in Processes |-> "waiting"]
     /\ target \in [Processes -> Tasks]
     /\ lockOwner = NoProcess
@@ -59,6 +64,8 @@ RecoveryEnabled(p) ==
     /\ status[t] = "in_progress"
     /\ owner[t] # NoActor
     /\ revision[t] = 0
+    /\ leaseExpired[t]
+    /\ recoveryEvidenceValid[p]
 
 Acquire(p) ==
     /\ pc[p] = "waiting"
@@ -67,7 +74,7 @@ Acquire(p) ==
     /\ pc' = [pc EXCEPT ![p] = "holding"]
     /\ UNCHANGED
         <<status, owner, revision, projectionRevision, target, result,
-          unrelatedFinding>>
+          leaseExpired, recoveryEvidenceValid, unrelatedFinding>>
 
 ExecuteSuccess(p) ==
     LET t == target[p] IN
@@ -80,7 +87,8 @@ ExecuteSuccess(p) ==
     /\ projectionRevision' = [projectionRevision EXCEPT ![t] = @ + 1]
     /\ result' = [result EXCEPT ![p] = "accepted"]
     /\ pc' = [pc EXCEPT ![p] = "releasing"]
-    /\ UNCHANGED <<target, lockOwner, unrelatedFinding>>
+    /\ UNCHANGED <<target, lockOwner, leaseExpired, recoveryEvidenceValid,
+                   unrelatedFinding>>
 
 ExecuteReject(p) ==
     /\ pc[p] = "holding"
@@ -90,7 +98,7 @@ ExecuteReject(p) ==
     /\ pc' = [pc EXCEPT ![p] = "releasing"]
     /\ UNCHANGED
         <<status, owner, revision, projectionRevision, target, lockOwner,
-          unrelatedFinding>>
+          leaseExpired, recoveryEvidenceValid, unrelatedFinding>>
 
 Release(p) ==
     /\ pc[p] = "releasing"
@@ -98,8 +106,8 @@ Release(p) ==
     /\ lockOwner' = NoProcess
     /\ pc' = [pc EXCEPT ![p] = "done"]
     /\ UNCHANGED
-        <<status, owner, revision, projectionRevision, target, result,
-          unrelatedFinding>>
+        <<status, owner, revision, projectionRevision, leaseExpired,
+          recoveryEvidenceValid, target, result, unrelatedFinding>>
 
 Quiescent ==
     /\ \A p \in Processes: pc[p] = "done"
@@ -123,6 +131,8 @@ TypeOK ==
     /\ owner \in [Tasks -> (Actors \cup {NoActor})]
     /\ revision \in [Tasks -> 0..1]
     /\ projectionRevision \in [Tasks -> 0..1]
+    /\ leaseExpired \in [Tasks -> BOOLEAN]
+    /\ recoveryEvidenceValid \in [Processes -> BOOLEAN]
     /\ pc \in [Processes -> Phases]
     /\ target \in [Processes -> Tasks]
     /\ lockOwner \in Processes \cup {NoProcess}

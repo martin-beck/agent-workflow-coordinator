@@ -1162,13 +1162,24 @@ def validate_recovery_evidence(path: object, meta: Meta) -> None:
         evidence = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as error:
         raise RuntimeError("recovery evidence is unreadable or invalid JSON") from error
-    required = {"schema_version", "task", "expected_revision", "owner", "worker_pid", "worker_start_time", "worker_absent"}
+    required = {
+        "schema_version",
+        "task",
+        "expected_revision",
+        "owner",
+        "worker_pid",
+        "worker_start_time",
+        "worker_absent",
+    }
     if not isinstance(evidence, dict) or set(evidence) != required:
         raise RuntimeError("recovery evidence must contain exactly the documented fields")
     if (
-        evidence["schema_version"] != 1
+        type(evidence["schema_version"]) is not int
+        or evidence["schema_version"] != 1
         or evidence["task"] != meta["id"]
+        or type(evidence["expected_revision"]) is not int
         or evidence["expected_revision"] != meta["task_revision"]
+        or not isinstance(evidence["owner"], str)
         or evidence["owner"] != meta["owner"]
         or evidence["worker_absent"] is not True
         or type(evidence["worker_pid"]) is not int
@@ -1180,7 +1191,8 @@ def validate_recovery_evidence(path: object, meta: Meta) -> None:
     proc = Path("/proc") / str(evidence["worker_pid"])
     if proc.exists():
         try:
-            start_time = int((proc / "stat").read_text(encoding="utf-8").split()[21])
+            stat = (proc / "stat").read_text(encoding="utf-8")
+            start_time = int(stat.rsplit(")", 1)[1].split()[19])
         except (OSError, IndexError, ValueError) as error:
             raise RuntimeError("cannot independently verify former worker absence") from error
         if start_time == evidence["worker_start_time"]:
@@ -1946,7 +1958,9 @@ def apply_recover_expired(args: argparse.Namespace, meta: Meta, _tasks: list[Tas
     meta["status"] = "open"
     meta["owner"] = ""
     meta["claim_expires"] = ""
-    snapshot_note = " using the latest session snapshot" if records else " without a session snapshot"
+    snapshot_note = (
+        " using the latest session snapshot" if records else " without a session snapshot"
+    )
     return f"Recovered expired claim formerly owned by {previous_owner}{snapshot_note}. {args.note}"
 
 
@@ -3360,7 +3374,10 @@ def main() -> int:
     item.add_argument(
         "--recovery-evidence",
         type=Path,
-        help="structured evidence proving the expired worker process is absent when no snapshot exists",
+        help=(
+            "structured evidence proving the expired worker process is absent "
+            "when no snapshot exists"
+        ),
     )
     item = commands.add_parser("update")
     item.add_argument("task")

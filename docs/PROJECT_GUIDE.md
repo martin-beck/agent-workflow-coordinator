@@ -139,6 +139,13 @@ tools/handoffctl recover-expired AR-0001 --expected-revision REVISION \
   --note "UTC expiry and absence of the previous worker independently verified"
 ```
 
+When no session snapshot exists, add `--recovery-evidence PATH`. The evidence JSON is an exact
+seven-field record: `schema_version`, `task`, `expected_revision`, `owner`, `worker_pid`,
+`worker_start_time`, and `worker_absent`. It must bind to the current expired claim, set
+`schema_version` to `1` and `worker_absent` to `true`, and use the worker's Linux
+`/proc/<pid>/stat` start time. Recovery rejects extra, missing, mismatched, live, or reused-PID
+evidence and always rechecks the exact task revision while holding the coordinator lock.
+
 A future or malformed deadline and a stale revision are rejected before mutation. If no bounded
 session snapshot exists, recovery preserves the task record's durable `next_action`; an available
 snapshot is still validated and preferred so recovery can restore the latest handoff context.
