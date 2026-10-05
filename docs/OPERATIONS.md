@@ -12,7 +12,8 @@
 - `promote`: exact-revision `planned -> open` after dependencies complete.
 - `resume`: exact-revision `blocked -> open` by an explicit `TASK@REVISION` paused-session reference.
 - `recover-expired`: exact-revision recovery of an in-progress task only after its UTC lease
-  deadline has passed and its latest bounded session snapshot validates.
+  deadline has passed. If a bounded session snapshot exists, it must validate and supplies the
+  restored next action; otherwise recovery preserves the task record's durable `next_action`.
 - `run`: execute a bounded command outside the lock, then record its classified result.
 - `gate`: record a revision-bound gate event. Generic task gates use the ordered `role`, `spec`,
   and `decision` stages; legacy interaction gates remain compatible.

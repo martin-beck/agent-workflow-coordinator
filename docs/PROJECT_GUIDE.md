@@ -139,7 +139,9 @@ tools/handoffctl recover-expired AR-0001 --expected-revision REVISION \
   --note "UTC expiry and absence of the previous worker independently verified"
 ```
 
-A future or malformed deadline and a stale revision are rejected before mutation.
+A future or malformed deadline and a stale revision are rejected before mutation. If no bounded
+session snapshot exists, recovery preserves the task record's durable `next_action`; an available
+snapshot is still validated and preferred so recovery can restore the latest handoff context.
 
 Dependencies normally require status `done`. A task with status `superseded` can satisfy a
 dependency only when its optional `superseded_by` field names an existing task (or finite chain of

@@ -237,7 +237,7 @@ type Meta = dict[str, Any]
 type Task = tuple[Path, Meta, str]
 type State = dict[str, Any]
 
-COORDINATOR_VERSION = "0.3.53"
+COORDINATOR_VERSION = "0.3.54"
 DEFAULT_PROJECT_SETTINGS: Meta = {
     "schema_version": 1,
     "project_id": "00000000-0000-4000-8000-000000000000",
@@ -1885,7 +1885,7 @@ def apply_resume(args: argparse.Namespace, meta: Meta, _tasks: list[Task]) -> st
 
 
 def apply_recover_expired(args: argparse.Namespace, meta: Meta, _tasks: list[Task]) -> str:
-    """Reopen an expired claim after restoring its latest bounded session."""
+    """Reopen an expired claim, restoring a session when one is available."""
     if args.expected_revision != meta["task_revision"]:
         raise RuntimeError(
             f"stale revision: expected {args.expected_revision}, current {meta['task_revision']}"
@@ -1901,18 +1901,18 @@ def apply_recover_expired(args: argparse.Namespace, meta: Meta, _tasks: list[Tas
     if not args.note.strip():
         raise RuntimeError("expired-claim recovery note must not be empty")
     records = storage_backend().load_session_records(args.task)
-    if not records:
-        raise RuntimeError(f"no session snapshot for {args.task}")
-    session = records[-1]
-    validate_session_record(session)
-    if session["task_revision"] > meta["task_revision"]:
-        raise RuntimeError("session snapshot revision is newer than the task")
     previous_owner = str(meta["owner"])
-    meta["next_action"] = str(session["next_action"])
+    if records:
+        session = records[-1]
+        validate_session_record(session)
+        if session["task_revision"] > meta["task_revision"]:
+            raise RuntimeError("session snapshot revision is newer than the task")
+        meta["next_action"] = str(session["next_action"])
     meta["status"] = "open"
     meta["owner"] = ""
     meta["claim_expires"] = ""
-    return f"Recovered expired claim formerly owned by {previous_owner}. {args.note}"
+    snapshot_note = " using the latest session snapshot" if records else " without a session snapshot"
+    return f"Recovered expired claim formerly owned by {previous_owner}{snapshot_note}. {args.note}"
 
 
 def require_promotion_preflight(kind: str) -> None:

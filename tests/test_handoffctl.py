@@ -2492,22 +2492,25 @@ class HandoffTest(unittest.TestCase):
         ):
             CORE.mutate(args, "recover-expired")
 
-    def test_recover_expired_rejects_missing_session(self) -> None:
-        self.make_task(
+    def test_recover_expired_preserves_next_action_without_session(self) -> None:
+        path = self.make_task(
             status="in_progress",
             owner="worker-a",
             claim_expires="2000-01-01T00:00:00+00:00",
+            next_action="Inspect the durable task handoff.",
         )
-        with (
-            patch.object(CORE, "commit", return_value=True),
-            self.assertRaisesRegex(RuntimeError, "no session snapshot"),
-        ):
+        with patch.object(CORE, "commit", return_value=True):
             CORE.mutate(
                 argparse.Namespace(
                     task="AR-0001", expected_revision=1, note="No live process remains."
                 ),
                 "recover-expired",
             )
+        recovered, body = CORE.read_task(path)
+        self.assertEqual("open", recovered["status"])
+        self.assertEqual("", recovered["owner"])
+        self.assertEqual("Inspect the durable task handoff.", recovered["next_action"])
+        self.assertIn("without a session\n  snapshot", body)
 
     def test_run_preflight_and_durable_journal_precede_reconcile(self) -> None:
         self.make_task(

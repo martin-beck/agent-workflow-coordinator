@@ -75,6 +75,9 @@
 
 ## Unreleased
 
+- Prototype snapshot-less expired-claim recovery by preserving the task's durable `next_action`
+  when no bounded session snapshot exists.
+
 ## v0.3.13 - 2026-09-18
 
 - Accept protected lightweight Git tags as sufficient release identity while
