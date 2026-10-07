@@ -40,7 +40,7 @@ authoritative revision, task status and owner unchanged.
 | `heartbeat` | `in_progress` | current owner, positive lease | lease renewed |
 | `update` | `in_progress` | current owner, exact revision | active fields updated |
 | `release` | `in_progress` | current owner | chosen non-active state, owner and lease cleared |
-| `recover-expired` | expired `in_progress` with a valid session | exact revision | `open`, ownership cleared, session restored |
+| `recover-expired` | expired `in_progress`; valid session, or `--recovery-evidence` with exactly `schema_version`, `task`, `expected_revision`, `owner`, `worker_pid`, `worker_start_time`, `worker_absent` when absent | exact revision plus expiry and independently checked no-worker evidence in the no-session case | `open`, ownership cleared, session restored or durable next action preserved |
 | `run` record | `in_progress`, unexpired | owner and current revision | bounded result recorded |
 
 `release --status` currently accepts every schema status other than

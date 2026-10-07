@@ -12,7 +12,14 @@
 - `promote`: exact-revision `planned -> open` after dependencies complete.
 - `resume`: exact-revision `blocked -> open` by an explicit `TASK@REVISION` paused-session reference.
 - `recover-expired`: exact-revision recovery of an in-progress task only after its UTC lease
-  deadline has passed and its latest bounded session snapshot validates.
+  deadline has passed. If a bounded session snapshot exists, it must validate and supplies the
+  restored next action; otherwise recovery preserves the task record's durable `next_action`.
+  Without a session snapshot, `--recovery-evidence PATH` is mandatory. The JSON file must contain
+  exactly these seven fields: `schema_version` (1), `task`, `expected_revision`, `owner`,
+  `worker_pid`, `worker_start_time` (Linux `/proc/<pid>/stat` start time), and `worker_absent`
+  (`true`). The task, revision, and owner must match the expired claim. The command independently
+  checks that the recorded PID is absent or has a different start time, so a reused PID cannot
+  accidentally fence or recover the wrong worker.
 - `run`: execute a bounded command outside the lock, then record its classified result.
 - `gate`: record a revision-bound gate event. Generic task gates use the ordered `role`, `spec`,
   and `decision` stages; legacy interaction gates remain compatible.

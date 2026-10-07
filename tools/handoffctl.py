@@ -237,7 +237,7 @@ type Meta = dict[str, Any]
 type Task = tuple[Path, Meta, str]
 type State = dict[str, Any]
 
-COORDINATOR_VERSION = "0.3.53"
+COORDINATOR_VERSION = "0.3.54"
 DEFAULT_PROJECT_SETTINGS: Meta = {
     "schema_version": 1,
     "project_id": "00000000-0000-4000-8000-000000000000",
@@ -1154,6 +1154,64 @@ def parse_claim_expiry(expiry: object) -> dt.datetime:
     return parsed.astimezone(dt.UTC)
 
 
+def read_recovery_evidence(path: object) -> dict[str, Any]:
+    if not isinstance(path, Path):
+        raise RuntimeError("snapshot-less recovery requires --recovery-evidence")
+    try:
+        evidence = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise RuntimeError("recovery evidence is unreadable or invalid JSON") from error
+    required = {
+        "schema_version",
+        "task",
+        "expected_revision",
+        "owner",
+        "worker_pid",
+        "worker_start_time",
+        "worker_absent",
+    }
+    if not isinstance(evidence, dict) or set(evidence) != required:
+        raise RuntimeError("recovery evidence must contain exactly the documented fields")
+    return evidence
+
+
+def validate_recovery_evidence_fields(evidence: dict[str, Any], meta: Meta) -> None:
+    if (
+        type(evidence["schema_version"]) is not int
+        or evidence["schema_version"] != 1
+        or evidence["task"] != meta["id"]
+        or type(evidence["expected_revision"]) is not int
+        or evidence["expected_revision"] != meta["task_revision"]
+        or not isinstance(evidence["owner"], str)
+        or evidence["owner"] != meta["owner"]
+        or evidence["worker_absent"] is not True
+        or type(evidence["worker_pid"]) is not int
+        or evidence["worker_pid"] <= 0
+        or type(evidence["worker_start_time"]) is not int
+        or evidence["worker_start_time"] < 0
+    ):
+        raise RuntimeError("recovery evidence does not match the expired claim")
+
+
+def validate_worker_absence(evidence: dict[str, Any]) -> None:
+    proc = Path("/proc") / str(evidence["worker_pid"])
+    if proc.exists():
+        try:
+            stat = (proc / "stat").read_text(encoding="utf-8")
+            start_time = int(stat.rsplit(")", 1)[1].split()[19])
+        except (OSError, IndexError, ValueError) as error:
+            raise RuntimeError("cannot independently verify former worker absence") from error
+        if start_time == evidence["worker_start_time"]:
+            raise RuntimeError("former worker process is still alive")
+
+
+def validate_recovery_evidence(path: object, meta: Meta) -> None:
+    """Require structured evidence that the former worker is absent."""
+    evidence = read_recovery_evidence(path)
+    validate_recovery_evidence_fields(evidence, meta)
+    validate_worker_absence(evidence)
+
+
 def active_expiry_errors(task_id: str, expiry: object) -> list[str]:
     if not expiry:
         return [f"{task_id}: active without claim"]
@@ -1885,7 +1943,7 @@ def apply_resume(args: argparse.Namespace, meta: Meta, _tasks: list[Task]) -> st
 
 
 def apply_recover_expired(args: argparse.Namespace, meta: Meta, _tasks: list[Task]) -> str:
-    """Reopen an expired claim after restoring its latest bounded session."""
+    """Reopen an expired claim, restoring a session when one is available."""
     if args.expected_revision != meta["task_revision"]:
         raise RuntimeError(
             f"stale revision: expected {args.expected_revision}, current {meta['task_revision']}"
@@ -1901,18 +1959,22 @@ def apply_recover_expired(args: argparse.Namespace, meta: Meta, _tasks: list[Tas
     if not args.note.strip():
         raise RuntimeError("expired-claim recovery note must not be empty")
     records = storage_backend().load_session_records(args.task)
-    if not records:
-        raise RuntimeError(f"no session snapshot for {args.task}")
-    session = records[-1]
-    validate_session_record(session)
-    if session["task_revision"] > meta["task_revision"]:
-        raise RuntimeError("session snapshot revision is newer than the task")
     previous_owner = str(meta["owner"])
-    meta["next_action"] = str(session["next_action"])
+    if records:
+        session = records[-1]
+        validate_session_record(session)
+        if session["task_revision"] > meta["task_revision"]:
+            raise RuntimeError("session snapshot revision is newer than the task")
+        meta["next_action"] = str(session["next_action"])
+    else:
+        validate_recovery_evidence(getattr(args, "recovery_evidence", None), meta)
     meta["status"] = "open"
     meta["owner"] = ""
     meta["claim_expires"] = ""
-    return f"Recovered expired claim formerly owned by {previous_owner}. {args.note}"
+    snapshot_note = (
+        " using the latest session snapshot" if records else " without a session snapshot"
+    )
+    return f"Recovered expired claim formerly owned by {previous_owner}{snapshot_note}. {args.note}"
 
 
 def require_promotion_preflight(kind: str) -> None:
@@ -3322,6 +3384,14 @@ def main() -> int:
     item.add_argument("task")
     item.add_argument("--expected-revision", type=int, required=True)
     item.add_argument("--note", required=True)
+    item.add_argument(
+        "--recovery-evidence",
+        type=Path,
+        help=(
+            "structured evidence proving the expired worker process is absent "
+            "when no snapshot exists"
+        ),
+    )
     item = commands.add_parser("update")
     item.add_argument("task")
     item.add_argument("--owner", required=True)
