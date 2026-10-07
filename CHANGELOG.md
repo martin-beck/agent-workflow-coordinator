@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.57 - 2026-10-07
+
+- Align the Coordinator package and runtime metadata with the signed v0.3.57 release.
+- Preserve the immutable, superseded v0.3.55 and v0.3.56 tags without vendoring them.
+
 ## 0.3.55 - 2026-10-07
 
 - Align the Coordinator package and runtime metadata with the v0.3.55 release.
