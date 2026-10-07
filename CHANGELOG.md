@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.55 - 2026-10-07
+
+- Align the Coordinator package and runtime metadata with the v0.3.55 release.
+
 ## 0.3.53
 
 - Keep downstream-owned formal qualification artifacts out of coordinator vendor snapshots.
