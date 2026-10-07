@@ -237,7 +237,7 @@ type Meta = dict[str, Any]
 type Task = tuple[Path, Meta, str]
 type State = dict[str, Any]
 
-COORDINATOR_VERSION = "0.3.53"
+COORDINATOR_VERSION = "0.3.54"
 DEFAULT_PROJECT_SETTINGS: Meta = {
     "schema_version": 1,
     "project_id": "00000000-0000-4000-8000-000000000000",
@@ -862,6 +862,14 @@ def project_scan() -> State:
                     paths.append(path)
     worktrees = []
     for path in paths:
+        # The coordinator checkout is the repository being reconciled. Its
+        # HEAD necessarily changes when reconcile commits generated views, so
+        # recording this self-referential checkout would make both the live
+        # inventory and any projection containing it stale immediately after
+        # every successful reconcile. Linked coordinator worktrees remain
+        # observable; exclude only this checkout.
+        if path.resolve() == ROOT.resolve():
+            continue
         head = run(["git", "-C", str(path), "rev-parse", "HEAD"]).stdout.strip()
         branch = (
             run(

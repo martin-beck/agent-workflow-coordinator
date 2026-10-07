@@ -1746,7 +1746,7 @@ class HandoffTest(unittest.TestCase):
         with patch.object(CORE, "run", side_effect=fake_run):
             state = CORE.project_scan()
         self.assertEqual(
-            {product.name, state_task.name, self.root.name},
+            {product.name, state_task.name},
             {item["key"] for item in state["worktrees"]},
         )
 
