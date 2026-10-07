@@ -2613,7 +2613,7 @@ class HandoffTest(unittest.TestCase):
         def fake_read_text(path: Path, *args: object, **kwargs: object) -> str:
             if str(path) == f"/proc/{pid}/stat":
                 return f"{pid} (worker) S 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 77"
-            return original_read_text(path, *args, **kwargs)
+            return cast(str, original_read_text(path, *args, **kwargs))
 
         with (
             patch.object(CORE.Path, "exists", autospec=True, side_effect=fake_exists),
