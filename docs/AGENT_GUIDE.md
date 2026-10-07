@@ -15,7 +15,9 @@ For autonomous or interactive agents using a project that embeds handoffctl:
 7. After every material result or failure, update the task immediately. Heartbeat before expiry.
 8. If a command times out or has an ambiguous response, inspect durable state before any retry.
 9. Run all project-specific gates on the exact candidate, review privacy and tag identity, then
-   publish only with the authority granted by project policy.
+   publish according to `DEVELOPMENT_REVIEW_POLICY.md` for development changes and the release
+   policy for release changes. A same-account GitHub approval is permitted for development only;
+   it never replaces an independent technical review-worker result.
 10. Release stopped work as `done`, `open`, or `blocked`; reconcile and run `doctor --live`.
 
 Never edit generated views, binding files, the vendor lock, or vendored runtime manually. A binding
