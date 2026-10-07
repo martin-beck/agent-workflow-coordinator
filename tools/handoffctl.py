@@ -1154,8 +1154,7 @@ def parse_claim_expiry(expiry: object) -> dt.datetime:
     return parsed.astimezone(dt.UTC)
 
 
-def validate_recovery_evidence(path: object, meta: Meta) -> None:
-    """Require structured evidence that the former worker is absent."""
+def read_recovery_evidence(path: object) -> dict[str, Any]:
     if not isinstance(path, Path):
         raise RuntimeError("snapshot-less recovery requires --recovery-evidence")
     try:
@@ -1173,6 +1172,10 @@ def validate_recovery_evidence(path: object, meta: Meta) -> None:
     }
     if not isinstance(evidence, dict) or set(evidence) != required:
         raise RuntimeError("recovery evidence must contain exactly the documented fields")
+    return evidence
+
+
+def validate_recovery_evidence_fields(evidence: dict[str, Any], meta: Meta) -> None:
     if (
         type(evidence["schema_version"]) is not int
         or evidence["schema_version"] != 1
@@ -1188,6 +1191,9 @@ def validate_recovery_evidence(path: object, meta: Meta) -> None:
         or evidence["worker_start_time"] < 0
     ):
         raise RuntimeError("recovery evidence does not match the expired claim")
+
+
+def validate_worker_absence(evidence: dict[str, Any]) -> None:
     proc = Path("/proc") / str(evidence["worker_pid"])
     if proc.exists():
         try:
@@ -1197,6 +1203,13 @@ def validate_recovery_evidence(path: object, meta: Meta) -> None:
             raise RuntimeError("cannot independently verify former worker absence") from error
         if start_time == evidence["worker_start_time"]:
             raise RuntimeError("former worker process is still alive")
+
+
+def validate_recovery_evidence(path: object, meta: Meta) -> None:
+    """Require structured evidence that the former worker is absent."""
+    evidence = read_recovery_evidence(path)
+    validate_recovery_evidence_fields(evidence, meta)
+    validate_worker_absence(evidence)
 
 
 def active_expiry_errors(task_id: str, expiry: object) -> list[str]:
