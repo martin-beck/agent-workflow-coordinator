@@ -6,6 +6,7 @@
 import importlib.util
 import json
 import os
+import re
 import subprocess
 import sys
 import tomllib
@@ -54,6 +55,16 @@ def upgrade_contract(backend: str) -> dict[str, Any]:
 
 
 class VendorTest(unittest.TestCase):
+    def test_snapshot_contains_shared_formal_verifier_helper_closure(self) -> None:
+        verifier = (ROOT / "formal/handoffctl/verify.sh").read_text(encoding="utf-8")
+        executed_tools = set(
+            re.findall(r"\$\{SPEC_DIR\}/\.\./\.\./(tools/[A-Za-z0-9_./-]+\.py)", verifier)
+        )
+        sources = {source for source, _ in VENDOR.SOURCE_FILES}
+        self.assertEqual({"tools/tlc_runner.py"}, executed_tools)
+        self.assertTrue(executed_tools.issubset(sources))
+        self.assertIn("tests/test_tlc_runner.py", sources)
+
     def test_snapshot_contains_runtime_mutation_dependency_closure(self) -> None:
         sources = {source for source, _ in VENDOR.SOURCE_FILES}
         self.assertTrue(
@@ -234,6 +245,56 @@ class VendorTest(unittest.TestCase):
         storage.write_text("#!/usr/bin/env python3\n" + storage.read_text())
         storage.chmod(0o644)
         self.assertEqual(["tools/sqlite_storage.py"], mismatches())
+
+    def test_synced_formal_runner_executes_from_clean_destination(self) -> None:
+        with patch("builtins.print"):
+            VENDOR.sync(ROOT, self.target, CURRENT_VERSION, "1" * 40)
+        fixture_bin = self.target / "fixture-bin"
+        fixture_bin.mkdir()
+        java = fixture_bin / "java"
+        java.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        java.chmod(0o755)
+        for name in ("runner.jar", "Model.tla", "Model.cfg"):
+            (self.target / name).write_text("fixture\n", encoding="utf-8")
+        result = subprocess.run(  # noqa: S603
+            [
+                sys.executable,
+                "-S",
+                str(self.target / "tools/tlc_runner.py"),
+                "--jar",
+                str(self.target / "runner.jar"),
+                "--model",
+                str(self.target / "Model.tla"),
+                "--config",
+                str(self.target / "Model.cfg"),
+                "--metadir",
+                str(self.target / "states"),
+                "--queue",
+                str(self.target / "queue"),
+                "--admission-lock",
+                str(self.target / "admission.lock"),
+                "--cgroup-mode",
+                "off",
+            ],
+            cwd=self.target,
+            check=False,
+            capture_output=True,
+            text=True,
+            env={"PATH": str(fixture_bin), "PYTHONPATH": str(self.target)},
+        )
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        outcomes = list((self.target / "queue").glob("*.outcome.json"))
+        self.assertEqual(1, len(outcomes))
+        self.assertEqual("completed", json.loads(outcomes[0].read_text())["state"])
+        runner = self.target / "tools/tlc_runner.py"
+        original_runner = runner.read_bytes()
+        runner.unlink()
+        with self.assertRaisesRegex(RuntimeError, "regular file: .*tools/tlc_runner.py"):
+            VENDOR.verify(self.target)
+        runner.write_bytes(original_runner)
+        runner.write_text("substituted\n", encoding="utf-8")
+        with self.assertRaisesRegex(RuntimeError, "digest mismatch: tools/tlc_runner.py"):
+            VENDOR.verify(self.target)
 
     def test_runtime_version_matches_project_metadata(self) -> None:
         metadata = tomllib.loads((ROOT / "pyproject.toml").read_text())
