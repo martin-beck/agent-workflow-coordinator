@@ -59,13 +59,59 @@ class EvidencePolicy:
 DEFAULT_EVIDENCE_POLICY = EvidencePolicy(EVIDENCE_CLASSES, "absent", None, False)
 
 
-def _tracked_clean_policy(root: Path) -> bool:
-    """Require the opt-in policy to be tracked and identical to HEAD."""
-    commands = (
-        ["/usr/bin/git", "-C", str(root), "ls-files", "--error-unmatch", "--", POLICY_NAME],
-        ["/usr/bin/git", "-C", str(root), "diff", "--quiet", "HEAD", "--", POLICY_NAME],
-    )
+def _tracked_clean_policy(root: Path, expected_payload: bytes | None = None) -> bool:
+    """Require the opt-in policy bytes to equal one exact, clean HEAD blob."""
     try:
+        commit = subprocess.run(  # noqa: S603 - fixed Git executable and bounded arguments
+            ["/usr/bin/git", "-C", str(root), "rev-parse", "--verify", "HEAD^{commit}"],
+            check=False,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            timeout=10,
+        )
+        commit_id = commit.stdout.strip()
+        if commit.returncode != 0 or re.fullmatch(rb"[0-9a-f]{40,64}", commit_id) is None:
+            return False
+        object_name = commit_id.decode("ascii") + ":" + POLICY_NAME
+        size = subprocess.run(  # noqa: S603 - immutable object selected by exact commit
+            ["/usr/bin/git", "-C", str(root), "cat-file", "-s", object_name],
+            check=False,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            timeout=10,
+        )
+        if size.returncode != 0:
+            return False
+        blob_size = int(size.stdout.strip())
+        if blob_size < 2 or blob_size > POLICY_MAX_BYTES:
+            return False
+        blob = subprocess.run(  # noqa: S603 - size-bounded immutable Git object
+            ["/usr/bin/git", "-C", str(root), "cat-file", "blob", object_name],
+            check=False,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            timeout=10,
+        )
+        if blob.returncode != 0 or len(blob.stdout) != blob_size:
+            return False
+        if expected_payload is not None and blob.stdout != expected_payload:
+            return False
+        commands = (
+            ["/usr/bin/git", "-C", str(root), "ls-files", "--error-unmatch", "--", POLICY_NAME],
+            [
+                "/usr/bin/git",
+                "-C",
+                str(root),
+                "diff",
+                "--quiet",
+                commit_id.decode("ascii"),
+                "--",
+                POLICY_NAME,
+            ],
+        )
         return all(
             subprocess.run(  # noqa: S603 - fixed Git executable and bounded arguments
                 command,
@@ -78,7 +124,7 @@ def _tracked_clean_policy(root: Path) -> bool:
             == 0
             for command in commands
         )
-    except (OSError, subprocess.SubprocessError):
+    except (OSError, ValueError, subprocess.SubprocessError):
         return False
 
 
@@ -139,6 +185,18 @@ def evidence_policy(root: Path) -> EvidencePolicy:  # noqa: C901
             or current.st_size != len(payload)
         ):
             raise TaskSpecPolicyError("task-spec policy identity changed while reading")
+        if not _tracked_clean_policy(root, payload):
+            raise TaskSpecPolicyError("task-spec policy must be tracked and unchanged")
+        final_descriptor = os.fstat(descriptor)
+        final_entry = os.stat(POLICY_NAME, dir_fd=directory, follow_symlinks=False)
+        if (
+            (final_descriptor.st_dev, final_descriptor.st_ino) != identity
+            or (final_entry.st_dev, final_entry.st_ino) != identity
+            or final_descriptor.st_size != len(payload)
+            or final_entry.st_size != len(payload)
+            or os.pread(descriptor, POLICY_MAX_BYTES + 1, 0) != payload
+        ):
+            raise TaskSpecPolicyError("task-spec policy identity changed during Git verification")
     except TaskSpecPolicyError:
         raise
     except OSError as error:
@@ -148,8 +206,6 @@ def evidence_policy(root: Path) -> EvidencePolicy:  # noqa: C901
             os.close(descriptor)
         if directory >= 0:
             os.close(directory)
-    if not _tracked_clean_policy(root):
-        raise TaskSpecPolicyError("task-spec policy must be tracked and unchanged")
     try:
         value = json.loads(payload.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as error:

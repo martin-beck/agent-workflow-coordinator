@@ -2443,6 +2443,53 @@ class HandoffTest(unittest.TestCase):
             CORE.cmd_run(argparse.Namespace(task="AR-0001", owner="worker-a", command=["true"]))
         command.assert_not_called()
 
+    def test_run_a_b_a_policy_swap_has_no_command_or_journal_effect(self) -> None:
+        self.enable_additive_policy()
+        self.make_task(
+            status="in_progress",
+            owner="worker-a",
+            claim_expires="2099-01-01T00:00:00+00:00",
+        )
+        CORE.CONFIG.parent.mkdir(exist_ok=True)
+        CORE.CONFIG.write_text("{}")
+        policy_path = self.root / "task-spec-policy.json"
+        original_payload = policy_path.read_bytes()
+        original_check = CORE.require_policy_unchanged
+        checks = 0
+
+        def a_b_a_check(root: Path, expected: Any) -> None:
+            nonlocal checks
+            checks += 1
+            if checks == 1:
+                original_check(root, expected)
+                return
+            saved = self.root / "task-spec-policy.saved"
+            policy_path.replace(saved)
+            policy_path.write_bytes(original_payload.replace(b'"hosted"', b'"remote"', 1))
+            try:
+                original_check(root, expected)
+            finally:
+                policy_path.unlink()
+                saved.replace(policy_path)
+
+        real_subprocess_run = CORE.subprocess.run
+        commands: list[object] = []
+
+        def observe_run(command: object, *args: object, **kwargs: object) -> object:
+            commands.append(command)
+            return real_subprocess_run(command, *args, **kwargs)
+
+        with (
+            patch.object(CORE, "assert_invocation_worktree"),
+            patch.object(CORE, "require_policy_unchanged", side_effect=a_b_a_check),
+            patch.object(CORE.subprocess, "run", side_effect=observe_run),
+            self.assertRaisesRegex(RuntimeError, "changed during operation"),
+        ):
+            CORE.cmd_run(argparse.Namespace(task="AR-0001", owner="worker-a", command=["true"]))
+        self.assertNotIn(["true"], commands)
+        self.assertEqual(original_payload, policy_path.read_bytes())
+        self.assertFalse((self.root / "sessions/AR-0001.jsonl").exists())
+
     def test_replica_prewrite_fast_forward_and_dirty_refusal(self) -> None:
         CORE.CONFIG.parent.mkdir()
         CORE.CONFIG.write_text('{"push_enabled": true}')

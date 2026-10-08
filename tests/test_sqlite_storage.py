@@ -82,7 +82,7 @@ def _commit_then_crash_before_projection(database: str, tasks_root: str) -> None
     CORE.TASKS = Path(tasks_root)
     arguments = argparse.Namespace(task="AR-0001", owner="worker", lease_minutes=10)
 
-    def crash() -> None:
+    def crash(*_args: object, **_kwargs: object) -> None:
         os.kill(os.getpid(), signal.SIGKILL)
 
     with patch.object(CORE, "export_sqlite_projections", side_effect=crash):
@@ -707,6 +707,39 @@ class SQLiteStorageTest(unittest.TestCase):
         self.assertEqual("git", CORE.backend_selection()["backend"])
         self.assertFalse(CORE.DATABASE.exists())
 
+    def test_git_to_sqlite_a_b_a_policy_swap_has_no_backend_effect(self) -> None:
+        self.configure_core()
+        original_payload = self.enable_additive_policy()
+        self.write_git_tasks()
+        policy_path = self.root / "task-spec-policy.json"
+        original_check = CORE.require_policy_unchanged
+        checks = 0
+
+        def a_b_a_check(root: Path, expected: Any) -> None:
+            nonlocal checks
+            checks += 1
+            if checks > 1:
+                original_check(root, expected)
+                return
+            saved = self.root / "task-spec-policy.saved"
+            policy_path.replace(saved)
+            policy_path.write_bytes(original_payload.replace(b'"hosted"', b'"remote"', 1))
+            try:
+                original_check(root, expected)
+            finally:
+                policy_path.unlink()
+                saved.replace(policy_path)
+
+        with (
+            patch.object(CORE, "sync_replica_before_write"),
+            patch.object(CORE, "require_policy_unchanged", side_effect=a_b_a_check),
+            self.assertRaisesRegex(RuntimeError, "changed during operation"),
+        ):
+            CORE.cmd_migrate(argparse.Namespace(to="sqlite"))
+        self.assertEqual("git", CORE.backend_selection()["backend"])
+        self.assertFalse(CORE.DATABASE.exists())
+        self.assertEqual(original_payload, policy_path.read_bytes())
+
     def test_policy_migration_preflight_and_equivalence_failures_are_atomic(self) -> None:
         self.configure_core()
         self.enable_additive_policy()
@@ -1158,7 +1191,11 @@ class SQLiteStorageTest(unittest.TestCase):
         )
         with patch.object(CORE, "reconcile", return_value=True) as reconcile:
             self.assertEqual(0, CORE.cmd_run(args))
-        reconcile.assert_called_once_with(do_commit=False, push=False)
+        reconcile.assert_called_once_with(
+            do_commit=False,
+            push=False,
+            policy=CORE.DEFAULT_EVIDENCE_POLICY,
+        )
         connection = sqlite3.connect(self.database)
         self.assertEqual(
             1, connection.execute("SELECT count(*) FROM command_results").fetchone()[0]

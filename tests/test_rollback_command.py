@@ -14,6 +14,7 @@ from unittest.mock import patch
 from tools import handoffctl as core
 from tools.checkpoint_records import append_checkpoint, build_checkpoint, load_checkpoints
 from tools.rollback_records import append_record, build_record, latest_for_checkpoint
+from tools.task_spec import EvidencePolicy, TaskSpecPolicyError
 
 
 def task() -> dict[str, object]:
@@ -109,6 +110,25 @@ class RollbackCommandTests(unittest.TestCase):
         target.assert_not_called()
         start.assert_not_called()
         revert.assert_not_called()
+
+    def test_a_b_a_policy_race_rejects_before_rollback_product_effect(self) -> None:
+        policy = EvidencePolicy(frozenset({"hosted"}), "a", (1, 1), True)
+        with (
+            patch.object(core, "evidence_policy", return_value=policy),
+            patch.object(
+                core,
+                "require_policy_unchanged",
+                side_effect=TaskSpecPolicyError("task-spec policy changed during operation"),
+            ),
+            patch.object(core, "_rollback_target", return_value=({}, self.product, "b" * 40, None)),
+            patch.object(core, "_start_rollback") as start,
+            patch.object(core, "_revert_product") as revert,
+            self.assertRaisesRegex(RuntimeError, "changed during operation"),
+        ):
+            core.cmd_rollback(self.args())
+        start.assert_not_called()
+        revert.assert_not_called()
+        self.assertFalse((self.root / "rollbacks.jsonl").exists())
 
     def test_completed_operation_rejects_double_restore(self) -> None:
         with self._entered("c" * 40):

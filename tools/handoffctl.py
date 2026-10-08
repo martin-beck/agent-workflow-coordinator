@@ -1357,13 +1357,17 @@ def directive_validation_errors() -> list[str]:
     return []
 
 
-def validate(*, live: bool = False) -> list[str]:
+def validate(  # noqa: C901
+    *, live: bool = False, policy: EvidencePolicy | None = None
+) -> list[str]:
     errors: list[str] = []
-    try:
-        policy = evidence_policy(ROOT)
-    except RuntimeError as error:
-        errors.append(str(error))
-        policy = DEFAULT_EVIDENCE_POLICY
+    selected_policy = policy
+    if selected_policy is None:
+        try:
+            selected_policy = evidence_policy(ROOT)
+        except RuntimeError as error:
+            errors.append(str(error))
+            selected_policy = DEFAULT_EVIDENCE_POLICY
     tasks = all_tasks()
     ids: dict[str, Path] = {}
     active_owners: dict[str, str] = {}
@@ -1374,7 +1378,7 @@ def validate(*, live: bool = False) -> list[str]:
         if task_id in ids:
             errors.append(f"duplicate {task_id}")
         ids[task_id] = path
-        errors.extend(basic_task_errors(path, meta, policy))
+        errors.extend(basic_task_errors(path, meta, selected_policy))
         errors.extend(claim_errors(meta, active_owners, active_worktrees, active_branches))
     errors.extend(graph_errors(tasks))
     errors.extend(hierarchy_errors(tasks))
@@ -1565,10 +1569,15 @@ def write_generated_views(tasks: list[Task], state: Meta) -> None:
     atomic(ROOT / "WORKTREES.md", worktrees)
 
 
-def reconcile(*, do_commit: bool, push: bool = False) -> bool:
-    policy = evidence_policy(ROOT)
+def reconcile(
+    *,
+    do_commit: bool,
+    push: bool = False,
+    policy: EvidencePolicy | None = None,
+) -> bool:
+    selected_policy = policy or evidence_policy(ROOT)
     if backend_selection()["backend"] == "sqlite":
-        return reconcile_sqlite(do_commit=do_commit, push=push, policy=policy)
+        return reconcile_sqlite(do_commit=do_commit, push=push, policy=selected_policy)
 
     with locked():
         if backend_selection()["backend"] != "git":
@@ -1583,10 +1592,10 @@ def reconcile(*, do_commit: bool, push: bool = False) -> bool:
             sync_task_observations(all_tasks(), state)
             tasks = all_tasks()
             write_generated_views(tasks, state)
-            errors = validate(live=False)
+            errors = validate(live=False, policy=selected_policy)
             if errors:
                 raise RuntimeError("validation failed:\n" + "\n".join(errors))
-            require_policy_unchanged(ROOT, policy)
+            require_policy_unchanged(ROOT, selected_policy)
             for path in generated_paths():
                 before.setdefault(path, None)
             touched = changed_paths(before, include_deleted=True)
@@ -1652,8 +1661,14 @@ def write_checkpoint_projections(checkpoint_records: list[Meta]) -> list[Path]:
     return [checkpoint_path(ROOT, task_id) for task_id in by_task]
 
 
-def write_sqlite_projections(tasks: list[Task], *, already_locked: bool = False) -> list[Path]:
+def write_sqlite_projections(
+    tasks: list[Task],
+    *,
+    already_locked: bool = False,
+    policy: EvidencePolicy | None = None,
+) -> list[Path]:
     """Regenerate byte-stable Markdown projections from one database snapshot."""
+    selected_policy = policy or evidence_policy(ROOT)
     with contextlib.nullcontext() if already_locked else locked():
         expected = {path.resolve() for path, _, _ in tasks}
         for path, meta, body in tasks:
@@ -1664,7 +1679,8 @@ def write_sqlite_projections(tasks: list[Task], *, already_locked: bool = False)
         views = rendered_task_views(tasks)
         for target, content in views.items():
             atomic(target, content)
-        errors = validate(live=False)
+        require_policy_unchanged(ROOT, selected_policy)
+        errors = validate(live=False, policy=selected_policy)
         if errors:
             raise RuntimeError("projection validation failed:\n" + "\n".join(errors))
         backend = storage_backend()
@@ -1680,9 +1696,10 @@ def write_sqlite_projections(tasks: list[Task], *, already_locked: bool = False)
         ]
 
 
-def export_sqlite_projections() -> list[Path]:
+def export_sqlite_projections(policy: EvidencePolicy | None = None) -> list[Path]:
     """Regenerate projections from the currently selected SQLite authority."""
-    return write_sqlite_projections(all_tasks())
+    selected_policy = policy or evidence_policy(ROOT)
+    return write_sqlite_projections(all_tasks(), policy=selected_policy)
 
 
 def refresh_sqlite_live_state() -> State | None:
@@ -1705,7 +1722,7 @@ def reconcile_sqlite(*, do_commit: bool, push: bool, policy: EvidencePolicy | No
     before.update({path: path.read_text() for path in (ROOT / "checkpoints").glob("AR-*.jsonl")})
     before.update({path: path.read_text() if path.exists() else None for path in generated_paths()})
     state = refresh_sqlite_live_state()
-    paths = export_sqlite_projections()
+    paths = export_sqlite_projections(selected_policy)
     if state is not None:
         project, worktrees = live_docs(state)
         atomic(ROOT / "PROJECT_STATE.md", project)
@@ -2253,15 +2270,15 @@ def git_session_record(
     return record
 
 
-def mutate(args: argparse.Namespace, kind: str) -> None:  # noqa: C901
+def mutate(args: argparse.Namespace, kind: str, policy: EvidencePolicy | None = None) -> None:  # noqa: C901
     if backend_selection()["backend"] == "sqlite":
-        mutate_sqlite(args, kind)
+        mutate_sqlite(args, kind, policy)
         return
     with locked():
         if backend_selection()["backend"] != "git":
             raise RuntimeError("BACKEND_CHANGED: retry using the selected backend")
         sync_replica_before_write()
-        policy = evidence_policy(ROOT)
+        selected_policy = policy or evidence_policy(ROOT)
         path, meta, body = locate(args.task)
         require_promotion_preflight(kind)
         before: dict[Path, str | None] = {path: path.read_text()}
@@ -2272,7 +2289,7 @@ def mutate(args: argparse.Namespace, kind: str) -> None:  # noqa: C901
             }
         )
         committed = False
-        note = apply_transition(args, kind, meta, all_tasks(), policy)
+        note = apply_transition(args, kind, meta, all_tasks(), selected_policy)
         meta["task_revision"] += 1
         meta["updated_at"] = now()
         session_record = git_session_record(args, kind, meta, before)
@@ -2304,8 +2321,8 @@ def mutate(args: argparse.Namespace, kind: str) -> None:  # noqa: C901
             write_task(path, meta, body)
             views = rendered_task_views(all_tasks())
             write_rendered_task_views(views)
-            require_policy_unchanged(ROOT, policy)
-            errors = mutation_errors(path, before, policy)
+            require_policy_unchanged(ROOT, selected_policy)
+            errors = mutation_errors(path, before, selected_policy)
             if errors:
                 raise RuntimeError("\n".join(errors))
             for target in generated_paths():
@@ -2340,9 +2357,11 @@ def _transition_note(body: str, note: str, at: str) -> str:
     )
 
 
-def mutate_sqlite(args: argparse.Namespace, kind: str) -> None:
+def mutate_sqlite(
+    args: argparse.Namespace, kind: str, policy: EvidencePolicy | None = None
+) -> None:
     """Linearize a lifecycle mutation at SQLite's committed CAS update."""
-    policy = evidence_policy(ROOT)
+    selected_policy = policy or evidence_policy(ROOT)
     backend = mutating_sqlite_backend()
     initial = backend.load_tasks()
     selected = next((task for task in initial if task[1]["id"] == args.task), None)
@@ -2354,20 +2373,20 @@ def mutate_sqlite(args: argparse.Namespace, kind: str) -> None:
     at = now()
 
     def transition(meta: Meta, tasks: list[Task]) -> tuple[str, str]:
-        require_policy_unchanged(ROOT, policy)
-        note = apply_transition(args, kind, meta, tasks, policy)
+        require_policy_unchanged(ROOT, selected_policy)
+        note = apply_transition(args, kind, meta, tasks, selected_policy)
         candidate = [
             (path, meta if item["id"] == args.task else item, text) for path, item, text in tasks
         ]
         errors = (
-            basic_task_errors(selected[0], meta, policy)
+            basic_task_errors(selected[0], meta, selected_policy)
             + graph_errors(candidate)
             + hierarchy_errors(candidate)
             + supersession_errors(candidate)
         )
         if errors:
             raise RuntimeError("transition validation failed:\n" + "\n".join(errors))
-        require_policy_unchanged(ROOT, policy)
+        require_policy_unchanged(ROOT, selected_policy)
         return note, _transition_note(selected[2], note, at)
 
     trigger = str(getattr(args, "_session_trigger", kind))
@@ -2397,7 +2416,7 @@ def mutate_sqlite(args: argparse.Namespace, kind: str) -> None:
         checkpoint_factory=checkpoint_factory,
     )
     try:
-        export_sqlite_projections()
+        export_sqlite_projections(selected_policy)
     except Exception as error:
         raise StorageCommittedError(
             f"SQLITE_COMMITTED_EXPORT_FAILED: task={args.task}; revision={expected + 1}; {error}"
@@ -2800,7 +2819,7 @@ def cmd_rollback(args: argparse.Namespace) -> None:
     args.rollback_checkpoint = checkpoint
     try:
         require_policy_unchanged(ROOT, policy)
-        mutate(args, "rollback")
+        mutate(args, "rollback", policy)
     except Exception as error:
         ambiguous = build_record(
             checkpoint,
@@ -2825,10 +2844,10 @@ def cmd_rollback(args: argparse.Namespace) -> None:
     )
     with locked():
         _rollback_commit(ROOT, completed, "rollback_completed")
-    reconcile(do_commit=True, push=True)
+    reconcile(do_commit=True, push=True, policy=policy)
 
 
-def require_active_owner(task_id: str, owner: str) -> None:
+def require_active_owner(task_id: str, owner: str) -> EvidencePolicy:
     """Fence wrapped commands with a live claim before external effects."""
     with locked(exclusive=False):
         _, meta, _ = locate(task_id)
@@ -2852,6 +2871,8 @@ def require_active_owner(task_id: str, owner: str) -> None:
         except GateError as error:
             raise RuntimeError(str(error)) from error
         assert_invocation_worktree(meta)
+        require_policy_unchanged(ROOT, policy)
+        return policy
 
 
 def invocation_worktree() -> tuple[str, str] | None:
@@ -2984,13 +3005,14 @@ def cmd_run(args: argparse.Namespace) -> int:
         raise RuntimeError("missing command")
     if backend_selection()["backend"] == "git":
         config()
-    require_active_owner(args.task, args.owner)
+    policy = require_active_owner(args.task, args.owner)
     # Never execute or consume untracked caller input. Scripts and data must be
     # named by argv or a stable file, whose content digest can be recorded too.
     command_hash = hashlib.sha256("\0".join(args.command).encode()).hexdigest()
     timeout = float(getattr(args, "timeout_seconds", COMMAND_TIMEOUT_SECONDS))
     if timeout <= 0:
         raise RuntimeError("command timeout must be positive")
+    require_policy_unchanged(ROOT, policy)
     timed_out = False
     try:
         proc = subprocess.run(args.command, check=False, stdin=subprocess.DEVNULL, timeout=timeout)
@@ -3023,10 +3045,11 @@ def cmd_run(args: argparse.Namespace) -> int:
         note=note,
         _session_trigger="run",
     )
-    mutate(update, "update")
+    mutate(update, "update", policy)
     sqlite = backend_selection()["backend"] == "sqlite"
     try:
-        reconcile(do_commit=not sqlite, push=not sqlite)
+        require_policy_unchanged(ROOT, policy)
+        reconcile(do_commit=not sqlite, push=not sqlite, policy=policy)
     except Exception as error:
         raise PostCommandReconcileError(
             "COMMAND_RECORDED_POST_RECONCILE_FAILED: "
@@ -3095,7 +3118,7 @@ def cmd_init(args: argparse.Namespace) -> None:
         DATABASE.unlink(missing_ok=True)
         raise
     if selected_backend == "sqlite":
-        export_sqlite_projections()
+        export_sqlite_projections(evidence_policy(ROOT))
     print(f"Initialized project binding {project_id} with {selected_backend} backend")
 
 
@@ -3114,7 +3137,7 @@ def cmd_migrate(args: argparse.Namespace) -> None:  # noqa: C901
             command_results = legacy_command_results()
             session_records = storage_backend().load_session_records()
             checkpoint_records = storage_backend().load_checkpoint_records()
-            errors = validate(live=False)
+            errors = validate(live=False, policy=policy)
             if errors:
                 raise RuntimeError("migration preflight failed:\n" + "\n".join(errors))
             require_policy_unchanged(ROOT, policy)
@@ -3150,15 +3173,15 @@ def cmd_migrate(args: argparse.Namespace) -> None:  # noqa: C901
             except Exception:
                 DATABASE.unlink(missing_ok=True)
                 raise
-        export_sqlite_projections()
+        export_sqlite_projections(policy)
     else:
         backend = mutating_sqlite_backend()
 
         def project(tasks: list[Task]) -> None:
-            write_sqlite_projections(tasks, already_locked=True)
+            write_sqlite_projections(tasks, already_locked=True, policy=policy)
 
         def switch() -> None:
-            errors = validate(live=False)
+            errors = validate(live=False, policy=policy)
             if errors:
                 raise RuntimeError("rollback export failed:\n" + "\n".join(errors))
             require_policy_unchanged(ROOT, policy)

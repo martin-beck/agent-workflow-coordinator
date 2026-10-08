@@ -346,6 +346,62 @@ class TaskSpecTests(unittest.TestCase):
             with patch.object(os, "read", side_effect=replace_after_read):
                 self.assertIn("identity changed", "\n".join(task_spec_policy_errors(root)))
 
+    def test_policy_git_verification_rejects_entry_swaps_at_every_boundary(self) -> None:
+        for boundary in ("before-git", "between-git", "after-cleanliness"):
+            with self.subTest(boundary=boundary), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                path = self._policy(root)
+                payload = path.read_bytes()
+                original_run = subprocess.run
+                calls = 0
+
+                def swap_entry(
+                    target_root: Path = root,
+                    target_path: Path = path,
+                    target_payload: bytes = payload,
+                ) -> None:
+                    replacement = target_root / "replacement.json"
+                    replacement.write_bytes(target_payload)
+                    replacement.replace(target_path)
+
+                def racing_run(
+                    command: Any,
+                    *args: Any,
+                    selected_boundary: str = boundary,
+                    selected_run: Any = original_run,
+                    **kwargs: Any,
+                ) -> Any:
+                    nonlocal calls
+                    calls += 1
+                    if selected_boundary == "before-git" and calls == 1:
+                        swap_entry()
+                    if selected_boundary == "between-git" and calls == 2:
+                        swap_entry()
+                    result = selected_run(command, *args, **kwargs)
+                    if selected_boundary == "after-cleanliness" and "diff" in command:
+                        swap_entry()
+                    return result
+
+                with patch("tools.task_spec.subprocess.run", side_effect=racing_run):
+                    self.assertIn(
+                        "identity changed",
+                        "\n".join(task_spec_policy_errors(root)),
+                    )
+
+    def test_policy_parsed_bytes_must_equal_exact_head_blob(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = self._policy(root)
+            original_read = os.read
+
+            def committed_bytes_replaced_after_read(descriptor: int, size: int) -> bytes:
+                payload = original_read(descriptor, size)
+                path.write_bytes(payload.replace(b'"privacy"', b'"journey"', 1))
+                return payload
+
+            with patch.object(os, "read", side_effect=committed_bytes_replaced_after_read):
+                self.assertIn("tracked and unchanged", "\n".join(task_spec_policy_errors(root)))
+
     def test_policy_io_and_git_failures_have_bounded_diagnostics(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
