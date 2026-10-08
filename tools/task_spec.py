@@ -59,6 +59,43 @@ class EvidencePolicy:
 DEFAULT_EVIDENCE_POLICY = EvidencePolicy(EVIDENCE_CLASSES, "absent", None, False)
 
 
+def _index_matches_head(root: Path, commit_id: str) -> bool:
+    """Bind the sole stage-0 index entry to the exact commit blob and mode."""
+    tree = subprocess.run(  # noqa: S603 - exact commit and fixed Git executable
+        ["/usr/bin/git", "-C", str(root), "ls-tree", "-z", commit_id, "--", POLICY_NAME],
+        check=False,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        timeout=10,
+    )
+    index = subprocess.run(  # noqa: S603 - fixed Git executable and bounded path
+        ["/usr/bin/git", "-C", str(root), "ls-files", "-s", "-z", "--", POLICY_NAME],
+        check=False,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        timeout=10,
+    )
+    if tree.returncode != 0 or index.returncode != 0:
+        return False
+    try:
+        tree_metadata, tree_name = tree.stdout.removesuffix(b"\0").split(b"\t", 1)
+        tree_mode, object_type, tree_blob = tree_metadata.split()
+        index_metadata, index_name = index.stdout.removesuffix(b"\0").split(b"\t", 1)
+        index_mode, index_blob, stage = index_metadata.split()
+    except ValueError:
+        return False
+    return (
+        object_type == b"blob"
+        and stage == b"0"
+        and tree_name == index_name == POLICY_NAME.encode("ascii")
+        and tree_mode == index_mode
+        and tree_blob == index_blob
+        and re.fullmatch(rb"[0-9a-f]{40,64}", tree_blob) is not None
+    )
+
+
 def _tracked_clean_policy(root: Path, expected_payload: bytes | None = None) -> bool:
     """Require the opt-in policy bytes to equal one exact, clean HEAD blob."""
     try:
@@ -99,20 +136,31 @@ def _tracked_clean_policy(root: Path, expected_payload: bytes | None = None) -> 
             return False
         if expected_payload is not None and blob.stdout != expected_payload:
             return False
+        if not _index_matches_head(root, commit_id.decode("ascii")):
+            return False
         commands = (
-            ["/usr/bin/git", "-C", str(root), "ls-files", "--error-unmatch", "--", POLICY_NAME],
             [
                 "/usr/bin/git",
                 "-C",
                 str(root),
                 "diff",
                 "--quiet",
+                "--",
+                POLICY_NAME,
+            ],
+            [
+                "/usr/bin/git",
+                "-C",
+                str(root),
+                "diff",
+                "--cached",
+                "--quiet",
                 commit_id.decode("ascii"),
                 "--",
                 POLICY_NAME,
             ],
         )
-        return all(
+        clean = all(
             subprocess.run(  # noqa: S603 - fixed Git executable and bounded arguments
                 command,
                 check=False,
@@ -124,6 +172,7 @@ def _tracked_clean_policy(root: Path, expected_payload: bytes | None = None) -> 
             == 0
             for command in commands
         )
+        return clean and _index_matches_head(root, commit_id.decode("ascii"))
     except (OSError, ValueError, subprocess.SubprocessError):
         return False
 

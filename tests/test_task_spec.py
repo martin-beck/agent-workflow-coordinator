@@ -19,6 +19,7 @@ import jsonschema
 
 from tools import handoffctl
 from tools.task_spec import (
+    POLICY_NAME,
     EvidencePolicy,
     TaskSpecPolicyError,
     _head_tracks_policy,
@@ -401,6 +402,60 @@ class TaskSpecTests(unittest.TestCase):
 
             with patch.object(os, "read", side_effect=committed_bytes_replaced_after_read):
                 self.assertIn("tracked and unchanged", "\n".join(task_spec_policy_errors(root)))
+
+    def test_staged_policy_change_with_restored_worktree_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = self._policy(root)
+            committed = path.read_bytes()
+            path.write_bytes(committed.replace(b'"privacy"', b'"journey"', 1))
+            self._git(root, "add", POLICY_NAME)
+            path.write_bytes(committed)
+            self.assertIn("tracked and unchanged", "\n".join(task_spec_policy_errors(root)))
+
+    def test_index_swaps_around_cleanliness_checks_are_rejected(self) -> None:
+        for boundary in ("after-index", "after-cached-diff"):
+            with self.subTest(boundary=boundary), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                path = self._policy(root)
+                committed = path.read_bytes()
+                original_run = subprocess.run
+                index_checks = 0
+
+                def stage_b_worktree_a(
+                    target_path: Path = path,
+                    target_payload: bytes = committed,
+                    target_root: Path = root,
+                    selected_run: Any = original_run,
+                ) -> None:
+                    target_path.write_bytes(target_payload.replace(b'"privacy"', b'"journey"', 1))
+                    selected_run(
+                        ["/usr/bin/git", "-C", str(target_root), "add", POLICY_NAME], check=True
+                    )
+                    target_path.write_bytes(target_payload)
+
+                def racing_run(
+                    command: Any,
+                    *args: Any,
+                    selected_run: Any = original_run,
+                    selected_boundary: str = boundary,
+                    **kwargs: Any,
+                ) -> Any:
+                    nonlocal index_checks
+                    result = selected_run(command, *args, **kwargs)
+                    if "ls-files" in command and "-s" in command:
+                        index_checks += 1
+                        if selected_boundary == "after-index" and index_checks == 1:
+                            stage_b_worktree_a()
+                    if selected_boundary == "after-cached-diff" and "--cached" in command:
+                        stage_b_worktree_a()
+                    return result
+
+                with patch("tools.task_spec.subprocess.run", side_effect=racing_run):
+                    self.assertIn(
+                        "tracked and unchanged",
+                        "\n".join(task_spec_policy_errors(root)),
+                    )
 
     def test_policy_io_and_git_failures_have_bounded_diagnostics(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
