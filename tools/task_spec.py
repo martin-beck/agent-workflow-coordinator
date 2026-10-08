@@ -5,14 +5,23 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
+import os
 import re
+import stat
+import subprocess
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 EVIDENCE_CLASSES = frozenset(
     {"mechanical", "contract-test", "property-or-fuzz", "bounded-model", "environmental"}
 )
+POLICY_NAME = "task-spec-policy.json"
+POLICY_MAX_BYTES = 4096
+POLICY_MAX_CLASSES = 32
+POLICY_CLASS = re.compile(r"^[a-z]+(?:-[a-z]+)*$")
 SPEC_REF = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{2,255}$")
 TOOL_REF = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$")
 ID_REF = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{2,63}$")
@@ -31,6 +40,168 @@ SPEC_FIELDS = {
     "required_evidence_classes",
     "gates",
 }
+
+
+class TaskSpecPolicyError(RuntimeError):
+    """A project task-spec policy is missing integrity or has invalid content."""
+
+
+@dataclass(frozen=True)
+class EvidencePolicy:
+    """One immutable state-root-bound evidence vocabulary snapshot."""
+
+    classes: frozenset[str]
+    digest: str
+    identity: tuple[int, int] | None
+    present: bool
+
+
+DEFAULT_EVIDENCE_POLICY = EvidencePolicy(EVIDENCE_CLASSES, "absent", None, False)
+
+
+def _tracked_clean_policy(root: Path) -> bool:
+    """Require the opt-in policy to be tracked and identical to HEAD."""
+    commands = (
+        ["/usr/bin/git", "-C", str(root), "ls-files", "--error-unmatch", "--", POLICY_NAME],
+        ["/usr/bin/git", "-C", str(root), "diff", "--quiet", "HEAD", "--", POLICY_NAME],
+    )
+    try:
+        return all(
+            subprocess.run(  # noqa: S603 - fixed Git executable and bounded arguments
+                command,
+                check=False,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=10,
+            ).returncode
+            == 0
+            for command in commands
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def _head_tracks_policy(root: Path) -> bool:
+    """Return whether the bound repository committed an opt-in policy."""
+    if not (root / ".git").exists():
+        return False
+    try:
+        return (
+            subprocess.run(  # noqa: S603 - fixed Git executable and bounded arguments
+                ["/usr/bin/git", "-C", str(root), "cat-file", "-e", f"HEAD:{POLICY_NAME}"],
+                check=False,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=10,
+            ).returncode
+            == 0
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def evidence_policy(root: Path) -> EvidencePolicy:  # noqa: C901
+    """Load the only supported additive vocabulary from the bound state root."""
+    directory = -1
+    descriptor = -1
+    try:
+        directory = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            descriptor = os.open(POLICY_NAME, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=directory)
+        except FileNotFoundError:
+            if _head_tracks_policy(root):
+                raise TaskSpecPolicyError(
+                    "task-spec policy must be tracked and unchanged"
+                ) from None
+            return DEFAULT_EVIDENCE_POLICY
+        except OSError as error:
+            raise TaskSpecPolicyError("task-spec policy is unreadable") from error
+        before = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(before.st_mode)
+            or before.st_nlink != 1
+            or before.st_uid != os.geteuid()
+            or stat.S_IMODE(before.st_mode) & 0o002
+            or before.st_size < 2
+            or before.st_size > POLICY_MAX_BYTES
+        ):
+            raise TaskSpecPolicyError("task-spec policy has unsafe identity or size")
+        payload = os.read(descriptor, POLICY_MAX_BYTES + 1)
+        after = os.fstat(descriptor)
+        current = os.stat(POLICY_NAME, dir_fd=directory, follow_symlinks=False)
+        identity = (before.st_dev, before.st_ino)
+        if (
+            len(payload) > POLICY_MAX_BYTES
+            or (after.st_dev, after.st_ino) != identity
+            or (current.st_dev, current.st_ino) != identity
+            or current.st_size != len(payload)
+        ):
+            raise TaskSpecPolicyError("task-spec policy identity changed while reading")
+    except TaskSpecPolicyError:
+        raise
+    except OSError as error:
+        raise TaskSpecPolicyError("task-spec policy root is unavailable") from error
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+        if directory >= 0:
+            os.close(directory)
+    if not _tracked_clean_policy(root):
+        raise TaskSpecPolicyError("task-spec policy must be tracked and unchanged")
+    try:
+        value = json.loads(payload.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise TaskSpecPolicyError("task-spec policy is not valid UTF-8 JSON") from error
+    if (
+        not isinstance(value, dict)
+        or set(value) != {"schema_version", "additional_evidence_classes"}
+        or value.get("schema_version") != 1
+    ):
+        raise TaskSpecPolicyError("task-spec policy shape or version is invalid")
+    additions = value.get("additional_evidence_classes")
+    if (
+        not isinstance(additions, list)
+        or not additions
+        or len(additions) > POLICY_MAX_CLASSES
+        or any(
+            not isinstance(item, str)
+            or len(item.encode("utf-8")) > 32
+            or POLICY_CLASS.fullmatch(item) is None
+            for item in additions
+        )
+    ):
+        raise TaskSpecPolicyError("task-spec policy evidence classes are invalid")
+    if len(set(additions)) != len(additions):
+        raise TaskSpecPolicyError("task-spec policy evidence classes contain duplicates")
+    if set(additions) & EVIDENCE_CLASSES:
+        raise TaskSpecPolicyError("task-spec policy evidence classes collide with built-ins")
+    return EvidencePolicy(
+        EVIDENCE_CLASSES | frozenset(additions),
+        hashlib.sha256(payload).hexdigest(),
+        identity,
+        True,
+    )
+
+
+def task_spec_policy_errors(root: Path) -> list[str]:
+    """Return one bounded public-safe project-policy diagnostic."""
+    try:
+        evidence_policy(root)
+    except TaskSpecPolicyError as error:
+        return [str(error)]
+    return []
+
+
+def require_policy_unchanged(root: Path, expected: EvidencePolicy) -> None:
+    """Reject a policy removal, replacement, or edit during an operation."""
+    try:
+        current = evidence_policy(root)
+    except TaskSpecPolicyError as error:
+        raise TaskSpecPolicyError("task-spec policy changed during operation") from error
+    if current != expected:
+        raise TaskSpecPolicyError("task-spec policy changed during operation")
 
 
 def _strings(
@@ -100,7 +271,7 @@ def _collection_errors(value: dict[str, Any]) -> list[str]:
     return errors
 
 
-def _tool_errors(value: dict[str, Any]) -> list[str]:
+def _tool_errors(value: dict[str, Any], evidence_classes: frozenset[str]) -> list[str]:
     errors = [
         *_strings(value.get("allowed_tools"), field="allowed_tools", pattern=TOOL_REF),
         *_strings(
@@ -120,17 +291,23 @@ def _tool_errors(value: dict[str, Any]) -> list[str]:
         _strings(evidence, field="required_evidence_classes", pattern=re.compile(r"^[a-z][a-z-]+$"))
     )
     if isinstance(evidence, list):
-        unknown = sorted(set(evidence) - EVIDENCE_CLASSES)
+        unknown = sorted(set(evidence) - evidence_classes)
         if unknown:
             errors.append("unknown evidence class: " + ", ".join(unknown))
     return errors
 
 
-def spec_errors(value: object) -> list[str]:
+def spec_errors(value: object, evidence_classes: frozenset[str] = EVIDENCE_CLASSES) -> list[str]:
     """Return deterministic errors for one task-spec record."""
     if not isinstance(value, dict):
         return ["spec must be an object"]
-    return sorted(set(_identity_errors(value) + _collection_errors(value) + _tool_errors(value)))
+    return sorted(
+        set(
+            _identity_errors(value)
+            + _collection_errors(value)
+            + _tool_errors(value, evidence_classes)
+        )
+    )
 
 
 def _metadata_errors(task_id: str, meta: dict[str, Any]) -> list[str]:
@@ -156,11 +333,17 @@ def _load_spec(root: Path, task_id: str, spec_ref: str) -> tuple[object | None, 
         return None, [f"{task_id}: cannot read spec_ref: {error}"]
 
 
-def task_spec_errors(root: Path, meta: dict[str, Any]) -> list[str]:
+def task_spec_errors(
+    root: Path, meta: dict[str, Any], policy: EvidencePolicy | None = None
+) -> list[str]:
     """Validate optional task metadata and its referenced local spec."""
     if "spec_ref" not in meta and "spec_revision" not in meta:
         return []
     task_id = str(meta.get("id", "task"))
+    try:
+        selected_policy = policy or evidence_policy(root)
+    except TaskSpecPolicyError as error:
+        return [f"{task_id}: {error}"]
     errors = _metadata_errors(task_id, meta)
     if errors:
         return errors
@@ -168,7 +351,7 @@ def task_spec_errors(root: Path, meta: dict[str, Any]) -> list[str]:
     value, load_errors = _load_spec(root, task_id, spec_ref)
     if load_errors:
         return load_errors
-    errors.extend(f"{task_id}: {error}" for error in spec_errors(value))
+    errors.extend(f"{task_id}: {error}" for error in spec_errors(value, selected_policy.classes))
     if isinstance(value, dict) and value.get("spec_revision") != meta.get("spec_revision"):
         errors.append(f"{task_id}: spec_revision does not match referenced spec")
     if isinstance(value, dict) and value.get("spec_ref") != spec_ref:
@@ -176,9 +359,15 @@ def task_spec_errors(root: Path, meta: dict[str, Any]) -> list[str]:
     return sorted(set(errors))
 
 
-def done_admission_error(root: Path, meta: dict[str, Any]) -> str | None:
+def done_admission_error(  # noqa: C901
+    root: Path, meta: dict[str, Any], policy: EvidencePolicy | None = None
+) -> str | None:
     """Return a fail-closed error when a new ``done`` transition lacks proof."""
-    errors = task_spec_errors(root, meta)
+    try:
+        selected_policy = policy or evidence_policy(root)
+    except TaskSpecPolicyError as error:
+        return f"done admission denied: {error}"
+    errors = task_spec_errors(root, meta, selected_policy)
     if errors:
         return "done admission denied: " + "; ".join(errors)
     acceptance = meta.get("spec_acceptance")
@@ -198,7 +387,7 @@ def done_admission_error(root: Path, meta: dict[str, Any]) -> str | None:
         return "done admission denied: acceptance spec_revision does not match task spec"
     if acceptance["status"] != "pass":
         return "done admission denied: acceptance status is not pass"
-    if acceptance["evidence_class"] not in EVIDENCE_CLASSES:
+    if acceptance["evidence_class"] not in selected_policy.classes:
         return "done admission denied: acceptance evidence class is unknown"
     if not isinstance(acceptance["evidence_ref"], str) or not EVIDENCE_REF.fullmatch(
         acceptance["evidence_ref"]

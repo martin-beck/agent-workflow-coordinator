@@ -85,7 +85,15 @@ if __package__:
         render_status,
         render_status_pages_from_text,
     )
-    from .task_spec import done_admission_error, task_spec_errors
+    from .task_spec import (
+        DEFAULT_EVIDENCE_POLICY,
+        EvidencePolicy,
+        done_admission_error,
+        evidence_policy,
+        require_policy_unchanged,
+        task_spec_errors,
+        task_spec_policy_errors,
+    )
 else:  # pragma: no cover - direct script execution
     try:
         from board_metrics import build_metrics  # type: ignore[import-not-found,no-redef]  # noqa: I001
@@ -158,8 +166,13 @@ else:  # pragma: no cover - direct script execution
         render_status_pages_from_text,
     )
     from task_spec import (  # type: ignore[import-not-found,no-redef]
+        DEFAULT_EVIDENCE_POLICY,
+        EvidencePolicy,
         done_admission_error,
+        evidence_policy,
+        require_policy_unchanged,
         task_spec_errors,
+        task_spec_policy_errors,
     )
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -664,8 +677,6 @@ UUID_PRIVACY_EXEMPT = frozenset(
         Path(".handoffctl.json"),
         Path("coordinator.binding.json"),
         Path("coordinator.backend.json"),
-        Path("tests/test_handoffctl.py"),
-        Path("tests/test_sqlite_storage.py"),
         Path("tools/handoffctl.py"),
     }
 )
@@ -1156,12 +1167,12 @@ def supersession_errors(tasks: list[Task]) -> list[str]:
     return errors
 
 
-def basic_task_errors(path: Path, meta: Meta) -> list[str]:
+def basic_task_errors(path: Path, meta: Meta, policy: EvidencePolicy | None = None) -> list[str]:
     return [
         *field_errors(path, meta),
         *value_errors(path, meta),
         *reference_errors(path, meta),
-        *task_spec_errors(ROOT, meta),
+        *task_spec_errors(ROOT, meta, policy),
     ]
 
 
@@ -1243,13 +1254,18 @@ def mutation_global_errors(tasks: list[Task]) -> list[str]:
     return errors
 
 
-def mutation_errors(path: Path, before: dict[Path, str | None]) -> list[str]:
+def mutation_errors(
+    path: Path,
+    before: dict[Path, str | None],
+    policy: EvidencePolicy | None = None,
+) -> list[str]:
     """Validate a Git mutation without gating on unrelated repository findings."""
     tasks = all_tasks()
     selected = [meta for candidate, meta, _ in tasks if candidate == path]
     if len(selected) != 1:
         return [f"{path.name}: mutation target is not unique"]
-    errors = basic_task_errors(path, selected[0])
+    errors = [] if policy is not None else task_spec_policy_errors(ROOT)
+    errors.extend(basic_task_errors(path, selected[0], policy))
     errors.extend(claim_errors(selected[0], {}, {}, {}))
     errors.extend(mutation_global_errors(tasks))
     errors.extend(generated_view_errors(tasks))
@@ -1343,6 +1359,11 @@ def directive_validation_errors() -> list[str]:
 
 def validate(*, live: bool = False) -> list[str]:
     errors: list[str] = []
+    try:
+        policy = evidence_policy(ROOT)
+    except RuntimeError as error:
+        errors.append(str(error))
+        policy = DEFAULT_EVIDENCE_POLICY
     tasks = all_tasks()
     ids: dict[str, Path] = {}
     active_owners: dict[str, str] = {}
@@ -1353,7 +1374,7 @@ def validate(*, live: bool = False) -> list[str]:
         if task_id in ids:
             errors.append(f"duplicate {task_id}")
         ids[task_id] = path
-        errors.extend(basic_task_errors(path, meta))
+        errors.extend(basic_task_errors(path, meta, policy))
         errors.extend(claim_errors(meta, active_owners, active_worktrees, active_branches))
     errors.extend(graph_errors(tasks))
     errors.extend(hierarchy_errors(tasks))
@@ -1545,8 +1566,9 @@ def write_generated_views(tasks: list[Task], state: Meta) -> None:
 
 
 def reconcile(*, do_commit: bool, push: bool = False) -> bool:
+    policy = evidence_policy(ROOT)
     if backend_selection()["backend"] == "sqlite":
-        return reconcile_sqlite(do_commit=do_commit, push=push)
+        return reconcile_sqlite(do_commit=do_commit, push=push, policy=policy)
 
     with locked():
         if backend_selection()["backend"] != "git":
@@ -1564,6 +1586,7 @@ def reconcile(*, do_commit: bool, push: bool = False) -> bool:
             errors = validate(live=False)
             if errors:
                 raise RuntimeError("validation failed:\n" + "\n".join(errors))
+            require_policy_unchanged(ROOT, policy)
             for path in generated_paths():
                 before.setdefault(path, None)
             touched = changed_paths(before, include_deleted=True)
@@ -1672,10 +1695,11 @@ def refresh_sqlite_live_state() -> State | None:
     return state
 
 
-def reconcile_sqlite(*, do_commit: bool, push: bool) -> bool:
+def reconcile_sqlite(*, do_commit: bool, push: bool, policy: EvidencePolicy | None = None) -> bool:
     """Export local authority; optional Git/GitHub publication is a replica only."""
     if push and not do_commit:
         raise RuntimeError("SQLite publication requires --commit with --push")
+    selected_policy = policy or evidence_policy(ROOT)
     before: dict[Path, str | None] = {path: path.read_text() for path in TASKS.glob("AR-*.md")}
     before.update({path: path.read_text() for path in (ROOT / "sessions").glob("AR-*.jsonl")})
     before.update({path: path.read_text() for path in (ROOT / "checkpoints").glob("AR-*.jsonl")})
@@ -1687,6 +1711,7 @@ def reconcile_sqlite(*, do_commit: bool, push: bool) -> bool:
         atomic(ROOT / "PROJECT_STATE.md", project)
         atomic(ROOT / "WORKTREES.md", worktrees)
         paths.extend((ROOT / "PROJECT_STATE.md", ROOT / "WORKTREES.md"))
+    require_policy_unchanged(ROOT, selected_policy)
     candidates = set(paths) | set(before)
     touched = changed_paths({path: before.get(path) for path in candidates}, include_deleted=True)
     title = project_settings()["project_title"]
@@ -1762,10 +1787,14 @@ def require_update_role_admission(kind: str, owner_id: str) -> None:
         require_role_admission(owner_id)
 
 
-def require_done_admission(meta: Meta, tasks: list[Task] | None = None) -> None:
+def require_done_admission(
+    meta: Meta,
+    tasks: list[Task] | None = None,
+    policy: EvidencePolicy | None = None,
+) -> None:
     if meta.get("status") != "in_progress":
         return
-    error = done_admission_error(ROOT, meta)
+    error = done_admission_error(ROOT, meta, policy)
     if error:
         raise RuntimeError(error)
     if tasks is not None:
@@ -1775,10 +1804,14 @@ def require_done_admission(meta: Meta, tasks: list[Task] | None = None) -> None:
 
 
 def require_release_admission(
-    kind: str, status: str | None, meta: Meta, tasks: list[Task] | None = None
+    kind: str,
+    status: str | None,
+    meta: Meta,
+    tasks: list[Task] | None = None,
+    policy: EvidencePolicy | None = None,
 ) -> None:
     if kind == "release" and status == "done":
-        require_done_admission(meta, tasks)
+        require_done_admission(meta, tasks, policy)
 
 
 def apply_claim(args: argparse.Namespace, meta: Meta, tasks: list[Task]) -> str:
@@ -2012,12 +2045,16 @@ def require_promotion_preflight(kind: str) -> None:
 
 
 def apply_owned_change(  # noqa: C901
-    args: argparse.Namespace, kind: str, meta: Meta, tasks: list[Task] | None = None
+    args: argparse.Namespace,
+    kind: str,
+    meta: Meta,
+    tasks: list[Task] | None = None,
+    policy: EvidencePolicy | None = None,
 ) -> str:
     if meta.get("owner") != args.owner:
         raise RuntimeError(f"{args.task} is owned by {meta.get('owner') or 'nobody'}")
     require_update_role_admission(kind, str(args.owner))
-    require_release_admission(kind, getattr(args, "status", None), meta, tasks)
+    require_release_admission(kind, getattr(args, "status", None), meta, tasks, policy)
     if kind == "heartbeat":
         if args.lease_minutes <= 0 or meta.get("status") != "in_progress":
             raise RuntimeError("heartbeat requires an active task and positive lease")
@@ -2131,7 +2168,13 @@ def apply_gate(args: argparse.Namespace, meta: Meta) -> str:
         raise RuntimeError(str(error)) from error
 
 
-def apply_transition(args: argparse.Namespace, kind: str, meta: Meta, tasks: list[Task]) -> str:
+def apply_transition(
+    args: argparse.Namespace,
+    kind: str,
+    meta: Meta,
+    tasks: list[Task],
+    policy: EvidencePolicy | None = None,
+) -> str:
     """Dispatch one typed lifecycle transition for both storage backends."""
     if kind == "claim":
         return apply_claim(args, meta, tasks)
@@ -2150,7 +2193,7 @@ def apply_transition(args: argparse.Namespace, kind: str, meta: Meta, tasks: lis
         return apply_checkpoint(args, meta)
     if kind == "rollback":
         return apply_rollback(args, meta)
-    return apply_owned_change(args, kind, meta, tasks)
+    return apply_owned_change(args, kind, meta, tasks, policy)
 
 
 def rendered_task_views(tasks: list[Task]) -> dict[Path, str]:
@@ -2218,6 +2261,7 @@ def mutate(args: argparse.Namespace, kind: str) -> None:  # noqa: C901
         if backend_selection()["backend"] != "git":
             raise RuntimeError("BACKEND_CHANGED: retry using the selected backend")
         sync_replica_before_write()
+        policy = evidence_policy(ROOT)
         path, meta, body = locate(args.task)
         require_promotion_preflight(kind)
         before: dict[Path, str | None] = {path: path.read_text()}
@@ -2228,7 +2272,7 @@ def mutate(args: argparse.Namespace, kind: str) -> None:  # noqa: C901
             }
         )
         committed = False
-        note = apply_transition(args, kind, meta, all_tasks())
+        note = apply_transition(args, kind, meta, all_tasks(), policy)
         meta["task_revision"] += 1
         meta["updated_at"] = now()
         session_record = git_session_record(args, kind, meta, before)
@@ -2260,7 +2304,8 @@ def mutate(args: argparse.Namespace, kind: str) -> None:  # noqa: C901
             write_task(path, meta, body)
             views = rendered_task_views(all_tasks())
             write_rendered_task_views(views)
-            errors = mutation_errors(path, before)
+            require_policy_unchanged(ROOT, policy)
+            errors = mutation_errors(path, before, policy)
             if errors:
                 raise RuntimeError("\n".join(errors))
             for target in generated_paths():
@@ -2297,6 +2342,7 @@ def _transition_note(body: str, note: str, at: str) -> str:
 
 def mutate_sqlite(args: argparse.Namespace, kind: str) -> None:
     """Linearize a lifecycle mutation at SQLite's committed CAS update."""
+    policy = evidence_policy(ROOT)
     backend = mutating_sqlite_backend()
     initial = backend.load_tasks()
     selected = next((task for task in initial if task[1]["id"] == args.task), None)
@@ -2308,18 +2354,20 @@ def mutate_sqlite(args: argparse.Namespace, kind: str) -> None:
     at = now()
 
     def transition(meta: Meta, tasks: list[Task]) -> tuple[str, str]:
-        note = apply_transition(args, kind, meta, tasks)
+        require_policy_unchanged(ROOT, policy)
+        note = apply_transition(args, kind, meta, tasks, policy)
         candidate = [
             (path, meta if item["id"] == args.task else item, text) for path, item, text in tasks
         ]
         errors = (
-            basic_task_errors(selected[0], meta)
+            basic_task_errors(selected[0], meta, policy)
             + graph_errors(candidate)
             + hierarchy_errors(candidate)
             + supersession_errors(candidate)
         )
         if errors:
             raise RuntimeError("transition validation failed:\n" + "\n".join(errors))
+        require_policy_unchanged(ROOT, policy)
         return note, _transition_note(selected[2], note, at)
 
     trigger = str(getattr(args, "_session_trigger", kind))
@@ -2361,6 +2409,17 @@ def cmd_render_status(*, check: bool) -> None:
     if not project_settings()["status_view"]:
         raise RuntimeError("STATUS.md generation is disabled by .handoffctl.json")
     with locked(exclusive=not check):
+        try:
+            policy = evidence_policy(ROOT)
+        except RuntimeError as error:
+            raise RuntimeError(f"task-spec policy invalid: {error}") from error
+        task_errors = [
+            error
+            for path, meta, _body in all_tasks()
+            for error in basic_task_errors(path, meta, policy)
+        ]
+        if task_errors:
+            raise RuntimeError("task-spec validation failed: " + "; ".join(task_errors))
         expected = render_status_views(all_tasks())
         if check:
             if status_projection_errors(expected):
@@ -2711,9 +2770,12 @@ def _start_rollback(
 
 def cmd_rollback(args: argparse.Namespace) -> None:
     """Restore one checkpoint with a durable journal and coordinated Git revert."""
+    policy = evidence_policy(ROOT)
     checkpoint, product, current_commit, previous = _rollback_target(args)
+    require_policy_unchanged(ROOT, policy)
     started, skip_product = _start_rollback(args, checkpoint, product, current_commit, previous)
     try:
+        require_policy_unchanged(ROOT, policy)
         rollback_commit = (
             str(started["rollback_commit"])
             if skip_product
@@ -2737,6 +2799,7 @@ def cmd_rollback(args: argparse.Namespace) -> None:
     )
     args.rollback_checkpoint = checkpoint
     try:
+        require_policy_unchanged(ROOT, policy)
         mutate(args, "rollback")
     except Exception as error:
         ambiguous = build_record(
@@ -2769,6 +2832,13 @@ def require_active_owner(task_id: str, owner: str) -> None:
     """Fence wrapped commands with a live claim before external effects."""
     with locked(exclusive=False):
         _, meta, _ = locate(task_id)
+        try:
+            policy = evidence_policy(ROOT)
+        except RuntimeError as error:
+            raise RuntimeError(f"run preflight failed: {error}") from error
+        spec_errors = task_spec_errors(ROOT, meta, policy)
+        if spec_errors:
+            raise RuntimeError("run preflight failed: " + "; ".join(spec_errors))
         if meta.get("owner") != owner:
             raise RuntimeError("task claim does not match owner")
         if meta.get("status") != "in_progress":
@@ -3031,6 +3101,7 @@ def cmd_init(args: argparse.Namespace) -> None:
 
 def cmd_migrate(args: argparse.Namespace) -> None:  # noqa: C901
     """Explicitly and restart-safely switch authority between supported backends."""
+    policy = evidence_policy(ROOT)
     current = str(backend_selection()["backend"])
     if current == args.to:
         raise RuntimeError(f"coordinator already uses {current}")
@@ -3046,6 +3117,7 @@ def cmd_migrate(args: argparse.Namespace) -> None:  # noqa: C901
             errors = validate(live=False)
             if errors:
                 raise RuntimeError("migration preflight failed:\n" + "\n".join(errors))
+            require_policy_unchanged(ROOT, policy)
             checkpoint = run(["git", "-C", str(ROOT), "rev-parse", "HEAD"]).stdout.strip()
             DATABASE.unlink(missing_ok=True)
             try:
@@ -3072,6 +3144,7 @@ def cmd_migrate(args: argparse.Namespace) -> None:  # noqa: C901
                     or imported_checkpoints != checkpoint_records
                 ):
                     raise RuntimeError("record migration equivalence check failed")
+                require_policy_unchanged(ROOT, policy)
                 provision_sqlite_barrier()
                 atomic(BACKEND_CONFIG, json.dumps(selection, indent=2, sort_keys=True) + "\n")
             except Exception:
@@ -3088,6 +3161,7 @@ def cmd_migrate(args: argparse.Namespace) -> None:  # noqa: C901
             errors = validate(live=False)
             if errors:
                 raise RuntimeError("rollback export failed:\n" + "\n".join(errors))
+            require_policy_unchanged(ROOT, policy)
             atomic(BACKEND_CONFIG, json.dumps(selection, indent=2, sort_keys=True) + "\n")
 
         backend.retire(project, switch)

@@ -93,6 +93,23 @@ class RollbackCommandTests(unittest.TestCase):
         ):
             core.cmd_rollback(self.args())
 
+    def test_invalid_project_policy_rejects_before_rollback_journal_or_product_effect(self) -> None:
+        with (
+            patch.object(
+                core,
+                "evidence_policy",
+                side_effect=RuntimeError("task-spec policy must be tracked and unchanged"),
+            ),
+            patch.object(core, "_rollback_target") as target,
+            patch.object(core, "_start_rollback") as start,
+            patch.object(core, "_revert_product") as revert,
+            self.assertRaisesRegex(RuntimeError, "policy must be tracked and unchanged"),
+        ):
+            core.cmd_rollback(self.args())
+        target.assert_not_called()
+        start.assert_not_called()
+        revert.assert_not_called()
+
     def test_completed_operation_rejects_double_restore(self) -> None:
         with self._entered("c" * 40):
             core.cmd_rollback(self.args())

@@ -21,6 +21,8 @@ from tempfile import TemporaryDirectory
 from typing import Any, Literal
 from unittest.mock import patch
 
+from fixture_ids import project_uuid
+
 from tools.sqlite_storage import (
     SQLiteAuthorityBinding,
     SQLiteBackend,
@@ -42,7 +44,7 @@ SPEC.loader.exec_module(CORE)
 
 BINDING = {
     "schema_version": 1,
-    "project_id": "11111111-1111-4111-8111-111111111111",
+    "project_id": project_uuid("1"),
     "state_repository": "owner/state",
     "product_repository": "owner/product",
 }
@@ -313,6 +315,48 @@ class SQLiteStorageTest(unittest.TestCase):
                 {"schema_version": 1, "project_id": BINDING["project_id"], "backend": backend}
             )
         )
+
+    def enable_additive_policy(self) -> bytes:
+        """Commit the supported project policy in this backend fixture."""
+        payload = (
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "additional_evidence_classes": [
+                        "hosted",
+                        "offline",
+                        "privacy",
+                        "journey",
+                        "quality",
+                    ],
+                }
+            )
+            + "\n"
+        ).encode()
+        (self.root / "task-spec-policy.json").write_bytes(payload)
+        subprocess.run(  # noqa: S603
+            ["/usr/bin/git", "init", "-q", str(self.root)], check=True
+        )
+        subprocess.run(  # noqa: S603
+            ["/usr/bin/git", "-C", str(self.root), "add", "task-spec-policy.json"],
+            check=True,
+        )
+        subprocess.run(  # noqa: S603
+            [
+                "/usr/bin/git",
+                "-C",
+                str(self.root),
+                "-c",
+                "user.name=Policy Test",
+                "-c",
+                "user.email=policy@example.invalid",
+                "commit",
+                "-qm",
+                "policy fixture",
+            ],
+            check=True,
+        )
+        return payload
 
     def write_git_tasks(self, values: list[Any] | None = None) -> None:
         for path, meta, body in values or [task("AR-0001")]:
@@ -616,6 +660,128 @@ class SQLiteStorageTest(unittest.TestCase):
         self.assertEqual(2, len(CORE.git_tasks()))
         with self.assertRaisesRegex(RuntimeError, "already uses"):
             CORE.cmd_migrate(argparse.Namespace(to="git"))
+
+    def test_additive_policy_migrates_and_policy_removal_or_race_is_atomic(self) -> None:
+        self.configure_core()
+        payload = self.enable_additive_policy()
+        path, meta, body = task("AR-0001")
+        spec = json.loads(
+            (
+                Path(__file__).resolve().parents[1] / "examples/task-specs/downstream-additive.json"
+            ).read_text(encoding="utf-8")
+        )
+        spec["spec_ref"] = "spec.json"
+        (self.root / "spec.json").write_text(json.dumps(spec) + "\n", encoding="utf-8")
+        meta.update(spec_ref="spec.json", spec_revision=1)
+        self.write_git_tasks([(path, meta, body)])
+        completed = subprocess.CompletedProcess([], 0, "b" * 40 + "\n", "")
+        with (
+            patch.object(CORE, "sync_replica_before_write"),
+            patch.object(CORE, "run", return_value=completed),
+            patch("builtins.print"),
+        ):
+            CORE.cmd_migrate(argparse.Namespace(to="sqlite"))
+        self.assertEqual("sqlite", CORE.backend_selection()["backend"])
+        self.assertEqual([], CORE.validate())
+
+        (self.root / "task-spec-policy.json").unlink()
+        with self.assertRaisesRegex(RuntimeError, "tracked and unchanged"):
+            CORE.cmd_migrate(argparse.Namespace(to="git"))
+        self.assertEqual("sqlite", CORE.backend_selection()["backend"])
+        (self.root / "task-spec-policy.json").write_bytes(payload)
+        with patch("builtins.print"):
+            CORE.cmd_migrate(argparse.Namespace(to="git"))
+        self.assertEqual("git", CORE.backend_selection()["backend"])
+
+        with (
+            patch.object(CORE, "sync_replica_before_write"),
+            patch.object(CORE, "run", return_value=completed),
+            patch.object(
+                CORE,
+                "require_policy_unchanged",
+                side_effect=[None, RuntimeError("task-spec policy changed during operation")],
+            ),
+            self.assertRaisesRegex(RuntimeError, "policy changed during operation"),
+        ):
+            CORE.cmd_migrate(argparse.Namespace(to="sqlite"))
+        self.assertEqual("git", CORE.backend_selection()["backend"])
+        self.assertFalse(CORE.DATABASE.exists())
+
+    def test_policy_migration_preflight_and_equivalence_failures_are_atomic(self) -> None:
+        self.configure_core()
+        self.enable_additive_policy()
+        self.write_git_tasks()
+        completed = subprocess.CompletedProcess([], 0, "b" * 40 + "\n", "")
+        with (
+            patch.object(CORE, "sync_replica_before_write"),
+            patch.object(CORE, "validate", return_value=["injected invalid policy state"]),
+            self.assertRaisesRegex(RuntimeError, "migration preflight failed"),
+        ):
+            CORE.cmd_migrate(argparse.Namespace(to="sqlite"))
+        self.assertEqual("git", CORE.backend_selection()["backend"])
+        self.assertFalse(CORE.DATABASE.exists())
+
+        with (
+            patch.object(CORE, "sync_replica_before_write"),
+            patch.object(CORE, "run", return_value=completed),
+            patch.object(CORE.SQLiteBackend, "load_tasks", return_value=[]),
+            self.assertRaisesRegex(RuntimeError, "migration equivalence check failed"),
+        ):
+            CORE.cmd_migrate(argparse.Namespace(to="sqlite"))
+        self.assertEqual("git", CORE.backend_selection()["backend"])
+        self.assertFalse(CORE.DATABASE.exists())
+
+        with (
+            patch.object(CORE, "sync_replica_before_write"),
+            patch.object(CORE, "run", return_value=completed),
+            patch.object(CORE.SQLiteBackend, "load_session_records", return_value=[{}]),
+            self.assertRaisesRegex(RuntimeError, "record migration equivalence check failed"),
+        ):
+            CORE.cmd_migrate(argparse.Namespace(to="sqlite"))
+        self.assertEqual("git", CORE.backend_selection()["backend"])
+        self.assertFalse(CORE.DATABASE.exists())
+
+        with (
+            patch.object(CORE, "sync_replica_before_write"),
+            patch.object(CORE, "run", return_value=completed),
+            patch("builtins.print"),
+        ):
+            CORE.cmd_migrate(argparse.Namespace(to="sqlite"))
+        with (
+            patch.object(CORE, "write_sqlite_projections"),
+            patch.object(CORE, "validate", return_value=["injected rollback validation"]),
+            self.assertRaisesRegex(RuntimeError, "rollback export failed"),
+        ):
+            CORE.cmd_migrate(argparse.Namespace(to="git"))
+        self.assertEqual("sqlite", CORE.backend_selection()["backend"])
+
+    def test_policy_sqlite_mutation_validation_and_unknown_task_are_atomic(self) -> None:
+        self.configure_core(backend="sqlite")
+        self.enable_additive_policy()
+        active = task("AR-0001", status="in_progress")
+        active[1].update(owner="worker-a", claim_expires="2099-01-01T00:00:00+00:00")
+        self.create([active])
+        with self.assertRaisesRegex(RuntimeError, "unknown task"):
+            CORE.mutate_sqlite(argparse.Namespace(task="AR-9999", expected_revision=1), "update")
+        before = SQLiteBackend(self.database, BINDING, self.tasks).load_tasks()[0][1]
+        args = argparse.Namespace(
+            task="AR-0001",
+            owner="worker-a",
+            expected_revision=1,
+            status=None,
+            priority=None,
+            summary=None,
+            next_action="changed",
+            note="validation fault",
+        )
+        with (
+            patch.object(CORE, "basic_task_errors", return_value=["injected spec error"]),
+            self.assertRaisesRegex(RuntimeError, "transition validation failed"),
+        ):
+            CORE.mutate_sqlite(args, "update")
+        self.assertEqual(
+            before, SQLiteBackend(self.database, BINDING, self.tasks).load_tasks()[0][1]
+        )
 
     def test_migration_preserves_hierarchy_session_and_checkpoint_records(self) -> None:
         self.configure_core()

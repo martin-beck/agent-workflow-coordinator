@@ -594,6 +594,54 @@ exec "$@"
         with self.assertRaisesRegex(RuntimeError, "digest mismatch"):
             VENDOR.verify(self.target)
 
+    def test_clean_development_closure_passes_strict_privacy_scan(self) -> None:
+        """A clean exact sync has no scanner residue; an injected UUID still fails."""
+        commit = "c" * 40
+        tree = "d" * 40
+
+        def payload(_source: Path, _commit: str, source_name: str) -> tuple[bytes, int]:
+            path = ROOT / source_name
+            return path.read_bytes(), path.stat().st_mode & 0o777
+
+        with (
+            patch.object(VENDOR, "development_identity", return_value=tree),
+            patch.object(VENDOR, "git_blob_payload", side_effect=payload),
+            patch("builtins.print"),
+        ):
+            VENDOR.sync_development(ROOT, self.target, commit)
+        with patch("builtins.print"):
+            VENDOR.verify(self.target)
+        self.assertFalse(any(path.is_symlink() for path in self.target.rglob("*")))
+        self.assertFalse(
+            any(
+                path.name == "__pycache__" or path.suffix in {".pyc", ".pyo"}
+                for path in self.target.rglob("*")
+            )
+        )
+        self.assertFalse(
+            any(path.stat().st_size > 200_000 for path in self.target.rglob("*") if path.is_file())
+        )
+        self.assertFalse(
+            any(path.suffix in {".log", ".transcript"} for path in self.target.rglob("*"))
+        )
+
+        runtime_spec = importlib.util.spec_from_file_location(
+            "vendored_handoffctl_privacy", self.target / "tools/handoffctl.py"
+        )
+        if runtime_spec is None or runtime_spec.loader is None:
+            self.fail("cannot load vendored runtime")
+        sys.path.insert(0, str(self.target / "tools"))
+        try:
+            runtime = cast(Any, importlib.util.module_from_spec(runtime_spec))
+            runtime_spec.loader.exec_module(runtime)
+            runtime.ROOT = self.target
+            self.assertEqual([], runtime.privacy_errors())
+            leaked = self.target / "leaked-fixture.txt"
+            leaked.write_text("11111111-1111-4111-8111-111111111111\n", encoding="utf-8")
+            self.assertEqual(["leaked-fixture.txt: session-like UUID"], runtime.privacy_errors())
+        finally:
+            sys.path.remove(str(self.target / "tools"))
+
     def test_rejects_bad_release_identity_and_lock_shapes(self) -> None:
         with self.assertRaisesRegex(RuntimeError, "invalid release"):
             VENDOR.build_lock(ROOT, "latest", "short")
