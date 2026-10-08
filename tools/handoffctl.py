@@ -820,8 +820,8 @@ def trace_lock_metric(phase: str, mode: str, wait: float, hold: float | None) ->
 
 
 def observation_marker(name: str) -> Path:
-    """Keep scan ordering shared by every worktree of the Git state repository."""
-    return coordinator_lock_path().parent / name
+    """Order scans for one checkout's independent task and projection files."""
+    return RUNTIME / name
 
 
 def reserve_observation_ticket() -> int:
@@ -1676,14 +1676,18 @@ def reconcile(
     # External product/GitHub observations are advisory and inherently
     # non-atomic. Keep their potentially long latency outside the authority
     # lock; only task/projection mutation and publication need serialization.
-    scan_config = config() if CONFIG.exists() else None
-    scan_binding = project_binding()
-    ticket = reserve_observation_ticket()
-    state = project_scan()
-    with locked(phase="git_reconcile"):
-        return apply_git_reconciliation(
-            state, selected_policy, scan_config, scan_binding, ticket, do_commit, push
-        )
+    for _ in range(32):
+        scan_config = config() if CONFIG.exists() else None
+        scan_binding = project_binding()
+        ticket = reserve_observation_ticket()
+        state = project_scan()
+        with locked(phase="git_reconcile"):
+            result = apply_git_reconciliation(
+                state, selected_policy, scan_config, scan_binding, ticket, do_commit, push
+            )
+        if result is not None:
+            return result
+    raise RuntimeError("OBSERVATION_SUPERSEDED: retry reconcile after concurrent publications")
 
 
 def observation_is_superseded(scan_config: Meta | None, scan_binding: Meta, ticket: int) -> bool:
@@ -1701,16 +1705,23 @@ def pending_observation_paths() -> list[Path]:
     """Return only coordinator-produced paths awaiting a reconciliation commit."""
     marker = RUNTIME / "last-reconcile.json"
     if not marker.exists():
-        if published_observation_ticket():
-            raise RuntimeError("published observation marker is incomplete")
         return []
     record = json.loads(marker.read_text())
-    if record.get("ticket", 0) != published_observation_ticket():
-        raise RuntimeError("published observation marker is incomplete")
     raw = record.get("pending_paths", [])
     if not isinstance(raw, list) or not all(isinstance(value, str) for value in raw):
         raise RuntimeError("invalid pending reconciliation paths")
     paths = [ROOT / value for value in raw]
+    validate_pending_path_scope(paths)
+    hashes = record.get("pending_hashes", {})
+    if not isinstance(hashes, dict) or set(hashes) != set(raw):
+        raise RuntimeError("invalid pending reconciliation hashes")
+    if any(hashes[value] != pending_path_digest(ROOT / value) for value in raw):
+        raise RuntimeError("PENDING_OBSERVATION_CHANGED: reconcile cannot commit edited content")
+    return paths
+
+
+def validate_pending_path_scope(paths: list[Path]) -> None:
+    """Refuse marker paths outside task and generated projection namespaces."""
     allowed = {path.resolve() for path, _, _ in all_tasks()}
     allowed.update(path.resolve() for path in generated_paths())
     if any(
@@ -1722,7 +1733,11 @@ def pending_observation_paths() -> list[Path]:
         for path in paths
     ):
         raise RuntimeError("pending reconciliation path is outside coordinator projections")
-    return paths
+
+
+def pending_path_digest(path: Path) -> str | None:
+    """Bind a pending path to exact contents, including an intentional deletion."""
+    return hashlib.sha256(path.read_bytes()).hexdigest() if path.exists() else None
 
 
 def remaining_pending_paths(paths: list[Path], do_commit: bool) -> list[str]:
@@ -1740,15 +1755,15 @@ def apply_git_reconciliation(
     ticket: int,
     do_commit: bool,
     push: bool,
-) -> bool:
+) -> bool | None:
     """Apply a completed external observation while holding the authority lock."""
     if observation_is_superseded(scan_config, scan_binding, ticket):
-        return finish_superseded_reconciliation(policy, do_commit, push)
+        return None
+    prior_pending = pending_observation_paths()
     generated = generated_paths()
     before: dict[Path, str | None] = {path: path.read_text() for path, _, _ in all_tasks()}
     before.update({path: path.read_text() if path.exists() else None for path in generated})
     committed = False
-    published = False
     try:
         sync_task_observations(all_tasks(), state)
         tasks = all_tasks()
@@ -1760,12 +1775,11 @@ def apply_git_reconciliation(
         for path in generated_paths():
             before.setdefault(path, None)
         touched = changed_paths(before, include_deleted=True)
-        pending = sorted(set(pending_observation_paths() + touched))
+        pending = sorted(set(prior_pending + touched))
         title = project_settings()["project_title"]
         committed = commit(f"chore(state): reconcile {title}", pending) if do_commit else False
         head = run(["git", "-C", str(ROOT), "rev-parse", "HEAD"], check=False).stdout.strip()
         atomic(observation_marker("observation-published"), f"{ticket}\n")
-        published = True
         atomic(
             RUNTIME / "last-reconcile.json",
             json.dumps(
@@ -1775,6 +1789,11 @@ def apply_git_reconciliation(
                     "state_commit": head,
                     "project_main": state["remote_main"],
                     "pending_paths": remaining_pending_paths(pending, do_commit),
+                    "pending_hashes": {
+                        str(path.relative_to(ROOT)): pending_path_digest(path) for path in pending
+                    }
+                    if not do_commit
+                    else {},
                 },
                 indent=2,
             )
@@ -1784,35 +1803,9 @@ def apply_git_reconciliation(
             push_replica()
         return committed if do_commit else True
     except Exception:
-        if not committed and not published:
+        if not committed:
             restore_paths(before)
         raise
-
-
-def finish_superseded_reconciliation(policy: EvidencePolicy, do_commit: bool, push: bool) -> bool:
-    """Honor durability requests without replacing the newer published observation."""
-    if not do_commit:
-        return False
-    errors = validate(live=False, policy=policy)
-    if errors:
-        raise RuntimeError("validation failed:\n" + "\n".join(errors))
-    require_policy_unchanged(ROOT, policy)
-    marker = RUNTIME / "last-reconcile.json"
-    record = json.loads(marker.read_text())
-    if not isinstance(record, dict) or not isinstance(record.get("project_main"), str):
-        raise RuntimeError("invalid published reconciliation marker")
-    if record.get("ticket", 0) != published_observation_ticket():
-        raise RuntimeError("published observation marker is incomplete")
-    paths = pending_observation_paths()
-    title = project_settings()["project_title"]
-    committed = commit(f"chore(state): reconcile {title}", paths)
-    head = run(["git", "-C", str(ROOT), "rev-parse", "HEAD"], check=False).stdout.strip()
-    record["state_commit"] = head
-    record["pending_paths"] = []
-    atomic(marker, json.dumps(record, indent=2) + "\n")
-    if push:
-        push_replica()
-    return committed
 
 
 def write_session_projections(session_records: list[Meta]) -> list[Path]:

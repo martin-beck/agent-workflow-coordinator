@@ -2230,10 +2230,11 @@ class HandoffTest(unittest.TestCase):
             return newer
 
         with patch.object(CORE, "project_scan", side_effect=out_of_order_scan):
-            self.assertFalse(CORE.reconcile(do_commit=False))
+            self.assertTrue(CORE.reconcile(do_commit=False))
+        self.assertEqual(3, scans)
         self.assertEqual("b" * 40, CORE.locate("AR-0001")[1]["observed_head"])
         self.assertEqual(CORE.live_docs(newer)[1], (self.root / "WORKTREES.md").read_text())
-        self.assertEqual("2\n", CORE.observation_marker("observation-published").read_text())
+        self.assertEqual("3\n", CORE.observation_marker("observation-published").read_text())
 
     def test_overtaken_commit_and_push_honor_durability_request(self) -> None:
         task_path = self.make_task()
@@ -2256,7 +2257,7 @@ class HandoffTest(unittest.TestCase):
         commit.assert_called_once()
         self.assertNotIn(task_path, commit.call_args.args[1])
         push.assert_called_once()
-        self.assertEqual("2\n", CORE.observation_marker("observation-published").read_text())
+        self.assertEqual("3\n", CORE.observation_marker("observation-published").read_text())
 
     def test_commit_collects_pending_paths_from_earlier_plain_reconcile(self) -> None:
         self.make_task()
@@ -2275,6 +2276,35 @@ class HandoffTest(unittest.TestCase):
             [], json.loads((CORE.RUNTIME / "last-reconcile.json").read_text())["pending_paths"]
         )
 
+    def test_pending_task_content_change_refuses_later_commit(self) -> None:
+        task_path = self.make_task(worktree_key="worker-one")
+        state = self.fake_scan()
+        state["worktrees"] = [
+            {
+                "key": "worker-one",
+                "branch": "feature/one",
+                "head": "b" * 40,
+                "dirty": 0,
+                "paths": [],
+                "behind": 0,
+                "ahead": 1,
+            }
+        ]
+        with patch.object(CORE, "project_scan", return_value=state):
+            CORE.reconcile(do_commit=False)
+            task_path.write_text(task_path.read_text() + "\nUnrelated draft note.\n")
+            with self.assertRaisesRegex(RuntimeError, "PENDING_OBSERVATION_CHANGED"):
+                CORE.reconcile(do_commit=True)
+
+    def test_observation_tickets_are_checkout_local(self) -> None:
+        first = CORE.reserve_observation_ticket()
+        other_runtime = self.root / "other-checkout" / ".runtime"
+        with patch.object(CORE, "RUNTIME", other_runtime):
+            self.assertEqual(1, CORE.reserve_observation_ticket())
+            self.assertEqual(0, CORE.published_observation_ticket())
+        self.assertEqual(1, first)
+        self.assertEqual(2, CORE.reserve_observation_ticket())
+
     def test_failed_push_keeps_locally_published_observation_ticket(self) -> None:
         self.make_task()
         with (
@@ -2286,7 +2316,7 @@ class HandoffTest(unittest.TestCase):
             CORE.reconcile(do_commit=True, push=True)
         self.assertEqual("1\n", CORE.observation_marker("observation-published").read_text())
 
-    def test_failed_publication_marker_fences_later_scans(self) -> None:
+    def test_failed_publication_marker_recovers_on_later_scan(self) -> None:
         self.make_task()
         real_atomic = CORE.atomic
 
@@ -2303,11 +2333,9 @@ class HandoffTest(unittest.TestCase):
         ):
             CORE.reconcile(do_commit=True)
         self.assertEqual("1\n", CORE.observation_marker("observation-published").read_text())
-        with (
-            patch.object(CORE, "project_scan", return_value=self.fake_scan()),
-            self.assertRaisesRegex(RuntimeError, "published observation marker is incomplete"),
-        ):
-            CORE.reconcile(do_commit=False)
+        with patch.object(CORE, "project_scan", return_value=self.fake_scan()):
+            self.assertTrue(CORE.reconcile(do_commit=False))
+        self.assertEqual("2\n", CORE.observation_marker("observation-published").read_text())
 
     def test_snapshot_retries_when_reconcile_publishes_during_scan(self) -> None:
         self.make_task()

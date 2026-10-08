@@ -30,6 +30,12 @@ are measured through the same CLI workload, not inferred from a mocked lock.
 This local fixture is a controlled contention test, not a production throughput
 claim or a substitute for a real project-scale probe.
 
+After the checkout-local ticket and retry repair, a separate 16-worker repeat
+completed in 4.25 seconds with zero lock timeouts; its longest recorded lock
+hold was 104 ms. Retries spend additional time scanning outside the lock, so
+this repeat is slower than the initial candidate sample but still avoids the
+baseline lock convoy.
+
 ## Project-scale cross-check
 
 `tests/git_scale_probe.py` clones a supplied product/state pair into temporary
@@ -60,7 +66,7 @@ A separate candidate stress kept the copied 746-task state but observed its
 one-worktree product clone. At 16 independent reconcile processes, all 16
 completed in 5.08 seconds without lock timeouts; maximum acquisition wait was
 4.31 seconds and maximum hold was 0.86 seconds. This exercises whole-state
-validation and scan-ticket coalescing without multiplying the 731-worktree
+validation and scan-ticket retries without multiplying the 731-worktree
 source scan across 16 processes.
 
 ## Cause and repair
@@ -74,23 +80,25 @@ trivial.
 
 External observations now run outside the authority lock. Applying observations
 to task records, rendering and validating projections, committing, and optional
-replication remain serialized. A short, separate, repository-common scan ticket
-prevents an older, slower scan from overwriting a newer published observation.
+replication remain serialized. A short, separate, checkout-local scan ticket
+prevents an older, slower scan from overwriting a newer published observation
+in the same checkout; overtaken scans retry outside the authority lock.
 The runtime configuration and permanent binding are rechecked before applying
-the scan. An overtaken commit/push caller commits only the recorded pending
-coordinator changes and replicates the newer published projection rather than
-silently skipping its durability request. A
-failed push cannot undo the locally published scan ticket. The shared lock in
+the scan. A commit/push caller commits only pending coordinator changes whose
+recorded content still matches and then replicates; an edited pending file
+fails closed rather than being staged. A failed push cannot undo the locally
+published scan ticket. The shared lock in
 `snapshot` covers validation and reading the authoritative view, not the
 product/GitHub observation; it retries if another reconciliation publishes
 between its scan and locked validation.
 
 The ticket is advisory ordering metadata, not task authority. Abandoned tickets
-leave harmless gaps; malformed metadata fails closed. A failed external scan
+leave harmless gaps; a failed publication marker can be repaired by a fresh
+scan in the same checkout. A failed external scan
 does not acquire the authority lock. Unit tests cover out-of-order scans,
-changed bindings, lock-free observation, ticket uniqueness across processes,
-lock timeout tracing, mixed commit/plain reconciliation, failed push, and
-snapshot publication races.
+changed bindings, lock-free observation, checkout-local ticket uniqueness,
+lock timeout tracing, mixed commit/plain reconciliation, pending-content drift,
+failed push, and snapshot publication races.
 
 ## Remaining scaling boundary
 
