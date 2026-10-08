@@ -33,6 +33,10 @@ rewrites the coordinator source, Git history, and binding files.
   the complete graph, dependency index and AR inventory.
 - `PROJECT_STATE.md` and `WORKTREES.md`: generated live observations.
 - `coordinator.vendor.json`: upstream version, commit and SHA-256 for every vendored file.
+- Optional `task-spec-policy.json`: a tracked version-1 project policy that
+  adds a bounded evidence-class vocabulary without changing the five built-in
+  classes. Validate it with `schema/task-spec-policy.schema.json`; the file
+  must remain clean, regular, state-root-bound, and non-symlinked.
 - `sessions/AR-####.jsonl`: bounded, content-minimized session snapshots. Each record stores
   only a context digest, step state, safe artifact references and the next action; raw prompts,
   logs and command output are never retained. The latest record can be replayed with

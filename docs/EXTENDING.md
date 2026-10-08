@@ -15,6 +15,16 @@ during a read, mutate generated files directly, or monkeypatch a vendored module
 Prefer a separate deterministic command that consumes snapshots when the existing optional status
 view is insufficient.
 
+A project may extend only the task-spec evidence vocabulary with a tracked
+`task-spec-policy.json` at the bound state root. The schema is
+`schema/task-spec-policy.schema.json`. The version-1 file contains only
+`schema_version` and `additional_evidence_classes`; additions are lowercase
+hyphenated identifiers and cannot duplicate, remove, or reinterpret a built-in
+class. The Coordinator rejects untracked, dirty, oversized, symlinked, replaced,
+or malformed policy files before lifecycle effects. Environment variables,
+runtime configuration, command arguments, home directories, and network input
+cannot select another policy.
+
 ## Upstream extensions
 
 Change upstream when behavior affects:

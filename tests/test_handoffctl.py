@@ -20,6 +20,8 @@ from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import patch
 
+from fixture_ids import project_uuid
+
 SOURCE = Path(__file__).resolve().parent.parent / "tools/handoffctl.py"
 sys.path.insert(0, str(SOURCE.parent))
 SPEC = importlib.util.spec_from_file_location("handoffctl_core", SOURCE)
@@ -199,7 +201,7 @@ class HandoffTest(unittest.TestCase):
             json.dumps(
                 {
                     "schema_version": 1,
-                    "project_id": "11111111-1111-4111-8111-111111111111",
+                    "project_id": project_uuid("1"),
                     "project_name": "test-project",
                     "project_title": "Test Project",
                     "status_view": True,
@@ -211,7 +213,7 @@ class HandoffTest(unittest.TestCase):
             json.dumps(
                 {
                     "schema_version": 1,
-                    "project_id": "11111111-1111-4111-8111-111111111111",
+                    "project_id": project_uuid("1"),
                     "state_repository": "owner/state",
                     "product_repository": "owner/product",
                 }
@@ -247,6 +249,51 @@ class HandoffTest(unittest.TestCase):
         CORE.write_task(path, meta, "# Test\n")
         self.refresh_views()
         return cast(Path, path)
+
+    def enable_additive_policy(self) -> None:
+        """Commit the supported downstream policy in the isolated state root."""
+        (self.root / "task-spec-policy.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "additional_evidence_classes": [
+                        "hosted",
+                        "offline",
+                        "privacy",
+                        "journey",
+                        "quality",
+                    ],
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        run_git(["git", "init", "-q", str(self.root)])
+        run_git(["git", "-C", str(self.root), "add", "task-spec-policy.json"])
+        run_git(
+            [
+                "git",
+                "-C",
+                str(self.root),
+                "-c",
+                "user.name=Policy Test",
+                "-c",
+                "user.email=policy@example.invalid",
+                "commit",
+                "-qm",
+                "policy fixture",
+            ],
+        )
+
+    def write_additive_spec(self) -> None:
+        """Write one realistic project spec that uses every additive class."""
+        value = json.loads(
+            (
+                Path(__file__).resolve().parents[1] / "examples/task-specs/downstream-additive.json"
+            ).read_text(encoding="utf-8")
+        )
+        value["spec_ref"] = "spec.json"
+        (self.root / "spec.json").write_text(json.dumps(value) + "\n", encoding="utf-8")
 
     def refresh_views(self) -> None:
         """Refresh both deterministic task views in a fixture repository."""
@@ -302,15 +349,13 @@ class HandoffTest(unittest.TestCase):
             patch.object(
                 CORE.uuid,
                 "uuid4",
-                return_value=CORE.uuid.UUID("33333333-3333-4333-8333-333333333333"),
+                return_value=CORE.uuid.UUID(project_uuid("3")),
             ),
             patch("builtins.print"),
         ):
             run.return_value = subprocess.CompletedProcess([], 0, str(self.root) + "\n", "")
             CORE.cmd_init(args)
-        self.assertEqual(
-            "33333333-3333-4333-8333-333333333333", CORE.project_settings()["project_id"]
-        )
+        self.assertEqual(project_uuid("3"), CORE.project_settings()["project_id"])
         with self.assertRaisesRegex(RuntimeError, "already initialized"):
             CORE.cmd_init(args)
 
@@ -322,7 +367,7 @@ class HandoffTest(unittest.TestCase):
             [],
             {**valid_settings, "schema_version": 2},
             {**valid_settings, "project_id": "bad"},
-            {**valid_settings, "project_id": "11111111-1111-1111-8111-111111111111"},
+            {**valid_settings, "project_id": project_uuid("1").replace("-4111-", "-1111-")},
             {**valid_settings, "project_name": "Bad Name"},
             {**valid_settings, "project_title": ""},
             {**valid_settings, "status_view": "yes"},
@@ -337,7 +382,7 @@ class HandoffTest(unittest.TestCase):
             {},
             {**valid_binding, "schema_version": 2},
             {**valid_binding, "project_id": "bad"},
-            {**valid_binding, "project_id": "11111111-1111-1111-8111-111111111111"},
+            {**valid_binding, "project_id": project_uuid("1").replace("-4111-", "-1111-")},
         ):
             with self.subTest(binding=value), self.assertRaises(RuntimeError):
                 CORE.BINDING.write_text(json.dumps(value))
@@ -1848,12 +1893,8 @@ class HandoffTest(unittest.TestCase):
         binary.write_bytes(b"\\xff")
         large = self.root / "large.md"
         large.write_text("x" * 200001)
-        sample_uuid = "33333333-3333-4333-8333-333333333333"
-        for relative in (
-            Path("tools/handoffctl.py"),
-            Path("tests/test_handoffctl.py"),
-            Path("tests/test_sqlite_storage.py"),
-        ):
+        sample_uuid = project_uuid("3")
+        for relative in (Path("tools/handoffctl.py"),):
             fixture = self.root / relative
             fixture.parent.mkdir(exist_ok=True)
             fixture.write_text(sample_uuid)
@@ -1863,8 +1904,6 @@ class HandoffTest(unittest.TestCase):
         self.assertIn("exceeds 200 KiB", errors)
         self.assertIn("notes.md: session-like UUID", errors)
         self.assertNotIn("tools/handoffctl.py: session-like UUID", errors)
-        self.assertNotIn("tests/test_handoffctl.py: session-like UUID", errors)
-        self.assertNotIn("tests/test_sqlite_storage.py: session-like UUID", errors)
         self.assertNotIn("coordinator.binding.json: session-like UUID", errors)
         self.assertIn("coordinator.binding.json: possible credential", errors)
 
@@ -2403,6 +2442,53 @@ class HandoffTest(unittest.TestCase):
         ):
             CORE.cmd_run(argparse.Namespace(task="AR-0001", owner="worker-a", command=["true"]))
         command.assert_not_called()
+
+    def test_run_a_b_a_policy_swap_has_no_command_or_journal_effect(self) -> None:
+        self.enable_additive_policy()
+        self.make_task(
+            status="in_progress",
+            owner="worker-a",
+            claim_expires="2099-01-01T00:00:00+00:00",
+        )
+        CORE.CONFIG.parent.mkdir(exist_ok=True)
+        CORE.CONFIG.write_text("{}")
+        policy_path = self.root / "task-spec-policy.json"
+        original_payload = policy_path.read_bytes()
+        original_check = CORE.require_policy_unchanged
+        checks = 0
+
+        def a_b_a_check(root: Path, expected: Any) -> None:
+            nonlocal checks
+            checks += 1
+            if checks == 1:
+                original_check(root, expected)
+                return
+            saved = self.root / "task-spec-policy.saved"
+            policy_path.replace(saved)
+            policy_path.write_bytes(original_payload.replace(b'"hosted"', b'"remote"', 1))
+            try:
+                original_check(root, expected)
+            finally:
+                policy_path.unlink()
+                saved.replace(policy_path)
+
+        real_subprocess_run = CORE.subprocess.run
+        commands: list[object] = []
+
+        def observe_run(command: object, *args: object, **kwargs: object) -> object:
+            commands.append(command)
+            return real_subprocess_run(command, *args, **kwargs)
+
+        with (
+            patch.object(CORE, "assert_invocation_worktree"),
+            patch.object(CORE, "require_policy_unchanged", side_effect=a_b_a_check),
+            patch.object(CORE.subprocess, "run", side_effect=observe_run),
+            self.assertRaisesRegex(RuntimeError, "changed during operation"),
+        ):
+            CORE.cmd_run(argparse.Namespace(task="AR-0001", owner="worker-a", command=["true"]))
+        self.assertNotIn(["true"], commands)
+        self.assertEqual(original_payload, policy_path.read_bytes())
+        self.assertFalse((self.root / "sessions/AR-0001.jsonl").exists())
 
     def test_replica_prewrite_fast_forward_and_dirty_refusal(self) -> None:
         CORE.CONFIG.parent.mkdir()
@@ -3039,6 +3125,192 @@ class HandoffTest(unittest.TestCase):
         self.assertEqual(
             CORE.render_status_view(CORE.all_tasks()), (self.root / "STATUS.md").read_text()
         )
+
+    def test_additive_policy_is_shared_by_doctor_render_run_and_done_lifecycle(self) -> None:
+        self.enable_additive_policy()
+        self.write_additive_spec()
+        acceptance = {
+            "spec_ref": "spec.json",
+            "spec_revision": 1,
+            "status": "pass",
+            "evidence_class": "hosted",
+            "evidence_ref": "quality/AR-0001",
+            "evidence_digest": "sha256:" + "a" * 64,
+        }
+        self.make_task(
+            status="in_progress",
+            owner="worker-a",
+            claim_expires="2099-01-01T00:00:00+00:00",
+            spec_ref="spec.json",
+            spec_revision=1,
+            spec_acceptance=acceptance,
+        )
+        self.assertEqual([], CORE.validate())
+        CORE.cmd_render_status(check=True)
+        with patch.object(CORE, "assert_invocation_worktree"):
+            CORE.require_active_owner("AR-0001", "worker-a")
+        args = argparse.Namespace(
+            task="AR-0001",
+            owner="worker-a",
+            expected_revision=1,
+            status="done",
+            note="accepted",
+        )
+        with (
+            patch.object(CORE, "sync_replica_before_write"),
+            patch.object(CORE, "commit", return_value=True),
+            patch.object(CORE, "push_replica"),
+        ):
+            CORE.mutate(args, "release")
+        self.assertEqual("done", CORE.locate("AR-0001")[1]["status"])
+
+    def test_policy_and_spec_failures_cover_every_read_only_preflight(self) -> None:
+        self.make_task(
+            status="in_progress",
+            owner="worker-a",
+            claim_expires="2099-01-01T00:00:00+00:00",
+        )
+        with patch.object(
+            CORE, "evidence_policy", side_effect=RuntimeError("invalid project policy")
+        ):
+            self.assertIn("invalid project policy", CORE.validate())
+            with self.assertRaisesRegex(RuntimeError, "task-spec policy invalid"):
+                CORE.cmd_render_status(check=True)
+            with self.assertRaisesRegex(RuntimeError, "run preflight failed"):
+                CORE.require_active_owner("AR-0001", "worker-a")
+
+        path, meta, body = CORE.locate("AR-0001")
+        meta.update(spec_ref="missing.json", spec_revision=1)
+        CORE.write_task(path, meta, body)
+        self.refresh_views()
+        with self.assertRaisesRegex(RuntimeError, "task-spec validation failed"):
+            CORE.cmd_render_status(check=True)
+        with self.assertRaisesRegex(RuntimeError, "run preflight failed"):
+            CORE.require_active_owner("AR-0001", "worker-a")
+
+    def test_done_policy_snapshot_rejects_missing_evidence_and_open_child(self) -> None:
+        meta = {"id": "AR-0001", "status": "in_progress"}
+        with self.assertRaisesRegex(RuntimeError, "spec_acceptance is incomplete"):
+            CORE.require_done_admission(meta, policy=CORE.DEFAULT_EVIDENCE_POLICY)
+        accepted = {
+            **meta,
+            "spec_ref": "spec.json",
+            "spec_revision": 1,
+            "spec_acceptance": {
+                "spec_ref": "spec.json",
+                "spec_revision": 1,
+                "status": "pass",
+                "evidence_class": "contract-test",
+                "evidence_ref": "quality/AR-0001",
+                "evidence_digest": "sha256:" + "a" * 64,
+            },
+        }
+        spec = json.loads(
+            (Path(__file__).resolve().parents[1] / "examples/task-specs/AR-0070.json").read_text()
+        )
+        spec["spec_ref"] = "spec.json"
+        (self.root / "spec.json").write_text(json.dumps(spec), encoding="utf-8")
+        with (
+            patch.object(CORE, "open_child_error", return_value="open child remains"),
+            self.assertRaisesRegex(RuntimeError, "open child remains"),
+        ):
+            CORE.require_done_admission(
+                accepted, [(self.root / "task", accepted, "body")], CORE.DEFAULT_EVIDENCE_POLICY
+            )
+        CORE.require_done_admission({"status": "open"}, policy=CORE.DEFAULT_EVIDENCE_POLICY)
+
+    def test_policy_change_during_git_mutation_is_atomic(self) -> None:
+        self.enable_additive_policy()
+        self.make_task(
+            status="in_progress",
+            owner="worker-a",
+            claim_expires="2099-01-01T00:00:00+00:00",
+        )
+        task_before = CORE.locate("AR-0001")[0].read_text(encoding="utf-8")
+        current_before = (self.root / "CURRENT.md").read_text(encoding="utf-8")
+        args = argparse.Namespace(
+            task="AR-0001",
+            owner="worker-a",
+            expected_revision=1,
+            status=None,
+            priority=None,
+            summary=None,
+            next_action="changed",
+            note="race",
+        )
+        with (
+            patch.object(CORE, "sync_replica_before_write"),
+            patch.object(
+                CORE,
+                "require_policy_unchanged",
+                side_effect=RuntimeError("task-spec policy changed during operation"),
+            ),
+            self.assertRaisesRegex(RuntimeError, "policy changed during operation"),
+        ):
+            CORE.mutate(args, "update")
+        self.assertEqual(task_before, CORE.locate("AR-0001")[0].read_text(encoding="utf-8"))
+        self.assertEqual(current_before, (self.root / "CURRENT.md").read_text(encoding="utf-8"))
+        self.assertFalse((self.root / "sessions/AR-0001.jsonl").exists())
+
+    def test_policy_validation_and_reconcile_failures_leave_state_unchanged(self) -> None:
+        path = self.make_task()
+        before = path.read_text(encoding="utf-8")
+        self.assertTrue(
+            any(
+                "mutation target is not unique" in error
+                for error in CORE.mutation_errors(self.root / "tasks/missing.md", {})
+            )
+        )
+        task = CORE.locate("AR-0001")
+        with patch.object(CORE, "all_tasks", return_value=[task, task]):
+            self.assertIn("duplicate AR-0001", CORE.validate())
+        failing_backend = unittest.mock.Mock()
+        failing_backend.load_tasks.return_value = [task]
+        failing_backend.load_checkpoint_records.side_effect = RuntimeError("checkpoint fault")
+        failing_backend.load_session_records.return_value = []
+        with patch.object(CORE, "storage_backend", return_value=failing_backend):
+            self.assertIn("checkpoint validation failed", "\n".join(CORE.validate()))
+
+        with (
+            patch.object(
+                CORE, "backend_selection", side_effect=[{"backend": "git"}, {"backend": "sqlite"}]
+            ),
+            self.assertRaisesRegex(RuntimeError, "BACKEND_CHANGED"),
+        ):
+            CORE.reconcile(do_commit=False)
+        with (
+            patch.object(CORE, "backend_selection", return_value={"backend": "git"}),
+            patch.object(CORE, "sync_replica_before_write"),
+            patch.object(CORE, "project_scan", return_value=self.fake_scan()),
+            patch.object(CORE, "write_generated_views"),
+            patch.object(CORE, "validate", return_value=["injected policy validation"]),
+            self.assertRaisesRegex(RuntimeError, "validation failed"),
+        ):
+            CORE.reconcile(do_commit=False)
+        self.assertEqual(before, path.read_text(encoding="utf-8"))
+
+    def test_policy_lifecycle_helpers_reject_inactive_gate_and_prune_stale_view(self) -> None:
+        self.make_task(status="open", owner="worker-a")
+        with self.assertRaisesRegex(RuntimeError, "claim is not active"):
+            CORE.require_active_owner("AR-0001", "worker-a")
+        path, meta, body = CORE.locate("AR-0001")
+        meta.update(
+            status="in_progress",
+            owner="worker-a",
+            claim_expires="2099-01-01T00:00:00+00:00",
+        )
+        CORE.write_task(path, meta, body)
+        with (
+            patch.object(CORE, "transition_allowed", side_effect=CORE.GateError("gate denied")),
+            self.assertRaisesRegex(RuntimeError, "gate denied"),
+        ):
+            CORE.require_active_owner("AR-0001", "worker-a")
+        self.assertEqual("body", CORE._transition_note("body", "", "now"))
+        stale = self.root / "status/STATUS-9999.md"
+        stale.parent.mkdir()
+        stale.write_text("stale", encoding="utf-8")
+        CORE.write_status_views({"STATUS.md": "current\n"})
+        self.assertFalse(stale.exists())
 
     def test_doctor_reports_replica_circuit_breaker(self) -> None:
         CORE.REPLICA_BLOCKED.parent.mkdir(exist_ok=True)
