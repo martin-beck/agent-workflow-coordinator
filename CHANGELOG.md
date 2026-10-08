@@ -84,6 +84,9 @@
 
 ## Unreleased
 
+- Restore the shared TLC runner and its focused tests to downstream vendor snapshots without
+  overwriting downstream-owned formal models, attestations, or verification entry points.
+
 ## v0.3.13 - 2026-09-18
 
 - Accept protected lightweight Git tags as sufficient release identity while
