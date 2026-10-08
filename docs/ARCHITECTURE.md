@@ -32,6 +32,18 @@ authority, and the repository-common lock serializes linked worktrees through on
 `coordinator.backend.json` permanently selects the backend. Its absence has one compatibility
 meaning only: an existing installation remains Git-backed.
 
+Git reconciliation observes product worktrees and GitHub before acquiring the authority lock.
+Those observations are advisory and already non-atomic; only applying them to task records,
+regenerating projections, validation, committing and optional replication are serialized. A
+short, separate repository-common ticket lock orders scans across state worktrees. If a newer
+scan has already published, an overtaken scan does not overwrite its task observations or live
+views. The scanned runtime configuration and permanent binding are rechecked under the authority
+lock before publication. `snapshot` likewise collects its live observation before its shared
+read lock. The worktree inventory reuses Git's porcelain head and branch fields instead of
+issuing two additional commands per worktree. Opt-in `HANDOFFCTL_LOCK_TRACE` records only phase,
+mode, wait/hold durations and a monotonic timestamp to a private local file; it never records
+commands, paths or task content.
+
 Git lifecycle mutation admission is intentionally narrower than the whole-repository `doctor`
 predicate. Under the common lock it validates the resulting target task, complete dependency graph,
 generated views, and global active task, owner, branch, and worktree uniqueness. It also compares
