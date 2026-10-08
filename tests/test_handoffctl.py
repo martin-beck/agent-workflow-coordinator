@@ -2296,6 +2296,46 @@ class HandoffTest(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "PENDING_OBSERVATION_CHANGED"):
                 CORE.reconcile(do_commit=True)
 
+    def test_committed_task_transition_clears_stale_pending_hash(self) -> None:
+        task_path = self.make_task(worktree_key="worker-one")
+        CORE.run(["git", "init", "-b", "main", str(self.root)])
+        for key, value in (
+            ("user.name", "Fixture"),
+            ("user.email", "fixture@example.invalid"),
+            ("commit.gpgsign", "false"),
+        ):
+            CORE.run(["git", "-C", str(self.root), "config", key, value])
+        CORE.run(["git", "-C", str(self.root), "add", "--all"])
+        CORE.run(["git", "-C", str(self.root), "commit", "-m", "fixture baseline"])
+        state = self.fake_scan()
+        state["worktrees"] = [
+            {
+                "key": "worker-one",
+                "branch": "feature/one",
+                "head": "b" * 40,
+                "dirty": 0,
+                "paths": [],
+                "behind": 0,
+                "ahead": 1,
+            }
+        ]
+        with patch.object(CORE, "project_scan", return_value=state):
+            self.assertTrue(CORE.reconcile(do_commit=False))
+            self.assertIn(
+                str(task_path.relative_to(self.root)),
+                json.loads((CORE.RUNTIME / "last-reconcile.json").read_text())["pending_paths"],
+            )
+            meta, body = CORE.read_task(task_path)
+            meta["status"] = "in_progress"
+            meta["owner"] = "worker-one"
+            meta["claim_expires"] = "2030-01-01T00:00:00+00:00"
+            meta["task_revision"] = 2
+            CORE.write_task(task_path, meta, body)
+            self.refresh_views()
+            CORE.run(["git", "-C", str(self.root), "add", "--all"])
+            CORE.run(["git", "-C", str(self.root), "commit", "-m", "fixture claim"])
+            self.assertTrue(CORE.reconcile(do_commit=False))
+
     def test_observation_tickets_are_checkout_local(self) -> None:
         first = CORE.reserve_observation_ticket()
         other_runtime = self.root / "other-checkout" / ".runtime"

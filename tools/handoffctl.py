@@ -1715,9 +1715,24 @@ def pending_observation_paths() -> list[Path]:
     hashes = record.get("pending_hashes", {})
     if not isinstance(hashes, dict) or set(hashes) != set(raw):
         raise RuntimeError("invalid pending reconciliation hashes")
-    if any(hashes[value] != pending_path_digest(ROOT / value) for value in raw):
-        raise RuntimeError("PENDING_OBSERVATION_CHANGED: reconcile cannot commit edited content")
-    return paths
+    remaining: list[Path] = []
+    for value, path in zip(raw, paths, strict=True):
+        if hashes[value] == pending_path_digest(path):
+            remaining.append(path)
+        elif not pending_path_matches_head(path):
+            raise RuntimeError(
+                "PENDING_OBSERVATION_CHANGED: reconcile cannot commit edited content"
+            )
+    return remaining
+
+
+def pending_path_matches_head(path: Path) -> bool:
+    """Discard only paths already committed (or absent both locally and at HEAD)."""
+    relative = path.relative_to(ROOT).as_posix()
+    committed = run(["git", "-C", str(ROOT), "show", f"HEAD:{relative}"], check=False)
+    if committed.returncode:
+        return not path.exists()
+    return path.exists() and path.read_text(encoding="utf-8") == committed.stdout
 
 
 def validate_pending_path_scope(paths: list[Path]) -> None:

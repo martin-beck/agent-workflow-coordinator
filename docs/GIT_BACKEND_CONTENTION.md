@@ -85,8 +85,9 @@ prevents an older, slower scan from overwriting a newer published observation
 in the same checkout; overtaken scans retry outside the authority lock.
 The runtime configuration and permanent binding are rechecked before applying
 the scan. A commit/push caller commits only pending coordinator changes whose
-recorded content still matches and then replicates; an edited pending file
-fails closed rather than being staged. A failed push cannot undo the locally
+recorded content still matches and then replicates. A file already changed and
+committed by a coordinator transition is no longer pending, while an uncommitted
+draft edit fails closed rather than being staged. A failed push cannot undo the locally
 published scan ticket. The shared lock in
 `snapshot` covers validation and reading the authoritative view, not the
 product/GitHub observation; it retries if another reconciliation publishes
