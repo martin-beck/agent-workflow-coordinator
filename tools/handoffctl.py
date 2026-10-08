@@ -197,6 +197,17 @@ STATUSES = (
     "cancelled",
     "superseded",
 )
+LIFECYCLE_MUTATION_COMMANDS = (
+    "claim",
+    "heartbeat",
+    "release",
+    "promote",
+    "pause",
+    "resume",
+    "unblock",
+    "recover-expired",
+    "update",
+)
 # CURRENT.md is the compact actionable queue; terminal history remains in the
 # full STATUS.md projection and authoritative task records.
 CURRENT_STATUSES = ("in_progress", "open", "blocked", "planned", "future")
@@ -323,7 +334,10 @@ class GitBackend:
         )
         records: list[Meta] = []
         for path in paths:
-            records.extend(decode_session_lines(path))
+            try:
+                records.extend(decode_session_lines(path, path.stem))
+            except ValueError as error:
+                raise RuntimeError("session history is invalid") from error
         return records
 
     def load_checkpoint_records(self, task_id: str | None = None) -> list[Meta]:
@@ -1837,18 +1851,37 @@ def apply_promote(args: argparse.Namespace, meta: Meta, tasks: list[Task]) -> st
     return str(args.note)
 
 
+def _coherent_pause_session(record: Meta, task_id: str, revision: int) -> bool:
+    step_state = record.get("step_state")
+    return (
+        record.get("task") == task_id
+        and record.get("trigger") == "pause"
+        and record.get("status") == "blocked"
+        and isinstance(step_state, dict)
+        and step_state.get("status") == "blocked"
+        and step_state.get("task_revision") == revision
+    )
+
+
 def _session_for_reference(task_id: str, reference: str) -> Meta:
     match = SESSION_REFERENCE.fullmatch(reference)
     if match is None or match.group(1) != task_id:
         raise RuntimeError("session reference must use TASK@REVISION for the target task")
     revision = int(match.group(2))
-    records = storage_backend().load_session_records(task_id)
-    record = next((item for item in records if item.get("task_revision") == revision), None)
-    if record is None:
-        raise RuntimeError(f"no session snapshot for {reference}")
-    validate_session_record(record)
-    if record.get("trigger") != "pause" or record.get("status") != "blocked":
-        raise RuntimeError("session reference is not a paused snapshot")
+    try:
+        records = storage_backend().load_session_records(task_id)
+        current = [item for item in records if item.get("task_revision") == revision]
+        for item in current:
+            validate_session_record(item)
+    except ValueError as error:
+        raise RuntimeError("session provenance is malformed") from error
+    if not current:
+        raise RuntimeError("no session snapshot at requested revision")
+    if len(current) != 1:
+        raise RuntimeError("session provenance is ambiguous")
+    record = current[0]
+    if not _coherent_pause_session(record, task_id, revision):
+        raise RuntimeError("session reference is not a coherent paused snapshot")
     return record
 
 
@@ -3234,15 +3267,7 @@ def dispatch_bound_command(args: argparse.Namespace) -> int:  # noqa: C901
     elif args.cmd == "render-status":
         cmd_render_status(check=args.check)
     elif args.cmd in (
-        "claim",
-        "heartbeat",
-        "release",
-        "promote",
-        "pause",
-        "resume",
-        "unblock",
-        "recover-expired",
-        "update",
+        *LIFECYCLE_MUTATION_COMMANDS,
         "gate",
     ):
         mutate(args, args.cmd)

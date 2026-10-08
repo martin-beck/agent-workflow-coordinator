@@ -36,6 +36,7 @@ Operations ==
 
 Phases == {"waiting", "holding", "releasing", "done"}
 Results == {"pending", "accepted", "rejected", "rolled_back", "lock_timeout"}
+PauseProvenances == {"absent", "unique_valid", "unique_incoherent", "duplicate"}
 
 ParentMap == [t \in Tasks |-> IF t = "t1" THEN NoTask ELSE "t1"]
 ChildrenMap == [t \in Tasks |-> IF t = "t1" THEN {"t2"} ELSE {}]
@@ -52,7 +53,7 @@ VARIABLES
     initialRevision,
     projectionRevision,
     leaseExpired,
-    pausedSnapshot,
+    pauseProvenance,
     dependencyReady,
     pc,
     operation,
@@ -69,7 +70,7 @@ ChildrenOpen(t) ==
 
 vars ==
     <<status, owner, revision, initialRevision, projectionRevision,
-      dependencyReady, leaseExpired, pausedSnapshot, pc, operation, target, actor, expected,
+      dependencyReady, leaseExpired, pauseProvenance, pc, operation, target, actor, expected,
       lockOwner, result, successCount>>
 
 OwnershipIsCoherent(s, o) ==
@@ -89,8 +90,8 @@ Init ==
     /\ initialRevision = revision
     /\ projectionRevision = revision
     /\ leaseExpired \in [Tasks -> BOOLEAN]
-    /\ pausedSnapshot \in [Tasks -> BOOLEAN]
-    /\ \A t \in Tasks: pausedSnapshot[t] => status[t] = "blocked"
+    /\ pauseProvenance \in [Tasks -> PauseProvenances]
+    /\ \A t \in Tasks: pauseProvenance[t] # "absent" => status[t] = "blocked"
     /\ dependencyReady \in [Tasks -> BOOLEAN]
     /\ pc = [p \in Processes |-> "waiting"]
     /\ operation \in [Processes -> Operations]
@@ -115,12 +116,12 @@ EnabledOperation(p) ==
       [] operation[p] = "resume" ->
             /\ status[t] = "blocked"
             /\ owner[t] = NoActor
-            /\ pausedSnapshot[t]
+            /\ pauseProvenance[t] = "unique_valid"
             /\ expected[p] = revision[t]
       [] operation[p] = "unblock" ->
             /\ status[t] = "blocked"
             /\ owner[t] = NoActor
-            /\ ~pausedSnapshot[t]
+            /\ pauseProvenance[t] = "absent"
             /\ expected[p] = revision[t]
       [] operation[p] = "pause" ->
             /\ status[t] = "in_progress"
@@ -170,8 +171,8 @@ ExpiryAfter(p) ==
     THEN FALSE
     ELSE leaseExpired[target[p]]
 
-PausedSnapshotAfter(p) ==
-    operation[p] = "pause"
+PauseProvenanceAfter(p) ==
+    IF operation[p] = "pause" THEN "unique_valid" ELSE "absent"
 
 
 Acquire(p) ==
@@ -181,7 +182,7 @@ Acquire(p) ==
     /\ pc' = [pc EXCEPT ![p] = "holding"]
     /\ UNCHANGED
         <<status, owner, revision, initialRevision, projectionRevision,
-          dependencyReady, leaseExpired, pausedSnapshot, operation, target, actor, expected, result,
+          dependencyReady, leaseExpired, pauseProvenance, operation, target, actor, expected, result,
           successCount>>
 
 WaitTimeout(p) ==
@@ -191,7 +192,7 @@ WaitTimeout(p) ==
     /\ result' = [result EXCEPT ![p] = "lock_timeout"]
     /\ UNCHANGED
         <<status, owner, revision, initialRevision, projectionRevision,
-          dependencyReady, leaseExpired, pausedSnapshot, operation, target, actor, expected, lockOwner,
+          dependencyReady, leaseExpired, pauseProvenance, operation, target, actor, expected, lockOwner,
           successCount>>
 
 Wait(p) ==
@@ -205,7 +206,7 @@ ExecuteSuccess(p) ==
     /\ status' = [status EXCEPT ![t] = StatusAfter(p)]
     /\ owner' = [owner EXCEPT ![t] = OwnerAfter(p)]
     /\ leaseExpired' = [leaseExpired EXCEPT ![t] = ExpiryAfter(p)]
-    /\ pausedSnapshot' = [pausedSnapshot EXCEPT ![t] = PausedSnapshotAfter(p)]
+    /\ pauseProvenance' = [pauseProvenance EXCEPT ![t] = PauseProvenanceAfter(p)]
     /\ revision' = [revision EXCEPT ![t] = @ + 1]
     /\ projectionRevision' = [projectionRevision EXCEPT ![t] = @ + 1]
     /\ successCount' = [successCount EXCEPT ![t] = @ + 1]
@@ -223,7 +224,7 @@ ExecuteReject(p) ==
     /\ pc' = [pc EXCEPT ![p] = "releasing"]
     /\ UNCHANGED
         <<status, owner, revision, initialRevision, projectionRevision,
-          dependencyReady, leaseExpired, pausedSnapshot, operation, target, actor, expected, lockOwner,
+          dependencyReady, leaseExpired, pauseProvenance, operation, target, actor, expected, lockOwner,
           successCount>>
 
 (*
@@ -237,7 +238,7 @@ ExecuteRollback(p) ==
     /\ pc' = [pc EXCEPT ![p] = "releasing"]
     /\ UNCHANGED
         <<status, owner, revision, initialRevision, projectionRevision,
-          dependencyReady, leaseExpired, pausedSnapshot, operation, target, actor, expected, lockOwner,
+          dependencyReady, leaseExpired, pauseProvenance, operation, target, actor, expected, lockOwner,
           successCount>>
 
 Execute(p) ==
@@ -250,7 +251,7 @@ Release(p) ==
     /\ pc' = [pc EXCEPT ![p] = "done"]
     /\ UNCHANGED
         <<status, owner, revision, initialRevision, projectionRevision,
-          dependencyReady, leaseExpired, pausedSnapshot, operation, target, actor, expected, result,
+          dependencyReady, leaseExpired, pauseProvenance, operation, target, actor, expected, result,
           successCount>>
 
 Quiescent ==
@@ -278,7 +279,7 @@ TypeOK ==
     /\ projectionRevision \in [Tasks -> Nat]
     /\ dependencyReady \in [Tasks -> BOOLEAN]
     /\ leaseExpired \in [Tasks -> BOOLEAN]
-    /\ pausedSnapshot \in [Tasks -> BOOLEAN]
+    /\ pauseProvenance \in [Tasks -> PauseProvenances]
     /\ pc \in [Processes -> Phases]
     /\ operation \in [Processes -> Operations]
     /\ target \in [Processes -> Tasks]
@@ -292,7 +293,7 @@ OwnershipCoherence ==
     OwnershipIsCoherent(status, owner)
 
 BlockedProvenance ==
-    \A t \in Tasks: pausedSnapshot[t] => status[t] = "blocked"
+    \A t \in Tasks: pauseProvenance[t] # "absent" => status[t] = "blocked"
 
 UniqueActiveOwner ==
     OwnerIsUnique(owner)

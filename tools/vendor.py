@@ -4,6 +4,7 @@
 """Create and verify self-contained handoffctl vendor snapshots."""
 
 import argparse
+import ast
 import hashlib
 import json
 import os
@@ -82,6 +83,31 @@ SOURCE_FILES: tuple[tuple[str, str], ...] = (
     ),
     ("schema/task-record.schema.json", "schema/task-record.schema.json"),
     ("docs/PROJECT_GUIDE.md", "docs/agent-workflow-coordinator.md"),
+    ("formal/evidence.json", "formal/evidence.json"),
+    ("formal/tier-evidence.json", "formal/tier-evidence.json"),
+    ("formal/handoffctl/Handoffctl.cfg", "formal/handoffctl/Handoffctl.cfg"),
+    ("formal/handoffctl/Handoffctl.tla", "formal/handoffctl/Handoffctl.tla"),
+    ("formal/handoffctl/HandoffctlBinding.cfg", "formal/handoffctl/HandoffctlBinding.cfg"),
+    ("formal/handoffctl/HandoffctlBinding.tla", "formal/handoffctl/HandoffctlBinding.tla"),
+    ("formal/handoffctl/HandoffctlFast.cfg", "formal/handoffctl/HandoffctlFast.cfg"),
+    ("formal/handoffctl/HandoffctlLocks.cfg", "formal/handoffctl/HandoffctlLocks.cfg"),
+    ("formal/handoffctl/HandoffctlLocks.tla", "formal/handoffctl/HandoffctlLocks.tla"),
+    ("formal/handoffctl/HandoffctlPR.cfg", "formal/handoffctl/HandoffctlPR.cfg"),
+    ("formal/handoffctl/HandoffctlRecovery.cfg", "formal/handoffctl/HandoffctlRecovery.cfg"),
+    ("formal/handoffctl/HandoffctlRecovery.tla", "formal/handoffctl/HandoffctlRecovery.tla"),
+    ("formal/handoffctl/HandoffctlRun.cfg", "formal/handoffctl/HandoffctlRun.cfg"),
+    ("formal/handoffctl/HandoffctlRun.tla", "formal/handoffctl/HandoffctlRun.tla"),
+    ("formal/handoffctl/HandoffctlStorage.cfg", "formal/handoffctl/HandoffctlStorage.cfg"),
+    ("formal/handoffctl/HandoffctlStorage.tla", "formal/handoffctl/HandoffctlStorage.tla"),
+    (
+        "formal/handoffctl/LIFECYCLE_CORRESPONDENCE.md",
+        "formal/handoffctl/LIFECYCLE_CORRESPONDENCE.md",
+    ),
+    ("formal/handoffctl/README.md", "formal/handoffctl/README.md"),
+    ("formal/handoffctl/attest.py", "formal/handoffctl/attest.py"),
+    ("formal/handoffctl/verify.sh", "formal/handoffctl/verify.sh"),
+    ("formal/oracle/OracleInteractionGates.cfg", "formal/oracle/OracleInteractionGates.cfg"),
+    ("formal/oracle/OracleInteractionGates.tla", "formal/oracle/OracleInteractionGates.tla"),
     ("LICENSE", "vendor/agent-workflow-coordinator/LICENSE"),
 )
 VERSION_PATTERN = re.compile(r"v\d+\.\d+\.\d+")
@@ -352,6 +378,57 @@ def validated_upstream_identity(manifest: dict[str, Any]) -> dict[str, Any]:
     return upstream
 
 
+def _literal_string_tuple(tree: ast.Module, name: str) -> set[str]:
+    """Read one exact tuple of string literals without executing vendored code."""
+    for statement in tree.body:
+        if (
+            isinstance(statement, ast.Assign)
+            and any(
+                isinstance(target, ast.Name) and target.id == name for target in statement.targets
+            )
+            and isinstance(statement.value, (ast.Tuple, ast.List))
+        ):
+            values = statement.value.elts
+            literals: set[str] = set()
+            for value in values:
+                if not isinstance(value, ast.Constant) or not isinstance(value.value, str):
+                    break
+                literals.add(value.value)
+            else:
+                return literals
+    raise RuntimeError("formal lifecycle runtime inventory is missing or malformed")
+
+
+def verify_formal_lifecycle_alignment(target: Path) -> None:
+    """Reject a vendor snapshot whose runtime and lifecycle model actions drift."""
+    try:
+        runtime = ast.parse((target / "tools/handoffctl.py").read_text(encoding="utf-8"))
+        model = (target / "formal/handoffctl/Handoffctl.tla").read_text(encoding="utf-8")
+    except (OSError, SyntaxError) as error:
+        raise RuntimeError("formal lifecycle inputs are unreadable") from error
+    runtime_operations = _literal_string_tuple(runtime, "LIFECYCLE_MUTATION_COMMANDS")
+    blocks = re.findall(
+        r"(?:ReleaseOperations|Operations)\s*==\s*(.*?)(?=\n\n[A-Za-z])",
+        model,
+        flags=re.DOTALL,
+    )
+    if len(blocks) < 2:
+        raise RuntimeError("formal lifecycle operation inventory is missing or malformed")
+    modeled = set(re.findall(r'"([a-z_]+)"', "\n".join(blocks[:2])))
+    model_operations = {
+        (
+            "release"
+            if item.startswith("release_")
+            else "recover-expired"
+            if item == "recover_expired"
+            else item
+        )
+        for item in modeled
+    }
+    if runtime_operations != model_operations:
+        raise RuntimeError("formal lifecycle operation drift")
+
+
 def verify(target: Path) -> None:
     """Fail unless every pinned downstream artifact matches its recorded digest."""
     manifest = load_lock(target)
@@ -370,6 +447,8 @@ def verify(target: Path) -> None:
     expected_version = str(upstream["version"]).removeprefix("v")
     if f'COORDINATOR_VERSION = "{expected_version}"' not in core:
         raise RuntimeError("runtime version differs from vendor lock")
+    if "formal/handoffctl/Handoffctl.tla" in expected:
+        verify_formal_lifecycle_alignment(target)
     print(f"OK: agent-workflow-coordinator {upstream['version']} at {upstream['commit']}")
 
 

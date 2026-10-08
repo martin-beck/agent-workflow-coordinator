@@ -10,7 +10,8 @@
 - `release`: clear ownership and move to a non-active status.
 - `pause`: exact-revision freeze of an owned task, lease, and bounded session snapshot.
 - `promote`: exact-revision `planned -> open` after dependencies complete.
-- `resume`: exact-revision `blocked -> open` by an explicit `TASK@REVISION` paused-session reference.
+- `resume`: exact-revision `blocked -> open` by one coherent, unique `TASK@REVISION`
+  paused-session reference. Duplicate, cross-task, or internally inconsistent history fails closed.
 - `unblock`: exact-revision `blocked -> open` for an unowned task released on an external
   condition. It preserves `next_action` and rejects a current-revision pause snapshot.
 - `recover-expired`: exact-revision recovery of an in-progress task only after its UTC lease

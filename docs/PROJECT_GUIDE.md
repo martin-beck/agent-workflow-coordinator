@@ -136,7 +136,8 @@ durable rollback head (or at the previously recorded pre-rollback head when no
 product commit was published); otherwise the operation remains fail-closed.
 
 Use `promote` only for `planned -> open` after dependencies complete. Use `resume --session` only
-to restore a task paused at that exact revision. After independently verifying an external blocker,
+to restore a task from one unique, coherent pause record at that exact task and revision. Duplicate,
+cross-task, or internally inconsistent history fails closed. After independently verifying an external blocker,
 use `unblock` on a task that reached `blocked` through `release --status blocked`; it preserves the
 current `next_action` and creates no session snapshot. These commands require the exact current
 revision and reject cross-mode provenance. Use `recover-expired` instead of impersonating the prior owner with `release`
@@ -202,11 +203,16 @@ manifest is explicitly classified as `development` and binds the exact Git tree 
 file digest. It is not release evidence. Normal `sync --version vMAJOR.MINOR.PATCH` behavior remains
 tag-bound and emits the existing schema-v1 release manifest.
 
-The vendor boundary intentionally excludes formal qualification models,
-attestation helpers, tier evidence and launchers owned by downstream quality
-projects. Those paths remain downstream-owned and must not be overwritten by
-coordinator sync; coordinator formal models are still tested and released by
-this repository itself.
+The vendor boundary includes the complete first-party Coordinator formal
+verification closure: lifecycle, binding, lock, run, storage, recovery and
+interaction-gate models/configurations; the verifier, runner, attestation
+helper; and evidence metadata. Vendor verification rejects runtime/model
+operation drift. Additional qualification models and launchers owned by
+downstream quality projects remain downstream-owned and are not overwritten.
+An empty-destination vendor diagnostic may supply the paired absolute
+`--diagnostic-queue` and `--diagnostic-admission-lock` verifier flags. That execution is explicitly
+noncanonical (`diagnostic-private-admission`) and cannot support publication or release claims;
+normal hosted verification continues to use the shared canonical admission path.
 
 ## Proof boundary
 
