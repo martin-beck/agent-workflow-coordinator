@@ -36,6 +36,7 @@ authoritative revision, task status and owner unchanged.
 | `promote` | `planned`, unowned, dependencies done | exact revision | `open` |
 | `pause` | `in_progress`, owned | exact revision and owner | `blocked`, ownership and lease cleared |
 | `resume` | `blocked`, unowned, paused session | exact revision and session reference | `open` |
+| `unblock` | `blocked`, unowned, no current-revision session | exact revision | `open` |
 | `claim` | `open`, dependencies done | owner has no active task | `in_progress`, lease set |
 | `heartbeat` | `in_progress` | current owner, positive lease | lease renewed |
 | `update` | `in_progress` | current owner, exact revision | active fields updated |
@@ -91,6 +92,7 @@ readers, a competing writer, and bounded lock-wait timeout. TLC checks:
 - atomic task/projection revision advancement and rollback;
 - reciprocal, bounded acyclic parent/child edges and done-rollup admission;
 - rejection of invalid source, owner, dependency, and revision combinations;
+- rejection of pause/external-block cross-mode transitions without mutation;
 - timeout without state mutation when another process holds the lock;
 - acceptance of eligible recovery despite simultaneous expiries and an unrelated repository
   finding;

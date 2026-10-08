@@ -135,14 +135,18 @@ or `ambiguous`. It may continue only when the product checkout is at the exact
 durable rollback head (or at the previously recorded pre-rollback head when no
 product commit was published); otherwise the operation remains fail-closed.
 
-Use `promote` only for `planned -> open` after dependencies complete. Use `resume` only for
-`blocked -> open` after independently verifying the external blocker. Both require the exact
-current revision. Use `recover-expired` instead of impersonating the prior owner with `release`
+Use `promote` only for `planned -> open` after dependencies complete. Use `resume --session` only
+to restore a task paused at that exact revision. After independently verifying an external blocker,
+use `unblock` on a task that reached `blocked` through `release --status blocked`; it preserves the
+current `next_action` and creates no session snapshot. These commands require the exact current
+revision and reject cross-mode provenance. Use `recover-expired` instead of impersonating the prior owner with `release`
 when another process recovers an abandoned claim:
 
 ```sh
 tools/handoffctl recover-expired AR-0001 --expected-revision REVISION \
   --note "UTC expiry and absence of the previous worker independently verified"
+tools/handoffctl unblock AR-0002 --expected-revision REVISION \
+  --note "External blocker and exact revision independently verified"
 ```
 
 A future or malformed deadline and a stale revision are rejected before mutation.

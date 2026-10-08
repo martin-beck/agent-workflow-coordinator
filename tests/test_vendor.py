@@ -194,6 +194,18 @@ class VendorTest(unittest.TestCase):
         )
         self.assertEqual(doctor.returncode, 0, doctor.stdout + doctor.stderr)
         self.assertIn("privacy", doctor.stdout)
+        help_result = subprocess.run(  # noqa: S603
+            [sys.executable, "-S", str(self.target / "tools/handoffctl.py"), "--help"],
+            cwd=self.target,
+            check=False,
+            capture_output=True,
+            text=True,
+            env={"PATH": os.environ["PATH"], "PYTHONPATH": str(self.target)},
+        )
+        self.assertEqual(0, help_result.returncode, help_result.stderr)
+        self.assertIn("unblock", help_result.stdout)
+        embedded_guide = (self.target / "docs/agent-workflow-coordinator.md").read_text()
+        self.assertIn("tools/handoffctl unblock", embedded_guide)
 
         document = upgrade_contract("git")
         contract_path = Path(self.temporary.name) / "upgrade-contract.json"
