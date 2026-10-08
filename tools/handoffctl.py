@@ -261,7 +261,7 @@ type Meta = dict[str, Any]
 type Task = tuple[Path, Meta, str]
 type State = dict[str, Any]
 
-COORDINATOR_VERSION = "0.3.57"
+COORDINATOR_VERSION = "0.3.58"
 DEFAULT_PROJECT_SETTINGS: Meta = {
     "schema_version": 1,
     "project_id": "00000000-0000-4000-8000-000000000000",
@@ -1670,6 +1670,8 @@ def reconcile(
     selected_policy = policy_snapshot(policy)
     if backend_selection()["backend"] == "sqlite":
         return reconcile_sqlite(do_commit=do_commit, push=push, policy=selected_policy)
+    if push and not do_commit:
+        raise RuntimeError("PUSH_REQUIRES_COMMIT: reconcile --push also requires --commit")
 
     # External product/GitHub observations are advisory and inherently
     # non-atomic. Keep their potentially long latency outside the authority
@@ -1695,6 +1697,41 @@ def observation_is_superseded(scan_config: Meta | None, scan_binding: Meta, tick
     return ticket < published_observation_ticket()
 
 
+def pending_observation_paths() -> list[Path]:
+    """Return only coordinator-produced paths awaiting a reconciliation commit."""
+    marker = RUNTIME / "last-reconcile.json"
+    if not marker.exists():
+        if published_observation_ticket():
+            raise RuntimeError("published observation marker is incomplete")
+        return []
+    record = json.loads(marker.read_text())
+    if record.get("ticket", 0) != published_observation_ticket():
+        raise RuntimeError("published observation marker is incomplete")
+    raw = record.get("pending_paths", [])
+    if not isinstance(raw, list) or not all(isinstance(value, str) for value in raw):
+        raise RuntimeError("invalid pending reconciliation paths")
+    paths = [ROOT / value for value in raw]
+    allowed = {path.resolve() for path, _, _ in all_tasks()}
+    allowed.update(path.resolve() for path in generated_paths())
+    if any(
+        path.resolve() not in allowed
+        and not (
+            path.parent.resolve() == (ROOT / "status").resolve()
+            and re.fullmatch(r"STATUS-[A-Za-z0-9_-]+\.md", path.name)
+        )
+        for path in paths
+    ):
+        raise RuntimeError("pending reconciliation path is outside coordinator projections")
+    return paths
+
+
+def remaining_pending_paths(paths: list[Path], do_commit: bool) -> list[str]:
+    """Keep coordinator-produced paths until a commit request consumes them."""
+    if do_commit:
+        return []
+    return [str(path.relative_to(ROOT)) for path in paths]
+
+
 def apply_git_reconciliation(
     state: State,
     policy: EvidencePolicy,
@@ -1706,12 +1743,12 @@ def apply_git_reconciliation(
 ) -> bool:
     """Apply a completed external observation while holding the authority lock."""
     if observation_is_superseded(scan_config, scan_binding, ticket):
-        # A later-started scan has already published a fresher projection.
-        return False
+        return finish_superseded_reconciliation(policy, do_commit, push)
     generated = generated_paths()
     before: dict[Path, str | None] = {path: path.read_text() for path, _, _ in all_tasks()}
     before.update({path: path.read_text() if path.exists() else None for path in generated})
     committed = False
+    published = False
     try:
         sync_task_observations(all_tasks(), state)
         tasks = all_tasks()
@@ -1723,25 +1760,59 @@ def apply_git_reconciliation(
         for path in generated_paths():
             before.setdefault(path, None)
         touched = changed_paths(before, include_deleted=True)
+        pending = sorted(set(pending_observation_paths() + touched))
         title = project_settings()["project_title"]
-        committed = commit(f"chore(state): reconcile {title}", touched) if do_commit else False
+        committed = commit(f"chore(state): reconcile {title}", pending) if do_commit else False
         head = run(["git", "-C", str(ROOT), "rev-parse", "HEAD"], check=False).stdout.strip()
-        if push:
-            push_replica()
+        atomic(observation_marker("observation-published"), f"{ticket}\n")
+        published = True
         atomic(
             RUNTIME / "last-reconcile.json",
             json.dumps(
-                {"at": now(), "state_commit": head, "project_main": state["remote_main"]},
+                {
+                    "at": now(),
+                    "ticket": ticket,
+                    "state_commit": head,
+                    "project_main": state["remote_main"],
+                    "pending_paths": remaining_pending_paths(pending, do_commit),
+                },
                 indent=2,
             )
             + "\n",
         )
-        atomic(observation_marker("observation-published"), f"{ticket}\n")
+        if push:
+            push_replica()
         return committed if do_commit else True
     except Exception:
-        if not committed:
+        if not committed and not published:
             restore_paths(before)
         raise
+
+
+def finish_superseded_reconciliation(policy: EvidencePolicy, do_commit: bool, push: bool) -> bool:
+    """Honor durability requests without replacing the newer published observation."""
+    if not do_commit:
+        return False
+    errors = validate(live=False, policy=policy)
+    if errors:
+        raise RuntimeError("validation failed:\n" + "\n".join(errors))
+    require_policy_unchanged(ROOT, policy)
+    marker = RUNTIME / "last-reconcile.json"
+    record = json.loads(marker.read_text())
+    if not isinstance(record, dict) or not isinstance(record.get("project_main"), str):
+        raise RuntimeError("invalid published reconciliation marker")
+    if record.get("ticket", 0) != published_observation_ticket():
+        raise RuntimeError("published observation marker is incomplete")
+    paths = pending_observation_paths()
+    title = project_settings()["project_title"]
+    committed = commit(f"chore(state): reconcile {title}", paths)
+    head = run(["git", "-C", str(ROOT), "rev-parse", "HEAD"], check=False).stdout.strip()
+    record["state_commit"] = head
+    record["pending_paths"] = []
+    atomic(marker, json.dumps(record, indent=2) + "\n")
+    if push:
+        push_replica()
+    return committed
 
 
 def write_session_projections(session_records: list[Meta]) -> list[Path]:
@@ -2625,30 +2696,39 @@ def cmd_doctor(*, live: bool) -> int:
 def cmd_snapshot(task_id: str | None = None) -> None:
     sqlite = backend_selection()["backend"] == "sqlite"
     sqlite_live = CONFIG.exists() and bool(config().get("github_repository"))
-    live_state = project_scan() if not sqlite or sqlite_live else None
-    with locked(exclusive=False, phase="snapshot"):
-        if (backend_selection()["backend"] == "sqlite") != sqlite:
-            raise RuntimeError("BACKEND_CHANGED: retry snapshot")
-        errors = validate(live=not sqlite or sqlite_live, live_state=live_state)
-        if errors:
-            raise RuntimeError("snapshot refused:\n" + "\n".join(errors))
+    for _ in range(3):
+        ticket = published_observation_ticket() if not sqlite else None
+        live_state = project_scan() if not sqlite or sqlite_live else None
+        with locked(exclusive=False, phase="snapshot"):
+            if (backend_selection()["backend"] == "sqlite") != sqlite:
+                raise RuntimeError("BACKEND_CHANGED: retry snapshot")
+            if not sqlite and ticket != published_observation_ticket():
+                continue
+            errors = validate(live=not sqlite or sqlite_live, live_state=live_state)
+            if errors:
+                raise RuntimeError("snapshot refused:\n" + "\n".join(errors))
+            print_snapshot_under_lock(task_id, sqlite)
+            return
+    raise RuntimeError("OBSERVATION_CHANGED: retry snapshot")
+
+
+def print_snapshot_under_lock(task_id: str | None, sqlite: bool) -> None:
+    """Emit one validated snapshot while the caller holds the shared lock."""
+    if sqlite:
+        print("STORAGE_BACKEND=sqlite")
+    else:
+        print("STATE_COMMIT=" + run(["git", "-C", str(ROOT), "rev-parse", "HEAD"]).stdout.strip())
+    print((ROOT / "CURRENT.md").read_text(), end="")
+    if task_id is not None:
         if sqlite:
-            print("STORAGE_BACKEND=sqlite")
+            records = storage_backend().load_session_records(task_id)
+            record = records[-1] if records else None
         else:
-            print(
-                "STATE_COMMIT=" + run(["git", "-C", str(ROOT), "rev-parse", "HEAD"]).stdout.strip()
-            )
-        print((ROOT / "CURRENT.md").read_text(), end="")
-        if task_id is not None:
-            if sqlite:
-                records = storage_backend().load_session_records(task_id)
-                record = records[-1] if records else None
-            else:
-                record = latest_session(ROOT, task_id)
-            if record is None:
-                raise RuntimeError(f"no session snapshot for {task_id}")
-            validate_session_record(record)
-            print("SESSION_SNAPSHOT=" + json.dumps(record, sort_keys=True, separators=(",", ":")))
+            record = latest_session(ROOT, task_id)
+        if record is None:
+            raise RuntimeError(f"no session snapshot for {task_id}")
+        validate_session_record(record)
+        print("SESSION_SNAPSHOT=" + json.dumps(record, sort_keys=True, separators=(",", ":")))
 
 
 def cmd_board() -> None:

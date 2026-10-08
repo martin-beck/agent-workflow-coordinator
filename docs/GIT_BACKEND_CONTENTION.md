@@ -7,8 +7,9 @@ It creates disposable, project-bound Git state and product repositories, signs
 fixture commits, gives each worker its own active AR and owner, then invokes the
 real `tools/handoffctl.py run` CLI in separate processes. The product observation
 uses a controlled local `gh` response with a 0.6-second delay per query; no
-GitHub state is changed. The script compares the exact local `origin/main`
-runtime with the candidate and prints bounded aggregate results only.
+GitHub state is changed. The script compares pinned pre-change commit
+`113dc61029f0e0c57bc7832e1e41430eafa17e73` with the candidate and prints
+bounded aggregate results only.
 
 An observed run on 2026-10-08, with two delayed GitHub queries per
 reconciliation, produced:
@@ -76,14 +77,20 @@ to task records, rendering and validating projections, committing, and optional
 replication remain serialized. A short, separate, repository-common scan ticket
 prevents an older, slower scan from overwriting a newer published observation.
 The runtime configuration and permanent binding are rechecked before applying
-the scan. The shared lock in `snapshot` covers validation and reading the
-authoritative view, not the product/GitHub observation.
+the scan. An overtaken commit/push caller commits only the recorded pending
+coordinator changes and replicates the newer published projection rather than
+silently skipping its durability request. A
+failed push cannot undo the locally published scan ticket. The shared lock in
+`snapshot` covers validation and reading the authoritative view, not the
+product/GitHub observation; it retries if another reconciliation publishes
+between its scan and locked validation.
 
 The ticket is advisory ordering metadata, not task authority. Abandoned tickets
 leave harmless gaps; malformed metadata fails closed. A failed external scan
 does not acquire the authority lock. Unit tests cover out-of-order scans,
 changed bindings, lock-free observation, ticket uniqueness across processes,
-and lock timeout tracing.
+lock timeout tracing, mixed commit/plain reconciliation, failed push, and
+snapshot publication races.
 
 ## Remaining scaling boundary
 

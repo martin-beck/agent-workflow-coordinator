@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 SOURCE = Path(__file__).resolve().parents[1]
+BASELINE_COMMIT = "113dc61029f0e0c57bc7832e1e41430eafa17e73"
 sys.path.insert(0, str(SOURCE))
 from tools.vendor import SOURCE_FILES  # noqa: E402
 
@@ -41,8 +42,8 @@ def fixture(base: Path, label: str, baseline: bool) -> tuple[Path, dict[str, str
         shutil.copy2(SOURCE / source_name, target)
     shutil.copytree(SOURCE / "schema", state / "schema")
     if baseline:
-        old = subprocess.run(
-            ["git", "show", "origin/main:tools/handoffctl.py"],  # noqa: S607
+        old = subprocess.run(  # noqa: S603
+            ["git", "show", f"{BASELINE_COMMIT}:tools/handoffctl.py"],  # noqa: S607
             cwd=SOURCE,
             check=True,
             capture_output=True,

@@ -2,8 +2,14 @@
 
 ## Unreleased
 
+## 0.3.58 - 2026-10-08
+
 - Add an exact-revision `unblock` transition for externally blocked tasks while preserving
   session-bound pause restoration and rejecting ambiguous cross-mode provenance.
+- Reduce Git-backend worker stalls by observing product/GitHub state outside the authority lock,
+  fencing overtaken scans, and preserving commit/push requests when scans overlap.
+- Add private lock timing traces and reproducible disposable contention probes, including an
+  Agent Systems Benchmark scale cross-check.
 
 ## 0.3.57 - 2026-10-07
 

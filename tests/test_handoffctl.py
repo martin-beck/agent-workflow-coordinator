@@ -2235,6 +2235,101 @@ class HandoffTest(unittest.TestCase):
         self.assertEqual(CORE.live_docs(newer)[1], (self.root / "WORKTREES.md").read_text())
         self.assertEqual("2\n", CORE.observation_marker("observation-published").read_text())
 
+    def test_overtaken_commit_and_push_honor_durability_request(self) -> None:
+        task_path = self.make_task()
+        scans = 0
+
+        def publish_newer_plain_reconcile() -> Any:
+            nonlocal scans
+            scans += 1
+            if scans == 1:
+                self.assertTrue(CORE.reconcile(do_commit=False))
+                task_path.write_text(task_path.read_text() + "\nUnrelated draft note.\n")
+            return self.fake_scan()
+
+        with (
+            patch.object(CORE, "project_scan", side_effect=publish_newer_plain_reconcile),
+            patch.object(CORE, "commit", return_value=True) as commit,
+            patch.object(CORE, "push_replica") as push,
+        ):
+            self.assertTrue(CORE.reconcile(do_commit=True, push=True))
+        commit.assert_called_once()
+        self.assertNotIn(task_path, commit.call_args.args[1])
+        push.assert_called_once()
+        self.assertEqual("2\n", CORE.observation_marker("observation-published").read_text())
+
+    def test_commit_collects_pending_paths_from_earlier_plain_reconcile(self) -> None:
+        self.make_task()
+        with patch.object(CORE, "project_scan", return_value=self.fake_scan()):
+            CORE.reconcile(do_commit=False)
+            pending = json.loads((CORE.RUNTIME / "last-reconcile.json").read_text())[
+                "pending_paths"
+            ]
+            self.assertTrue(pending)
+            with patch.object(CORE, "commit", return_value=True) as commit:
+                self.assertTrue(CORE.reconcile(do_commit=True))
+        self.assertTrue(
+            {CORE.ROOT / value for value in pending}.issubset(set(commit.call_args.args[1]))
+        )
+        self.assertEqual(
+            [], json.loads((CORE.RUNTIME / "last-reconcile.json").read_text())["pending_paths"]
+        )
+
+    def test_failed_push_keeps_locally_published_observation_ticket(self) -> None:
+        self.make_task()
+        with (
+            patch.object(CORE, "project_scan", return_value=self.fake_scan()),
+            patch.object(CORE, "commit", return_value=True),
+            patch.object(CORE, "push_replica", side_effect=OSError("push failed")),
+            self.assertRaisesRegex(OSError, "push failed"),
+        ):
+            CORE.reconcile(do_commit=True, push=True)
+        self.assertEqual("1\n", CORE.observation_marker("observation-published").read_text())
+
+    def test_failed_publication_marker_fences_later_scans(self) -> None:
+        self.make_task()
+        real_atomic = CORE.atomic
+
+        def fail_marker(path: Path, value: str) -> None:
+            if path.name == "last-reconcile.json":
+                raise OSError("marker write failed")
+            real_atomic(path, value)
+
+        with (
+            patch.object(CORE, "project_scan", return_value=self.fake_scan()),
+            patch.object(CORE, "commit", return_value=True),
+            patch.object(CORE, "atomic", side_effect=fail_marker),
+            self.assertRaisesRegex(OSError, "marker write failed"),
+        ):
+            CORE.reconcile(do_commit=True)
+        self.assertEqual("1\n", CORE.observation_marker("observation-published").read_text())
+        with (
+            patch.object(CORE, "project_scan", return_value=self.fake_scan()),
+            self.assertRaisesRegex(RuntimeError, "published observation marker is incomplete"),
+        ):
+            CORE.reconcile(do_commit=False)
+
+    def test_snapshot_retries_when_reconcile_publishes_during_scan(self) -> None:
+        self.make_task()
+        with patch.object(CORE, "project_scan", return_value=self.fake_scan()):
+            CORE.reconcile(do_commit=False)
+        scans = 0
+
+        def scan_with_interleaved_publication() -> Any:
+            nonlocal scans
+            scans += 1
+            if scans == 1:
+                with patch.object(CORE, "project_scan", return_value=self.fake_scan()):
+                    CORE.reconcile(do_commit=False)
+            return self.fake_scan()
+
+        with (
+            patch.object(CORE, "project_scan", side_effect=scan_with_interleaved_publication),
+            patch.object(CORE, "run", return_value=SimpleNamespace(stdout="state\n")),
+        ):
+            CORE.cmd_snapshot()
+        self.assertEqual(2, scans)
+
     def test_observation_tickets_are_unique_across_workers(self) -> None:
         start = multiprocessing.Event()
         outcomes: Any = multiprocessing.Queue()
