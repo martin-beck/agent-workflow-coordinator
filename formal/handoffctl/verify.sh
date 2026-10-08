@@ -3,11 +3,26 @@
 # SPDX-License-Identifier: MIT
 set -euo pipefail
 
-if [[ "${1:-}" != "--tier" || ( "${2:-}" != "portable-smoke" && "${2:-}" != "pr-fast" && "${2:-}" != "pr-publication" && "${2:-}" != "full-exhaustive" ) || "$#" -ne 2 ]]; then
-    echo "usage: $0 --tier portable-smoke|pr-fast|pr-publication|full-exhaustive" >&2
+if [[ "${1:-}" != "--tier" || ( "${2:-}" != "portable-smoke" && "${2:-}" != "pr-fast" && "${2:-}" != "pr-publication" && "${2:-}" != "full-exhaustive" ) ]]; then
+    echo "usage: $0 --tier portable-smoke|pr-fast|pr-publication|full-exhaustive [--diagnostic-queue ABSOLUTE_PATH --diagnostic-admission-lock ABSOLUTE_PATH]" >&2
     exit 64
 fi
 readonly TIER="$2"
+shift 2
+EXECUTION_CLASSIFICATION=canonical
+RUNNER_ADMISSION_ARGS=()
+if [[ "$#" -eq 4 && "$1" == "--diagnostic-queue" && "$3" == "--diagnostic-admission-lock" ]]; then
+    if [[ "$2" != /* || "$4" != /* || "$2" == "$4" ]]; then
+        echo "diagnostic admission paths must be distinct absolute paths" >&2
+        exit 64
+    fi
+    EXECUTION_CLASSIFICATION=diagnostic-private-admission
+    RUNNER_ADMISSION_ARGS=(--queue "$2" --admission-lock "$4")
+elif [[ "$#" -ne 0 ]]; then
+    echo "diagnostic queue and admission lock must be supplied together after --tier" >&2
+    exit 64
+fi
+readonly EXECUTION_CLASSIFICATION
 readonly ATTESTATION="${TLC_ATTESTATION_PATH:-${TMPDIR:-/tmp}/handoffctl-${TIER}-attestation.json}"
 
 readonly TLA_VERSION=1.7.4
@@ -39,7 +54,8 @@ run_model() {
         --jar "${JAR}" \
         --model "${SPEC_DIR}/${source}.tla" \
         --config "${config}" \
-        --metadir "${TEMP_DIR}/${model}-states"
+        --metadir "${TEMP_DIR}/${model}-states" \
+        "${RUNNER_ADMISSION_ARGS[@]}"
     printf "%s success\n" "${model}" >> "${MANIFEST}"
 }
 
@@ -68,5 +84,5 @@ else
     run_model Handoffctl
     run_model HandoffctlRecovery
 fi
-python3 "${SPEC_DIR}/attest.py" --tier "${TIER}" --output "${ATTESTATION}" --jar "${JAR}" --manifest "${MANIFEST}" \
+python3 "${SPEC_DIR}/attest.py" --tier "${TIER}" --output "${ATTESTATION}" --jar "${JAR}" --manifest "${MANIFEST}" --execution-classification "${EXECUTION_CLASSIFICATION}" \
     --models $(if [[ "${TIER}" == "portable-smoke" ]]; then echo HandoffctlBinding; elif [[ "${TIER}" == "pr-fast" ]]; then echo HandoffctlFast OracleInteractionGates; elif [[ "${TIER}" == "pr-publication" ]]; then echo HandoffctlBinding HandoffctlLocks HandoffctlRun HandoffctlStorage HandoffctlPR HandoffctlRecovery; else echo HandoffctlBinding HandoffctlLocks HandoffctlRun HandoffctlStorage Handoffctl HandoffctlRecovery; fi)

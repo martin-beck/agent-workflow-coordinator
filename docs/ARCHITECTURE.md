@@ -18,8 +18,10 @@ projections. Task specifications and hierarchy edges remain part of each task re
 backends. Directives remain a Git-authority journal and their command path stays fail-closed under
 SQLite until a dedicated backend is reviewed.
 Blocked provenance is revision-local: `pause` atomically creates the sole current-revision paused
-session, while `release --status blocked` creates no session. `resume` accepts only the former and
-`unblock` accepts only the latter; malformed or ambiguous current-revision evidence fails closed.
+session, while `release --status blocked` creates no session. `resume` accepts only one coherent
+record whose task, revision, top-level state, and nested step state match the requested blocked
+task; `unblock` accepts only absent current-revision provenance. Missing, malformed, cross-task,
+or duplicate pause evidence fails closed before mutation.
 Gate metadata supports the generic ordered `role` -> `spec` -> `decision` stages for new task
 specifications. Existing interaction-gate records retain the legacy
 `intake` -> `discussion` -> `formal_spec_review` -> `reconciliation` sequence; stage parsing and

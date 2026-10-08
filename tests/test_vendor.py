@@ -7,6 +7,7 @@ import importlib.util
 import json
 import os
 import re
+import runpy
 import subprocess
 import sys
 import tomllib
@@ -55,6 +56,52 @@ def upgrade_contract(backend: str) -> dict[str, Any]:
 
 
 class VendorTest(unittest.TestCase):
+    def test_formal_attestation_binds_release_and_development_vendor_identity(self) -> None:
+        candidate_identity = runpy.run_path(str(ROOT / "formal/handoffctl/attest.py"))[
+            "candidate_identity"
+        ]
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            manifest = root / "coordinator.vendor.json"
+            manifest.write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "upstream": {
+                            "repository": VENDOR.UPSTREAM_REPOSITORY,
+                            "version": CURRENT_VERSION,
+                            "commit": "a" * 40,
+                        },
+                        "files": {},
+                    },
+                    sort_keys=True,
+                )
+            )
+            release = candidate_identity(root)
+            self.assertEqual(
+                ("release-vendor", "a" * 40, ""),
+                (
+                    release["kind"],
+                    release["commit"],
+                    release["tree"],
+                ),
+            )
+            self.assertEqual(VENDOR.sha256(manifest), release["vendor_manifest_sha256"])
+
+            value = json.loads(manifest.read_text())
+            value["schema_version"] = 2
+            value["upstream"].update(channel="development", tree="b" * 40)
+            manifest.write_text(json.dumps(value, sort_keys=True))
+            development = candidate_identity(root)
+            self.assertEqual(
+                ("development-vendor", "a" * 40, "b" * 40),
+                (development["kind"], development["commit"], development["tree"]),
+            )
+            value["upstream"]["tree"] = "bad"
+            manifest.write_text(json.dumps(value, sort_keys=True))
+            with self.assertRaisesRegex(ValueError, "exact development vendor identity"):
+                candidate_identity(root)
+
     def create_development_source(self, name: str) -> tuple[Path, str]:
         source = Path(self.temporary.name) / name
         (source / "tools").mkdir(parents=True)
@@ -97,6 +144,170 @@ class VendorTest(unittest.TestCase):
         self.assertEqual({"tools/tlc_runner.py"}, executed_tools)
         self.assertTrue(executed_tools.issubset(sources))
         self.assertIn("tests/test_tlc_runner.py", sources)
+
+    def test_snapshot_contains_complete_first_party_formal_closure(self) -> None:
+        sources = {source for source, _ in VENDOR.SOURCE_FILES}
+        expected = {
+            "formal/evidence.json",
+            "formal/tier-evidence.json",
+            "formal/handoffctl/Handoffctl.cfg",
+            "formal/handoffctl/Handoffctl.tla",
+            "formal/handoffctl/HandoffctlBinding.cfg",
+            "formal/handoffctl/HandoffctlBinding.tla",
+            "formal/handoffctl/HandoffctlFast.cfg",
+            "formal/handoffctl/HandoffctlLocks.cfg",
+            "formal/handoffctl/HandoffctlLocks.tla",
+            "formal/handoffctl/HandoffctlPR.cfg",
+            "formal/handoffctl/HandoffctlRecovery.cfg",
+            "formal/handoffctl/HandoffctlRecovery.tla",
+            "formal/handoffctl/HandoffctlRun.cfg",
+            "formal/handoffctl/HandoffctlRun.tla",
+            "formal/handoffctl/HandoffctlStorage.cfg",
+            "formal/handoffctl/HandoffctlStorage.tla",
+            "formal/handoffctl/attest.py",
+            "formal/handoffctl/verify.sh",
+            "formal/oracle/OracleInteractionGates.cfg",
+            "formal/oracle/OracleInteractionGates.tla",
+            "tools/tlc_runner.py",
+        }
+        self.assertTrue(expected.issubset(sources))
+
+    def test_vendor_verify_rejects_stale_lifecycle_model_even_with_matching_digest(self) -> None:
+        with patch("builtins.print"):
+            VENDOR.sync(ROOT, self.target, CURRENT_VERSION, "1" * 40)
+        model = self.target / "formal/handoffctl/Handoffctl.tla"
+        model.write_text(model.read_text().replace('"resume", ', "", 1))
+        manifest_path = self.target / VENDOR.LOCK_NAME
+        manifest = json.loads(manifest_path.read_text())
+        manifest["files"]["formal/handoffctl/Handoffctl.tla"]["sha256"] = VENDOR.sha256(model)
+        manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
+        with self.assertRaisesRegex(RuntimeError, "formal lifecycle operation drift"):
+            VENDOR.verify(self.target)
+
+    def test_formal_lifecycle_alignment_rejects_malformed_and_missing_inventories(self) -> None:
+        tools = self.target / "tools"
+        formal = self.target / "formal/handoffctl"
+        tools.mkdir(parents=True)
+        formal.mkdir(parents=True)
+        runtime = tools / "handoffctl.py"
+        model = formal / "Handoffctl.tla"
+
+        runtime.write_text('LIFECYCLE_MUTATION_COMMANDS = ("resume", 3)\n')
+        model.write_text("Operations == {resume}\n")
+        with self.assertRaisesRegex(RuntimeError, "runtime inventory"):
+            VENDOR.verify_formal_lifecycle_alignment(self.target)
+
+        runtime.write_text("not valid python !\n")
+        with self.assertRaisesRegex(RuntimeError, "inputs are unreadable"):
+            VENDOR.verify_formal_lifecycle_alignment(self.target)
+
+        runtime.write_text('LIFECYCLE_MUTATION_COMMANDS = ("resume",)\n')
+        with self.assertRaisesRegex(RuntimeError, "operation inventory"):
+            VENDOR.verify_formal_lifecycle_alignment(self.target)
+
+    def test_empty_destination_runs_vendored_portable_and_publication_tiers(self) -> None:
+        with patch("builtins.print"):
+            VENDOR.sync(ROOT, self.target, CURRENT_VERSION, "1" * 40)
+        fixture_bin = self.target / "formal-fixture-bin"
+        fixture_bin.mkdir()
+        scripts = {
+            "curl": """#!/bin/sh
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "--output" ]; then
+    shift
+    printf 'fixture-jar' > "$1"
+    exit 0
+  fi
+  shift
+done
+exit 2
+""",
+            "sha256sum": "#!/bin/sh\nexit 0\n",
+            "java": "#!/bin/sh\nexit 0\n",
+            "systemd-run": """#!/bin/sh
+while [ "$#" -gt 0 ] && [ "$1" != "--" ]; do shift; done
+[ "$#" -gt 0 ] && shift
+exec "$@"
+""",
+        }
+        for name, content in scripts.items():
+            path = fixture_bin / name
+            path.write_text(content)
+            path.chmod(0o755)
+        environment = {
+            **os.environ,
+            "PATH": str(fixture_bin) + os.pathsep + os.environ["PATH"],
+            "TLC_CGROUP_MODE": "required",
+            "TLC_HEAP": "512m",
+            "TLC_MEMORY_MAX": "3G",
+            "TLC_SWAP_MAX": "3G",
+            "TLC_TIMEOUT_SECONDS": "30",
+        }
+        expected_models = {
+            "portable-smoke": {"HandoffctlBinding"},
+            "pr-publication": {
+                "HandoffctlBinding",
+                "HandoffctlLocks",
+                "HandoffctlRun",
+                "HandoffctlStorage",
+                "HandoffctlPR",
+                "HandoffctlRecovery",
+            },
+        }
+        for tier, models in expected_models.items():
+            attestation = self.target / f"{tier}-attestation.json"
+            queue = self.target / f"{tier}-queue"
+            admission_lock = self.target / f"{tier}-admission.lock"
+            result = subprocess.run(  # noqa: S603 - exact vendored executable under test
+                [
+                    str(self.target / "formal/handoffctl/verify.sh"),
+                    "--tier",
+                    tier,
+                    "--diagnostic-queue",
+                    str(queue),
+                    "--diagnostic-admission-lock",
+                    str(admission_lock),
+                ],
+                cwd=self.target,
+                check=False,
+                capture_output=True,
+                text=True,
+                env={**environment, "TLC_ATTESTATION_PATH": str(attestation)},
+            )
+            self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+            value = json.loads(attestation.read_text())
+            self.assertEqual(models, set(value["models"]))
+            self.assertEqual("release-vendor", value["candidate_identity"]["kind"])
+            self.assertEqual("1" * 40, value["candidate_identity"]["commit"])
+            self.assertEqual("diagnostic-private-admission", value["execution_classification"])
+            self.assertFalse(value["canonical_publication_evidence"])
+            self.assertTrue(
+                any(
+                    "cannot support release or publication claims" in item
+                    for item in value["non_claims"]
+                )
+            )
+            self.assertEqual(
+                VENDOR.sha256(self.target / VENDOR.LOCK_NAME),
+                value["candidate_identity"]["vendor_manifest_sha256"],
+            )
+            for name in (
+                "formal/evidence.json",
+                "formal/tier-evidence.json",
+                "formal/handoffctl/verify.sh",
+                "formal/handoffctl/attest.py",
+                "tools/tlc_runner.py",
+            ):
+                self.assertEqual(VENDOR.sha256(self.target / name), value["formal_inputs"][name])
+
+    def test_verify_diagnostic_admission_requires_both_distinct_absolute_paths(self) -> None:
+        script = (ROOT / "formal/handoffctl/verify.sh").read_text(encoding="utf-8")
+        documentation = (ROOT / "formal/handoffctl/README.md").read_text(encoding="utf-8")
+        self.assertIn('[[ "$2" != /* || "$4" != /* || "$2" == "$4" ]]', script)
+        self.assertIn("diagnostic queue and admission lock must be supplied together", script)
+        self.assertIn("--execution-classification", script)
+        self.assertIn("diagnostic-private-admission", documentation)
+        self.assertIn("cannot support publication or release claims", documentation)
 
     def test_snapshot_contains_runtime_mutation_dependency_closure(self) -> None:
         sources = {source for source, _ in VENDOR.SOURCE_FILES}
