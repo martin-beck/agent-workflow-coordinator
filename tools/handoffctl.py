@@ -1569,13 +1569,18 @@ def write_generated_views(tasks: list[Task], state: Meta) -> None:
     atomic(ROOT / "WORKTREES.md", worktrees)
 
 
+def policy_snapshot(policy: EvidencePolicy | None) -> EvidencePolicy:
+    """Use one caller-owned policy snapshot or load it once at the outer boundary."""
+    return evidence_policy(ROOT) if policy is None else policy
+
+
 def reconcile(
     *,
     do_commit: bool,
     push: bool = False,
     policy: EvidencePolicy | None = None,
 ) -> bool:
-    selected_policy = policy or evidence_policy(ROOT)
+    selected_policy = policy_snapshot(policy)
     if backend_selection()["backend"] == "sqlite":
         return reconcile_sqlite(do_commit=do_commit, push=push, policy=selected_policy)
 
@@ -1668,7 +1673,7 @@ def write_sqlite_projections(
     policy: EvidencePolicy | None = None,
 ) -> list[Path]:
     """Regenerate byte-stable Markdown projections from one database snapshot."""
-    selected_policy = policy or evidence_policy(ROOT)
+    selected_policy = policy_snapshot(policy)
     with contextlib.nullcontext() if already_locked else locked():
         expected = {path.resolve() for path, _, _ in tasks}
         for path, meta, body in tasks:
@@ -1698,7 +1703,7 @@ def write_sqlite_projections(
 
 def export_sqlite_projections(policy: EvidencePolicy | None = None) -> list[Path]:
     """Regenerate projections from the currently selected SQLite authority."""
-    selected_policy = policy or evidence_policy(ROOT)
+    selected_policy = policy_snapshot(policy)
     return write_sqlite_projections(all_tasks(), policy=selected_policy)
 
 
@@ -1716,7 +1721,7 @@ def reconcile_sqlite(*, do_commit: bool, push: bool, policy: EvidencePolicy | No
     """Export local authority; optional Git/GitHub publication is a replica only."""
     if push and not do_commit:
         raise RuntimeError("SQLite publication requires --commit with --push")
-    selected_policy = policy or evidence_policy(ROOT)
+    selected_policy = policy_snapshot(policy)
     before: dict[Path, str | None] = {path: path.read_text() for path in TASKS.glob("AR-*.md")}
     before.update({path: path.read_text() for path in (ROOT / "sessions").glob("AR-*.jsonl")})
     before.update({path: path.read_text() for path in (ROOT / "checkpoints").glob("AR-*.jsonl")})
@@ -2278,7 +2283,7 @@ def mutate(args: argparse.Namespace, kind: str, policy: EvidencePolicy | None = 
         if backend_selection()["backend"] != "git":
             raise RuntimeError("BACKEND_CHANGED: retry using the selected backend")
         sync_replica_before_write()
-        selected_policy = policy or evidence_policy(ROOT)
+        selected_policy = policy_snapshot(policy)
         path, meta, body = locate(args.task)
         require_promotion_preflight(kind)
         before: dict[Path, str | None] = {path: path.read_text()}
@@ -2361,7 +2366,7 @@ def mutate_sqlite(
     args: argparse.Namespace, kind: str, policy: EvidencePolicy | None = None
 ) -> None:
     """Linearize a lifecycle mutation at SQLite's committed CAS update."""
-    selected_policy = policy or evidence_policy(ROOT)
+    selected_policy = policy_snapshot(policy)
     backend = mutating_sqlite_backend()
     initial = backend.load_tasks()
     selected = next((task for task in initial if task[1]["id"] == args.task), None)
