@@ -183,6 +183,21 @@ regenerates the project profile or binding. Review the full vendor diff and run 
 tests before committing. On interruption, inspect the manifest, hashes, refs, release and CI before
 retrying.
 
+For development integration from an untagged Coordinator head, use the explicit development-only
+path with a full immutable commit identifier:
+
+```sh
+python /path/to/agent-workflow-coordinator/tools/vendor.py sync-development \
+  --source /path/to/agent-workflow-coordinator \
+  --target /path/to/project-state \
+  --commit FULL_40_CHARACTER_HEAD_COMMIT
+```
+
+The source must be clean and its `HEAD` must equal the requested commit. The resulting schema-v2
+manifest is explicitly classified as `development` and binds the exact Git tree plus every vendored
+file digest. It is not release evidence. Normal `sync --version vMAJOR.MINOR.PATCH` behavior remains
+tag-bound and emits the existing schema-v1 release manifest.
+
 The vendor boundary intentionally excludes formal qualification models,
 attestation helpers, tier evidence and launchers owned by downstream quality
 projects. Those paths remain downstream-owned and must not be overwritten by

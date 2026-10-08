@@ -86,6 +86,8 @@
 
 - Restore the shared TLC runner and its focused tests to downstream vendor snapshots without
   overwriting downstream-owned formal models, attestations, or verification entry points.
+- Add an explicitly classified, exact-commit development sync path without weakening the existing
+  tag-bound release sync contract.
 
 ## v0.3.13 - 2026-09-18
 

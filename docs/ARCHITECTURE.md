@@ -42,9 +42,12 @@ Project identity has three layers: a tracked profile, the permanent UUID/reposit
 the backend selector. SQLite repeats the identity inside the database. Runtime paths and database
 identity must match that binding before normal command execution.
 
-The vendor tool copies an allowlist from one exact tagged upstream commit. A downstream lock
-manifest records each source/destination and SHA-256. The downstream verifier is itself part of the
-manifest. Project profile and binding files are outside the vendor allowlist.
+The vendor tool normally copies an allowlist from one exact tagged upstream commit. Its explicit
+development-only path accepts an untagged head only when the clean source is at the requested full
+commit, and records that commit, its Git tree, and a `development` classification. A downstream
+lock manifest records each source/destination and SHA-256. Release manifests retain their existing
+tag-bound schema and behavior. The downstream verifier is itself part of the manifest. Project
+profile and binding files are outside the vendor allowlist.
 
 TLA+ models are AI-generated best-effort design guidance for the implementation, not required
 refinement proofs of the Python interpreter,

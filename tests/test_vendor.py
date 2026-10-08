@@ -13,7 +13,7 @@ import tomllib
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import Any
+from typing import Any, cast
 from unittest.mock import patch
 
 from tools.generate_upgrade_contract import generate
@@ -55,6 +55,39 @@ def upgrade_contract(backend: str) -> dict[str, Any]:
 
 
 class VendorTest(unittest.TestCase):
+    def create_development_source(self, name: str) -> tuple[Path, str]:
+        source = Path(self.temporary.name) / name
+        (source / "tools").mkdir(parents=True)
+        version = CURRENT_VERSION.removeprefix("v")
+        (source / "tools/handoffctl.py").write_text(
+            f'COORDINATOR_VERSION = "{version}"\n', encoding="utf-8"
+        )
+        (source / "LICENSE").write_text("committed-license\n", encoding="utf-8")
+        subprocess.run(["/usr/bin/git", "init", "-q"], cwd=source, check=True)
+        subprocess.run(["/usr/bin/git", "add", "."], cwd=source, check=True)
+        subprocess.run(
+            [
+                "/usr/bin/git",
+                "-c",
+                "user.name=Vendor Test",
+                "-c",
+                "user.email=vendor-test@example.invalid",
+                "commit",
+                "-qm",
+                "fixture",
+            ],
+            cwd=source,
+            check=True,
+        )
+        commit = subprocess.run(
+            ["/usr/bin/git", "rev-parse", "HEAD"],
+            cwd=source,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        return source, commit
+
     def test_snapshot_contains_shared_formal_verifier_helper_closure(self) -> None:
         verifier = (ROOT / "formal/handoffctl/verify.sh").read_text(encoding="utf-8")
         executed_tools = set(
@@ -325,6 +358,8 @@ class VendorTest(unittest.TestCase):
         self.assertEqual("project-binding-sentinel\n", binding.read_text())
         self.assertEqual("backend-selection-sentinel\n", backend.read_text())
         lock = json.loads((self.target / VENDOR.LOCK_NAME).read_text())
+        self.assertEqual(1, lock["schema_version"])
+        self.assertEqual({"repository", "version", "commit"}, set(lock["upstream"]))
         self.assertEqual(commit, lock["upstream"]["commit"])
         self.assertEqual(
             {destination for _, destination in VENDOR.SOURCE_FILES}, set(lock["files"])
@@ -361,6 +396,148 @@ class VendorTest(unittest.TestCase):
             VENDOR.release_identity(ROOT, CURRENT_VERSION)
         with self.assertRaisesRegex(RuntimeError, "form vMAJOR"):
             VENDOR.release_identity(ROOT, "main")
+
+    def test_development_identity_requires_clean_exact_head_and_tree(self) -> None:
+        commit = "c" * 40
+        tree = "d" * 40
+        root = str(ROOT.resolve())
+        with patch.object(VENDOR, "git_output", side_effect=[root, "", commit, tree]):
+            self.assertEqual(tree, VENDOR.development_identity(ROOT, commit))
+        with (
+            patch.object(VENDOR, "git_output", side_effect=[root, "dirty"]),
+            self.assertRaisesRegex(RuntimeError, "must be clean"),
+        ):
+            VENDOR.development_identity(ROOT, commit)
+        with (
+            patch.object(VENDOR, "git_output", side_effect=[root, "", "e" * 40]),
+            self.assertRaisesRegex(RuntimeError, "HEAD differs"),
+        ):
+            VENDOR.development_identity(ROOT, commit)
+        with (
+            patch.object(VENDOR, "git_output", side_effect=[root, "", commit, "short"]),
+            self.assertRaisesRegex(RuntimeError, "tree is not a full"),
+        ):
+            VENDOR.development_identity(ROOT, commit)
+        with (
+            patch.object(VENDOR, "git_output", return_value=str(ROOT.parent)),
+            self.assertRaisesRegex(RuntimeError, "worktree root"),
+        ):
+            VENDOR.development_identity(ROOT, commit)
+        with self.assertRaisesRegex(RuntimeError, "full commit"):
+            VENDOR.development_identity(ROOT, "short")
+
+    def test_sync_development_records_distinct_exact_identity(self) -> None:
+        commit = "c" * 40
+        tree = "d" * 40
+
+        def payload(_source: Path, _commit: str, source_name: str) -> tuple[bytes, int]:
+            path = ROOT / source_name
+            return path.read_bytes(), path.stat().st_mode & 0o777
+
+        with (
+            patch.object(VENDOR, "development_identity", return_value=tree),
+            patch.object(VENDOR, "git_blob_payload", side_effect=payload),
+            patch("builtins.print"),
+        ):
+            VENDOR.sync_development(ROOT, self.target, commit)
+        lock_path = self.target / VENDOR.LOCK_NAME
+        lock = json.loads(lock_path.read_text())
+        self.assertEqual(2, lock["schema_version"])
+        self.assertEqual(
+            {"repository", "version", "commit", "channel", "tree"}, set(lock["upstream"])
+        )
+        self.assertEqual("development", lock["upstream"]["channel"])
+        self.assertEqual(commit, lock["upstream"]["commit"])
+        self.assertEqual(tree, lock["upstream"]["tree"])
+        with patch("builtins.print"):
+            VENDOR.verify(self.target)
+        for field, value in (("channel", "release"), ("tree", "short")):
+            invalid = json.loads(json.dumps(lock))
+            invalid["upstream"][field] = value
+            lock_path.write_text(json.dumps(invalid), encoding="utf-8")
+            with (
+                self.subTest(field=field),
+                self.assertRaisesRegex(RuntimeError, "invalid development"),
+            ):
+                VENDOR.verify(self.target)
+        lock["schema_version"] = 3
+        lock_path.write_text(json.dumps(lock), encoding="utf-8")
+        with self.assertRaisesRegex(RuntimeError, "unsupported vendor lock schema"):
+            VENDOR.verify(self.target)
+
+    def test_development_sync_ignores_assume_unchanged_worktree_substitution(self) -> None:
+        source, commit = self.create_development_source("assume-unchanged-source")
+        (source / "LICENSE").write_text("substituted-worktree-license\n", encoding="utf-8")
+        subprocess.run(
+            ["/usr/bin/git", "update-index", "--assume-unchanged", "LICENSE"],
+            cwd=source,
+            check=True,
+        )
+        sources = (
+            ("tools/handoffctl.py", "tools/handoffctl.py"),
+            ("LICENSE", "LICENSE"),
+        )
+        with patch.object(VENDOR, "SOURCE_FILES", sources), patch("builtins.print"):
+            VENDOR.sync_development(source, self.target, commit)
+        self.assertEqual("committed-license\n", (self.target / "LICENSE").read_text())
+
+    def test_development_sync_uses_committed_runtime_version(self) -> None:
+        source, commit = self.create_development_source("hidden-version-source")
+        subprocess.run(
+            ["/usr/bin/git", "update-index", "--assume-unchanged", "tools/handoffctl.py"],
+            cwd=source,
+            check=True,
+        )
+        (source / "tools/handoffctl.py").write_text(
+            'COORDINATOR_VERSION = "9.9.9"\n', encoding="utf-8"
+        )
+        sources = (
+            ("tools/handoffctl.py", "tools/handoffctl.py"),
+            ("LICENSE", "LICENSE"),
+        )
+        with patch.object(VENDOR, "SOURCE_FILES", sources), patch("builtins.print"):
+            VENDOR.sync_development(source, self.target, commit)
+        lock = json.loads((self.target / VENDOR.LOCK_NAME).read_text())
+        self.assertEqual(CURRENT_VERSION, lock["upstream"]["version"])
+        runtime_version = CURRENT_VERSION.removeprefix("v")
+        expected = 'COORDINATOR_VERSION = "' + runtime_version + '"'
+        self.assertIn(expected, (self.target / "tools/handoffctl.py").read_text())
+
+    def test_development_sync_ignores_mid_operation_worktree_substitution(self) -> None:
+        source, commit = self.create_development_source("mid-operation-source")
+        original = VENDOR.git_blob_payload
+        calls = 0
+
+        def mutate_then_read(root: Path, exact_commit: str, name: str) -> tuple[bytes, int]:
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                (root / "LICENSE").write_text("mid-operation-substitution\n", encoding="utf-8")
+            return cast(tuple[bytes, int], original(root, exact_commit, name))
+
+        sources = (
+            ("tools/handoffctl.py", "tools/handoffctl.py"),
+            ("LICENSE", "LICENSE"),
+        )
+        with (
+            patch.object(VENDOR, "SOURCE_FILES", sources),
+            patch.object(VENDOR, "git_blob_payload", side_effect=mutate_then_read),
+            patch("builtins.print"),
+        ):
+            VENDOR.sync_development(source, self.target, commit)
+        self.assertEqual("committed-license\n", (self.target / "LICENSE").read_text())
+
+    def test_snapshot_verification_failure_preserves_existing_target(self) -> None:
+        destination = self.target / "LICENSE"
+        destination.write_text("existing-target\n", encoding="utf-8")
+        manifest = {"schema_version": 1, "upstream": {}, "files": {}}
+        with (
+            patch.object(VENDOR, "SOURCE_FILES", (("LICENSE", "LICENSE"),)),
+            patch.object(VENDOR, "verify", side_effect=RuntimeError("injected verification")),
+            self.assertRaisesRegex(RuntimeError, "injected verification"),
+        ):
+            VENDOR.install_snapshot(ROOT, self.target, manifest)
+        self.assertEqual("existing-target\n", destination.read_text())
 
     def test_verify_rejects_every_identity_and_manifest_boundary(self) -> None:
         commit = "d" * 40
@@ -509,6 +686,25 @@ class VendorTest(unittest.TestCase):
         ):
             self.assertEqual(0, VENDOR.main())
         sync.assert_called_once_with(ROOT, self.target, CURRENT_VERSION, "c" * 40)
+        with (
+            patch.object(
+                sys,
+                "argv",
+                [
+                    "vendor",
+                    "sync-development",
+                    "--source",
+                    str(ROOT),
+                    "--target",
+                    str(self.target),
+                    "--commit",
+                    "d" * 40,
+                ],
+            ),
+            patch.object(VENDOR, "sync_development") as sync_development,
+        ):
+            self.assertEqual(0, VENDOR.main())
+        sync_development.assert_called_once_with(ROOT, self.target, "d" * 40)
 
 
 if __name__ == "__main__":
