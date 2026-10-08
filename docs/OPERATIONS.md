@@ -11,6 +11,8 @@
 - `pause`: exact-revision freeze of an owned task, lease, and bounded session snapshot.
 - `promote`: exact-revision `planned -> open` after dependencies complete.
 - `resume`: exact-revision `blocked -> open` by an explicit `TASK@REVISION` paused-session reference.
+- `unblock`: exact-revision `blocked -> open` for an unowned task released on an external
+  condition. It preserves `next_action` and rejects a current-revision pause snapshot.
 - `recover-expired`: exact-revision recovery of an in-progress task only after its UTC lease
   deadline has passed and its latest bounded session snapshot validates.
 - `run`: execute a bounded command outside the lock, then record its classified result.
@@ -58,7 +60,7 @@ Git-backed lifecycle commands do not use the strict whole-repository `doctor` re
 transaction predicate. They continue to reject an invalid resulting target, dependency graph,
 generated view, active owner/branch/worktree collision, or a privacy/size finding introduced in a
 file that the mutation writes. An unrelated expired claim or pre-existing privacy/size finding does
-not block `recover-expired`, `claim`, `heartbeat`, `release`, `promote`, or `resume`.
+not block `recover-expired`, `claim`, `heartbeat`, `release`, `promote`, `resume`, or `unblock`.
 Run `doctor` separately to see and remediate every outstanding repository finding; successful
 transition admission does not declare the whole repository healthy.
 

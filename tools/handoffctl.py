@@ -1891,6 +1891,51 @@ def apply_resume(args: argparse.Namespace, meta: Meta, _tasks: list[Task]) -> st
     return str(args.note)
 
 
+def _blocked_provenance(task_id: str, revision: int) -> str:
+    """Classify blocked state from its exact-revision session evidence."""
+    try:
+        records = storage_backend().load_session_records(task_id)
+        current = [record for record in records if record.get("task_revision") == revision]
+        for record in current:
+            validate_session_record(record)
+    except ValueError as error:
+        raise RuntimeError("blocked provenance is malformed") from error
+    if not current:
+        return "external"
+    if len(current) != 1:
+        raise RuntimeError("blocked provenance is ambiguous")
+    record = current[0]
+    step_state = record.get("step_state")
+    if (
+        record.get("task") != task_id
+        or record.get("trigger") != "pause"
+        or record.get("status") != "blocked"
+        or not isinstance(step_state, dict)
+        or step_state.get("status") != "blocked"
+        or step_state.get("task_revision") != revision
+    ):
+        raise RuntimeError("blocked provenance is ambiguous")
+    return "pause"
+
+
+def apply_unblock(args: argparse.Namespace, meta: Meta, _tasks: list[Task]) -> str:
+    """Reopen one exact external-blocked revision without restoring a session."""
+    if args.expected_revision != meta["task_revision"]:
+        raise RuntimeError(
+            f"stale revision: expected {args.expected_revision}, current {meta['task_revision']}"
+        )
+    if meta.get("status") != "blocked":
+        raise RuntimeError(f"{args.task} is not blocked")
+    if meta.get("owner") or meta.get("claim_expires"):
+        raise RuntimeError(f"{args.task} has active claim metadata")
+    if _blocked_provenance(args.task, int(meta["task_revision"])) != "external":
+        raise RuntimeError("task is paused; use resume with its exact session reference")
+    if not args.note.strip():
+        raise RuntimeError("unblock note must not be empty")
+    meta["status"] = "open"
+    return str(args.note)
+
+
 def apply_recover_expired(args: argparse.Namespace, meta: Meta, _tasks: list[Task]) -> str:
     """Reopen an expired claim after restoring its latest bounded session."""
     if args.expected_revision != meta["task_revision"]:
@@ -1924,7 +1969,7 @@ def apply_recover_expired(args: argparse.Namespace, meta: Meta, _tasks: list[Tas
 
 def require_promotion_preflight(kind: str) -> None:
     """Reject a promotion before writes when its source checkout is ambiguous."""
-    if kind not in ("promote", "resume"):
+    if kind not in ("promote", "resume", "unblock"):
         return
     errors = generated_view_errors(all_tasks())
     if errors:
@@ -2061,8 +2106,9 @@ def apply_transition(args: argparse.Namespace, kind: str, meta: Meta, tasks: lis
         return apply_promote(args, meta, tasks)
     if kind == "pause":
         return apply_pause(args, meta)
-    if kind == "resume":
-        return apply_resume(args, meta, tasks)
+    reopen = {"resume": apply_resume, "unblock": apply_unblock}.get(kind)
+    if reopen is not None:
+        return reopen(args, meta, tasks)
     if kind == "recover-expired":
         return apply_recover_expired(args, meta, tasks)
     if kind == "gate":
@@ -3194,6 +3240,7 @@ def dispatch_bound_command(args: argparse.Namespace) -> int:  # noqa: C901
         "promote",
         "pause",
         "resume",
+        "unblock",
         "recover-expired",
         "update",
         "gate",
@@ -3319,6 +3366,10 @@ def main() -> int:
     item.add_argument("task")
     item.add_argument("--expected-revision", type=int, required=True)
     item.add_argument("--session", required=True)
+    item.add_argument("--note", required=True)
+    item = commands.add_parser("unblock")
+    item.add_argument("task")
+    item.add_argument("--expected-revision", type=int, required=True)
     item.add_argument("--note", required=True)
     item = commands.add_parser("pause")
     item.add_argument("task")

@@ -124,6 +124,23 @@ def concurrent_promote(root_value: str, start: Any) -> None:
         CORE.mutate(args, "promote")
 
 
+def racing_unblock(root_value: str, start: Any, outcomes: Any) -> None:
+    """Race one exact-revision external unblock through the Git authority."""
+    configure_child(root_value)
+    start.wait(5)
+    args = argparse.Namespace(task="AR-0001", expected_revision=1, note="external clear")
+    try:
+        with (
+            patch.object(CORE, "commit", return_value=True),
+            patch.object(CORE, "dirty_state_paths", return_value=[]),
+        ):
+            CORE.mutate(args, "unblock")
+    except RuntimeError as error:
+        outcomes.put(("rejected", str(error)))
+    else:
+        outcomes.put(("accepted", "open"))
+
+
 def hold_repository_lock(root_value: str, ready: Any, release: Any) -> None:
     """Hold the repository-common lock from one linked worktree."""
     configure_child(root_value)
@@ -996,6 +1013,126 @@ class HandoffTest(unittest.TestCase):
                 "resume",
             )
 
+    def test_external_unblock_release_reopen_and_claim_preserves_state(self) -> None:
+        target = self.make_task(
+            status="in_progress",
+            owner="worker-a",
+            claim_expires="2099-01-01T00:00:00+00:00",
+            next_action="Wait for external AR-9999.",
+        )
+        with patch.object(CORE, "commit", return_value=True):
+            CORE.mutate(
+                argparse.Namespace(
+                    task="AR-0001", owner="worker-a", status="blocked", note="external wait"
+                ),
+                "release",
+            )
+        blocked, _ = CORE.read_task(target)
+        self.assertEqual(("blocked", 2), (blocked["status"], blocked["task_revision"]))
+        self.assertEqual([], CORE.storage_backend().load_session_records("AR-0001"))
+
+        with (
+            patch.object(CORE, "dirty_state_paths", return_value=[]),
+            patch.object(CORE, "commit", return_value=True),
+        ):
+            CORE.mutate(
+                argparse.Namespace(
+                    task="AR-0001", expected_revision=2, note="external dependency verified"
+                ),
+                "unblock",
+            )
+            CORE.mutate(
+                argparse.Namespace(task="AR-0001", owner="worker-b", lease_minutes=10),
+                "claim",
+            )
+        reopened, body = CORE.read_task(target)
+        self.assertEqual(("in_progress", 4), (reopened["status"], reopened["task_revision"]))
+        self.assertEqual("Wait for external AR-9999.", reopened["next_action"])
+        self.assertEqual([], CORE.storage_backend().load_session_records("AR-0001"))
+        self.assertIn("external dependency verified", body)
+
+    def test_unblock_and_resume_reject_cross_mode_and_hostile_provenance(self) -> None:
+        target = self.make_task(status="blocked", task_revision=2)
+        blocked, _ = CORE.read_task(target)
+        stale = argparse.Namespace(task="AR-0001", expected_revision=1, note="clear")
+        with self.assertRaisesRegex(RuntimeError, "stale revision"):
+            CORE.apply_unblock(stale, dict(blocked), [])
+
+        active = dict(blocked, owner="worker-a", claim_expires="later")
+        current = argparse.Namespace(task="AR-0001", expected_revision=2, note="clear")
+        with self.assertRaisesRegex(RuntimeError, "active claim metadata"):
+            CORE.apply_unblock(current, active, [])
+        with self.assertRaisesRegex(RuntimeError, "must not be empty"):
+            CORE.apply_unblock(
+                argparse.Namespace(task="AR-0001", expected_revision=2, note=""),
+                dict(blocked),
+                [],
+            )
+
+        old = dict(blocked, task_revision=1)
+        CORE.append_session_record(
+            CORE.ROOT,
+            CORE.build_session_record(old, "pause", "2026-09-24T12:00:00+00:00"),
+        )
+        preserved = dict(blocked)
+        self.assertEqual("clear", CORE.apply_unblock(current, preserved, []))
+        self.assertEqual("open", preserved["status"])
+
+        pause = CORE.build_session_record(blocked, "pause", "2026-09-24T12:01:00+00:00")
+        CORE.append_session_record(CORE.ROOT, pause)
+        with self.assertRaisesRegex(RuntimeError, "task is paused"):
+            CORE.apply_unblock(current, dict(blocked), [])
+
+        external = self.make_task("AR-0002", status="blocked")
+        external_meta, _ = CORE.read_task(external)
+        with self.assertRaisesRegex(RuntimeError, "no session snapshot"):
+            CORE.apply_resume(
+                argparse.Namespace(
+                    task="AR-0002", expected_revision=1, session="AR-0002@1", note="wrong mode"
+                ),
+                external_meta,
+                [],
+            )
+
+        malformed = dict(pause, step_state={"status": "open", "task_revision": 2})
+        backend = SimpleNamespace(load_session_records=lambda _task: [malformed])
+        with (
+            patch.object(CORE, "storage_backend", return_value=backend),
+            self.assertRaisesRegex(RuntimeError, "provenance is ambiguous"),
+        ):
+            CORE.apply_unblock(current, dict(blocked), [])
+        duplicate = SimpleNamespace(load_session_records=lambda _task: [pause, dict(pause)])
+        with (
+            patch.object(CORE, "storage_backend", return_value=duplicate),
+            self.assertRaisesRegex(RuntimeError, "provenance is ambiguous"),
+        ):
+            CORE.apply_unblock(current, dict(blocked), [])
+
+    def test_unblock_failure_restores_task_views_and_session_history(self) -> None:
+        target = self.make_task(status="blocked")
+        before = {
+            path: path.read_text()
+            for path in (target, self.root / "CURRENT.md", self.root / "STATUS.md")
+        }
+        real_atomic = CORE.atomic
+
+        def fail_task(path: Path, content: str) -> None:
+            if path == target:
+                raise OSError("injected unblock failure")
+            real_atomic(path, content)
+
+        with (
+            patch.object(CORE, "dirty_state_paths", return_value=[]),
+            patch.object(CORE, "atomic", side_effect=fail_task),
+            self.assertRaisesRegex(OSError, "injected unblock failure"),
+        ):
+            CORE.mutate(
+                argparse.Namespace(task="AR-0001", expected_revision=1, note="external clear"),
+                "unblock",
+            )
+        self.assertTrue(all(path.read_text() == content for path, content in before.items()))
+        self.assertEqual([], CORE.storage_backend().load_session_records("AR-0001"))
+
     def test_pause_freezes_lease_and_resume_reloads_exact_snapshot(self) -> None:
         target = self.make_task(
             status="in_progress",
@@ -1435,6 +1572,27 @@ class HandoffTest(unittest.TestCase):
         self.assertEqual(
             CORE.render_status_view(CORE.all_tasks()), (self.root / "STATUS.md").read_text()
         )
+
+    def test_parallel_external_unblocks_have_one_linearization_winner(self) -> None:
+        self.make_task(status="blocked")
+        start = multiprocessing.Event()
+        outcomes: Any = multiprocessing.Queue()
+        workers = [
+            multiprocessing.Process(target=racing_unblock, args=(str(self.root), start, outcomes))
+            for _ in range(2)
+        ]
+        for process in workers:
+            process.start()
+        start.set()
+        for process in workers:
+            process.join(10)
+            self.assertEqual(0, process.exitcode)
+        self.assertEqual(
+            ["accepted", "rejected"], sorted(outcomes.get(timeout=2)[0] for _ in workers)
+        )
+        meta, _ = CORE.read_task(CORE.locate("AR-0001")[0])
+        self.assertEqual(("open", 2), (meta["status"], meta["task_revision"]))
+        self.assertEqual([], CORE.storage_backend().load_session_records("AR-0001"))
 
     def test_concurrent_claim_and_reconcile_keep_status_current(self) -> None:
         self.make_task()
@@ -2719,6 +2877,19 @@ class HandoffTest(unittest.TestCase):
                     "AR-0001@1",
                     "--note",
                     "ready",
+                ],
+                "mutate",
+                None,
+            ),
+            (
+                [
+                    "handoffctl",
+                    "unblock",
+                    "AR-0001",
+                    "--expected-revision",
+                    "1",
+                    "--note",
+                    "external clear",
                 ],
                 "mutate",
                 None,

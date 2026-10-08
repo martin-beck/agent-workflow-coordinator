@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Add an exact-revision `unblock` transition for externally blocked tasks while preserving
+  session-bound pause restoration and rejecting ambiguous cross-mode provenance.
+
 ## 0.3.57 - 2026-10-07
 
 - Align the Coordinator package and runtime metadata with the signed v0.3.57 release.
