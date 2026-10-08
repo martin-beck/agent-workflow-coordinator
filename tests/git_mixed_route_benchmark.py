@@ -15,7 +15,7 @@ import sys
 import tempfile
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from git_contention_benchmark import COUNTS, fixture
 
@@ -114,6 +114,19 @@ def percentile(values: list[float], fraction: float) -> float | None:
     return round(ordered[min(len(ordered) - 1, max(0, math.ceil(len(ordered) * fraction) - 1))], 3)
 
 
+def lock_events(item: dict[str, Any], wait: float, hold: float) -> list[tuple[int, str, int]]:
+    """Emit half-open wait/hold intervals without zero-length wait artifacts."""
+    end = int(item["ended_ns"])
+    hold_ns = round(hold * 1_000_000)
+    wait_ns = round(wait * 1_000_000)
+    events: list[tuple[int, str, int]] = []
+    if wait_ns > 0:
+        events.extend(((end - hold_ns - wait_ns, "wait", 1), (end - hold_ns, "wait", -1)))
+    if item["hold_ms"] is not None:
+        events.extend(((end - hold_ns, "hold", 1), (end, "hold", -1)))
+    return events
+
+
 def lock_aggregates(traces: list[Path]) -> dict[str, object]:
     events: list[tuple[int, str, int]] = []
     by_phase: dict[str, dict[str, list[float]]] = {}
@@ -129,12 +142,7 @@ def lock_aggregates(traces: list[Path]) -> dict[str, object]:
             group["wait"].append(wait)
             if item["hold_ms"] is not None:
                 group["hold"].append(hold)
-            end = int(item["ended_ns"])
-            hold_ns = round(hold * 1_000_000)
-            wait_ns = round(wait * 1_000_000)
-            events.extend(((end - hold_ns - wait_ns, "wait", 1), (end - hold_ns, "wait", -1)))
-            if item["hold_ms"] is not None:
-                events.extend(((end - hold_ns, "hold", 1), (end, "hold", -1)))
+            events.extend(lock_events(item, wait, hold))
     waiting = holding = peak = 0
     queue_samples: list[float] = []
     # A waiter stops waiting at the instant it acquires the lock. Process
@@ -164,6 +172,66 @@ def lock_aggregates(traces: list[Path]) -> dict[str, object]:
             }
             for phase, values in sorted(by_phase.items())
         },
+    }
+
+
+def task_meta(state: Path, index: int) -> dict[str, Any]:
+    """Audit a disposable authority file only after every CLI worker exits."""
+    raw = (state / "tasks" / f"AR-{index:04d}.md").read_text()
+    return cast(dict[str, Any], json.loads(raw.split("\n---\n", 1)[0][4:]))
+
+
+def audit_state(state: Path, env: dict[str, str], count: int) -> dict[str, object]:
+    """Bounded post-batch authority, projection, session and command audit."""
+    doctor = subprocess.run(
+        [sys.executable, "tools/handoffctl.py", "doctor", "--live"],
+        cwd=state,
+        env=env,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        check=False,
+        timeout=30,
+    )
+    result_path = state / ".runtime/command-results.jsonl"
+    commands = (
+        [json.loads(line) for line in result_path.read_text().splitlines()]
+        if result_path.exists()
+        else []
+    )
+    safe = complete = 0
+    for index in range(1, count + 1):
+        task_id = f"AR-{index:04d}"
+        meta = task_meta(state, index)
+        status = meta["status"]
+        owner = meta["owner"]
+        expiry = meta["claim_expires"]
+        revision = int(meta["task_revision"])
+        if (
+            status in {"open", "in_progress"}
+            and 1 <= revision <= 6
+            and (
+                (status == "open" and not owner and not expiry)
+                or (status == "in_progress" and owner == f"worker-{index}" and expiry)
+            )
+        ):
+            safe += 1
+        session_path = state / "sessions" / f"{task_id}.jsonl"
+        sessions = session_path.read_text().splitlines() if session_path.exists() else []
+        recorded = sum(record["task"] == task_id for record in commands)
+        if (
+            status == "open"
+            and not owner
+            and not expiry
+            and revision == 6
+            and len(sessions) == 2
+            and recorded == 1
+        ):
+            complete += 1
+    return {
+        "post_doctor_ok": doctor.returncode == 0,
+        "safe_tasks": safe,
+        "complete_tasks": complete,
+        "command_results": len(commands),
     }
 
 
@@ -223,6 +291,7 @@ def batch(state: Path, env: dict[str, str], count: int) -> dict[str, object]:
             for route, values in sorted(durations.items())
         },
         "locks": lock_aggregates([trace for _, trace in running]),
+        "state_audit": audit_state(state, env, count),
     }
 
 
@@ -241,10 +310,20 @@ def main() -> None:
         for count in counts:
             for label, baseline in (("baseline", True), ("candidate", False)):
                 state, env = fixture(base, f"{label}-{count}", baseline, initially_open=True)
-                print(
-                    json.dumps({"case": label, "result": batch(state, env, count)}, sort_keys=True),
-                    flush=True,
-                )
+                result = batch(state, env, count)
+                print(json.dumps({"case": label, "result": result}, sort_keys=True), flush=True)
+                audit = result["state_audit"]
+                assert isinstance(audit, dict)
+                if audit["safe_tasks"] != count:
+                    raise RuntimeError("fixture authority safety audit failed")
+                routes = cast(dict[str, dict[str, int]], result["route_results"])
+                if not baseline and (
+                    audit["complete_tasks"] != count
+                    or not audit["post_doctor_ok"]
+                    or result["process_errors"] != 0
+                    or any(routes.get(route, {}).get("ok", 0) != count for route in ROUTES)
+                ):
+                    raise RuntimeError("candidate durable outcome audit failed")
 
 
 if __name__ == "__main__":

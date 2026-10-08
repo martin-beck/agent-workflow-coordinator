@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 0.3.59 - 2026-10-09
+
+- Qualify the Git contention repair across independent workers using the real
+  snapshot, doctor, claim, heartbeat, update, run, release, and reconcile CLI routes,
+  with durable outcome audits and hostile recovery probes.
+- Make Git `doctor --live` scan outside the authority lock and validate under a
+  shared lock, preserving structural errors when a live observation is overtaken.
+
 ## 0.3.58 - 2026-10-08
 
 - Add an exact-revision `unblock` transition for externally blocked tasks while preserving

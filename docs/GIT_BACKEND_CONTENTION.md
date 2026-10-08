@@ -79,6 +79,11 @@ then starts independent worker processes. Every worker invokes the real
 observation and mutation. Each owner is unique, revisions are fenced, and
 successful releases return the fixture tasks to `open`. Both versions receive
 the same inputs and schedule. Raw local traces are deleted with the fixture.
+After all workers exit, a read-only auditor checks each task's status, owner,
+lease, and revision, counts session and command records, and runs the real
+`doctor --live` route. The candidate must have every task back at `open` at
+revision 6 with two session records and one command result; either version
+fails the probe if a task has an impossible status or owner.
 
 The following 2026-10-08 controlled run used the same 0.6-second local GitHub
 response delay as the run-only benchmark. "Routes" counts successful CLI
@@ -108,6 +113,15 @@ event-sampled waiting-queue p50/p95/max. The queue depth counts other workers
 waiting while one holds the authority lock; a newly acquiring worker does not
 count itself.
 
+The final audited full sweep on 2026-10-09 passed its durable-state assertions
+at every count. At 16 workers the baseline completed 101/128 routes in 36.24
+seconds with 13 lock timeouts; its 16 task records all remained safely `open`
+or owned by their original worker, though only eight journeys completed. The
+candidate completed 128/128 in 11.16 seconds with zero timeouts, and all 16
+tasks were `open` at revision 6 with two session records and one command result
+each. Post-batch `doctor --live` passed on both versions. Candidate queue-depth
+was p95 9, maximum 11; the baseline does not expose comparable phase traces.
+
 Earlier full runs before the Git doctor read repair also reproduced the lock
 convoy: at 16 workers the baseline completed 85/128 and 90/128 routes, with
 14 and 16 lock timeouts respectively; the then-candidate completed 128/128
@@ -115,6 +129,18 @@ with none in both samples. A later pre-repair run exposed a transient doctor
 error, which led to the shared-read repair measured above. Individual timeout
 and latency counts vary with scheduling; the qualitative convoy difference did
 not depend on one sample.
+
+Run `python tests/git_hostile_route_probe.py` for separate process-level
+negative cases on a disposable candidate fixture. A 2026-10-09 run passed:
+two CLI claimants had exactly one winner and the loser could neither heartbeat
+nor release; killing a `handoffctl run` process group after its wrapped command
+started left no invented transition or command result and allowed a truthful
+release; a real one-minute lease expired and was recovered through
+`recover-expired` before a new owner claimed; and a deliberately slow Git
+commit under the authority lock caused a second CLI claim to time out without
+mutating its task, after which the retry succeeded. Final reconcile and
+`doctor --live` passed. The slow commit hook exists only inside the disposable
+fixture and is removed before the retry.
 
 The Git route boundary is: claim/heartbeat/update/release serialize task and
 projection writes under `git_mutate`; `run` first performs external preflight

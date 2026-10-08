@@ -2291,6 +2291,32 @@ class HandoffTest(unittest.TestCase):
         self.assertEqual(3, scans)
         printed.assert_called_once_with("ERROR: OBSERVATION_CHANGED: retry doctor")
 
+    def test_git_doctor_does_not_hide_structural_error_behind_overtaken_scan(self) -> None:
+        self.make_task()
+        with patch.object(CORE, "project_scan", return_value=self.fake_scan()):
+            CORE.reconcile(do_commit=False)
+        scans = 0
+
+        def overtaken_scan() -> Any:
+            nonlocal scans
+            scans += 1
+            with patch.object(CORE, "project_scan", return_value=self.fake_scan()):
+                CORE.reconcile(do_commit=False)
+            return self.fake_scan()
+
+        with (
+            patch.object(CORE, "project_scan", side_effect=overtaken_scan),
+            patch.object(
+                CORE,
+                "doctor_checks",
+                return_value=["PROJECT_STATE.md is stale", "structural error"],
+            ),
+            patch("builtins.print") as printed,
+        ):
+            self.assertEqual(1, CORE.cmd_doctor(live=True))
+        self.assertEqual(1, scans)
+        printed.assert_called_once_with("ERROR: PROJECT_STATE.md is stale\nERROR: structural error")
+
     def test_git_doctor_rejects_changed_binding_after_scan(self) -> None:
         self.make_task()
 

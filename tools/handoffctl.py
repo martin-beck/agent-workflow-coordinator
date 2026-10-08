@@ -2712,8 +2712,13 @@ def git_doctor_checks(*, live: bool) -> list[str]:
             # An intervening publication is harmless when its rendered live
             # view agrees with this scan. Retry only a stale live comparison;
             # never hide unrelated structural errors.
-            if ticket != published_observation_ticket() and any(
-                error in {"PROJECT_STATE.md is stale", "WORKTREES.md is stale"} for error in errors
+            if (
+                ticket != published_observation_ticket()
+                and errors
+                and all(
+                    error in {"PROJECT_STATE.md is stale", "WORKTREES.md is stale"}
+                    for error in errors
+                )
             ):
                 continue
             return errors
