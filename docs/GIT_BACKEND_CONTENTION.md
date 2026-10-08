@@ -62,7 +62,7 @@ subprocesses per scan. These are local host measurements with warm caches and
 one controlled run, not a service-level latency guarantee. In particular,
 each worker still performs its own potentially expensive external inventory.
 
-A separate candidate stress kept the copied 746-task state but observed its
+A separate candidate stress kept a state copy containing 746 tasks but observed its
 one-worktree product clone. At 16 independent reconcile processes, all 16
 completed in 5.08 seconds without lock timeouts; maximum acquisition wait was
 4.31 seconds and maximum hold was 0.86 seconds. This exercises whole-state
