@@ -69,6 +69,72 @@ completed in 5.08 seconds without lock timeouts; maximum acquisition wait was
 validation and scan-ticket retries without multiplying the 731-worktree
 source scan across 16 processes.
 
+## Mixed-route qualification
+
+Run `python tests/git_mixed_route_benchmark.py` from a development checkout.
+It creates separate disposable Git states for each worker count and revision,
+then starts independent worker processes. Every worker invokes the real
+`handoffctl` CLI for snapshot, `doctor --live`, claim, heartbeat, update,
+`run`, release, and `reconcile --commit`; route order is staggered to overlap
+observation and mutation. Each owner is unique, revisions are fenced, and
+successful releases return the fixture tasks to `open`. Both versions receive
+the same inputs and schedule. Raw local traces are deleted with the fixture.
+
+The following 2026-10-08 controlled run used the same 0.6-second local GitHub
+response delay as the run-only benchmark. "Routes" counts successful CLI
+calls out of eight per worker; a failed mutation skips dependent transitions.
+
+| Workers | Baseline wall | Candidate wall | Baseline routes | Candidate routes | Baseline lock timeouts | Candidate lock timeouts |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 6.52 s | 6.55 s | 8/8 | 8/8 | 0 | 0 |
+| 2 | 9.39 s | 6.43 s | 16/16 | 16/16 | 0 | 0 |
+| 4 | 17.96 s | 6.87 s | 32/32 | 32/32 | 0 | 0 |
+| 8 | 26.81 s | 8.89 s | 58/64 | 64/64 | 3 | 0 |
+| 16 | 38.78 s | 10.95 s | 98/128 | 128/128 | 15 | 0 |
+
+At 16 workers, the candidate completed 11.69 routes/second, compared with
+2.53 successful routes/second on the baseline. Candidate opt-in traces recorded
+up to 1.40 seconds acquisition wait and 113 ms lock hold; the longest `run`
+call was 3.82 seconds. Its event-sampled waiting queue was p50 3, p95 9,
+maximum 11. The baseline predates phase tracing, so its route
+latencies and timeout classes are measured, but phase-level wait/hold and
+queue-depth distributions are unavailable rather than inferred. Four baseline
+`doctor --live` calls also returned non-timeout errors during the 16-worker
+overlap; no candidate call failed. These single-host samples are diagnostic,
+not a throughput guarantee.
+
+The candidate JSON includes phase-level wait and hold p50/p95/max and
+event-sampled waiting-queue p50/p95/max. The queue depth counts other workers
+waiting while one holds the authority lock; a newly acquiring worker does not
+count itself.
+
+Earlier full runs before the Git doctor read repair also reproduced the lock
+convoy: at 16 workers the baseline completed 85/128 and 90/128 routes, with
+14 and 16 lock timeouts respectively; the then-candidate completed 128/128
+with none in both samples. A later pre-repair run exposed a transient doctor
+error, which led to the shared-read repair measured above. Individual timeout
+and latency counts vary with scheduling; the qualitative convoy difference did
+not depend on one sample.
+
+The Git route boundary is: claim/heartbeat/update/release serialize task and
+projection writes under `git_mutate`; `run` first performs external preflight
+observation outside the lock, briefly checks the active owner under a shared
+lock, executes the wrapped command outside the lock, then records and commits
+its result through serialized mutation. Reconcile scans externally, then
+serializes application, validation, commit, and optional push under
+`git_reconcile`. Snapshot and Git `doctor --live` scan externally, then
+validate under a shared lock. Doctor accepts a concurrent reconciliation if
+its published live view matches the scan, and retries a changed view within a
+bounded limit. Its previous unlocked authority validation could report
+transient projection errors during task writes; the shared read excludes that
+race without placing the external scan under the lock. Doctor remains
+diagnostic, not an authority mutation. This uses the existing abstract
+shared-reader operation, so no TLA+ transition changes. The remaining
+lock-held commit/optional replication boundary
+is described below. Existing negative and process-race tests cover competing
+claims, stale owners, bounded lock timeout, scan interruption, pending-content
+drift, failed push, and snapshot/reconciliation races.
+
 ## Cause and repair
 
 Before this change, every Git `run` reconciled under an exclusive

@@ -261,7 +261,7 @@ type Meta = dict[str, Any]
 type Task = tuple[Path, Meta, str]
 type State = dict[str, Any]
 
-COORDINATOR_VERSION = "0.3.58"
+COORDINATOR_VERSION = "0.3.59"
 DEFAULT_PROJECT_SETTINGS: Meta = {
     "schema_version": 1,
     "project_id": "00000000-0000-4000-8000-000000000000",
@@ -2675,11 +2675,9 @@ def role_doctor_errors() -> list[str]:
         return [f"role admission unavailable: {error}"]
 
 
-def cmd_doctor(*, live: bool) -> int:
-    """Validate static state and optionally compare the live generated views."""
-    sqlite = backend_selection()["backend"] == "sqlite"
-    sqlite_live = CONFIG.exists() and bool(config().get("github_repository"))
-    errors = validate(live=live and (not sqlite or sqlite_live))
+def doctor_checks(*, live: bool, sqlite: bool, live_state: State | None) -> list[str]:
+    """Validate one authority view and its optional pre-scanned live input."""
+    errors = validate(live=live, live_state=live_state)
     errors.extend(role_doctor_errors())
     if sqlite:
         errors.extend(SQLiteBackend(DATABASE, project_binding(), TASKS).integrity_errors())
@@ -2690,6 +2688,47 @@ def cmd_doctor(*, live: bool) -> int:
         except (OSError, json.JSONDecodeError, AttributeError):
             code = "REPLICA_BLOCKED"
         errors.append(f"{code}: replica reconciliation requires operator review")
+    return errors
+
+
+def git_doctor_checks(*, live: bool) -> list[str]:
+    """Read one Git authority view while observing live data outside the lock."""
+    if not live:
+        with locked(exclusive=False, phase="doctor"):
+            return doctor_checks(live=False, sqlite=False, live_state=None)
+    for _ in range(3):
+        ticket = published_observation_ticket()
+        scan_config = config() if CONFIG.exists() else None
+        scan_binding = project_binding()
+        live_state = project_scan() if live else None
+        with locked(exclusive=False, phase="doctor"):
+            if backend_selection()["backend"] != "git":
+                raise RuntimeError("BACKEND_CHANGED: retry doctor")
+            if (config() if CONFIG.exists() else None) != scan_config:
+                raise RuntimeError("OBSERVATION_INPUT_CHANGED: retry doctor")
+            if project_binding() != scan_binding:
+                raise RuntimeError("OBSERVATION_INPUT_CHANGED: retry doctor")
+            errors = doctor_checks(live=live, sqlite=False, live_state=live_state)
+            # An intervening publication is harmless when its rendered live
+            # view agrees with this scan. Retry only a stale live comparison;
+            # never hide unrelated structural errors.
+            if ticket != published_observation_ticket() and any(
+                error in {"PROJECT_STATE.md is stale", "WORKTREES.md is stale"} for error in errors
+            ):
+                continue
+            return errors
+    return ["OBSERVATION_CHANGED: retry doctor"]
+
+
+def cmd_doctor(*, live: bool) -> int:
+    """Validate one consistent Git authority view without locking its live scan."""
+    sqlite = backend_selection()["backend"] == "sqlite"
+    sqlite_live = CONFIG.exists() and bool(config().get("github_repository"))
+    check_live = live and (not sqlite or sqlite_live)
+    if sqlite:
+        errors = doctor_checks(live=check_live, sqlite=True, live_state=None)
+    else:
+        errors = git_doctor_checks(live=check_live)
     if errors:
         print("\n".join("ERROR: " + value for value in errors))
         return 1

@@ -29,7 +29,9 @@ def command(*argv: str, cwd: Path | None = None, env: dict[str, str] | None = No
     subprocess.run(argv, cwd=cwd, env=env, check=True, stdout=subprocess.DEVNULL)  # noqa: S603
 
 
-def fixture(base: Path, label: str, baseline: bool) -> tuple[Path, dict[str, str]]:
+def fixture(
+    base: Path, label: str, baseline: bool, *, initially_open: bool = False
+) -> tuple[Path, dict[str, str]]:
     state = base / label / "state"
     product = base / label / "product"
     state.mkdir(parents=True)
@@ -96,14 +98,14 @@ def fixture(base: Path, label: str, baseline: bool) -> tuple[Path, dict[str, str
             "schema_version": 1,
             "id": task_id,
             "title": "Contention fixture",
-            "status": "in_progress",
+            "status": "open" if initially_open else "in_progress",
             "priority": "P1",
             "summary": "Independent worker fixture.",
             "next_action": "Run command.",
             "task_revision": 1,
             "updated_at": dt.datetime.now(dt.UTC).isoformat(),
-            "owner": f"worker-{index}",
-            "claim_expires": expiry,
+            "owner": "" if initially_open else f"worker-{index}",
+            "claim_expires": "" if initially_open else expiry,
             "worktree_key": "",
             "branch": "",
             "checkpoint_commit": "",
