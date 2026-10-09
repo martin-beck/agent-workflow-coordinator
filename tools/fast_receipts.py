@@ -54,6 +54,7 @@ class ReceiptStore:
             self._assert_path()
             self._initialize()
             self._retain_sidecars()
+            os.fsync(self._parent_fd)
             self._closed = False
         except BaseException:
             if hasattr(self, "connection"):
@@ -66,7 +67,16 @@ class ReceiptStore:
 
     def _open_private_path(self) -> tuple[int, int]:
         parent = self.path.parent
-        parent.mkdir(parents=True, mode=0o700, exist_ok=True)
+        try:
+            parent.mkdir(mode=0o700)
+        except FileExistsError:
+            pass
+        else:
+            ancestor_fd = os.open(parent.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            try:
+                os.fsync(ancestor_fd)
+            finally:
+                os.close(ancestor_fd)
         info = parent.lstat()
         if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.geteuid() or info.st_mode & 0o077:
             raise RuntimeError("receipt directory is not private")
@@ -92,12 +102,17 @@ class ReceiptStore:
             ):
                 os.close(database_fd)
                 raise RuntimeError("receipt database is not a private regular owned file")
+            os.fsync(parent_fd)
             return parent_fd, database_fd
         except BaseException:
             os.close(parent_fd)
             raise
 
     def _assert_path(self) -> None:
+        self._assert_database_path()
+        self._assert_sidecars()
+
+    def _assert_database_path(self) -> None:
         parent = os.fstat(self._parent_fd)
         current_parent = self.path.parent.lstat()
         database = os.fstat(self._database_fd)
@@ -113,6 +128,8 @@ class ReceiptStore:
             or stat.S_IMODE(current_database.st_mode) != 0o600
         ):
             raise RuntimeError("receipt database path identity changed")
+
+    def _assert_sidecars(self) -> None:
         for suffix in ("-wal", "-shm"):
             try:
                 sidecar = os.stat(

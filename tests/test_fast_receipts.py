@@ -127,6 +127,19 @@ class FastReceiptTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "not private"):
             ReceiptStore(self.path, self.project_id)
 
+    def test_first_creation_syncs_new_parent_and_database_entries(self) -> None:
+        with patch("tools.fast_receipts.os.fsync", wraps=os.fsync) as sync:
+            self.store()
+        self.assertGreaterEqual(sync.call_count, 3)
+
+    def test_failed_first_directory_sync_never_acknowledges_intent(self) -> None:
+        with (
+            patch("tools.fast_receipts.os.fsync", side_effect=OSError("sync failed")),
+            self.assertRaisesRegex(OSError, "sync failed"),
+        ):
+            ReceiptStore(self.path, self.project_id)
+        self.assertFalse(self.path.exists())
+
     def test_existing_hardlink_is_rejected(self) -> None:
         self.path.parent.mkdir(mode=0o700)
         original = self.path.parent / "other"
