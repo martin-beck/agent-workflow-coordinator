@@ -8,6 +8,7 @@ import contextlib
 import io
 import json
 import socket
+import sqlite3
 import tempfile
 import unittest
 import uuid
@@ -21,6 +22,7 @@ from tools.fast_receipt_socket import (
     socket_service,
     try_socket_fast,
 )
+from tools.fast_receipts import ReceiptStore
 
 
 class FakeBoundCore:
@@ -195,6 +197,35 @@ class FastReceiptSocketTests(unittest.TestCase):
         with patch("tools.fast_receipt_socket._socket_path", return_value=self.path):
             self.assertIsNone(try_socket_fast(self.argv))
         self.assertIsNone(try_socket_fast(["fast", "heartbeat", "AR-0120"]))
+
+    def test_disconnect_after_durable_enqueue_uses_same_key_fallback(self) -> None:
+        with (
+            socket_service(self.core),
+            patch("tools.fast_receipt_socket._socket_path", return_value=self.path),
+            patch(
+                "tools.fast_receipt_socket.public_receipt",
+                side_effect=sqlite3.OperationalError("injected post-enqueue disconnect"),
+            ),
+        ):
+            self.assertIsNone(try_socket_fast(self.argv))
+            self.assertEqual(1, self._intent_count())
+            with ReceiptStore(
+                self.private / "fast-receipts.sqlite3", self.core.project_id
+            ) as store:
+                original = store.connection.execute(
+                    "SELECT receipt_id FROM intents WHERE idempotency_key=?",
+                    ("worker-a:heartbeat:2",),
+                ).fetchone()
+                assert original is not None
+                retried = store.enqueue_heartbeat(
+                    key="worker-a:heartbeat:2",
+                    task="AR-0120",
+                    owner="worker-a",
+                    expected_revision=2,
+                    lease_minutes=20,
+                )
+                self.assertEqual(original["receipt_id"], retried["receipt_id"])
+            self.assertEqual(1, self._intent_count())
 
 
 if __name__ == "__main__":

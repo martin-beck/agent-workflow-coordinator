@@ -131,7 +131,7 @@ def _read_line(peer: socket.socket, limit: int) -> bytes:
     while len(data) <= limit:
         chunk = peer.recv(min(4096, limit + 1 - len(data)))
         if not chunk:
-            raise RuntimeError("fast receipt socket closed before response")
+            raise ConnectionError("fast receipt socket closed before response")
         data.extend(chunk)
         if b"\n" in chunk:
             line, remainder = bytes(data).split(b"\n", 1)
