@@ -1607,6 +1607,13 @@ def commit(message: str, paths: list[Path]) -> bool:
         raise
 
 
+def current_commit_oid() -> str:
+    oid = run(["git", "-C", str(ROOT), "rev-parse", "HEAD"]).stdout.strip()
+    if not re.fullmatch(r"[0-9a-f]{40}", oid):
+        raise RuntimeError("cannot identify signed receipt commit")
+    return oid
+
+
 def replication_enabled() -> bool:
     """Return whether this checkout is the configured writable replica."""
     return CONFIG.exists() and bool(config().get("push_enabled", False))
@@ -2652,7 +2659,17 @@ def require_project_settings_unchanged(settings: Meta) -> None:
 
 
 def mutate(args: argparse.Namespace, kind: str, policy: EvidencePolicy | None = None) -> None:  # noqa: C901
+    receipt_id = getattr(args, "_receipt_id", None)
+    if receipt_id is not None and (
+        kind != "heartbeat"
+        or not isinstance(receipt_id, str)
+        or not re.fullmatch(r"[0-9a-f]{32}", receipt_id)
+        or getattr(args, "expected_revision", None) is None
+    ):
+        raise RuntimeError("invalid fast receipt mutation")
     if backend_selection()["backend"] == "sqlite":
+        if receipt_id is not None:
+            raise RuntimeError("fast receipts require Git authority")
         mutate_sqlite(args, kind, policy)
         return
     with locked(phase="git_mutate"):
@@ -2717,8 +2734,17 @@ def mutate(args: argparse.Namespace, kind: str, policy: EvidencePolicy | None = 
             for target in generated_paths():
                 before.setdefault(target, None)
             touched = changed_paths(before, include_deleted=True)
-            committed = commit(f"chore(state): {kind} {args.task}", touched)
-            push_replica()
+            message = f"chore(state): {kind} {args.task}"
+            if receipt_id is not None:
+                message += f"\n\nHandoffctl-Receipt: {receipt_id}"
+            committed = commit(message, touched)
+            if receipt_id is not None and not committed:
+                raise RuntimeError("fast receipt mutation produced no signed commit")
+            if receipt_id is not None:
+                args._committed_oid = current_commit_oid()
+                args._committed_revision = meta["task_revision"]
+            if receipt_id is None:
+                push_replica()
         except Exception:
             # A signed local commit is already durable even when replication fails.
             # Keep its worktree representation intact so a later reconcile can safely

@@ -1,0 +1,269 @@
+# Copyright (C) Huawei Technologies Co., Ltd. 2026. All rights reserved.
+# SPDX-License-Identifier: MIT
+"""Internal receipt executor outcomes are exact and never inferred from enqueue."""
+
+from __future__ import annotations
+
+import subprocess
+import tempfile
+import unittest
+import uuid
+from pathlib import Path
+from typing import Any
+from unittest.mock import patch
+
+from tools.fast_receipt_worker import (
+    process_one,
+    process_pending,
+    publish_pending,
+    recover_running,
+    service_lock,
+    verify_local_commit,
+)
+from tools.fast_receipts import ReceiptStore
+
+
+class FakeCore:
+    def __init__(self, root: Path, outcome: str) -> None:
+        self.ROOT = root
+        self.outcome = outcome
+        self.calls = 0
+
+    def assert_project_binding(self) -> None:
+        return None
+
+    def coordinator_lock_path(self) -> Path:
+        return self.ROOT / "private/state.lock"
+
+    def backend_selection(self) -> dict[str, str]:
+        return {"backend": "git"}
+
+    def mutate(self, args: Any, kind: str) -> None:
+        self.calls += 1
+        if kind != "heartbeat":
+            raise AssertionError(kind)
+        if self.outcome == "stale":
+            raise RuntimeError("stale revision: expected 1, current 2")
+        if self.outcome == "unknown":
+            raise RuntimeError("unknown mutation failure")
+        if self.outcome == "post-commit":
+            raise RuntimeError("post-commit observation failed")
+        args._committed_oid = "a" * 40
+
+    def run(self, command: list[str], *, check: bool = True) -> subprocess.CompletedProcess[str]:
+        del check
+        return subprocess.CompletedProcess(command, 0, "")
+
+
+class PublicationCore(FakeCore):
+    def replication_enabled(self) -> bool:
+        return True
+
+    def run(self, command: list[str], *, check: bool = True) -> subprocess.CompletedProcess[str]:
+        del check
+        if "symbolic-ref" in command:
+            return subprocess.CompletedProcess(command, 0, "main\n")
+        if "rev-parse" in command:
+            return subprocess.CompletedProcess(command, 0, "b" * 40 + "\n")
+        return subprocess.CompletedProcess(command, 0, "")
+
+
+class FastReceiptWorkerTests(unittest.TestCase):
+    def setUp(self) -> None:
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        self.store = ReceiptStore(self.root / "private/receipts.sqlite3", str(uuid.uuid4()))
+        self.addCleanup(self.store.close)
+
+    def enqueue(self) -> str:
+        receipt = self.store.enqueue_heartbeat(
+            key="worker-a:heartbeat:1",
+            task="AR-0120",
+            owner="worker-a",
+            expected_revision=1,
+            lease_minutes=20,
+        )
+        return str(receipt["receipt_id"])
+
+    def complete_local(self) -> str:
+        receipt_id = self.enqueue()
+        self.store.claim_next()
+        self.store.record_local_commit(receipt_id, "a" * 40, 2)
+        return receipt_id
+
+    def test_success_requires_verified_commit_before_local_receipt(self) -> None:
+        receipt_id = self.enqueue()
+        core = FakeCore(self.root, "success")
+        with patch("tools.fast_receipt_worker.verify_local_commit", return_value=2) as verify:
+            result = process_one(core, self.store)
+        assert result is not None
+        self.assertEqual("completed-local", result["phase"])
+        self.assertEqual("a" * 40, result["commit_oid"])
+        verify.assert_called_once()
+        self.assertEqual(receipt_id, verify.call_args.args[1]["receipt_id"])
+        self.assertIsNone(process_one(core, self.store))
+        self.assertEqual(1, core.calls)
+
+    def test_stale_admission_is_rejected_without_local_commit(self) -> None:
+        self.enqueue()
+        core = FakeCore(self.root, "stale")
+        result = process_one(core, self.store)
+        assert result is not None
+        self.assertEqual("rejected", result["phase"])
+        self.assertIsNone(result["commit_oid"])
+
+    def test_unknown_failure_is_ambiguous_not_completed(self) -> None:
+        self.enqueue()
+        core = FakeCore(self.root, "unknown")
+        result = process_one(core, self.store)
+        assert result is not None
+        self.assertEqual("ambiguous", result["phase"])
+        self.assertIsNone(result["commit_oid"])
+
+    def test_commit_found_after_worker_failure_can_be_recovered(self) -> None:
+        self.enqueue()
+        core = FakeCore(self.root, "post-commit")
+        with (
+            patch("tools.fast_receipt_worker.find_receipt_commit", return_value="b" * 40),
+            patch("tools.fast_receipt_worker.verify_local_commit", return_value=2),
+        ):
+            result = process_one(core, self.store)
+        assert result is not None
+        self.assertEqual("completed-local", result["phase"])
+        self.assertEqual("b" * 40, result["commit_oid"])
+
+    def test_untrusted_commit_stays_ambiguous(self) -> None:
+        self.enqueue()
+        core = FakeCore(self.root, "success")
+        with (
+            patch(
+                "tools.fast_receipt_worker.verify_local_commit",
+                side_effect=RuntimeError("signature is not trusted"),
+            ),
+            patch("tools.fast_receipt_worker.find_receipt_commit", return_value="a" * 40),
+        ):
+            result = process_one(core, self.store)
+        assert result is not None
+        self.assertEqual("ambiguous", result["phase"])
+        self.assertIsNone(result["commit_oid"])
+
+    def test_off_branch_commit_cannot_be_local_completion(self) -> None:
+        intent_id = self.enqueue()
+        intent = self.store.read(intent_id)
+        assert intent is not None
+        core = FakeCore(self.root, "success")
+
+        def off_branch(
+            command: list[str], *, check: bool = True
+        ) -> subprocess.CompletedProcess[str]:
+            del check
+            if "merge-base" in command:
+                return subprocess.CompletedProcess(command, 1, "")
+            return subprocess.CompletedProcess(command, 0, "")
+
+        core.run = off_branch  # type: ignore[method-assign]
+        with self.assertRaisesRegex(RuntimeError, "not on the active state branch"):
+            verify_local_commit(core, intent, "a" * 40)
+
+    def test_restart_does_not_reexecute_running_intent_without_commit(self) -> None:
+        receipt_id = self.enqueue()
+        self.store.claim_next()
+        core = FakeCore(self.root, "success")
+        outcomes = recover_running(core, self.store)
+        self.assertEqual(1, len(outcomes))
+        self.assertEqual("ambiguous", outcomes[0]["phase"])
+        self.assertEqual("INTERRUPTED_BEFORE_COMMIT", outcomes[0]["error_code"])
+        self.assertEqual(receipt_id, outcomes[0]["receipt_id"])
+        self.assertEqual(0, core.calls)
+
+    def test_restart_recovers_exact_signed_commit_marker(self) -> None:
+        receipt_id = self.enqueue()
+        self.store.claim_next()
+        core = FakeCore(self.root, "success")
+        with (
+            patch("tools.fast_receipt_worker.find_receipt_commit", return_value="a" * 40),
+            patch("tools.fast_receipt_worker.verify_local_commit", return_value=2),
+        ):
+            outcomes = recover_running(core, self.store)
+        self.assertEqual(1, len(outcomes))
+        self.assertEqual("completed-local", outcomes[0]["phase"])
+        self.assertEqual(receipt_id, outcomes[0]["receipt_id"])
+        self.assertEqual(0, core.calls)
+
+    def test_service_lock_rejects_competing_executor(self) -> None:
+        core = FakeCore(self.root, "success")
+
+        def compete() -> None:
+            with service_lock(core):
+                pass
+
+        with service_lock(core), self.assertRaisesRegex(RuntimeError, "already active"):
+            compete()
+
+    def test_bounded_service_drains_queued_intents_once(self) -> None:
+        self.enqueue()
+        self.store.enqueue_heartbeat(
+            key="worker-b:heartbeat:1",
+            task="AR-0121",
+            owner="worker-b",
+            expected_revision=1,
+            lease_minutes=20,
+        )
+        core = FakeCore(self.root, "success")
+        with patch("tools.fast_receipt_worker.verify_local_commit", return_value=2):
+            outcomes = process_pending(core, self.store, limit=2)
+        self.assertEqual(2, len(outcomes))
+        self.assertTrue(all(outcome["phase"] == "completed-local" for outcome in outcomes))
+        self.assertEqual(2, core.calls)
+        self.assertEqual([], process_pending(core, self.store, limit=2))
+
+    def test_failed_push_and_unknown_ref_stay_local(self) -> None:
+        receipt_id = self.complete_local()
+        core = PublicationCore(self.root, "success")
+
+        def relation(_core: Any, older: str, newer: str) -> bool:
+            return (older, newer) in {("a" * 40, "b" * 40), ("c" * 40, "b" * 40)}
+
+        with (
+            patch(
+                "tools.fast_receipt_worker._observe_remote_main",
+                side_effect=["c" * 40, None],
+            ),
+            patch("tools.fast_receipt_worker._is_ancestor", side_effect=relation),
+        ):
+            outcomes = publish_pending(core, self.store)
+        self.assertEqual(1, len(outcomes))
+        self.assertEqual("completed-local", outcomes[0]["phase"])
+        self.assertEqual("REMOTE_UNKNOWN", outcomes[0]["publication_error"])
+        self.assertEqual(receipt_id, outcomes[0]["receipt_id"])
+
+    def test_diverged_remote_cannot_be_published(self) -> None:
+        self.complete_local()
+        core = PublicationCore(self.root, "success")
+
+        def relation(_core: Any, older: str, newer: str) -> bool:
+            return (older, newer) == ("a" * 40, "b" * 40)
+
+        with (
+            patch("tools.fast_receipt_worker._observe_remote_main", return_value="c" * 40),
+            patch("tools.fast_receipt_worker._is_ancestor", side_effect=relation),
+        ):
+            outcomes = publish_pending(core, self.store)
+        self.assertEqual("completed-local", outcomes[0]["phase"])
+        self.assertEqual("REMOTE_NOT_CONTAINING_COMMIT", outcomes[0]["publication_error"])
+
+    def test_observed_descendant_ref_publishes_without_push(self) -> None:
+        self.complete_local()
+        core = PublicationCore(self.root, "success")
+        with (
+            patch("tools.fast_receipt_worker._observe_remote_main", return_value="b" * 40),
+            patch("tools.fast_receipt_worker._is_ancestor", return_value=True),
+        ):
+            outcomes = publish_pending(core, self.store)
+        self.assertEqual("published-remote", outcomes[0]["phase"])
+        self.assertEqual("b" * 40, outcomes[0]["remote_oid"])
+
+
+if __name__ == "__main__":
+    unittest.main()

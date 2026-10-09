@@ -227,6 +227,73 @@ class FastReceiptTests(unittest.TestCase):
         count = store.connection.execute("SELECT count(*) FROM intents").fetchone()[0]
         self.assertEqual(1, count)
 
+    def test_queued_intent_cannot_be_reported_as_local_commit(self) -> None:
+        store = self.store()
+        queued = self.submit(store)
+        receipt_id = str(queued["receipt_id"])
+        with self.assertRaisesRegex(RuntimeError, "not running"):
+            store.record_local_commit(receipt_id, "a" * 40, 2)
+        current = store.read(receipt_id)
+        assert current is not None
+        self.assertEqual("queued-local", current["phase"])
+
+    def test_reservation_and_local_commit_are_fenced_and_idempotent(self) -> None:
+        store = self.store()
+        queued = self.submit(store)
+        receipt_id = str(queued["receipt_id"])
+        reserved = store.claim_next()
+        assert reserved is not None
+        self.assertEqual(receipt_id, reserved["receipt_id"])
+        self.assertEqual("running", reserved["phase"])
+        self.assertIsNone(store.claim_next())
+        with self.assertRaisesRegex(ValueError, "revision"):
+            store.record_local_commit(receipt_id, "a" * 40, 3)
+        with self.assertRaisesRegex(ValueError, "commit evidence"):
+            store.record_local_commit(receipt_id, "not-an-oid", 2)
+        local = store.record_local_commit(receipt_id, "a" * 40, 2)
+        self.assertEqual("completed-local", local["phase"])
+        self.assertEqual("a" * 40, local["commit_oid"])
+        self.assertEqual(local, store.record_local_commit(receipt_id, "a" * 40, 2))
+        with self.assertRaises(ReceiptConflictError):
+            store.record_local_commit(receipt_id, "b" * 40, 2)
+
+    def test_rejected_and_ambiguous_outcomes_do_not_become_local(self) -> None:
+        store = self.store()
+        rejected = self.submit(store, key="rejected")
+        store.claim_next()
+        rejected_id = str(rejected["receipt_id"])
+        self.assertEqual("rejected", store.record_rejection(rejected_id, "STALE_REVISION")["phase"])
+        with self.assertRaisesRegex(RuntimeError, "not running"):
+            store.record_local_commit(rejected_id, "a" * 40, 2)
+        ambiguous = self.submit(store, key="ambiguous")
+        store.claim_next()
+        ambiguous_id = str(ambiguous["receipt_id"])
+        self.assertEqual(
+            "ambiguous", store.record_ambiguity(ambiguous_id, "COMMIT_UNKNOWN")["phase"]
+        )
+        self.assertIsNone(store.claim_next())
+
+    def test_remote_receipt_requires_local_commit_and_exact_observation(self) -> None:
+        store = self.store()
+        queued = self.submit(store)
+        receipt_id = str(queued["receipt_id"])
+        with self.assertRaisesRegex(RuntimeError, "no local commit"):
+            store.record_remote_observation(receipt_id, "b" * 40)
+        store.claim_next()
+        store.record_local_commit(receipt_id, "a" * 40, 2)
+        self.assertEqual(1, len(store.pending_publication()))
+        pending = store.record_publication_failure(receipt_id, "REMOTE_UNAVAILABLE")
+        self.assertEqual("completed-local", pending["phase"])
+        self.assertEqual("REMOTE_UNAVAILABLE", pending["publication_error"])
+        remote = store.record_remote_observation(receipt_id, "b" * 40)
+        self.assertEqual("published-remote", remote["phase"])
+        self.assertEqual("b" * 40, remote["remote_oid"])
+        self.assertIsNotNone(remote["remote_observed_at"])
+        self.assertEqual([], store.pending_publication())
+        self.assertEqual(remote, store.record_remote_observation(receipt_id, "b" * 40))
+        with self.assertRaises(ReceiptConflictError):
+            store.record_remote_observation(receipt_id, "c" * 40)
+
 
 if __name__ == "__main__":
     unittest.main()

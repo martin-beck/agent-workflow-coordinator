@@ -15,6 +15,8 @@ import re
 import sqlite3
 import stat
 import uuid
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -25,6 +27,12 @@ else:  # pragma: no cover - direct vendored import
 
 _TOKEN = re.compile(r"[A-Za-z0-9._:-]{1,128}\Z")
 _PHASE_QUEUED = "queued-local"
+_PHASE_RUNNING = "running"
+_PHASE_LOCAL = "completed-local"
+_PHASE_REMOTE = "published-remote"
+_PHASE_REJECTED = "rejected"
+_PHASE_AMBIGUOUS = "ambiguous"
+_COMMIT = re.compile(r"[0-9a-f]{40}\Z")
 
 
 class ReceiptConflictError(RuntimeError):
@@ -163,7 +171,7 @@ class ReceiptStore:
         try:
             self.connection.execute("BEGIN IMMEDIATE")
             version = self.connection.execute("PRAGMA user_version").fetchone()[0]
-            if version not in (0, 1):
+            if version not in (0, 3):
                 raise RuntimeError("unsupported receipt database schema")
             self.connection.execute(
                 """CREATE TABLE IF NOT EXISTS receipt_binding (
@@ -191,12 +199,22 @@ class ReceiptStore:
                     expected_revision INTEGER NOT NULL,
                     payload_json TEXT NOT NULL,
                     input_digest TEXT NOT NULL,
-                    phase TEXT NOT NULL CHECK (phase IN ('queued-local', 'running')),
+                    phase TEXT NOT NULL CHECK (
+                        phase IN ('queued-local', 'running', 'completed-local',
+                                  'published-remote', 'rejected', 'ambiguous')
+                    ),
+                    started_at TEXT,
+                    commit_oid TEXT,
+                    result_revision INTEGER,
+                    error_code TEXT,
+                    remote_oid TEXT,
+                    remote_observed_at TEXT,
+                    publication_error TEXT,
                     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
                     UNIQUE(project_id, idempotency_key)
                 )"""
             )
-            self.connection.execute("PRAGMA user_version=1")
+            self.connection.execute("PRAGMA user_version=3")
             self._assert_path()
             self.connection.execute("COMMIT")
         except BaseException:
@@ -213,6 +231,22 @@ class ReceiptStore:
             os.close(descriptor)
         os.close(self._database_fd)
         os.close(self._parent_fd)
+
+    @contextmanager
+    def _transaction(self) -> Iterator[None]:
+        self._assert_path()
+        self.connection.execute("BEGIN IMMEDIATE")
+        committed = False
+        try:
+            yield
+            self._assert_path()
+            self.connection.execute("COMMIT")
+            committed = True
+            self._assert_path()
+        except BaseException:
+            if not committed:
+                self.connection.execute("ROLLBACK")
+            raise
 
     def enqueue_heartbeat(
         self,
@@ -240,10 +274,7 @@ class ReceiptStore:
         }
         canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
         digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
-        self._assert_path()
-        self.connection.execute("BEGIN IMMEDIATE")
-        committed = False
-        try:
+        with self._transaction():
             existing = self.connection.execute(
                 "SELECT * FROM intents WHERE project_id=? AND idempotency_key=?",
                 (self.project_id, key),
@@ -273,15 +304,104 @@ class ReceiptStore:
                 raise RuntimeError("receipt insert was not visible")
             if existing["input_digest"] != digest or existing["payload_json"] != canonical:
                 raise ReceiptConflictError("idempotency key already binds different input")
-            self._assert_path()
-            self.connection.execute("COMMIT")
-            committed = True
-            self._assert_path()
             return dict(existing)
-        except BaseException:
-            if not committed:
-                self.connection.execute("ROLLBACK")
-            raise
+
+    def claim_next(self) -> dict[str, Any] | None:
+        """Reserve one queued intent; a crashed reservation is not replayed blindly."""
+        with self._transaction():
+            selected = self.connection.execute(
+                """SELECT receipt_id FROM intents
+                WHERE project_id=? AND phase=?
+                ORDER BY created_at, rowid LIMIT 1""",
+                (self.project_id, _PHASE_QUEUED),
+            ).fetchone()
+            if selected is None:
+                return None
+            receipt_id = str(selected["receipt_id"])
+            self.connection.execute(
+                """UPDATE intents SET phase=?, started_at=strftime('%Y-%m-%dT%H:%M:%fZ','now')
+                WHERE receipt_id=? AND project_id=? AND phase=?""",
+                (_PHASE_RUNNING, receipt_id, self.project_id, _PHASE_QUEUED),
+            )
+            row = self.connection.execute(
+                "SELECT * FROM intents WHERE receipt_id=? AND project_id=?",
+                (receipt_id, self.project_id),
+            ).fetchone()
+            if row is None or row["phase"] != _PHASE_RUNNING:
+                raise RuntimeError("receipt reservation was not visible")
+            return dict(row)
+
+    def _finish_running(
+        self,
+        receipt_id: str,
+        phase: str,
+        *,
+        commit_oid: str | None = None,
+        result_revision: int | None = None,
+        error_code: str | None = None,
+    ) -> dict[str, Any]:
+        if not re.fullmatch(r"[0-9a-f]{32}", receipt_id):
+            raise ValueError("invalid receipt id")
+        with self._transaction():
+            row = self.connection.execute(
+                "SELECT * FROM intents WHERE receipt_id=? AND project_id=?",
+                (receipt_id, self.project_id),
+            ).fetchone()
+            if row is None:
+                raise RuntimeError("unknown receipt")
+            if row["phase"] == phase:
+                if (
+                    row["commit_oid"] != commit_oid
+                    or row["result_revision"] != result_revision
+                    or row["error_code"] != error_code
+                ):
+                    raise ReceiptConflictError("receipt outcome differs")
+            elif row["phase"] != _PHASE_RUNNING:
+                raise RuntimeError("receipt is not running")
+            else:
+                self.connection.execute(
+                    """UPDATE intents SET phase=?, commit_oid=?, result_revision=?,
+                    error_code=? WHERE receipt_id=? AND project_id=? AND phase=?""",
+                    (
+                        phase,
+                        commit_oid,
+                        result_revision,
+                        error_code,
+                        receipt_id,
+                        self.project_id,
+                        _PHASE_RUNNING,
+                    ),
+                )
+            current = self.connection.execute(
+                "SELECT * FROM intents WHERE receipt_id=? AND project_id=?",
+                (receipt_id, self.project_id),
+            ).fetchone()
+            if current is None or current["phase"] != phase:
+                raise RuntimeError("receipt outcome was not visible")
+            return dict(current)
+
+    def record_local_commit(
+        self, receipt_id: str, commit_oid: str, result_revision: int
+    ) -> dict[str, Any]:
+        """Record a service-verified signed commit, never just a queued intent."""
+        if not _COMMIT.fullmatch(commit_oid) or result_revision < 2:
+            raise ValueError("invalid local commit evidence")
+        receipt = self.read(receipt_id)
+        if receipt is None or result_revision != receipt["expected_revision"] + 1:
+            raise ValueError("commit revision does not match queued fence")
+        return self._finish_running(
+            receipt_id, _PHASE_LOCAL, commit_oid=commit_oid, result_revision=result_revision
+        )
+
+    def record_rejection(self, receipt_id: str, error_code: str) -> dict[str, Any]:
+        if not _TOKEN.fullmatch(error_code):
+            raise ValueError("invalid rejection code")
+        return self._finish_running(receipt_id, _PHASE_REJECTED, error_code=error_code)
+
+    def record_ambiguity(self, receipt_id: str, error_code: str) -> dict[str, Any]:
+        if not _TOKEN.fullmatch(error_code):
+            raise ValueError("invalid ambiguity code")
+        return self._finish_running(receipt_id, _PHASE_AMBIGUOUS, error_code=error_code)
 
     def read(self, receipt_id: str) -> dict[str, Any] | None:
         if not re.fullmatch(r"[0-9a-f]{32}", receipt_id):
@@ -293,3 +413,67 @@ class ReceiptStore:
         ).fetchone()
         self._assert_path()
         return None if row is None else dict(row)
+
+    def running(self) -> list[dict[str, Any]]:
+        """List interrupted reservations for single-service startup recovery."""
+        self._assert_path()
+        rows = self.connection.execute(
+            "SELECT * FROM intents WHERE project_id=? AND phase=? ORDER BY started_at, rowid",
+            (self.project_id, _PHASE_RUNNING),
+        ).fetchall()
+        self._assert_path()
+        return [dict(row) for row in rows]
+
+    def pending_publication(self) -> list[dict[str, Any]]:
+        self._assert_path()
+        rows = self.connection.execute(
+            "SELECT * FROM intents WHERE project_id=? AND phase=? ORDER BY created_at, rowid",
+            (self.project_id, _PHASE_LOCAL),
+        ).fetchall()
+        self._assert_path()
+        return [dict(row) for row in rows]
+
+    def record_remote_observation(self, receipt_id: str, remote_oid: str) -> dict[str, Any]:
+        """Store a service-verified exact remote ref observation."""
+        if not _COMMIT.fullmatch(remote_oid):
+            raise ValueError("invalid observed remote oid")
+        with self._transaction():
+            row = self.connection.execute(
+                "SELECT * FROM intents WHERE project_id=? AND receipt_id=?",
+                (self.project_id, receipt_id),
+            ).fetchone()
+            if row is None or row["phase"] not in (_PHASE_LOCAL, _PHASE_REMOTE):
+                raise RuntimeError("receipt has no local commit to publish")
+            if row["phase"] == _PHASE_REMOTE and row["remote_oid"] != remote_oid:
+                raise ReceiptConflictError("remote receipt already binds another observation")
+            if row["phase"] == _PHASE_LOCAL:
+                self.connection.execute(
+                    """UPDATE intents SET phase=?, remote_oid=?,
+                    remote_observed_at=strftime('%Y-%m-%dT%H:%M:%fZ','now'),
+                    publication_error=NULL WHERE project_id=? AND receipt_id=?""",
+                    (_PHASE_REMOTE, remote_oid, self.project_id, receipt_id),
+                )
+            current = self.connection.execute(
+                "SELECT * FROM intents WHERE project_id=? AND receipt_id=?",
+                (self.project_id, receipt_id),
+            ).fetchone()
+            if current is None:
+                raise RuntimeError("remote receipt was not visible")
+            return dict(current)
+
+    def record_publication_failure(self, receipt_id: str, code: str) -> dict[str, Any]:
+        if not _TOKEN.fullmatch(code):
+            raise ValueError("invalid publication failure code")
+        with self._transaction():
+            self.connection.execute(
+                """UPDATE intents SET publication_error=?
+                WHERE project_id=? AND receipt_id=? AND phase=?""",
+                (code, self.project_id, receipt_id, _PHASE_LOCAL),
+            )
+            row = self.connection.execute(
+                "SELECT * FROM intents WHERE project_id=? AND receipt_id=?",
+                (self.project_id, receipt_id),
+            ).fetchone()
+            if row is None or row["phase"] != _PHASE_LOCAL:
+                raise RuntimeError("receipt is not locally completed")
+            return dict(row)
