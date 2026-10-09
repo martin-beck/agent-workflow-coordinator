@@ -5,22 +5,168 @@
 
 import datetime as dt
 import json
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
 
 from git_mixed_command_probe import (
+    TASK_IDS,
+    acceptance_errors,
+    acceptances,
     adversarial_commands,
     checked_batch,
     error_class,
+    has_matching_dco_trailer,
     require_unchanged_sources,
     route_name,
     stabilize_disposable_claims,
+    strict_acceptance_commit_errors,
 )
 
 
 class GitMixedCommandProbeTests(unittest.TestCase):
+    def test_dco_requires_actual_matching_final_trailer(self) -> None:
+        identity = "Fixture <fixture@example.invalid>"
+        self.assertTrue(
+            has_matching_dco_trailer(
+                f"subject\n\nSigned-off-by: {identity}\n", "Fixture", "fixture@example.invalid"
+            )
+        )
+        self.assertFalse(
+            has_matching_dco_trailer(
+                f"subject\n\nMention Signed-off-by: {identity} in prose.\n",
+                "Fixture",
+                "fixture@example.invalid",
+            )
+        )
+        self.assertFalse(
+            has_matching_dco_trailer(
+                f"subject\n\nSigned-off-by: {identity}\n", "Other", "other@example.invalid"
+            )
+        )
+
+    def test_acceptance_commit_checker_rejects_unsigned_or_missing_dco(self) -> None:
+        def fake_run(argv: list[str], **_kwargs: object) -> subprocess.CompletedProcess[object]:
+            if argv[1] == "rev-list":
+                return subprocess.CompletedProcess(argv, 0, "abc123\n")
+            if argv[1] == "diff-tree":
+                return subprocess.CompletedProcess(argv, 0, b"tasks/AR-9000.md\0")
+            if argv[1] == "verify-commit":
+                return subprocess.CompletedProcess(argv, 1, b"", b"invalid signature")
+            if argv[1] == "show" and argv[3] == "--format=%P":
+                return subprocess.CompletedProcess(argv, 0, "parent\n")
+            if argv[1] == "show" and argv[3] == "--format=%an%x00%ae%x00%s%x00%B":
+                return subprocess.CompletedProcess(
+                    argv,
+                    0,
+                    "Fixture\0fixture@example.invalid\0chore(state): accept AR-9000\0missing",
+                )
+            if argv[1] == "interpret-trailers":
+                return subprocess.CompletedProcess(argv, 0, "")
+            raise AssertionError(argv)
+
+        with (
+            mock.patch("git_mixed_command_probe.subprocess.run", side_effect=fake_run),
+            mock.patch("git_mixed_command_probe.history_extends", return_value=True),
+        ):
+            count, errors = strict_acceptance_commit_errors(Path("disposable"), "starting")
+        self.assertEqual(1, count)
+        self.assertTrue(any("signature did not verify" in error for error in errors))
+        self.assertTrue(any("DCO trailer missing" in error for error in errors))
+
+    def test_acceptance_commit_checker_catches_intermediate_unrelated_path(self) -> None:
+        def fake_run(argv: list[str], **_kwargs: object) -> subprocess.CompletedProcess[object]:
+            if argv[1] == "rev-list":
+                return subprocess.CompletedProcess(argv, 0, "newer\nolder\n")
+            if argv[1] == "diff-tree":
+                path = b"secret.txt\0" if argv[-1] == "older" else b"tasks/AR-9001.md\0"
+                return subprocess.CompletedProcess(argv, 0, path)
+            if argv[1] == "verify-commit":
+                return subprocess.CompletedProcess(argv, 0, b"")
+            if argv[1] == "show" and argv[3] == "--format=%P":
+                return subprocess.CompletedProcess(argv, 0, "parent\n")
+            if argv[1] == "show" and argv[3] == "--format=%an%x00%ae%x00%s%x00%B":
+                task_id = "AR-9000" if argv[-1] == "older" else "AR-9001"
+                return subprocess.CompletedProcess(
+                    argv,
+                    0,
+                    f"Fixture\0fixture@example.invalid\0chore(state): accept {task_id}\0subject\n",
+                )
+            if argv[1] == "interpret-trailers":
+                return subprocess.CompletedProcess(
+                    argv, 0, "Signed-off-by: Fixture <fixture@example.invalid>\n"
+                )
+            raise AssertionError(argv)
+
+        with (
+            mock.patch("git_mixed_command_probe.subprocess.run", side_effect=fake_run),
+            mock.patch("git_mixed_command_probe.history_extends", return_value=True),
+        ):
+            _, errors = strict_acceptance_commit_errors(Path("disposable"), "starting")
+        self.assertTrue(any("unrelated committed path changed" in error for error in errors))
+
+    def test_acceptance_errors_reject_missing_or_wrong_records(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            tasks = Path(directory) / "tasks"
+            tasks.mkdir()
+            before: dict[str, dict[str, object]] = {}
+            for index, task_id in enumerate(TASK_IDS):
+                meta = {
+                    "owner": f"bench-{index}",
+                    "task_revision": 3,
+                    "spec_ref": f"specs/{task_id}.json",
+                    "spec_revision": 1,
+                    "spec_acceptance": {
+                        "spec_ref": f"specs/{task_id}.json",
+                        "spec_revision": 1,
+                        "status": "pass",
+                        "evidence_class": "mechanical",
+                        "evidence_ref": f"quality/{task_id}",
+                        "evidence_digest": "sha256:" + "a" * 64,
+                    },
+                }
+                before[task_id] = {
+                    key: value for key, value in meta.items() if key != "spec_acceptance"
+                }
+                before[task_id]["task_revision"] = 2
+                (tasks / f"{task_id}.md").write_text("---\n" + json.dumps(meta) + "\n---\n")
+            self.assertEqual([], acceptance_errors(Path(directory), before))
+            bad = tasks / f"{TASK_IDS[0]}.md"
+            meta = json.loads(bad.read_text().split("---", 2)[1])
+            del meta["spec_acceptance"]
+            bad.write_text("---\n" + json.dumps(meta) + "\n---\n")
+            self.assertIn(
+                "acceptance does not match request", acceptance_errors(Path(directory), before)[0]
+            )
+            meta["unrelated"] = "changed"
+            bad.write_text("---\n" + json.dumps(meta) + "\n---\n")
+            self.assertTrue(
+                any(
+                    "unrelated task fields changed" in error
+                    for error in acceptance_errors(Path(directory), before)
+                )
+            )
+
+    def test_acceptances_bind_each_owner_revision_and_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            tasks = Path(directory) / "tasks"
+            tasks.mkdir()
+            for index, task_id in enumerate(TASK_IDS):
+                (tasks / f"{task_id}.md").write_text(
+                    "---\n" + json.dumps({"task_revision": index + 2}) + "\n---\n"
+                )
+            commands = acceptances(Path(directory))
+            self.assertEqual(16, len(commands))
+            self.assertEqual(16, len({tuple(command) for command in commands}))
+            for index, command in enumerate(commands):
+                self.assertEqual(["accept", TASK_IDS[index]], command[:2])
+                self.assertEqual(f"bench-{index}", command[3])
+                self.assertEqual(str(index + 2), command[5])
+                self.assertEqual("mechanical", command[7])
+                self.assertEqual(f"quality/{TASK_IDS[index]}", command[9])
+
     def test_stabilize_claims_only_changes_disposable_active_tasks(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             tasks = Path(directory) / "tasks"

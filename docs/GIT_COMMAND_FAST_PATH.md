@@ -261,6 +261,15 @@ largest observed exclusive holds were 3.752 s for `git_mutate` and 2.469 s
 for `git_reconcile`; post-batch static and live doctors passed. This repeat
 confirms a correctness-preserving but still severe accepted-worker liveness
 failure under the unchanged ten-second lock deadline.
+At exact merged Coordinator `5249a62`, a separate 16-worker batch for the new
+`accept` route passed 16/16 after 16/16 claims on the same frozen fixture.
+Its maximum exclusive hold was 0.426 s, post-batch static/live doctors passed,
+and the observed source state and product bytes stayed unchanged. A stronger
+rerun verified all 16 exact acceptance records, 16 extending SSH-signed/DCO
+commits, unchanged unrelated task fields and bodies, no unrelated committed or
+uncommitted paths, stable ignored runtime state and non-HEAD refs, and green
+doctors. This tests the new route in one contention pattern, not the full
+command matrix.
 
 A subsequent single-task-snapshot mutation experiment was rejected after
 independent review: although it preserved lock-respecting writers, it could
@@ -284,7 +293,7 @@ diagnostic on one host, not a statistical p95 or a 5% acceptance result.
 | --- | --- | --- |
 | `snapshot`, `doctor --live` | Fresh product/GitHub observation, consistent validated authority view | Worktree inventory and remote queries dominate; an older cached observation cannot be reported as fresh. |
 | `doctor`, `render-status --check` | Complete structural, privacy, and generated-view validation | Whole-repository privacy scan and full task graph/rendering; direct edits and missed invalidations must be detected. |
-| `claim`, `heartbeat`, `update`, `release`, `promote`, `pause`, `resume`, `unblock`, `recover-expired`, `gate`, `checkpoint` | Fenced accepted transition, validated task/projections, signed durable Git commit, optional required replica publication | A signed commit and any required remote acknowledgement cannot be removed from the unchanged end-to-end boundary. |
+| `claim`, `heartbeat`, `update`, `accept`, `release`, `promote`, `pause`, `resume`, `unblock`, `recover-expired`, `gate`, `checkpoint` | Fenced accepted transition, validated task/projections, signed durable Git commit, optional required replica publication | A signed commit and any required remote acknowledgement cannot be removed from the unchanged end-to-end boundary. |
 | Git `roles` and `directive` operations | The route's exact durable read or mutation result | Preserve binding, revision, privacy, and precedence admission; measure each subcommand rather than hiding it in a family average. |
 | `run` | Completed wrapped process, fsynced classified result, task commit, and post-command reconcile | A caller-selected command can run arbitrarily long; zero coordinator overhead cannot reduce its total time by 95%. |
 | `reconcile` with/without `--commit`/`--push` | Applied live observation, optional signed commit, optional confirmed push | Separate local and remote completion; an outbox alone does not satisfy a synchronous `--push`. |
@@ -293,10 +302,25 @@ diagnostic on one host, not a statistical p95 or a 5% acceptance result.
 
 The literal all-command target cannot be proved for arbitrary `run` payloads,
 unbounded remote latency, or an unchanged strict fresh-remote route: those
-external operations have lower bounds independent of coordinator code. This
-does not waive the target. Such a row remains unresolved until the user
-explicitly accepts a separate completion contract; unchanged routes retain
-their current behavior.
+external operations have lower bounds independent of coordinator code. The
+user selected an **opt-in fast completion contract** on 2026-10-09. The
+unchanged strict routes retain their current behavior and are not reported as
+meeting the 5% target. A fast-mode timing must name which receipt boundary it
+measures; comparing a queued receipt to a strict completed response without
+labelling the changed contract is invalid.
+
+The proposed opt-in receipt sequence is `queued-local` (fsynced intent only,
+no authority transition), `completed-local` (fenced, validated transition and
+signed Git commit, or a classified terminal rejection), then
+`published-remote` (exact remote ref observed at the committed revision).
+Receipt IDs bind project, operation kind, canonical argv digest, task and
+expected revision, and an idempotency key. A worker may retry with the same
+key and identical input without executing a mutation or `run` payload twice;
+different input under that key rejects. A receipt must expose its phase and
+failure classification, never call a queued `run` completed, and never call
+a local commit remotely published. Existing strict commands remain the
+compatibility path and can wait for the corresponding receipt boundary.
+This is a design contract, not implemented behavior or release evidence.
 
 ## Further candidate architecture, not yet implemented
 
