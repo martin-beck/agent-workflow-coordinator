@@ -7,7 +7,7 @@ the Python implementation, not a replacement implementation.
 ## Evidence classification
 
 [`../evidence.json`](../evidence.json) records the structured formal-evidence contract required by
-Agent Workflow Quality v0.24.0. It classifies these six TLC runs as bounded-model evidence and
+Agent Workflow Quality v0.24.0. It classifies these eight TLC runs as bounded-model evidence and
 records the largest finite process, task, actor, project, worktree, and revision domains used by
 their checked configurations. Each `.cfg` file remains authoritative for the exact bound of its
 model.
@@ -130,6 +130,14 @@ implementation correspondence. Its liveness property is conditional on both
 services eventually remaining available; repeated crashes are therefore an
 explicitly nonterminal environmental condition, not a false completion claim.
 
+HandoffctlObservation.tla checks the bounded opt-in `cached-observation-v1`
+contract: cache hits require the exact current input generation, one refresh
+serves concurrent waiters, an input change rejects the in-flight generation,
+and timeout is terminal. It is an abstraction of the resident socket cache;
+it does not claim operating-system event delivery or implementation refinement.
+[`OBSERVATION_CORRESPONDENCE.md`](OBSERVATION_CORRESPONDENCE.md) maps the
+abstraction to focused implementation evidence and records those limits.
+
 `HandoffctlStorage.tla` checks both selected backends, transaction mutual exclusion, one accepted
 revision increment per process, prepared SQLite authority before selector switch, eventual command
 completion and eventual migration switch under weak fairness. Real independent-process tests connect
@@ -189,7 +197,7 @@ use their full configurations; the general lifecycle model uses the
 one-process `HandoffctlPR.cfg`, while the separate lock and recovery models
 retain independent-process races. This exact-head PR tier is not the complete
 two-process lifecycle cross-product and cannot produce full release evidence.
-`verify.sh --tier full-exhaustive` runs all seven full configurations on the
+`verify.sh --tier full-exhaustive` runs all eight full configurations on the
 scheduled weekly or manually dispatched gate. A release claim requires its
 fresh exact-head full attestation; neither smaller tier substitutes for it.
 

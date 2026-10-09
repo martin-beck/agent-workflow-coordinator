@@ -159,6 +159,16 @@ class FastReceiptCLITests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "unknown fast receipt"):
             self.invoke("receipt", receipt_id="a" * 32)
 
+    def test_invalid_observation_age_is_a_cli_runtime_error(self) -> None:
+        with (
+            patch(
+                "tools.fast_receipt_cli.ObservationCache.observe",
+                side_effect=ValueError("max_age_seconds must be bounded"),
+            ),
+            self.assertRaisesRegex(RuntimeError, "max_age_seconds must be bounded"),
+        ):
+            dispatch_fast(self.core, argparse.Namespace(fast_action="observe", max_age_seconds=-1))
+
     def test_one_cycle_worker_reports_separate_outcomes(self) -> None:
         queued = self.heartbeat()
         with (

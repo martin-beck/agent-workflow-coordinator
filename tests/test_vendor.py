@@ -155,6 +155,9 @@ class VendorTest(unittest.TestCase):
             "formal/handoffctl/HandoffctlBinding.cfg",
             "formal/handoffctl/HandoffctlBinding.tla",
             "formal/handoffctl/HandoffctlFast.cfg",
+            "formal/handoffctl/HandoffctlObservation.cfg",
+            "formal/handoffctl/HandoffctlObservation.tla",
+            "formal/handoffctl/OBSERVATION_CORRESPONDENCE.md",
             "formal/handoffctl/HandoffctlLocks.cfg",
             "formal/handoffctl/HandoffctlLocks.tla",
             "formal/handoffctl/HandoffctlPR.cfg",
@@ -254,6 +257,7 @@ exec "$@"
                 "HandoffctlRun",
                 "HandoffctlStorage",
                 "HandoffctlReceipts",
+                "HandoffctlObservation",
                 "HandoffctlPR",
                 "HandoffctlRecovery",
             },
@@ -428,7 +432,9 @@ exec "$@"
             env={"PATH": os.environ["PATH"], "PYTHONPATH": str(self.target)},
         )
         self.assertEqual(0, fast_help.returncode, fast_help.stderr)
-        self.assertIn("heartbeat,claim,promote,update,receipt,worker,publisher", fast_help.stdout)
+        self.assertIn(
+            "heartbeat,claim,promote,update,receipt,observe,worker,publisher", fast_help.stdout
+        )
         embedded_guide = (self.target / "docs/agent-workflow-coordinator.md").read_text()
         self.assertIn("tools/handoffctl unblock", embedded_guide)
 

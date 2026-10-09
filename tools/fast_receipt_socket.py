@@ -18,8 +18,13 @@ from pathlib import Path
 from typing import Any
 
 if __package__:
+    from .fast_observation import ObservationCache, validate_max_age
     from .fast_receipts import validate_update_changes
 else:  # pragma: no cover - direct vendored import
+    from fast_observation import (  # type: ignore[import-not-found,no-redef]
+        ObservationCache,
+        validate_max_age,
+    )
     from fast_receipts import validate_update_changes  # type: ignore[import-not-found,no-redef]
 
 _SOCKET_NAME = "fast-receipts.sock"
@@ -28,7 +33,12 @@ _SOCKET_NAME = "fast-receipts.sock"
 # escapes non-ASCII input, so a maximum-length Unicode request is about 110
 # KiB on the wire.  The single-frame protocol stays bounded at 128 KiB.
 _MAX_REQUEST = 131072
-_MAX_REPLY = 16384
+# A complete ASB observation can contain hundreds of worktrees.  Reserve a
+# larger fixed reply frame for that inventory, rather than letting the service
+# write an unbounded response.  A larger inventory receives a bounded signal
+# that permits the documented direct fresh-scan fallback.
+_MAX_REPLY = 1048576
+_OBSERVATION_SOCKET_TIMEOUT_SECONDS = 100.0
 _PUBLIC_FIELDS = (
     "receipt_id",
     "project_id",
@@ -123,6 +133,13 @@ def _safe_socket(path: Path) -> bool:
 def _fast_request(argv: list[str]) -> dict[str, Any] | None:  # noqa: C901 - strict wire parser
     if argv[:2] == ["fast", "receipt"] and len(argv) == 3:
         return {"protocol": 1, "action": "receipt", "receipt_id": argv[2]}
+    if argv[:2] == ["fast", "observe"] and len(argv) == 4 and argv[2] == "--max-age-seconds":
+        try:
+            maximum = int(argv[3])
+            validate_max_age(maximum)
+        except ValueError:
+            return None
+        return {"protocol": 1, "action": "observe", "max_age_seconds": maximum}
     if argv[:2] == ["fast", "promote"] and len(argv) == 9:
         if argv[2].startswith("-"):
             return None
@@ -224,7 +241,15 @@ def _read_line(peer: socket.socket, limit: int) -> bytes:
     raise RuntimeError("fast receipt socket message is too large")
 
 
-def try_socket_fast(argv: list[str]) -> int | None:
+def _send_reply(peer: socket.socket, reply: dict[str, Any]) -> None:
+    """Send one bounded frame, never an unbounded observation response."""
+    encoded = json.dumps(reply, sort_keys=True).encode() + b"\n"
+    if len(encoded) > _MAX_REPLY:
+        encoded = b'{"error":"FAST_OBSERVATION_REPLY_TOO_LARGE: use direct fast observe"}\n'
+    peer.sendall(encoded)
+
+
+def try_socket_fast(argv: list[str]) -> int | None:  # noqa: C901 - strict transport fallback
     """Use the warm bound service when available; otherwise use the direct CLI."""
     request = _fast_request(argv)
     if request is None:
@@ -234,6 +259,7 @@ def try_socket_fast(argv: list[str]) -> int | None:
             ["fast", "promote"],
             ["fast", "update"],
             ["fast", "receipt"],
+            ["fast", "observe"],
         ):
             return _fallback_or_error()
         return None
@@ -242,7 +268,9 @@ def try_socket_fast(argv: list[str]) -> int | None:
         return _fallback_or_error()
     try:
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as peer:
-            peer.settimeout(10)
+            peer.settimeout(
+                _OBSERVATION_SOCKET_TIMEOUT_SECONDS if request["action"] == "observe" else 10
+            )
             peer.connect(str(path))
             peer.sendall(json.dumps(request, sort_keys=True).encode() + b"\n")
             raw = _read_line(peer, _MAX_REPLY)
@@ -250,10 +278,21 @@ def try_socket_fast(argv: list[str]) -> int | None:
         # A timed-out enqueue may have committed; the direct path uses the same
         # idempotency key and returns that durable row rather than duplicating it.
         return _fallback_or_error()
+    except RuntimeError as error:
+        if (
+            request["action"] == "observe"
+            and str(error) == "fast receipt socket message is too large"
+        ):
+            return _fallback_or_error()
+        raise
     response = json.loads(raw)
     if not isinstance(response, dict) or set(response) not in ({"ok"}, {"error"}):
         raise RuntimeError("fast receipt socket response is invalid")
     if "error" in response:
+        if request["action"] == "observe" and str(response["error"]).startswith(
+            "FAST_OBSERVATION_REPLY_TOO_LARGE:"
+        ):
+            return _fallback_or_error()
         sys.stderr.write(f"ERROR: {response['error']}\n")
         return 1
     print(json.dumps(response["ok"], sort_keys=True))
@@ -267,6 +306,14 @@ def _require_request(request: Any) -> dict[str, Any]:  # noqa: C901 - strict wir
     if action == "receipt":
         if set(request) != {"protocol", "action", "receipt_id"}:
             raise RuntimeError("invalid fast receipt lookup")
+        return request
+    if action == "observe":
+        if set(request) != {"protocol", "action", "max_age_seconds"}:
+            raise RuntimeError("invalid fast observation request")
+        try:
+            validate_max_age(request["max_age_seconds"])
+        except ValueError as error:
+            raise RuntimeError("invalid fast observation request") from error
         return request
     if action in {"heartbeat", "claim"}:
         if set(request) != {
@@ -347,8 +394,8 @@ def _handle(
                 json.loads(raw if raw is not None else _read_line(peer, _MAX_REQUEST))
             )
             result = submit(request)
-            reply = {"ok": public_receipt(result)}
-            peer.sendall(json.dumps(reply, sort_keys=True).encode() + b"\n")
+            reply = {"ok": (result if request["action"] == "observe" else public_receipt(result))}
+            _send_reply(peer, reply)
         except _TransportUnavailableError:
             # No reply forces the same-key client fallback.  An error reply
             # would incorrectly make a dead service a terminal command failure.
@@ -359,7 +406,7 @@ def _handle(
             pass
         except (OSError, ValueError, RuntimeError, KeyError) as error:
             with suppress(OSError):
-                peer.sendall(json.dumps({"error": str(error)}).encode() + b"\n")
+                _send_reply(peer, {"error": str(error)})
 
 
 @contextmanager
@@ -388,6 +435,7 @@ def socket_service(core: Any) -> Iterator[None]:  # noqa: C901
             raise RuntimeError("fast receipt socket identity changed")
         path.unlink()
     requests: Queue[tuple[dict[str, Any], Future[dict[str, Any]]] | None] = Queue(maxsize=64)
+    observations = ObservationCache()
     ready = threading.Event()
     writer_error: list[Exception] = []
 
@@ -453,6 +501,8 @@ def socket_service(core: Any) -> Iterator[None]:  # noqa: C901
         )
 
     def submit(request: dict[str, Any]) -> dict[str, Any]:
+        if request["action"] == "observe":
+            return observations.observe(core, request["max_age_seconds"])
         if not writer.is_alive():
             raise _TransportUnavailableError("fast receipt writer is unavailable")
         future: Future[dict[str, Any]] = Future()
@@ -472,8 +522,15 @@ def socket_service(core: Any) -> Iterator[None]:  # noqa: C901
             listener.listen(128)
             listener.setblocking(False)
             stop = threading.Event()
-            slots = threading.BoundedSemaphore(32)
-            with ThreadPoolExecutor(max_workers=32) as pool:
+            # Observations are bounded separately from receipt operations.
+            # A cold 64-caller read burst may occupy every observation worker,
+            # but cannot make a socket-required mutation unavailable.
+            observation_slots = threading.BoundedSemaphore(64)
+            receipt_slots = threading.BoundedSemaphore(32)
+            with (
+                ThreadPoolExecutor(max_workers=64) as observation_pool,
+                ThreadPoolExecutor(max_workers=32) as receipt_pool,
+            ):
 
                 def accept_loop() -> None:  # noqa: C901 - bounded socket admission state machine
                     pending: dict[socket.socket, tuple[bytearray, float]] = {}
@@ -535,16 +592,33 @@ def socket_service(core: Any) -> Iterator[None]:  # noqa: C901
                                     if not separator or remainder or len(line) > _MAX_REQUEST:
                                         peer.close()
                                         continue
+                                    try:
+                                        request = json.loads(line)
+                                        action = (
+                                            request.get("action")
+                                            if isinstance(request, dict)
+                                            else None
+                                        )
+                                    except (TypeError, ValueError):
+                                        action = None
+                                    slots = (
+                                        observation_slots if action == "observe" else receipt_slots
+                                    )
+                                    pool = observation_pool if action == "observe" else receipt_pool
                                     if not slots.acquire(blocking=False):
                                         peer.close()
                                         continue
                                     peer.setblocking(True)
 
-                                    def handle_one(connection: socket.socket, raw: bytes) -> None:
+                                    def handle_one(
+                                        connection: socket.socket,
+                                        raw: bytes,
+                                        slot: threading.BoundedSemaphore = slots,
+                                    ) -> None:
                                         try:
                                             _handle(core, connection, submit, raw)
                                         finally:
-                                            slots.release()
+                                            slot.release()
 
                                     try:
                                         pool.submit(handle_one, peer, line)

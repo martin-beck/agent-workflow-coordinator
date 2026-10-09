@@ -4016,6 +4016,8 @@ def main() -> int:
     fast_update.add_argument("--key", required=True)
     fast_receipt = fast_actions.add_parser("receipt")
     fast_receipt.add_argument("receipt_id")
+    fast_observe = fast_actions.add_parser("observe")
+    fast_observe.add_argument("--max-age-seconds", type=int, required=True)
     fast_worker = fast_actions.add_parser("worker")
     fast_worker.add_argument("--limit", type=int, default=16)
     fast_worker.add_argument("--serve", action="store_true")

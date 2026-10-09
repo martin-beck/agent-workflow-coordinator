@@ -15,13 +15,19 @@ from pathlib import Path
 
 EXPECTED_MODELS = {
     "portable-smoke": {"HandoffctlBinding"},
-    "pr-fast": {"HandoffctlFast", "HandoffctlReceiptsFast", "OracleInteractionGates"},
+    "pr-fast": {
+        "HandoffctlFast",
+        "HandoffctlReceiptsFast",
+        "HandoffctlObservation",
+        "OracleInteractionGates",
+    },
     "pr-publication": {
         "HandoffctlBinding",
         "HandoffctlLocks",
         "HandoffctlRun",
         "HandoffctlStorage",
         "HandoffctlReceipts",
+        "HandoffctlObservation",
         "HandoffctlPR",
         "HandoffctlRecovery",
     },
@@ -31,6 +37,7 @@ EXPECTED_MODELS = {
         "HandoffctlRun",
         "HandoffctlStorage",
         "HandoffctlReceipts",
+        "HandoffctlObservation",
         "Handoffctl",
         "HandoffctlRecovery",
     },
