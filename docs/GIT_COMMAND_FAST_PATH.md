@@ -69,7 +69,58 @@ workers continued work, but both fixture clones used the same pinned commit.
 The candidate uses roughly 10--13% of baseline wall time for these routes,
 not the required 5%, and it still consumes roughly 14 CPU-seconds per live
 command. This is a local first-stage result, not a concurrency, cold-start,
-failure-mode, or all-command qualification.
+failure-mode, or all-command qualification. Independent checkpoint review
+found that this early harness version did not pin candidate file bytes, capture
+outputs, or detect dirty-worktree/ref changes; the harness now clones both
+exact runtime commits, hashes outputs, and fingerprints source checkout status
+and refs. The earlier timings remain diagnostic only until re-run with those
+repairs and a stable input fixture.
+
+The follow-up 16-process probe (`tests/git_mixed_command_probe.py`) uses one
+disposable Git state clone plus 16 synthetic, dependency-free task/spec pairs;
+its live product inventory is the same 746-worktree ASB repository, observed
+read-only. On candidate `1d306b02adbde5988306e5bc48c3f78b5d809cd1`,
+16 simultaneous claims and 16 simultaneous releases on distinct tasks all
+succeeded, with batch walls of 6.1--7.7 seconds across repeated local runs.
+Read-only and live/reconcile mixtures also passed static and live `doctor`
+after each batch. Four `board` and four `metrics` invocations rejected as
+unsupported on Git authority, and four unassigned `roles check` calls
+rejected, as expected; four `directive list` calls succeeded. Separate
+16-lane directive create and activation batches also succeeded, with
+roughly 0.09-second maximum exclusive lock holds. Role assignment/removal
+CAS batches admitted exactly one request and rejected 15 stale revisions,
+while the role reads succeeded; the fixture must seed roles for any
+pre-existing active tasks before initializing role admission.
+
+A 16-process mixture of four heartbeats, four updates, four `run` invocations
+wrapping `/usr/bin/true`, and four reconciles **did not pass**: one run had
+two mutation lock timeouts, and a repeat had one heartbeat lock timeout.
+The repeat's private phase trace showed 16 claims with maximum lock wait
+7.067 s and hold 0.520 s; in the mixed batch, `git_mutate` reached 10.000 s
+wait and 1.224 s hold, while `git_reconcile` reached 8.279 s wait and
+1.272 s hold. The successful calls and post-batch static/live doctors show
+durable consistency, but do not turn timed-out calls into success. The
+remaining 0.5--1.3 s serialized Git mutation/reconciliation phases are a
+concrete scalability bottleneck under the current 10 s admission deadline.
+
+The new 16-lane adversarial fixture races 15 rejected wrong-owner,
+stale-revision, and malformed-gate calls with one valid owner update on the
+same task. At pinned ASB state `d4bc028efae43d53e5a9868c40eec41426f7824f`,
+the valid update completed in 1.389 seconds; all 15 invalid attempts failed,
+exactly one Git commit was added, the task revision advanced once, the owner
+remained unchanged, and static/live `doctor` both passed. This is a concrete
+integrity and liveness witness for that adversarial mix, not a proof against
+arbitrary malicious workloads. In the same run, the separate four-each
+heartbeat/update/`run`/reconcile batch had three lock timeouts and 13
+successes; post-batch doctors remained green. The source ASB state head moved
+during the run due to other workers, though the probe itself used a pinned
+disposable clone; the observed product inputs did not change.
+
+This matrix covers a meaningful subset, **not all commands**. `checkpoint`,
+`gate`, `promote`, `pause`/`resume`, `recover-expired`, `unblock`, Git
+`migrate`/`upgrade`/`rollback`, `init`, and replica-push/failure paths still
+require route-specific fixtures and differential review. The trace is a
+diagnostic on one host, not a statistical p95 or a 5% acceptance result.
 
 ## Command inventory and lower bounds
 
@@ -91,7 +142,7 @@ does not waive the target. Such a row remains unresolved until the user
 explicitly accepts a separate completion contract; unchanged routes retain
 their current behavior.
 
-## Candidate architecture, not yet implemented
+## Further candidate architecture, not yet implemented
 
 Keep the CLI as the mandatory project-bound route. A repository-common local
 service could retain a generation-fenced task/dependency index and materialized

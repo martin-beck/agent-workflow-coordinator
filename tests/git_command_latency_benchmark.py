@@ -9,16 +9,19 @@ temporary state clones. Results contain bounded aggregates, not raw state.
 """
 
 import argparse
+import concurrent.futures
+import contextlib
 import hashlib
 import json
 import math
+import os
 import resource
 import subprocess
 import sys
 import tempfile
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, BinaryIO
 
 from git_scale_probe import prepare
 
@@ -50,6 +53,35 @@ def worktree_listing(root: Path) -> str:
     ).stdout
 
 
+def product_input_digest(root: Path) -> str:
+    """Detect net changes to listed heads, refs, and checkout status."""
+    listing = worktree_listing(root)
+    paths = [Path(line[9:]) for line in listing.splitlines() if line.startswith("worktree ")]
+    digest = hashlib.sha256(listing.encode())
+    refs = subprocess.run(  # noqa: S603
+        ["git", "-C", str(root), "show-ref"],  # noqa: S607
+        check=True,
+        capture_output=True,
+    ).stdout
+    digest.update(refs)
+    observed_env = dict(os.environ)
+    observed_env["GIT_OPTIONAL_LOCKS"] = "0"
+
+    def status(path: Path) -> bytes:
+        return subprocess.run(  # noqa: S603
+            ["git", "-C", str(path), "status", "--porcelain=v1", "-z"],  # noqa: S607
+            env=observed_env,
+            check=True,
+            capture_output=True,
+        ).stdout
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=32) as pool:
+        for path, observed in zip(paths, pool.map(status, paths), strict=True):
+            digest.update(str(path).encode())
+            digest.update(observed)
+    return digest.hexdigest()
+
+
 def percentile(values: list[float], fraction: float) -> float:
     ordered = sorted(values)
     index = min(len(ordered) - 1, max(0, math.ceil(len(ordered) * fraction) - 1))
@@ -75,27 +107,42 @@ def classify(returncode: int, stderr: bytes) -> str:
     return "other_error"
 
 
+def digest_stream(stream: BinaryIO) -> tuple[str, int]:
+    stream.seek(0)
+    digest = hashlib.sha256()
+    length = 0
+    while chunk := stream.read(65536):
+        digest.update(chunk)
+        length += len(chunk)
+    return digest.hexdigest(), length
+
+
 def wait_for_processes(
-    running: list[tuple[subprocess.Popen[bytes], float]],
+    running: list[tuple[subprocess.Popen[bytes], float, BinaryIO, BinaryIO]],
     route: str,
     started: float,
     timeout: float,
-) -> dict[int, tuple[float, str]]:
-    completed: dict[int, tuple[float, str]] = {}
+) -> dict[int, tuple[float, str, str, int]]:
+    completed: dict[int, tuple[float, str, str, int]] = {}
     while len(completed) != len(running):
         if time.monotonic() - started > timeout:
-            for process, _ in running:
+            for process, _, _, _ in running:
                 if process.poll() is None:
                     process.kill()
-            for process, _ in running:
-                process.communicate()
+            for process, _, _, _ in running:
+                process.wait()
             raise TimeoutError(f"{route} exceeded the bounded {timeout:.0f}s batch deadline")
-        for process, _ in running:
+        for process, _, stdout, stderr in running:
             if process.pid not in completed and process.poll() is not None:
-                _, stderr = process.communicate()
+                process.wait()
+                stderr.seek(0)
+                diagnostic = stderr.read(1_000_000)
+                output_hash, output_bytes = digest_stream(stdout)
                 completed[process.pid] = (
                     time.monotonic(),
-                    classify(process.returncode, stderr),
+                    classify(process.returncode, diagnostic),
+                    output_hash,
+                    output_bytes,
                 )
         time.sleep(0.005)
     return completed
@@ -106,23 +153,26 @@ def measure(
 ) -> dict[str, object]:
     started = time.monotonic()
     before = resources()
-    running: list[tuple[subprocess.Popen[bytes], float]] = []
-    for _ in range(workers):
-        process = subprocess.Popen(  # noqa: S603
-            [sys.executable, "tools/handoffctl.py", *ROUTES[route]],
-            cwd=state,
-            env=env,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
-        )
-        running.append((process, time.monotonic()))
-    completed = wait_for_processes(running, route, started, timeout)
+    with contextlib.ExitStack() as files:
+        running: list[tuple[subprocess.Popen[bytes], float, BinaryIO, BinaryIO]] = []
+        for _ in range(workers):
+            stdout = files.enter_context(tempfile.TemporaryFile())
+            stderr = files.enter_context(tempfile.TemporaryFile())
+            process = subprocess.Popen(  # noqa: S603
+                [sys.executable, "tools/handoffctl.py", *ROUTES[route]],
+                cwd=state,
+                env=env,
+                stdin=subprocess.DEVNULL,
+                stdout=stdout,
+                stderr=stderr,
+            )
+            running.append((process, time.monotonic(), stdout, stderr))
+        completed = wait_for_processes(running, route, started, timeout)
     elapsed = time.monotonic() - started
     after = resources()
-    latencies = [(completed[process.pid][0] - launch) * 1000 for process, launch in running]
+    latencies = [(completed[process.pid][0] - launch) * 1000 for process, launch, _, _ in running]
     outcomes: dict[str, int] = {}
-    for process, _ in running:
+    for process, _, _, _ in running:
         result = completed[process.pid][1]
         outcomes[result] = outcomes.get(result, 0) + 1
     return {
@@ -135,6 +185,8 @@ def measure(
             "max": percentile(latencies, 1),
         },
         "outcomes": outcomes,
+        "stdout_sha256": sorted({completed[process.pid][2] for process, _, _, _ in running}),
+        "stdout_bytes": [completed[process.pid][3] for process, _, _, _ in running],
         "child_cpu_ms": {
             "user": round((after[0] - before[0]) * 1000, 3),
             "system": round((after[1] - before[1]) * 1000, 3),
@@ -146,18 +198,18 @@ def measure(
     }
 
 
-def prepare_runtime(base: Path, baseline: str) -> Path:
-    runtime = base / "baseline-runtime"
+def prepare_runtime(base: Path, revision: str, label: str) -> Path:
+    runtime = base / f"{label}-runtime"
     subprocess.run(  # noqa: S603
         ["git", "clone", "--shared", "-q", str(SOURCE), str(runtime)],  # noqa: S607
         check=True,
     )
     subprocess.run(  # noqa: S603
-        ["git", "-C", str(runtime), "checkout", "-q", "--detach", baseline],  # noqa: S607
+        ["git", "-C", str(runtime), "checkout", "-q", "--detach", revision],  # noqa: S607
         check=True,
     )
-    if git_head(runtime) != baseline:
-        raise RuntimeError("baseline runtime does not match the requested commit")
+    if git_head(runtime) != revision:
+        raise RuntimeError(f"{label} runtime does not match the requested commit")
     return runtime
 
 
@@ -219,9 +271,11 @@ def run_samples(
     for route in routes:
         for count in counts:
             for repetition in range(repetitions):
+                paired: dict[str, dict[str, object]] = {}
                 for label in case_order(repetition):
                     state, env = instances[label]
                     result = measure(state, env, route, count, timeout)
+                    paired[label] = result
                     print(
                         json.dumps(
                             {"case": label, "repetition": repetition + 1, **result},
@@ -229,6 +283,23 @@ def run_samples(
                         ),
                         flush=True,
                     )
+                baseline = paired["baseline"]
+                candidate = paired["candidate"]
+                print(
+                    json.dumps(
+                        {
+                            "route": route,
+                            "workers": count,
+                            "repetition": repetition + 1,
+                            "outcomes_equal": baseline["outcomes"] == candidate["outcomes"],
+                            "stdout_equal": baseline["stdout_sha256"] == candidate["stdout_sha256"],
+                            "stdout_lengths_equal": baseline["stdout_bytes"]
+                            == candidate["stdout_bytes"],
+                        },
+                        sort_keys=True,
+                    ),
+                    flush=True,
+                )
 
 
 def main() -> None:
@@ -256,26 +327,29 @@ def main() -> None:
     source_product = args.product.resolve()
     state_head = git_head(source_state)
     product_head = git_head(source_product)
+    candidate_head = git_head(SOURCE)
     product_binding: dict[str, Any] = json.loads(
         (source_state / "coordinator.binding.json").read_text()
     )
     task_count = len(list((source_state / "tasks").glob("AR-*.md")))
     listing = worktree_listing(source_product)
     worktree_count = listing.count("worktree ")
-    listing_digest = hashlib.sha256(listing.encode()).hexdigest()
+    product_digest = product_input_digest(source_product)
     with tempfile.TemporaryDirectory(prefix="awc-git-command-latency-") as temporary:
         base = Path(temporary)
-        baseline_runtime = prepare_runtime(base, baseline)
+        baseline_runtime = prepare_runtime(base, baseline, "baseline")
+        candidate_runtime = prepare_runtime(base, candidate_head, "candidate")
         print(
             json.dumps(
                 {
                     "source_state": state_head,
                     "source_product": product_head,
                     "baseline": baseline,
-                    "candidate": git_head(SOURCE),
+                    "candidate": candidate_head,
                     "tasks": task_count,
                     "product_worktrees": worktree_count,
                     "source_product_read_only": True,
+                    "source_product_input_digest": product_digest,
                     "replication_enabled": False,
                     "github_observation": "fixed_empty_local_stub",
                 },
@@ -284,7 +358,7 @@ def main() -> None:
             flush=True,
         )
         instances: dict[str, tuple[Path, dict[str, str]]] = {}
-        for label, runtime in (("baseline", baseline_runtime), ("candidate", SOURCE)):
+        for label, runtime in (("baseline", baseline_runtime), ("candidate", candidate_runtime)):
             state, _product, env = prepare(
                 base,
                 source_state,
@@ -302,10 +376,9 @@ def main() -> None:
                 {
                     "source_state_head_changed": git_head(source_state) != state_head,
                     "source_product_head_changed": git_head(source_product) != product_head,
-                    "source_worktree_listing_changed": hashlib.sha256(
-                        worktree_listing(source_product).encode()
-                    ).hexdigest()
-                    != listing_digest,
+                    "source_worktree_listing_changed": worktree_listing(source_product) != listing,
+                    "source_product_inputs_changed": product_input_digest(source_product)
+                    != product_digest,
                 },
                 sort_keys=True,
             ),
