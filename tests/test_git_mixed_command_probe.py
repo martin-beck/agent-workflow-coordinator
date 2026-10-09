@@ -3,6 +3,9 @@
 
 """Safety checks for 16-lane Git-backed mixed-route classification."""
 
+import datetime as dt
+import json
+import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -13,10 +16,69 @@ from git_mixed_command_probe import (
     error_class,
     require_unchanged_sources,
     route_name,
+    stabilize_disposable_claims,
 )
 
 
 class GitMixedCommandProbeTests(unittest.TestCase):
+    def test_stabilize_claims_only_changes_disposable_active_tasks(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            tasks = Path(directory) / "tasks"
+            tasks.mkdir()
+            claimed = tasks / "AR-9000.md"
+            open_task = tasks / "AR-9001.md"
+            future_task = tasks / "AR-9002.md"
+            expired = "2020-01-01T00:00:00+00:00"
+            claimed.write_text(
+                "---\n"
+                + json.dumps({"status": "in_progress", "claim_expires": expired}, sort_keys=True)
+                + "\n---\n\nKeep this body.\n"
+            )
+            open_task.write_text(
+                "---\n"
+                + json.dumps({"status": "open", "claim_expires": ""}, sort_keys=True)
+                + "\n---\n\nKeep this open task.\n"
+            )
+            future = (dt.datetime.now(dt.UTC) + dt.timedelta(hours=2)).isoformat()
+            future_task.write_text(
+                "---\n"
+                + json.dumps({"status": "in_progress", "claim_expires": future}, sort_keys=True)
+                + "\n---\n\nKeep this future task.\n"
+            )
+            before_open = open_task.read_bytes()
+            before_future = future_task.read_bytes()
+            self.assertEqual(1, stabilize_disposable_claims(Path(directory)))
+            self.assertEqual(before_open, open_task.read_bytes())
+            self.assertEqual(before_future, future_task.read_bytes())
+            self.assertTrue(claimed.read_text().endswith("\n\nKeep this body.\n"))
+            metadata = json.loads(claimed.read_text().split("---", 2)[1])
+            self.assertGreater(
+                dt.datetime.fromisoformat(metadata["claim_expires"]), dt.datetime.now(dt.UTC)
+            )
+
+    def test_stabilize_claims_rejects_malformed_source_without_rewriting(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            tasks = Path(directory) / "tasks"
+            tasks.mkdir()
+            expired = tasks / "AR-9000.md"
+            malformed = tasks / "AR-9001.md"
+            expired.write_text(
+                "---\n"
+                + json.dumps(
+                    {"status": "in_progress", "claim_expires": "2020-01-01T00:00:00+00:00"}
+                )
+                + "\n---\n"
+            )
+            malformed.write_text(
+                "---\n"
+                + json.dumps({"status": "in_progress", "claim_expires": "invalid"})
+                + "\n---\n"
+            )
+            before = expired.read_bytes()
+            with self.assertRaisesRegex(RuntimeError, "invalid source claim expiry"):
+                stabilize_disposable_claims(Path(directory))
+            self.assertEqual(before, expired.read_bytes())
+
     def test_route_names_keep_semantically_distinct_variants(self) -> None:
         self.assertEqual("doctor-live", route_name(["doctor", "--live"]))
         self.assertEqual("doctor", route_name(["doctor"]))
