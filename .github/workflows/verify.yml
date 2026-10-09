@@ -106,6 +106,8 @@ jobs:
           uv run mypy tools tests
           uv run lizard -l python --CCN 14 tools/handoffctl.py
       - name: Tests and branch coverage
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
         run: |
           uv run coverage run --branch -m unittest discover -s tests -p 'test_*.py'
           uv run coverage report --fail-under=95
