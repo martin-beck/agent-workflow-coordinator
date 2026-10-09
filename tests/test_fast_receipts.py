@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import sqlite3
 import tempfile
@@ -92,6 +93,66 @@ class FastReceiptTests(unittest.TestCase):
         self.assertEqual(first, store.read(str(first["receipt_id"])))
         count = store.connection.execute("SELECT count(*) FROM intents").fetchone()[0]
         self.assertEqual(1, count)
+
+    def test_promote_intent_is_canonical_and_conflict_fenced(self) -> None:
+        store = self.store()
+        first = store.enqueue_promote(
+            key="worker-a:promote:1",
+            task="AR-0120",
+            expected_revision=1,
+            note="Dependencies verified.",
+        )
+        self.assertEqual("promote", first["operation"])
+        self.assertEqual("queued-local", first["phase"])
+        payload = json.loads(str(first["payload_json"]))
+        self.assertEqual(
+            {
+                "expected_revision": 1,
+                "note": "Dependencies verified.",
+                "operation": "promote",
+                "project_id": self.project_id,
+                "task": "AR-0120",
+            },
+            payload,
+        )
+        self.assertEqual(
+            first["receipt_id"],
+            store.enqueue_promote(
+                key="worker-a:promote:1",
+                task="AR-0120",
+                expected_revision=1,
+                note="Dependencies verified.",
+            )["receipt_id"],
+        )
+        with self.assertRaises(ReceiptConflictError):
+            store.enqueue_promote(
+                key="worker-a:promote:1",
+                task="AR-0120",
+                expected_revision=1,
+                note="Changed note.",
+            )
+
+    def test_promote_rejects_invalid_note_and_revision_without_row(self) -> None:
+        store = self.store()
+        for values in (
+            {"key": "bad key", "task": "AR-0120", "expected_revision": 1, "note": "note"},
+            {
+                "key": "worker-a:promote:1",
+                "task": "AR-0120",
+                "expected_revision": 0,
+                "note": "note",
+            },
+            {"key": "worker-a:promote:1", "task": "AR-0120", "expected_revision": 1, "note": ""},
+            {
+                "key": "worker-a:promote:1",
+                "task": "AR-0120",
+                "expected_revision": 1,
+                "note": "x" * 4097,
+            },
+        ):
+            with self.subTest(values=values), self.assertRaises(ValueError):
+                store.enqueue_promote(**values)  # type: ignore[arg-type]
+        self.assertEqual(0, store.connection.execute("SELECT count(*) FROM intents").fetchone()[0])
 
     def test_invalid_intent_never_creates_row(self) -> None:
         store = self.store()

@@ -85,6 +85,29 @@ class FastReceiptSocketTests(unittest.TestCase):
             {"protocol": 1, "action": "receipt", "receipt_id": "a" * 32},
             _fast_request(["fast", "receipt", "a" * 32]),
         )
+        self.assertEqual(
+            {
+                "protocol": 1,
+                "action": "promote",
+                "task": "AR-0120",
+                "expected_revision": 2,
+                "note": "Open",
+                "key": "worker-a:promote:2",
+            },
+            _fast_request(
+                [
+                    "fast",
+                    "promote",
+                    "AR-0120",
+                    "--expected-revision",
+                    "2",
+                    "--note",
+                    "Open",
+                    "--key",
+                    "worker-a:promote:2",
+                ]
+            ),
+        )
 
     def test_git_common_directory_resolves_main_and_linked_worktree(self) -> None:
         root = Path(self.directory.name)

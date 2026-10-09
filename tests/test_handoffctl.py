@@ -2251,8 +2251,12 @@ class HandoffTest(unittest.TestCase):
                 f"Handoffctl-Receipt: {view_forged['receipt_id']}",
             ]
         )
-        with self.assertRaisesRegex(RuntimeError, "outside target heartbeat task"):
+        with self.assertRaisesRegex(RuntimeError, "task projection does not match"):
             verify_local_commit(CORE, view_forged, CORE.current_commit_oid())
+        claimed = store.claim_next()
+        assert claimed is not None
+        self.assertEqual(view_forged["receipt_id"], claimed["receipt_id"])
+        store.record_ambiguity(str(view_forged["receipt_id"]), "TEST_FORGED")
 
         field_forged = store.enqueue_heartbeat(
             key="worker-a:heartbeat:3",
@@ -2284,8 +2288,33 @@ class HandoffTest(unittest.TestCase):
                 f"Handoffctl-Receipt: {field_forged['receipt_id']}",
             ]
         )
-        with self.assertRaisesRegex(RuntimeError, "non-heartbeat task fields"):
+        with self.assertRaisesRegex(RuntimeError, "task projection does not match"):
             verify_local_commit(CORE, field_forged, CORE.current_commit_oid())
+        claimed = store.claim_next()
+        assert claimed is not None
+        self.assertEqual(field_forged["receipt_id"], claimed["receipt_id"])
+        store.record_ambiguity(str(field_forged["receipt_id"]), "TEST_FORGED")
+
+        meta, body = CORE.read_task(path)
+        meta.update({"status": "planned", "owner": "", "claim_expires": ""})
+        CORE.write_task(path, meta, body)
+        CORE.write_rendered_task_views(CORE.rendered_task_views(CORE.all_tasks()))
+        run_git(["git", "-C", str(self.root), "add", "-A"])
+        run_git(["git", "-C", str(self.root), "commit", "-qS", "-m", "fixture promote baseline"])
+        promote = store.enqueue_promote(
+            key="worker-a:promote:1",
+            task="AR-0001",
+            expected_revision=4,
+            note="Dependencies verified.",
+        )
+        with patch.object(CORE, "assert_project_binding"):
+            promoted = process_one(CORE, store)
+        assert promoted is not None
+        self.assertEqual("completed-local", promoted["phase"], promoted)
+        self.assertEqual(promote["receipt_id"], promoted["receipt_id"])
+        self.assertEqual(5, promoted["result_revision"])
+        self.assertEqual("open", CORE.read_task(path)[0]["status"])
+        run_git(["git", "-C", str(self.root), "verify-commit", str(promoted["commit_oid"])])
 
     def fake_scan(self) -> dict[str, object]:
         return {

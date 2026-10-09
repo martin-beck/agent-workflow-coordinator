@@ -73,6 +73,16 @@ class FastReceiptCLITests(unittest.TestCase):
         values.update(overrides)
         return self.invoke("heartbeat", **values)
 
+    def promote(self, **overrides: object) -> dict[str, object]:
+        values: dict[str, object] = {
+            "key": "worker-a:promote:1",
+            "task": "AR-0120",
+            "expected_revision": 1,
+            "note": "Open for implementation.",
+        }
+        values.update(overrides)
+        return self.invoke("promote", **values)
+
     def test_enqueue_is_durable_but_not_completed(self) -> None:
         queued = self.heartbeat()
         self.assertEqual("queued-local", queued["phase"])
@@ -93,6 +103,12 @@ class FastReceiptCLITests(unittest.TestCase):
         with self.assertRaises(ReceiptConflictError):
             self.heartbeat(expected_revision=2)
         self.assertEqual(queued, self.invoke("receipt", receipt_id=queued["receipt_id"]))
+
+    def test_promote_is_a_durable_bounded_receipt(self) -> None:
+        queued = self.promote()
+        self.assertEqual("promote", queued["operation"])
+        self.assertEqual("queued-local", queued["phase"])
+        self.assertEqual(queued, self.promote())
 
     def test_unknown_receipt_and_non_git_backend_fail_closed(self) -> None:
         self.core.backend = "sqlite"
@@ -167,6 +183,38 @@ class FastReceiptCLITests(unittest.TestCase):
         args = dispatch.call_args.args[0]
         self.assertEqual("fast", args.cmd)
         self.assertEqual("heartbeat", args.fast_action)
+        self.assertEqual(7, args.expected_revision)
+
+    def test_parser_requires_fenced_fast_promote(self) -> None:
+        with (
+            patch.object(handoffctl, "assert_project_binding"),
+            patch.object(handoffctl, "dispatch_bound_command", return_value=0) as dispatch,
+            patch("sys.argv", ["handoffctl", "fast", "promote", "AR-0120", "--note", "Open"]),
+            self.assertRaises(SystemExit),
+        ):
+            handoffctl.main()
+        with (
+            patch.object(handoffctl, "assert_project_binding"),
+            patch.object(handoffctl, "dispatch_bound_command", return_value=0) as dispatch,
+            patch(
+                "sys.argv",
+                [
+                    "handoffctl",
+                    "fast",
+                    "promote",
+                    "AR-0120",
+                    "--expected-revision",
+                    "7",
+                    "--note",
+                    "Open",
+                    "--key",
+                    "worker-a:promote:7",
+                ],
+            ),
+        ):
+            self.assertEqual(0, handoffctl.main())
+        args = dispatch.call_args.args[0]
+        self.assertEqual("promote", args.fast_action)
         self.assertEqual(7, args.expected_revision)
 
 

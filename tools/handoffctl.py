@@ -2669,7 +2669,7 @@ def require_project_settings_unchanged(settings: Meta) -> None:
 def mutate(args: argparse.Namespace, kind: str, policy: EvidencePolicy | None = None) -> None:  # noqa: C901
     receipt_id = getattr(args, "_receipt_id", None)
     if receipt_id is not None and (
-        kind != "heartbeat"
+        kind not in {"heartbeat", "promote"}
         or not isinstance(receipt_id, str)
         or not re.fullmatch(r"[0-9a-f]{32}", receipt_id)
         or getattr(args, "expected_revision", None) is None
@@ -3930,6 +3930,11 @@ def main() -> int:
     fast_heartbeat.add_argument("--expected-revision", type=int, required=True)
     fast_heartbeat.add_argument("--lease-minutes", type=int, default=120)
     fast_heartbeat.add_argument("--key", required=True)
+    fast_promote = fast_actions.add_parser("promote")
+    fast_promote.add_argument("task")
+    fast_promote.add_argument("--expected-revision", type=int, required=True)
+    fast_promote.add_argument("--note", required=True)
+    fast_promote.add_argument("--key", required=True)
     fast_receipt = fast_actions.add_parser("receipt")
     fast_receipt.add_argument("receipt_id")
     fast_worker = fast_actions.add_parser("worker")

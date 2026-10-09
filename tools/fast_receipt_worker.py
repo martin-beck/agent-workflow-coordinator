@@ -25,8 +25,16 @@ else:  # pragma: no cover - direct vendored import
     from fast_receipts import ReceiptStore  # type: ignore[import-not-found,no-redef]
 
 _OID = re.compile(r"[0-9a-f]{40}\Z")
-_REJECTABLE = ("stale revision", "is owned by", "heartbeat requires an active task")
+_REJECTABLE = (
+    "stale revision",
+    "is owned by",
+    "heartbeat requires an active task",
+    "is not planned",
+    "unfinished dependencies",
+    "has active claim metadata",
+)
 _HEARTBEAT_FIELDS = frozenset(("task_revision", "updated_at", "claim_expires"))
+_PROMOTE_FIELDS = frozenset(("task_revision", "updated_at", "status"))
 
 
 def _require_bound_store(core: Any, store: ReceiptStore) -> None:
@@ -107,6 +115,18 @@ def _task_record(core: Any, oid: str, path: str) -> tuple[dict[str, Any], str]:
     return value, source[end + 5 :]
 
 
+def _task_views(core: Any, oid: str) -> dict[str, str]:
+    """Render task-derived projections from the exact committed task snapshot."""
+    tasks = []
+    for name in _git(core, "ls-tree", "-r", "--name-only", oid, "tasks").splitlines():
+        if name.startswith("tasks/") and name.endswith(".md"):
+            meta, body = _task_record(core, oid, name)
+            tasks.append((core.ROOT / name, meta, body))
+    views = {"CURRENT.md": core.render_current(tasks)}
+    views.update(core.render_status_views(tasks))
+    return views
+
+
 def _task_change(core: Any, oid: str, task: str) -> tuple[dict[str, Any], str, dict[str, Any], str]:
     paths = _git(core, "diff-tree", "--no-commit-id", "--name-only", "-r", oid).splitlines()
     matches = [
@@ -117,16 +137,25 @@ def _task_change(core: Any, oid: str, task: str) -> tuple[dict[str, Any], str, d
     ]
     if len(matches) != 1:
         raise RuntimeError("receipt commit does not change exactly one target task")
-    # A heartbeat changes only revision, timestamps and its task history body;
-    # none of those fields are rendered in CURRENT/STATUS. If a future renderer
-    # changes that assumption, fail closed until this verifier is updated.
-    if paths != matches:
-        raise RuntimeError("receipt commit changes paths outside target heartbeat task")
+    projections = set(paths) - set(matches)
+    if any(
+        projection not in {"CURRENT.md", "STATUS.md"}
+        and not projection.startswith("status/STATUS-")
+        for projection in projections
+    ):
+        raise RuntimeError("receipt commit changes paths outside target task")
     parent = _git(core, "rev-parse", f"{oid}^").strip()
     if not _OID.fullmatch(parent):
         raise RuntimeError("receipt commit has no valid parent")
     before_meta, before_body = _task_record(core, parent, matches[0])
     after_meta, after_body = _task_record(core, oid, matches[0])
+    views = _task_views(core, oid)
+    if not projections <= set(views):
+        raise RuntimeError("receipt commit changes paths outside target task")
+    for projection, expected in views.items():
+        found = _git(core, "show", f"{oid}:{projection}", check=False)
+        if found != expected:
+            raise RuntimeError("receipt commit task projection does not match committed tasks")
     return before_meta, before_body, after_meta, after_body
 
 
@@ -167,6 +196,36 @@ def _verify_heartbeat_delta(
     return expected_before + 1
 
 
+def _verify_promote_delta(
+    core: Any, intent: dict[str, Any], payload: dict[str, Any], oid: str
+) -> int:
+    before, before_body, after, after_body = _task_change(core, oid, str(intent["task_id"]))
+    expected_before = int(intent["expected_revision"])
+    if (
+        before.get("id") != intent["task_id"]
+        or before.get("status") != "planned"
+        or before.get("owner")
+        or before.get("claim_expires")
+        or before.get("task_revision") != expected_before
+        or after.get("id") != intent["task_id"]
+        or after.get("status") != "open"
+        or after.get("owner")
+        or after.get("claim_expires")
+        or after.get("task_revision") != expected_before + 1
+    ):
+        raise RuntimeError("receipt commit task state does not match promote intent")
+    before_stable = {key: value for key, value in before.items() if key not in _PROMOTE_FIELDS}
+    after_stable = {key: value for key, value in after.items() if key not in _PROMOTE_FIELDS}
+    if before_stable != after_stable:
+        raise RuntimeError("receipt commit changes non-promote task fields")
+    expected_body = core._transition_note(
+        before_body, str(payload["note"]), str(after["updated_at"])
+    )
+    if after_body != expected_body:
+        raise RuntimeError("receipt commit body does not match promote")
+    return expected_before + 1
+
+
 def _require_signed_branch_commit(core: Any, oid: str) -> None:
     if not _OID.fullmatch(oid):
         raise RuntimeError("invalid receipt commit oid")
@@ -189,12 +248,19 @@ def verify_local_commit(core: Any, intent: dict[str, Any], oid: str) -> int:
     lines = message.splitlines()
     if lines.count(marker) != 1:
         raise RuntimeError("receipt commit marker is missing or duplicated")
-    if not lines or lines[0] != f"chore(state): heartbeat {intent['task_id']}":
+    operation = str(intent["operation"])
+    if operation not in {"heartbeat", "promote"}:
+        raise RuntimeError("receipt operation is unsupported")
+    if not lines or lines[0] != f"chore(state): {operation} {intent['task_id']}":
         raise RuntimeError("receipt commit operation does not match intent")
     payload = json.loads(str(intent["payload_json"]))
     if not isinstance(payload, dict):
         raise RuntimeError("receipt intent payload is invalid")
-    expected = _verify_heartbeat_delta(core, intent, payload, oid)
+    expected = (
+        _verify_heartbeat_delta(core, intent, payload, oid)
+        if operation == "heartbeat"
+        else _verify_promote_delta(core, intent, payload, oid)
+    )
     if core.project_settings()["commit_signoff"]:
         committer = _git(core, "show", "-s", "--format=%cn <%ce>", oid).strip()
         if lines.count(f"Signed-off-by: {committer}") != 1:
@@ -216,7 +282,7 @@ def find_receipt_commit(core: Any, receipt_id: str) -> str | None:
     return exact[0] if exact else None
 
 
-def _validated_heartbeat_intent(intent: dict[str, Any]) -> dict[str, Any]:
+def _validated_intent(intent: dict[str, Any]) -> dict[str, Any]:
     payload_text = str(intent["payload_json"])
     payload = json.loads(payload_text)
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
@@ -225,13 +291,26 @@ def _validated_heartbeat_intent(intent: dict[str, Any]) -> dict[str, Any]:
         or payload_text != canonical
         or hashlib.sha256(canonical.encode()).hexdigest() != intent["input_digest"]
         or payload.get("project_id") != intent["project_id"]
-        or payload.get("operation") != "heartbeat"
         or payload.get("task") != intent["task_id"]
         or payload.get("expected_revision") != intent["expected_revision"]
+    ):
+        raise RuntimeError("receipt intent does not match canonical typed fields")
+    if payload.get("operation") == "heartbeat" and (
+        set(payload)
+        != {"expected_revision", "lease_minutes", "operation", "owner", "project_id", "task"}
         or not isinstance(payload.get("owner"), str)
         or not isinstance(payload.get("lease_minutes"), int)
     ):
-        raise RuntimeError("receipt intent does not match canonical typed fields")
+        raise RuntimeError("receipt heartbeat intent fields are invalid")
+    if payload.get("operation") == "promote" and (
+        set(payload) != {"expected_revision", "note", "operation", "project_id", "task"}
+        or not isinstance(payload.get("note"), str)
+        or not 1 <= len(payload["note"]) <= 4096
+        or "\x00" in payload["note"]
+    ):
+        raise RuntimeError("receipt promote intent fields are invalid")
+    if payload.get("operation") not in {"heartbeat", "promote"}:
+        raise RuntimeError("receipt operation is unsupported")
     return payload
 
 
@@ -243,15 +322,24 @@ def process_one(core: Any, store: ReceiptStore) -> dict[str, Any] | None:
         return None
     receipt_id = str(intent["receipt_id"])
     try:
-        payload = _validated_heartbeat_intent(intent)
-        args = argparse.Namespace(
-            task=intent["task_id"],
-            owner=payload["owner"],
-            lease_minutes=payload["lease_minutes"],
-            expected_revision=intent["expected_revision"],
-            _receipt_id=receipt_id,
-        )
-        core.mutate(args, "heartbeat")
+        payload = _validated_intent(intent)
+        operation = str(payload["operation"])
+        if operation == "heartbeat":
+            args = argparse.Namespace(
+                task=intent["task_id"],
+                owner=payload["owner"],
+                lease_minutes=payload["lease_minutes"],
+                expected_revision=intent["expected_revision"],
+                _receipt_id=receipt_id,
+            )
+        else:
+            args = argparse.Namespace(
+                task=intent["task_id"],
+                expected_revision=intent["expected_revision"],
+                note=payload["note"],
+                _receipt_id=receipt_id,
+            )
+        core.mutate(args, operation)
         oid = str(args._committed_oid)
         revision = verify_local_commit(core, intent, oid)
         return store.record_local_commit(receipt_id, oid, revision)

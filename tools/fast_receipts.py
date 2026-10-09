@@ -307,8 +307,38 @@ class ReceiptStore:
             "project_id": self.project_id,
             "task": task,
         }
+        return self._enqueue(
+            key=key, task=task, expected_revision=expected_revision, payload=payload
+        )
+
+    def enqueue_promote(
+        self, *, key: str, task: str, expected_revision: int, note: str
+    ) -> dict[str, Any]:
+        """Fsync a fenced promote intent; strict dependency admission is deferred."""
+        if not isinstance(note, str) or not 1 <= len(note) <= 4096 or "\x00" in note:
+            raise ValueError("invalid promote note")
+        payload = {
+            "expected_revision": expected_revision,
+            "note": note,
+            "operation": "promote",
+            "project_id": self.project_id,
+            "task": task,
+        }
+        return self._enqueue(
+            key=key, task=task, expected_revision=expected_revision, payload=payload
+        )
+
+    def _enqueue(
+        self, *, key: str, task: str, expected_revision: int, payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Store one canonical, operation-closed intent under its idempotency key."""
+        if not _TOKEN.fullmatch(key) or not _TOKEN.fullmatch(task) or expected_revision < 1:
+            raise ValueError("invalid receipt key, task, or revision")
         canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
         digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+        operation = payload.get("operation")
+        if not isinstance(operation, str):
+            raise ValueError("invalid receipt operation")
         with self._transaction():
             existing = self.connection.execute(
                 "SELECT * FROM intents WHERE project_id=? AND idempotency_key=?",
@@ -320,11 +350,12 @@ class ReceiptStore:
                     """INSERT INTO intents
                     (receipt_id, project_id, idempotency_key, operation, task_id,
                      expected_revision, payload_json, input_digest, phase)
-                    VALUES (?, ?, ?, 'heartbeat', ?, ?, ?, ?, ?)""",
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (
                         receipt_id,
                         self.project_id,
                         key,
+                        operation,
                         task,
                         expected_revision,
                         canonical,

@@ -19,7 +19,7 @@ from .fast_receipt_worker import (
 from .fast_receipts import ReceiptStore
 
 
-def dispatch_fast(core: Any, args: Namespace) -> int:
+def dispatch_fast(core: Any, args: Namespace) -> int:  # noqa: C901 - explicit receipt dispatch
     """Access one bound per-project queue without changing strict CLI semantics."""
     core.assert_project_binding()
     if core.backend_selection()["backend"] != "git":
@@ -33,6 +33,15 @@ def dispatch_fast(core: Any, args: Namespace) -> int:
                 owner=args.owner,
                 expected_revision=args.expected_revision,
                 lease_minutes=args.lease_minutes,
+            )
+            print(json.dumps(public_receipt(receipt), sort_keys=True))
+            return 0
+        if args.fast_action == "promote":
+            receipt = store.enqueue_promote(
+                key=args.key,
+                task=args.task,
+                expected_revision=args.expected_revision,
+                note=args.note,
             )
             print(json.dumps(public_receipt(receipt), sort_keys=True))
             return 0

@@ -51,7 +51,7 @@ class FakeCore:
 
     def mutate(self, args: Any, kind: str) -> None:
         self.calls += 1
-        if kind != "heartbeat":
+        if kind not in {"heartbeat", "promote"}:
             raise AssertionError(kind)
         if self.outcome == "stale":
             raise RuntimeError("stale revision: expected 1, current 2")
@@ -68,6 +68,14 @@ class FakeCore:
     def _transition_note(self, body: str, note: str, at: str) -> str:
         del body, note, at
         return "expected heartbeat body\n"
+
+    def render_current(self, tasks: list[object]) -> str:
+        del tasks
+        return "current\n"
+
+    def render_status_views(self, tasks: list[object]) -> dict[str, str]:
+        del tasks
+        return {"STATUS.md": "status\n"}
 
 
 class PublicationCore(FakeCore):
@@ -103,6 +111,15 @@ class FastReceiptWorkerTests(unittest.TestCase):
         )
         return str(receipt["receipt_id"])
 
+    def enqueue_promote(self) -> str:
+        receipt = self.store.enqueue_promote(
+            key="worker-a:promote:1",
+            task="AR-0120",
+            expected_revision=1,
+            note="Dependencies verified.",
+        )
+        return str(receipt["receipt_id"])
+
     def complete_local(self) -> str:
         receipt_id = self.enqueue()
         self.store.claim_next()
@@ -121,6 +138,35 @@ class FastReceiptWorkerTests(unittest.TestCase):
         self.assertEqual(receipt_id, verify.call_args.args[1]["receipt_id"])
         self.assertIsNone(process_one(core, self.store))
         self.assertEqual(1, core.calls)
+
+    def test_promote_uses_typed_namespace_and_verified_commit(self) -> None:
+        receipt_id = self.enqueue_promote()
+        core = FakeCore(self.root, "success")
+        with patch("tools.fast_receipt_worker.verify_local_commit", return_value=2) as verify:
+            result = process_one(core, self.store)
+        assert result is not None
+        self.assertEqual("completed-local", result["phase"])
+        self.assertEqual(receipt_id, verify.call_args.args[1]["receipt_id"])
+        self.assertEqual(1, core.calls)
+
+    def test_promote_with_unexpected_payload_field_never_executes(self) -> None:
+        receipt_id = self.enqueue_promote()
+        queued = self.store.read(receipt_id)
+        assert queued is not None
+        payload = json.loads(str(queued["payload_json"]))
+        payload["owner"] = "injected"
+        canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+        import hashlib
+
+        self.store.connection.execute(
+            "UPDATE intents SET payload_json=?, input_digest=? WHERE receipt_id=?",
+            (canonical, hashlib.sha256(canonical.encode()).hexdigest(), receipt_id),
+        )
+        core = FakeCore(self.root, "success")
+        result = process_one(core, self.store)
+        assert result is not None
+        self.assertEqual("ambiguous", result["phase"])
+        self.assertEqual(0, core.calls)
 
     def test_foreign_project_store_is_rejected_before_reservation(self) -> None:
         receipt_id = self.enqueue()
@@ -446,7 +492,7 @@ class FastReceiptWorkerTests(unittest.TestCase):
                 worker._task_record(core, "a" * 40, "tasks/AR-0120.md")
         for paths, message in (
             ("CURRENT.md\n", "exactly one target"),
-            ("tasks/AR-0120.md\nCURRENT.md\n", "outside target"),
+            ("tasks/AR-0120.md\nPROJECT_STATE.md\n", "outside target"),
         ):
             with (
                 self.subTest(message=message),

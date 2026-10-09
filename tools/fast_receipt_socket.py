@@ -111,9 +111,27 @@ def _safe_socket(path: Path) -> bool:
     return True
 
 
-def _fast_request(argv: list[str]) -> dict[str, Any] | None:
+def _fast_request(argv: list[str]) -> dict[str, Any] | None:  # noqa: C901 - strict wire parser
     if argv[:2] == ["fast", "receipt"] and len(argv) == 3:
         return {"protocol": 1, "action": "receipt", "receipt_id": argv[2]}
+    if argv[:2] == ["fast", "promote"] and len(argv) == 9:
+        if argv[2].startswith("-"):
+            return None
+        promote_options = dict(zip(argv[3::2], argv[4::2], strict=True))
+        if set(promote_options) != {"--expected-revision", "--note", "--key"}:
+            return None
+        try:
+            revision = int(promote_options["--expected-revision"])
+        except ValueError:
+            return None
+        return {
+            "protocol": 1,
+            "action": "promote",
+            "task": argv[2],
+            "expected_revision": revision,
+            "note": promote_options["--note"],
+            "key": promote_options["--key"],
+        }
     if argv[:2] != ["fast", "heartbeat"] or len(argv) < 9:
         return None
     if argv[2].startswith("-") or len(argv[3:]) % 2:
@@ -162,7 +180,7 @@ def try_socket_fast(argv: list[str]) -> int | None:
     """Use the warm bound service when available; otherwise use the direct CLI."""
     request = _fast_request(argv)
     if request is None:
-        if argv[:2] in (["fast", "heartbeat"], ["fast", "receipt"]):
+        if argv[:2] in (["fast", "heartbeat"], ["fast", "promote"], ["fast", "receipt"]):
             return _fallback_or_error()
         return None
     path = _socket_path(Path(__file__).resolve().parent.parent)
@@ -188,7 +206,7 @@ def try_socket_fast(argv: list[str]) -> int | None:
     return 0
 
 
-def _require_request(request: Any) -> dict[str, Any]:
+def _require_request(request: Any) -> dict[str, Any]:  # noqa: C901 - strict wire validator
     if not isinstance(request, dict) or request.get("protocol") != 1:
         raise RuntimeError("invalid fast receipt socket protocol")
     action = request.get("action")
@@ -215,6 +233,16 @@ def _require_request(request: Any) -> dict[str, Any]:
             or not all(isinstance(request[field], str) for field in ("task", "owner", "key"))
         ):
             raise RuntimeError("invalid fast heartbeat request fields")
+        return request
+    if action == "promote":
+        if set(request) != {"protocol", "action", "task", "expected_revision", "note", "key"}:
+            raise RuntimeError("invalid fast promote request")
+        if (
+            not isinstance(request["expected_revision"], int)
+            or isinstance(request["expected_revision"], bool)
+            or not all(isinstance(request[field], str) for field in ("task", "note", "key"))
+        ):
+            raise RuntimeError("invalid fast promote request fields")
         return request
     raise RuntimeError("unknown fast receipt socket action")
 
@@ -300,6 +328,13 @@ def socket_service(core: Any) -> Iterator[None]:  # noqa: C901
                                 owner=request["owner"],
                                 expected_revision=request["expected_revision"],
                                 lease_minutes=request["lease_minutes"],
+                            )
+                        elif request["action"] == "promote":
+                            result = store.enqueue_promote(
+                                key=request["key"],
+                                task=request["task"],
+                                expected_revision=request["expected_revision"],
+                                note=request["note"],
                             )
                         else:
                             found = store.read(request["receipt_id"])
