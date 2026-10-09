@@ -132,6 +132,73 @@ class FastReceiptTests(unittest.TestCase):
                 note="Changed note.",
             )
 
+    def test_update_intent_is_closed_canonical_and_conflict_fenced(self) -> None:
+        store = self.store()
+        first = store.enqueue_update(
+            key="worker-a:update:1",
+            task="AR-0120",
+            owner="worker-a",
+            expected_revision=1,
+            changes={"next_action": "Run the focused test.", "priority": "P1"},
+            note="Refined the execution plan.",
+        )
+        self.assertEqual("update", first["operation"])
+        self.assertEqual(
+            {
+                "changes": {"next_action": "Run the focused test.", "priority": "P1"},
+                "expected_revision": 1,
+                "note": "Refined the execution plan.",
+                "operation": "update",
+                "owner": "worker-a",
+                "project_id": self.project_id,
+                "task": "AR-0120",
+            },
+            json.loads(str(first["payload_json"])),
+        )
+        self.assertEqual(
+            first["receipt_id"],
+            store.enqueue_update(
+                key="worker-a:update:1",
+                task="AR-0120",
+                owner="worker-a",
+                expected_revision=1,
+                changes={"priority": "P1", "next_action": "Run the focused test."},
+                note="Refined the execution plan.",
+            )["receipt_id"],
+        )
+        with self.assertRaises(ReceiptConflictError):
+            store.enqueue_update(
+                key="worker-a:update:1",
+                task="AR-0120",
+                owner="worker-a",
+                expected_revision=1,
+                changes={"priority": "P2"},
+                note="Refined the execution plan.",
+            )
+
+    def test_update_rejects_empty_nonactive_and_unbounded_changes(self) -> None:
+        store = self.store()
+        invalid_changes: tuple[dict[str, dict[str, str]], ...] = (
+            {"changes": {}},
+            {"changes": {"status": "done"}},
+            {"changes": {"priority": "invalid"}},
+            {"changes": {"owner": "injected"}},
+            {"changes": {"summary": "x" * 4001}},
+            {"changes": {"summary": "bad\x00value"}},
+            {"changes": {"next_action": "x" * 1025}},
+            {"changes": {"next_action": "line\nbreak"}},
+        )
+        for values in invalid_changes:
+            with self.subTest(values=values), self.assertRaises(ValueError):
+                store.enqueue_update(
+                    key="worker-a:update:1",
+                    task="AR-0120",
+                    owner="worker-a",
+                    expected_revision=1,
+                    note="Refined.",
+                    **values,
+                )
+
     def test_claim_intent_is_canonical_and_conflict_fenced(self) -> None:
         store = self.store()
         first = store.enqueue_claim(

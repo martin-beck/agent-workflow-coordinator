@@ -17,8 +17,17 @@ from contextlib import contextmanager, suppress
 from pathlib import Path
 from typing import Any
 
+if __package__:
+    from .fast_receipts import validate_update_changes
+else:  # pragma: no cover - direct vendored import
+    from fast_receipts import validate_update_changes  # type: ignore[import-not-found,no-redef]
+
 _SOCKET_NAME = "fast-receipts.sock"
-_MAX_REQUEST = 4096
+# A fully bounded update may carry a 4,000-character summary, a
+# 1,024-character next action, and a 4,096-character note.  json.dumps()
+# escapes non-ASCII input, so a maximum-length Unicode request is about 110
+# KiB on the wire.  The single-frame protocol stays bounded at 128 KiB.
+_MAX_REQUEST = 131072
 _MAX_REPLY = 16384
 _PUBLIC_FIELDS = (
     "receipt_id",
@@ -132,6 +141,45 @@ def _fast_request(argv: list[str]) -> dict[str, Any] | None:  # noqa: C901 - str
             "note": promote_options["--note"],
             "key": promote_options["--key"],
         }
+    if argv[:2] == ["fast", "update"] and len(argv) >= 11:
+        if argv[2].startswith("-") or len(argv[3:]) % 2:
+            return None
+        update_options = dict(zip(argv[3::2], argv[4::2], strict=True))
+        allowed = {
+            "--owner",
+            "--expected-revision",
+            "--status",
+            "--priority",
+            "--summary",
+            "--next-action",
+            "--note",
+            "--key",
+        }
+        if len(update_options) != len(argv[3::2]) or set(update_options) - allowed:
+            return None
+        if not {"--owner", "--expected-revision", "--note", "--key"} <= set(update_options):
+            return None
+        changes = {
+            name.removeprefix("--").replace("-", "_"): value
+            for name, value in update_options.items()
+            if name in {"--status", "--priority", "--summary", "--next-action"}
+        }
+        if not changes:
+            return None
+        try:
+            revision = int(update_options["--expected-revision"])
+        except ValueError:
+            return None
+        return {
+            "protocol": 1,
+            "action": "update",
+            "task": argv[2],
+            "owner": update_options["--owner"],
+            "expected_revision": revision,
+            "changes": changes,
+            "note": update_options["--note"],
+            "key": update_options["--key"],
+        }
     if argv[:2] not in (["fast", "heartbeat"], ["fast", "claim"]) or len(argv) < 9:
         return None
     if argv[2].startswith("-") or len(argv[3:]) % 2:
@@ -184,6 +232,7 @@ def try_socket_fast(argv: list[str]) -> int | None:
             ["fast", "heartbeat"],
             ["fast", "claim"],
             ["fast", "promote"],
+            ["fast", "update"],
             ["fast", "receipt"],
         ):
             return _fallback_or_error()
@@ -248,6 +297,31 @@ def _require_request(request: Any) -> dict[str, Any]:  # noqa: C901 - strict wir
             or not all(isinstance(request[field], str) for field in ("task", "note", "key"))
         ):
             raise RuntimeError("invalid fast promote request fields")
+        return request
+    if action == "update":
+        if set(request) != {
+            "protocol",
+            "action",
+            "task",
+            "owner",
+            "expected_revision",
+            "changes",
+            "note",
+            "key",
+        }:
+            raise RuntimeError("invalid fast update request")
+        if (
+            not isinstance(request["expected_revision"], int)
+            or isinstance(request["expected_revision"], bool)
+            or not all(
+                isinstance(request[field], str) for field in ("task", "owner", "note", "key")
+            )
+        ):
+            raise RuntimeError("invalid fast update request fields")
+        try:
+            validate_update_changes(request["changes"])
+        except ValueError as error:
+            raise RuntimeError("invalid fast update request fields") from error
         return request
     raise RuntimeError("unknown fast receipt socket action")
 
@@ -347,6 +421,15 @@ def socket_service(core: Any) -> Iterator[None]:  # noqa: C901
                                 key=request["key"],
                                 task=request["task"],
                                 expected_revision=request["expected_revision"],
+                                note=request["note"],
+                            )
+                        elif request["action"] == "update":
+                            result = store.enqueue_update(
+                                key=request["key"],
+                                task=request["task"],
+                                owner=request["owner"],
+                                expected_revision=request["expected_revision"],
+                                changes=request["changes"],
                                 note=request["note"],
                             )
                         else:

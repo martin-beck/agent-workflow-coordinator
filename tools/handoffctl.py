@@ -2682,7 +2682,7 @@ def fast_receipt_id(args: argparse.Namespace, kind: str) -> str | None:
     if receipt_id is None:
         return None
     if (
-        kind not in {"claim", "heartbeat", "promote"}
+        kind not in {"claim", "heartbeat", "promote", "update"}
         or not isinstance(receipt_id, str)
         or not re.fullmatch(r"[0-9a-f]{32}", receipt_id)
         or getattr(args, "expected_revision", None) is None
@@ -4004,6 +4004,16 @@ def main() -> int:
     fast_promote.add_argument("--expected-revision", type=int, required=True)
     fast_promote.add_argument("--note", required=True)
     fast_promote.add_argument("--key", required=True)
+    fast_update = fast_actions.add_parser("update")
+    fast_update.add_argument("task")
+    fast_update.add_argument("--owner", required=True)
+    fast_update.add_argument("--expected-revision", type=int, required=True)
+    fast_update.add_argument("--status", choices=STATUSES)
+    fast_update.add_argument("--priority", choices=PRIORITIES)
+    fast_update.add_argument("--summary")
+    fast_update.add_argument("--next-action")
+    fast_update.add_argument("--note", required=True)
+    fast_update.add_argument("--key", required=True)
     fast_receipt = fast_actions.add_parser("receipt")
     fast_receipt.add_argument("receipt_id")
     fast_worker = fast_actions.add_parser("worker")

@@ -108,6 +108,37 @@ class FastReceiptSocketTests(unittest.TestCase):
                 ]
             ),
         )
+        self.assertEqual(
+            {
+                "protocol": 1,
+                "action": "update",
+                "task": "AR-0120",
+                "owner": "worker-a",
+                "expected_revision": 2,
+                "changes": {"priority": "P1", "next_action": "Run tests."},
+                "note": "Refined plan.",
+                "key": "worker-a:update:2",
+            },
+            _fast_request(
+                [
+                    "fast",
+                    "update",
+                    "AR-0120",
+                    "--owner",
+                    "worker-a",
+                    "--expected-revision",
+                    "2",
+                    "--priority",
+                    "P1",
+                    "--next-action",
+                    "Run tests.",
+                    "--note",
+                    "Refined plan.",
+                    "--key",
+                    "worker-a:update:2",
+                ]
+            ),
+        )
 
     def test_git_common_directory_resolves_main_and_linked_worktree(self) -> None:
         root = Path(self.directory.name)
@@ -169,6 +200,23 @@ class FastReceiptSocketTests(unittest.TestCase):
             _fast_request(
                 [
                     "fast",
+                    "update",
+                    "AR-0120",
+                    "--owner",
+                    "worker-a",
+                    "--expected-revision",
+                    "2",
+                    "--note",
+                    "no metadata",
+                    "--key",
+                    "worker-a:update:2",
+                ]
+            )
+        )
+        self.assertIsNone(
+            _fast_request(
+                [
+                    "fast",
                     "promote",
                     "-AR-0120",
                     "--expected-revision",
@@ -205,6 +253,32 @@ class FastReceiptSocketTests(unittest.TestCase):
                     "expected_revision": True,
                     "note": "Open",
                     "key": "worker-a:promote:2",
+                }
+            )
+        with self.assertRaisesRegex(RuntimeError, "update request fields"):
+            _require_request(
+                {
+                    "protocol": 1,
+                    "action": "update",
+                    "task": "AR-0120",
+                    "owner": "worker-a",
+                    "expected_revision": 2,
+                    "changes": {"owner": "injected"},
+                    "note": "Refined.",
+                    "key": "worker-a:update:2",
+                }
+            )
+        with self.assertRaisesRegex(RuntimeError, "update request fields"):
+            _require_request(
+                {
+                    "protocol": 1,
+                    "action": "update",
+                    "task": "AR-0120",
+                    "owner": "worker-a",
+                    "expected_revision": 2,
+                    "changes": {"next_action": "line\nbreak"},
+                    "note": "Refined.",
+                    "key": "worker-a:update:2",
                 }
             )
 
@@ -275,6 +349,36 @@ class FastReceiptSocketTests(unittest.TestCase):
             self.assertEqual(0, try_socket_fast(argv))
             queued = json.loads(output.getvalue())
             self.assertEqual("promote", queued["operation"])
+            self.assertEqual("queued-local", queued["phase"])
+            self.assertEqual(1, self._intent_count())
+
+    def test_bound_service_accepts_largest_valid_update_frame(self) -> None:
+        argv = [
+            "fast",
+            "update",
+            "AR-0120",
+            "--owner",
+            "worker-a",
+            "--expected-revision",
+            "2",
+            "--summary",
+            "😀" * 4000,
+            "--next-action",
+            "😀" * 1024,
+            "--note",
+            "😀" * 4096,
+            "--key",
+            "worker-a:update:largest",
+        ]
+        with (
+            socket_service(self.core),
+            patch("tools.fast_receipt_socket._socket_path", return_value=self.path),
+            patch.dict(os.environ, {"HANDOFFCTL_FAST_REQUIRE_SOCKET": "1"}),
+            contextlib.redirect_stdout(io.StringIO()) as output,
+        ):
+            self.assertEqual(0, try_socket_fast(argv))
+            queued = json.loads(output.getvalue())
+            self.assertEqual("update", queued["operation"])
             self.assertEqual("queued-local", queued["phase"])
             self.assertEqual(1, self._intent_count())
 

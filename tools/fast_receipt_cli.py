@@ -55,6 +55,22 @@ def dispatch_fast(core: Any, args: Namespace) -> int:  # noqa: C901 - explicit r
             )
             print(json.dumps(public_receipt(receipt), sort_keys=True))
             return 0
+        if args.fast_action == "update":
+            changes = {
+                name: value
+                for name in ("status", "priority", "summary", "next_action")
+                if (value := getattr(args, name)) is not None
+            }
+            receipt = store.enqueue_update(
+                key=args.key,
+                task=args.task,
+                owner=args.owner,
+                expected_revision=args.expected_revision,
+                changes=changes,
+                note=args.note,
+            )
+            print(json.dumps(public_receipt(receipt), sort_keys=True))
+            return 0
         if args.fast_action == "receipt":
             found = store.read(args.receipt_id)
             if found is None:

@@ -27,6 +27,9 @@ else:  # pragma: no cover - direct vendored import
     from sqlite_storage import require_local_filesystem  # type: ignore[import-not-found,no-redef]
 
 _TOKEN = re.compile(r"[A-Za-z0-9._:-]{1,128}\Z")
+_PRIORITIES = frozenset(("P0", "P1", "P2", "P3", "P4"))
+_MAX_SUMMARY = 4000
+_MAX_NEXT_ACTION = 1024
 _PHASE_QUEUED = "queued-local"
 _PHASE_RUNNING = "running"
 _PHASE_LOCAL = "completed-local"
@@ -38,6 +41,35 @@ _COMMIT = re.compile(r"[0-9a-f]{40}\Z")
 
 class ReceiptConflictError(RuntimeError):
     """One idempotency key was submitted with different canonical content."""
+
+
+def validate_update_changes(changes: object) -> dict[str, str]:
+    """Accept only an update that strict task and session validation can commit."""
+    allowed = {"status", "priority", "summary", "next_action"}
+    if (
+        not isinstance(changes, dict)
+        or not changes
+        or set(changes) - allowed
+        or not all(
+            isinstance(name, str) and isinstance(value, str) for name, value in changes.items()
+        )
+        or (
+            "summary" in changes
+            and (not 1 <= len(changes["summary"]) <= _MAX_SUMMARY or "\x00" in changes["summary"])
+        )
+        or (
+            "next_action" in changes
+            and (
+                not 1 <= len(changes["next_action"]) <= _MAX_NEXT_ACTION
+                or "\x00" in changes["next_action"]
+                or "\n" in changes["next_action"]
+            )
+        )
+        or changes.get("status") not in {None, "in_progress"}
+        or changes.get("priority") not in {None, *_PRIORITIES}
+    ):
+        raise ValueError("invalid fast update changes")
+    return changes
 
 
 class ReceiptStore:
@@ -349,6 +381,46 @@ class ReceiptStore:
             "expected_revision": expected_revision,
             "note": note,
             "operation": "promote",
+            "project_id": self.project_id,
+            "task": task,
+        }
+        return self._enqueue(
+            key=key, task=task, expected_revision=expected_revision, payload=payload
+        )
+
+    def enqueue_update(
+        self,
+        *,
+        key: str,
+        task: str,
+        owner: str,
+        expected_revision: int,
+        changes: dict[str, str],
+        note: str,
+    ) -> dict[str, Any]:
+        """Fsync a closed owner-held metadata update for later strict admission."""
+        if (
+            not _TOKEN.fullmatch(key)
+            or not _TOKEN.fullmatch(task)
+            or not _TOKEN.fullmatch(owner)
+            or not isinstance(expected_revision, int)
+            or isinstance(expected_revision, bool)
+            or expected_revision < 1
+            or not isinstance(note, str)
+            or not 1 <= len(note) <= 4096
+            or "\x00" in note
+        ):
+            raise ValueError("invalid update receipt intent")
+        try:
+            validated_changes = validate_update_changes(changes)
+        except ValueError as error:
+            raise ValueError("invalid update receipt intent") from error
+        payload = {
+            "changes": dict(sorted(validated_changes.items())),
+            "expected_revision": expected_revision,
+            "note": note,
+            "operation": "update",
+            "owner": owner,
             "project_id": self.project_id,
             "task": task,
         }
