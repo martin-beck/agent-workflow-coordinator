@@ -56,6 +56,8 @@ class FakeCore:
             raise AssertionError(kind)
         if self.outcome == "stale":
             raise RuntimeError("stale revision: expected 1, current 2")
+        if self.outcome == "role-denied":
+            raise RuntimeError("role admission denied: worker-a is not eligible")
         if self.outcome == "unknown":
             raise RuntimeError("unknown mutation failure")
         if self.outcome == "post-commit":
@@ -172,6 +174,14 @@ class FastReceiptWorkerTests(unittest.TestCase):
         self.assertEqual("completed-local", result["phase"])
         self.assertEqual(receipt_id, verify.call_args.args[1]["receipt_id"])
         self.assertEqual(1, core.calls)
+
+    def test_claim_role_denial_is_rejected_not_ambiguous(self) -> None:
+        receipt_id = self.enqueue_claim()
+        result = process_one(FakeCore(self.root, "role-denied"), self.store)
+        assert result is not None
+        self.assertEqual(receipt_id, result["receipt_id"])
+        self.assertEqual("rejected", result["phase"])
+        self.assertEqual("ADMISSION_REJECTED", result["error_code"])
 
     def test_promote_with_unexpected_payload_field_never_executes(self) -> None:
         receipt_id = self.enqueue_promote()

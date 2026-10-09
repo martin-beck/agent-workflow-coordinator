@@ -34,6 +34,7 @@ _REJECTABLE = (
     "unfinished dependencies",
     "has active claim metadata",
     "owner already holds",
+    "role admission denied",
 )
 _HEARTBEAT_FIELDS = frozenset(("task_revision", "updated_at", "claim_expires"))
 _CLAIM_FIELDS = frozenset(("task_revision", "updated_at", "claim_expires", "owner", "status"))
