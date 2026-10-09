@@ -2728,6 +2728,8 @@ def persist_git_mutation(
         for target in generated_paths():
             before.setdefault(target, None)
         committed = commit_persisted_mutation(args, kind, receipt_id, before, meta)
+        if receipt_id is None:
+            push_replica()
     except Exception:
         if not committed:
             restore_paths(before)
@@ -2751,8 +2753,6 @@ def commit_persisted_mutation(
     if receipt_id is not None:
         args._committed_oid = current_commit_oid()
         args._committed_revision = meta["task_revision"]
-    else:
-        push_replica()
     return committed
 
 
@@ -3886,8 +3886,8 @@ def dispatch_fast_command(args: argparse.Namespace) -> int:
     return dispatch_fast(sys.modules[__name__], args)
 
 
-def dispatch_bound_command(args: argparse.Namespace) -> int:  # noqa: C901
-    """Dispatch a command only after the permanent project binding has passed."""
+def dispatch_bound_standard_command(args: argparse.Namespace) -> int:  # noqa: C901
+    """Dispatch every non-fast command after permanent project binding."""
     if args.cmd == "reconcile":
         reconcile(do_commit=args.commit, push=args.push)
     elif args.cmd == "roles":
@@ -3916,6 +3916,13 @@ def dispatch_bound_command(args: argparse.Namespace) -> int:  # noqa: C901
     elif args.cmd == "upgrade":
         return cmd_upgrade(args)
     return 0
+
+
+def dispatch_bound_command(args: argparse.Namespace) -> int:
+    """Dispatch a bound command while retaining the opt-in receipt route."""
+    if args.cmd == "fast":
+        return dispatch_fast_command(args)
+    return dispatch_bound_standard_command(args)
 
 
 def main() -> int:
@@ -4116,8 +4123,6 @@ def main() -> int:
     if args.cmd == "directive":
         cmd_directive(args)
         return 0
-    if args.cmd == "fast":
-        return dispatch_fast_command(args)
     return dispatch_bound_command(args)
 
 
