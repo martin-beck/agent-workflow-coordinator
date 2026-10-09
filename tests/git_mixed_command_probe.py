@@ -13,6 +13,8 @@ import contextlib
 import datetime as dt
 import hashlib
 import json
+import math
+import statistics
 import subprocess
 import sys
 import tempfile
@@ -306,12 +308,15 @@ def batch(
         grouped.setdefault(str(result["command"]), []).append(result)
     routes = {}
     for command, entries in grouped.items():
+        durations = sorted(cast(float, entry["elapsed_ms"]) for entry in entries)
         routes[command] = {
             "ok": sum(entry["exit"] == 0 for entry in entries),
             "errors": dict(
                 Counter(str(entry["stderr_class"]) for entry in entries if entry["exit"])
             ),
-            "max_ms": max(cast(float, entry["elapsed_ms"]) for entry in entries),
+            "p50_ms": round(statistics.median(durations), 1),
+            "p95_ms": durations[math.ceil(0.95 * len(durations)) - 1],
+            "max_ms": durations[-1],
             "distinct_stdout": len({str(entry["stdout_sha256"]) for entry in entries}),
         }
     lock_trace: dict[str, dict[str, float | int]] = {}
@@ -745,6 +750,219 @@ def checked_batch(
         raise RuntimeError(f"{name}: unexpected route outcome or failed integrity check")
 
 
+def run_fast_heartbeat_probe(  # noqa: C901
+    state: Path, env: dict[str, str], timeout: float
+) -> None:
+    """Exercise 16 queued CLI submissions against one resident signed-Git executor."""
+    configure_fixture_signature_verification(state)
+    starting_head = git_head(state)
+    service = subprocess.Popen(
+        [sys.executable, "tools/handoffctl.py", "fast", "worker", "--serve"],
+        cwd=state,
+        env=env,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+    )
+    batch_started = time.monotonic()
+    launched: list[tuple[subprocess.Popen[bytes], float]] = []
+    try:
+        for index, task_id in enumerate(TASK_IDS):
+            command = [
+                sys.executable,
+                "tools/handoffctl.py",
+                "fast",
+                "heartbeat",
+                task_id,
+                "--owner",
+                f"bench-{index}",
+                "--expected-revision",
+                "2",
+                "--lease-minutes",
+                "20",
+                "--key",
+                f"bench-{index}:heartbeat:2",
+            ]
+            launched.append(
+                (
+                    subprocess.Popen(  # noqa: S603
+                        command,
+                        cwd=state,
+                        env=env,
+                        stdin=subprocess.DEVNULL,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                    ),
+                    time.monotonic(),
+                )
+            )
+        queued: list[dict[str, object]] = []
+        latencies: list[float] = []
+        ended: dict[int, float] = {}
+        enqueue_deadline = time.monotonic() + timeout
+        while len(ended) < len(launched):
+            if time.monotonic() >= enqueue_deadline:
+                raise RuntimeError("fast enqueue liveness timeout")
+            for process, _ in launched:
+                if process.pid not in ended and process.poll() is not None:
+                    ended[process.pid] = time.monotonic()
+            if len(ended) < len(launched):
+                time.sleep(0.005)
+        for process, launched_at in launched:
+            output, diagnostic = process.communicate(timeout=5)
+            latencies.append((ended[process.pid] - launched_at) * 1000)
+            if process.returncode:
+                raise RuntimeError(
+                    f"fast enqueue failed ({process.returncode}): "
+                    + diagnostic[:500].decode(errors="replace")
+                )
+            receipt = json.loads(output)
+            if (
+                receipt.get("phase") != "queued-local"
+                or receipt.get("commit_oid") is not None
+                or receipt.get("remote_oid") is not None
+            ):
+                raise RuntimeError("fast enqueue falsely reported completed authority")
+            queued.append(receipt)
+        if len({item["receipt_id"] for item in queued}) != 16:
+            raise RuntimeError("16 independent fast workers did not get distinct receipts")
+        pending = {str(item["receipt_id"]): item for item in queued}
+        completed: dict[str, dict[str, object]] = {}
+        deadline = time.monotonic() + timeout
+        while pending:
+            if service.poll() is not None:
+                diagnostic = service.stderr.read(500) if service.stderr else b""
+                raise RuntimeError(
+                    "resident fast worker exited before completing 16 intents: "
+                    + diagnostic.decode(errors="replace")
+                )
+            if time.monotonic() >= deadline:
+                raise RuntimeError(f"fast worker liveness timeout: {len(pending)} receipts pending")
+            for receipt_id in list(pending):
+                read = subprocess.run(  # noqa: S603
+                    [sys.executable, "tools/handoffctl.py", "fast", "receipt", receipt_id],
+                    cwd=state,
+                    env=env,
+                    check=False,
+                    capture_output=True,
+                    timeout=30,
+                )
+                if read.returncode:
+                    raise RuntimeError("fast receipt lookup failed: " + read.stderr[:500].decode())
+                current = json.loads(read.stdout)
+                if current["phase"] == "completed-local":
+                    if (
+                        current["result_revision"] != 3
+                        or not current["commit_oid"]
+                        or current["remote_oid"] is not None
+                    ):
+                        raise RuntimeError("fast local receipt has invalid phase evidence")
+                    completed[receipt_id] = current
+                    pending.pop(receipt_id)
+                elif current["phase"] not in {"queued-local", "running"}:
+                    raise RuntimeError(f"fast heartbeat failed: {current['phase']}")
+            if pending:
+                time.sleep(0.1)
+        local_wall_ms = (time.monotonic() - batch_started) * 1000
+    finally:
+        for process, _ in launched:
+            if process.poll() is None:
+                process.terminate()
+            try:
+                process.communicate(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.communicate()
+        if service.poll() is None:
+            service.terminate()
+        try:
+            service.communicate(timeout=10)
+        except subprocess.TimeoutExpired:
+            service.kill()
+            service.communicate()
+    revisions = subprocess.run(  # noqa: S603
+        ["git", "rev-list", f"{starting_head}..HEAD"],  # noqa: S607
+        cwd=state,
+        env=env,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.splitlines()
+    if len(revisions) != 16 or not history_extends(state, starting_head):
+        raise RuntimeError("fast heartbeat batch did not add 16 extending signed commits")
+    by_commit = {str(item["commit_oid"]): item for item in completed.values()}
+    if set(revisions) != set(by_commit):
+        raise RuntimeError("fast receipt commits do not match the exact Git history")
+    for commit_hash in revisions:
+        verified = subprocess.run(  # noqa: S603
+            ["git", "verify-commit", commit_hash],  # noqa: S607
+            cwd=state,
+            env=env,
+            check=False,
+            capture_output=True,
+        )
+        if verified.returncode:
+            raise RuntimeError(f"fast heartbeat signature invalid: {commit_hash}")
+        receipt = by_commit[commit_hash]
+        changed = subprocess.run(  # noqa: S603
+            ["git", "diff-tree", "-r", "--no-commit-id", "--name-only", commit_hash],  # noqa: S607
+            cwd=state,
+            env=env,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.splitlines()
+        if changed != [f"tasks/{receipt['task_id']}.md"]:
+            raise RuntimeError(f"fast commit changed paths outside its task: {commit_hash}")
+        message = subprocess.run(  # noqa: S603
+            ["git", "show", "-s", "--format=%B", commit_hash],  # noqa: S607
+            cwd=state,
+            env=env,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
+        if message.splitlines().count(f"Handoffctl-Receipt: {receipt['receipt_id']}") != 1:
+            raise RuntimeError(f"fast commit has no unique matching receipt marker: {commit_hash}")
+        identity = (
+            subprocess.run(  # noqa: S603
+                ["git", "show", "-s", "--format=%cn%x00%ce", commit_hash],  # noqa: S607
+                cwd=state,
+                env=env,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            .stdout.strip()
+            .split("\0")
+        )
+        if len(identity) != 2 or not has_matching_dco_trailer(message, identity[0], identity[1]):
+            raise RuntimeError(f"fast commit DCO trailer invalid: {commit_hash}")
+    for index, task_id in enumerate(TASK_IDS):
+        meta = json.loads((state / "tasks" / f"{task_id}.md").read_text().split("---", 2)[1])
+        if meta["task_revision"] != 3 or meta["owner"] != f"bench-{index}":
+            raise RuntimeError(f"fast heartbeat mutated wrong task state: {task_id}")
+    checks = doctor(state, env)
+    if any(checks.values()):
+        raise RuntimeError("post-fast heartbeat doctors failed")
+    print(
+        json.dumps(
+            {
+                "batch": "fast_heartbeat",
+                "workers": 16,
+                "enqueue_max_ms": round(max(latencies), 1),
+                "enqueue_p50_ms": round(statistics.median(latencies), 1),
+                "enqueue_p95_ms": round(sorted(latencies)[math.ceil(0.95 * len(latencies)) - 1], 1),
+                "local_wall_ms": round(local_wall_ms, 1),
+                "completed_local": 16,
+                "signed_commits": len(revisions),
+                "integrity": checks,
+            }
+        ),
+        flush=True,
+    )
+
+
 def configure_fixture_signature_verification(state: Path) -> None:
     """Trust only the ephemeral key that signed this disposable state clone."""
     public_key = (state.parent / "signing-key.pub").read_text().strip()
@@ -892,7 +1110,7 @@ def run_acceptance_probe(
     )
 
 
-def main() -> None:
+def main() -> None:  # noqa: C901
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--state", type=Path, required=True)
     parser.add_argument("--product", type=Path, required=True)
@@ -901,6 +1119,8 @@ def main() -> None:
     parser.add_argument("--only-adversarial", action="store_true")
     parser.add_argument("--only-accept", action="store_true")
     parser.add_argument("--only-roles", action="store_true")
+    parser.add_argument("--only-fast-heartbeat", action="store_true")
+    parser.add_argument("--only-strict-heartbeat", action="store_true")
     args = parser.parse_args()
     source_state = args.state.resolve()
     source_product = args.product.resolve()
@@ -962,11 +1182,53 @@ def main() -> None:
             ()
             if args.only_roles
             else initial_batches[-1:]
-            if args.only_mutations or args.only_adversarial or args.only_accept
+            if args.only_mutations
+            or args.only_adversarial
+            or args.only_accept
+            or args.only_fast_heartbeat
+            or args.only_strict_heartbeat
             else initial_batches
         )
         for name, commands in batches:
             checked_batch(state, env, name, commands, args.timeout_seconds, 16)
+        if args.only_strict_heartbeat:
+            checked_batch(
+                state,
+                env,
+                "strict_heartbeat",
+                [
+                    ["heartbeat", task_id, "--owner", f"bench-{index}", "--expected-revision", "2"]
+                    for index, task_id in enumerate(TASK_IDS)
+                ],
+                args.timeout_seconds,
+                16,
+            )
+            require_unchanged_sources(
+                {
+                    "source_product_inputs_changed": product_input_digest(source_product)
+                    != product_digest,
+                    "source_state_head_changed": git_head(source_state) != state_head,
+                    "source_state_inputs_changed": product_input_digest(
+                        source_state, include_runtime=True
+                    )
+                    != state_digest,
+                }
+            )
+            return
+        if args.only_fast_heartbeat:
+            run_fast_heartbeat_probe(state, env, args.timeout_seconds)
+            require_unchanged_sources(
+                {
+                    "source_product_inputs_changed": product_input_digest(source_product)
+                    != product_digest,
+                    "source_state_head_changed": git_head(source_state) != state_head,
+                    "source_state_inputs_changed": product_input_digest(
+                        source_state, include_runtime=True
+                    )
+                    != state_digest,
+                }
+            )
+            return
         if args.only_accept:
             run_acceptance_probe(
                 state,
