@@ -3,6 +3,15 @@
 # SPDX-License-Identifier: MIT
 """Transactional, project-configurable coordination state."""
 
+import sys
+
+if __name__ == "__main__" and len(sys.argv) > 2 and sys.argv[1] == "fast":
+    from fast_receipt_socket import try_socket_fast  # type: ignore[import-not-found]
+
+    _FAST_EXIT = try_socket_fast(sys.argv[1:])
+    if _FAST_EXIT is not None:
+        raise SystemExit(_FAST_EXIT)
+
 import argparse
 import contextlib
 import datetime as dt
@@ -13,7 +22,6 @@ import os
 import re
 import stat
 import subprocess
-import sys
 import tempfile
 import textwrap
 import threading
@@ -527,7 +535,7 @@ def configured_product_checkout(binding: Meta) -> tuple[Path, Path]:
     return projects_root, product.resolve()
 
 
-def assert_project_binding() -> None:
+def assert_project_binding(caller_cwd: Path | None = None) -> None:
     """Fail closed when this initialized coordinator is called from another project."""
     settings = project_settings()
     binding = project_binding()
@@ -544,7 +552,7 @@ def assert_project_binding() -> None:
     if CONFIG.exists():
         projects_root, product = configured_product_checkout(binding)
         allowed.append(product)
-    current = Path.cwd().resolve()
+    current = (Path.cwd() if caller_cwd is None else caller_cwd).resolve()
     if projects_root is not None and inside(current, projects_root):
         candidate = run(
             ["git", "-C", str(current), "rev-parse", "--show-toplevel"], check=False

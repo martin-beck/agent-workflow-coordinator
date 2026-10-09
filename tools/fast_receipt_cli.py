@@ -8,6 +8,7 @@ import json
 from argparse import Namespace
 from typing import Any
 
+from .fast_receipt_socket import public_receipt
 from .fast_receipt_worker import (
     process_pending,
     publication_lock,
@@ -16,28 +17,6 @@ from .fast_receipt_worker import (
     serve_publication,
 )
 from .fast_receipts import ReceiptStore
-
-_PUBLIC_FIELDS = (
-    "receipt_id",
-    "project_id",
-    "operation",
-    "task_id",
-    "expected_revision",
-    "phase",
-    "started_at",
-    "commit_oid",
-    "result_revision",
-    "error_code",
-    "remote_oid",
-    "remote_observed_at",
-    "publication_error",
-    "created_at",
-)
-
-
-def public_receipt(row: dict[str, Any]) -> dict[str, Any]:
-    """Return evidence fields without internal payload or idempotency key."""
-    return {field: row[field] for field in _PUBLIC_FIELDS}
 
 
 def dispatch_fast(core: Any, args: Namespace) -> int:

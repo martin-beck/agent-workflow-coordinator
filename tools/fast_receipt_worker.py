@@ -305,16 +305,19 @@ def serve_local(
     """Run one resident local executor; a restart never blindly replays running work."""
     if not 1 <= limit <= 1024 or not 0.01 <= poll_seconds <= 60:
         raise ValueError("invalid local receipt service limits")
+    from .fast_receipt_socket import socket_service
+
     with service_lock(core):
         recover_running(core, store)
-        while True:
-            count = 0
-            for _ in range(limit):
-                if process_one(core, store) is None:
-                    break
-                count += 1
-            if count == 0:
-                time.sleep(poll_seconds)
+        with socket_service(core):
+            while True:
+                count = 0
+                for _ in range(limit):
+                    if process_one(core, store) is None:
+                        break
+                    count += 1
+                if count == 0:
+                    time.sleep(poll_seconds)
 
 
 def _is_ancestor(core: Any, older: str, newer: str) -> bool:

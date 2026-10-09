@@ -416,6 +416,14 @@ class HandoffTest(unittest.TestCase):
 
     def test_binding_checks_root_origin_product_and_caller(self) -> None:
         completed = subprocess.CompletedProcess([], 0, str(self.root) + "\n", "")
+        other = self.root.parent / f"{self.root.name}-other"
+        with (
+            patch.object(CORE, "run", return_value=completed),
+            patch.object(CORE, "git_repository_slug", return_value="owner/state"),
+            patch.object(CORE.Path, "cwd", return_value=self.root),
+            self.assertRaisesRegex(RuntimeError, "must be called"),
+        ):
+            CORE.assert_project_binding(other)
         with (
             patch.object(CORE, "run", return_value=completed),
             patch.object(CORE, "git_repository_slug", return_value="other/state"),
@@ -423,7 +431,6 @@ class HandoffTest(unittest.TestCase):
         ):
             CORE.assert_project_binding()
 
-        other = self.root.parent / f"{self.root.name}-other"
         wrong_top = subprocess.CompletedProcess([], 0, str(other) + "\n", "")
         with (
             patch.object(CORE, "run", return_value=wrong_top),
