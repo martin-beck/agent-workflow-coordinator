@@ -1187,6 +1187,18 @@ def possible_privacy_pattern(text: str, lowered: str, label: str) -> bool:
     return True
 
 
+def private_text_errors(relative: Path, text: str) -> list[str]:
+    """Keep the original regex and label ordering after cheap prefilters."""
+    lowered = text.lower()
+    return [
+        f"{relative}: {label}"
+        for regex, label in PRIVATE
+        if privacy_pattern_applies(relative, label)
+        and possible_privacy_pattern(text, lowered, label)
+        and regex.search(text)
+    ]
+
+
 def privacy_errors() -> list[str]:
     errors: list[str] = []
     for path in sorted(ROOT.rglob("*")):
@@ -1207,12 +1219,7 @@ def privacy_errors() -> list[str]:
             text = path.read_text()
         except UnicodeDecodeError:
             continue
-        lowered = text.lower()
-        for regex, label in PRIVATE:
-            if not privacy_pattern_applies(relative, label):
-                continue
-            if possible_privacy_pattern(text, lowered, label) and regex.search(text):
-                errors.append(f"{relative}: {label}")
+        errors.extend(private_text_errors(relative, text))
     return errors
 
 
@@ -1443,6 +1450,18 @@ def status_projection_errors(expected: dict[str, str]) -> list[str]:
     return errors
 
 
+def status_views_for_validation(
+    tasks: list[Task], snapshot: tuple[list[Task], dict[Path, str], Meta] | None
+) -> dict[str, str]:
+    if snapshot is None:
+        return render_status_views(tasks)
+    return {
+        str(target.relative_to(ROOT)): content
+        for target, content in snapshot[1].items()
+        if target.name == "STATUS.md" or target.parent.name == "status"
+    }
+
+
 def generated_view_errors(
     tasks: list[Task],
     *,
@@ -1468,15 +1487,7 @@ def generated_view_errors(
     if not project_settings()["status_view"]:
         return errors
     try:
-        expected_status = (
-            {
-                str(target.relative_to(ROOT)): content
-                for target, content in reusable_snapshot[1].items()
-                if target.name == "STATUS.md" or target.parent.name == "status"
-            }
-            if reusable_snapshot is not None
-            else render_status_views(tasks)
-        )
+        expected_status = status_views_for_validation(tasks, reusable_snapshot)
     except StatusRenderError as error:
         errors.extend(str(error).splitlines())
     else:
@@ -2534,6 +2545,15 @@ def rendered_task_views(tasks: list[Task]) -> dict[Path, str]:
     return views
 
 
+def safe_generated_view_inode(info: os.stat_result) -> bool:
+    return (
+        stat.S_ISREG(info.st_mode)
+        and info.st_nlink == 1
+        and info.st_uid == os.geteuid()
+        and stat.S_IMODE(info.st_mode) == 0o600
+    )
+
+
 def unchanged_generated_view(path: Path, content: str) -> bool:
     """Avoid an fsync only for an ordinary, already-correct projection file."""
     try:
@@ -2545,12 +2565,7 @@ def unchanged_generated_view(path: Path, content: str) -> bool:
         return False
     try:
         found = os.fstat(descriptor)
-        if (
-            not stat.S_ISREG(found.st_mode)
-            or found.st_nlink != 1
-            or found.st_uid != os.geteuid()
-            or stat.S_IMODE(found.st_mode) != 0o600
-        ):
+        if not safe_generated_view_inode(found):
             return False
         expected = content.encode("utf-8")
         with os.fdopen(descriptor, "rb", closefd=False) as stream:
@@ -2566,11 +2581,8 @@ def unchanged_generated_view(path: Path, content: str) -> bool:
         return (
             stat.S_ISDIR(current_parent.st_mode)
             and (current_parent.st_dev, current_parent.st_ino) == (parent.st_dev, parent.st_ino)
-            and stat.S_ISREG(current.st_mode)
             and (current.st_dev, current.st_ino) == (found.st_dev, found.st_ino)
-            and current.st_nlink == 1
-            and current.st_uid == os.geteuid()
-            and stat.S_IMODE(current.st_mode) == 0o600
+            and safe_generated_view_inode(current)
         )
     finally:
         os.close(descriptor)
@@ -2629,6 +2641,11 @@ def git_session_record(
     return record
 
 
+def require_project_settings_unchanged(settings: Meta) -> None:
+    if project_settings() != settings:
+        raise RuntimeError("PROJECT_CONFIG_CHANGED: retry after a stable project profile")
+
+
 def mutate(args: argparse.Namespace, kind: str, policy: EvidencePolicy | None = None) -> None:  # noqa: C901
     if backend_selection()["backend"] == "sqlite":
         mutate_sqlite(args, kind, policy)
@@ -2681,8 +2698,7 @@ def mutate(args: argparse.Namespace, kind: str, policy: EvidencePolicy | None = 
             view_tasks = all_tasks()
             view_settings = project_settings()
             views = rendered_task_views(view_tasks)
-            if project_settings() != view_settings:
-                raise RuntimeError("PROJECT_CONFIG_CHANGED: retry after a stable project profile")
+            require_project_settings_unchanged(view_settings)
             write_rendered_task_views(views)
             require_policy_unchanged(ROOT, selected_policy)
             errors = mutation_errors(
