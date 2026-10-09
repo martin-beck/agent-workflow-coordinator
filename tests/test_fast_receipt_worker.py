@@ -511,6 +511,244 @@ class FastReceiptWorkerTests(unittest.TestCase):
         ):
             worker._verify_heartbeat_delta(core, intent, payload, "a" * 40)
 
+    def test_claim_and_promote_deltas_accept_only_exact_transitions(self) -> None:
+        core = FakeCore(self.root, "success")
+        claim_before = {
+            "id": "AR-0120",
+            "owner": "",
+            "status": "open",
+            "claim_expires": "",
+            "task_revision": 1,
+            "priority": "P1",
+            "updated_at": "2026-10-09T09:00:00+00:00",
+        }
+        claim_after = {
+            **claim_before,
+            "owner": "worker-a",
+            "status": "in_progress",
+            "claim_expires": "2026-10-09T10:20:00+00:00",
+            "task_revision": 2,
+            "updated_at": "2026-10-09T10:00:00+00:00",
+        }
+        claim_intent = {"task_id": "AR-0120", "expected_revision": 1}
+        claim_payload = {"owner": "worker-a", "lease_minutes": 20}
+        with patch.object(
+            worker,
+            "_task_change",
+            return_value=(claim_before, "before\n", claim_after, "expected heartbeat body\n"),
+        ):
+            self.assertEqual(
+                2, worker._verify_claim_delta(core, claim_intent, claim_payload, "a" * 40)
+            )
+        for field, value, message in (
+            ("priority", "P0", "non-claim"),
+            ("updated_at", "2026-10-09T10:00:00", "naive"),
+            ("claim_expires", "2026-10-09T10:19:00+00:00", "lease"),
+        ):
+            altered = dict(claim_after)
+            altered[field] = value
+            with (
+                self.subTest(claim_field=field),
+                patch.object(
+                    worker,
+                    "_task_change",
+                    return_value=(claim_before, "before\n", altered, "forged body\n"),
+                ),
+                self.assertRaisesRegex(RuntimeError, message),
+            ):
+                worker._verify_claim_delta(core, claim_intent, claim_payload, "a" * 40)
+
+        promote_before = {
+            "id": "AR-0120",
+            "owner": "",
+            "status": "planned",
+            "claim_expires": "",
+            "task_revision": 1,
+            "priority": "P1",
+            "updated_at": "2026-10-09T09:00:00+00:00",
+        }
+        promote_after = {
+            **promote_before,
+            "status": "open",
+            "task_revision": 2,
+            "updated_at": "2026-10-09T10:00:00+00:00",
+        }
+        promote_intent = {"task_id": "AR-0120", "expected_revision": 1}
+        promote_payload = {"note": "Dependencies verified."}
+        with patch.object(
+            worker,
+            "_task_change",
+            return_value=(promote_before, "before\n", promote_after, "expected heartbeat body\n"),
+        ):
+            self.assertEqual(
+                2, worker._verify_promote_delta(core, promote_intent, promote_payload, "a" * 40)
+            )
+        changed = dict(promote_after)
+        changed["priority"] = "P0"
+        with (
+            patch.object(
+                worker,
+                "_task_change",
+                return_value=(promote_before, "before\n", changed, "forged body\n"),
+            ),
+            self.assertRaisesRegex(RuntimeError, "non-promote"),
+        ):
+            worker._verify_promote_delta(core, promote_intent, promote_payload, "a" * 40)
+
+    def test_verify_local_commit_dispatch_and_fail_closed_metadata(self) -> None:
+        core = FakeCore(self.root, "success")
+        core.project_settings = lambda: {"commit_signoff": False}  # type: ignore[method-assign]
+        receipt_id = "f" * 32
+        oid = "a" * 40
+
+        def verify(operation: str) -> None:
+            intent = {
+                "receipt_id": receipt_id,
+                "operation": operation,
+                "task_id": "AR-0120",
+                "payload_json": "{}",
+            }
+            message = f"chore(state): {operation} AR-0120\n\nHandoffctl-Receipt: {receipt_id}\n"
+            verifier = getattr(worker, f"_verify_{operation}_delta")
+            with (
+                patch.object(worker, "_require_signed_branch_commit"),
+                patch.object(worker, "_git", return_value=message),
+                patch.object(verifier.__module__ and worker, verifier.__name__, return_value=2),
+            ):
+                self.assertEqual(2, verify_local_commit(core, intent, oid))
+
+        for operation in ("heartbeat", "claim", "promote"):
+            with self.subTest(operation=operation):
+                verify(operation)
+        base = {
+            "receipt_id": receipt_id,
+            "operation": "heartbeat",
+            "task_id": "AR-0120",
+            "payload_json": "{}",
+        }
+        with (
+            patch.object(worker, "_require_signed_branch_commit"),
+            patch.object(worker, "_git", return_value="chore(state): heartbeat AR-0120\n"),
+            self.assertRaisesRegex(RuntimeError, "marker"),
+        ):
+            verify_local_commit(core, base, oid)
+        for operation, message in (
+            ("unknown", "unsupported"),
+            ("heartbeat", "operation does not match"),
+        ):
+            intent = {**base, "operation": operation}
+            subject = (
+                "chore(state): wrong AR-0120"
+                if operation == "heartbeat"
+                else "chore(state): unknown AR-0120"
+            )
+            with (
+                self.subTest(operation=operation),
+                patch.object(worker, "_require_signed_branch_commit"),
+                patch.object(
+                    worker,
+                    "_git",
+                    return_value=f"{subject}\nHandoffctl-Receipt: {receipt_id}\n",
+                ),
+                self.assertRaisesRegex(RuntimeError, message),
+            ):
+                verify_local_commit(core, intent, oid)
+
+    def test_observe_remote_main_requires_one_fetchable_exact_ref(self) -> None:
+        core = PublicationCore(self.root, "success")
+        oid = "b" * 40
+        for stdout in (
+            "",
+            f"{oid}\trefs/heads/main\n{oid}\trefs/heads/main\n",
+            "bad refs/heads/main\n",
+        ):
+            with (
+                self.subTest(stdout=stdout),
+                patch.object(core, "run", return_value=subprocess.CompletedProcess([], 0, stdout)),
+            ):
+                self.assertIsNone(worker._observe_remote_main(core))
+        responses = [
+            subprocess.CompletedProcess([], 0, f"{oid}\trefs/heads/main\n"),
+            subprocess.CompletedProcess([], 1, ""),
+            subprocess.CompletedProcess([], 0, ""),
+            subprocess.CompletedProcess([], 0, ""),
+        ]
+        with patch.object(core, "run", side_effect=responses) as run:
+            self.assertEqual(oid, worker._observe_remote_main(core))
+        self.assertIn("fetch", run.call_args_list[2].args[0])
+        responses[-1] = subprocess.CompletedProcess([], 1, "")
+        with patch.object(core, "run", side_effect=responses):
+            self.assertIsNone(worker._observe_remote_main(core))
+
+    def test_worker_validation_and_projection_fail_closed(self) -> None:
+        core = FakeCore(self.root, "success")
+        valid = {
+            "expected_revision": 1,
+            "lease_minutes": 20,
+            "operation": "claim",
+            "owner": "worker-a",
+            "project_id": self.store.project_id,
+            "task": "AR-0120",
+        }
+
+        def intent(payload: object) -> dict[str, Any]:
+            text = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+            import hashlib
+
+            return {
+                "payload_json": text,
+                "input_digest": hashlib.sha256(text.encode()).hexdigest(),
+                "project_id": self.store.project_id,
+                "task_id": "AR-0120",
+                "expected_revision": 1,
+            }
+
+        self.assertEqual(valid, worker._validated_intent(intent(valid)))
+        for payload, message in (
+            ({**valid, "lease_minutes": True}, "claim intent fields"),
+            ({**valid, "owner": 1}, "claim intent fields"),
+            ({**valid, "operation": "unknown"}, "unsupported"),
+            (["not", "an", "object"], "canonical typed fields"),
+        ):
+            with self.subTest(payload=payload), self.assertRaisesRegex(RuntimeError, message):
+                worker._validated_intent(intent(payload))
+        marker = "Handoffctl-Receipt: " + "f" * 32
+        with (
+            patch.object(
+                worker,
+                "_git",
+                side_effect=["a" * 40 + "\n" + "b" * 40 + "\n", marker, marker],
+            ),
+            self.assertRaisesRegex(RuntimeError, "multiple commits"),
+        ):
+            worker.find_receipt_commit(core, "f" * 32)
+
+        before = ({"id": "AR-0120"}, "before\n")
+        after = ({"id": "AR-0120"}, "after\n")
+        base_calls = ["tasks/AR-0120.md\nCURRENT.md\n", "b" * 40]
+        with (
+            patch.object(worker, "_task_record", side_effect=[before, after]),
+            patch.object(
+                worker,
+                "_task_views",
+                side_effect=[{"CURRENT.md": "expected\n"}, {"CURRENT.md": "expected\n"}],
+            ),
+            patch.object(worker, "_git", side_effect=[*base_calls, "different\n"]),
+            self.assertRaisesRegex(RuntimeError, "projection does not match"),
+        ):
+            worker._task_change(core, "a" * 40, "AR-0120")
+        with (
+            patch.object(worker, "_task_record", side_effect=[before, after]),
+            patch.object(
+                worker,
+                "_task_views",
+                side_effect=[{"CURRENT.md": "old\n"}, {}],
+            ),
+            patch.object(worker, "_git", side_effect=[*base_calls, "present\n"]),
+            self.assertRaisesRegex(RuntimeError, "retains an obsolete"),
+        ):
+            worker._task_change(core, "a" * 40, "AR-0120")
+
     def test_commit_task_shape_and_path_scope_fail_closed(self) -> None:
         core = FakeCore(self.root, "success")
         for source, message in (
