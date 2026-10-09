@@ -15,6 +15,7 @@ import hashlib
 import json
 import math
 import os
+import sqlite3
 import statistics
 import subprocess
 import sys
@@ -131,9 +132,9 @@ def heartbeat_effect_errors(  # noqa: C901
             errors.append(f"{task_id}: revision did not advance once")
         def unchanged(item: dict[str, Any]) -> dict[str, Any]:
             return {
-            key: value
-            for key, value in item.items()
-            if key not in {"task_revision", "updated_at", "claim_expires"}
+                key: value
+                for key, value in item.items()
+                if key not in {"task_revision", "updated_at", "claim_expires"}
             }
         if unchanged(after) != unchanged(original):
             errors.append(f"{task_id}: unrelated metadata changed")
@@ -153,6 +154,8 @@ def heartbeat_effect_errors(  # noqa: C901
             seconds=2
         ):
             errors.append(f"{task_id}: updated_at is outside the operation window")
+        if abs((expiry - updated - dt.timedelta(minutes=20)).total_seconds()) > 1:
+            errors.append(f"{task_id}: lease duration differs from requested 20 minutes")
         expected_body = (
             bodies[task_id] + f"\n- {after['updated_at']}: Heartbeat by bench-{index}.\n"
         )
@@ -161,8 +164,8 @@ def heartbeat_effect_errors(  # noqa: C901
     return errors
 
 
-def coordinator_other_digest(state: Path) -> bytes:
-    """Fence unexpected private Git-common-directory effects beyond receipt files."""
+def coordinator_private_root(state: Path) -> Path:
+    """Resolve the disposable clone's private Git-common-directory state."""
     common_name = subprocess.run(
         ["git", "rev-parse", "--git-common-dir"],  # noqa: S607
         cwd=state,
@@ -173,7 +176,12 @@ def coordinator_other_digest(state: Path) -> bytes:
     common = Path(common_name)
     if not common.is_absolute():
         common = state / common
-    root = common / "handoffctl"
+    return common / "handoffctl"
+
+
+def coordinator_other_digest(state: Path) -> bytes:
+    """Fence unexpected private Git-common-directory effects beyond receipt files."""
+    root = coordinator_private_root(state)
     allowed = {
         "state.lock",
         "fast-receipts.sqlite3",
@@ -198,6 +206,60 @@ def coordinator_other_digest(state: Path) -> bytes:
             else:
                 digest.update(b"directory\0")
     return digest.digest()
+
+
+def receipt_queue_errors(
+    state: Path, completed: dict[str, dict[str, object]]
+) -> list[str]:
+    """Reject extra intents and bind every durable row to one requested heartbeat."""
+    path = coordinator_private_root(state) / "fast-receipts.sqlite3"
+    if not path.is_file() or path.is_symlink():
+        return ["fast receipt database is absent or unsafe"]
+    project_id = json.loads((state / "coordinator.binding.json").read_text())["project_id"]
+    with contextlib.closing(sqlite3.connect(f"file:{path}?mode=ro", uri=True)) as connection:
+        connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA query_only=ON")
+        binding = connection.execute(
+            "SELECT project_id FROM receipt_binding WHERE singleton=1"
+        ).fetchone()
+        rows = connection.execute("SELECT * FROM intents").fetchall()
+    errors: list[str] = []
+    if binding is None or binding["project_id"] != project_id:
+        errors.append("fast receipt database has wrong project binding")
+    if len(rows) != len(TASK_IDS) or {row["receipt_id"] for row in rows} != set(completed):
+        errors.append("fast receipt database has missing or extra durable intents")
+    for row in rows:
+        task_id = str(row["task_id"])
+        if task_id not in TASK_IDS:
+            errors.append("fast receipt database has unexpected task")
+            continue
+        index = TASK_IDS.index(task_id)
+        payload = {
+            "expected_revision": 2,
+            "lease_minutes": 20,
+            "operation": "heartbeat",
+            "owner": f"bench-{index}",
+            "project_id": project_id,
+            "task": task_id,
+        }
+        canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+        if (
+            row["project_id"] != project_id
+            or row["idempotency_key"] != f"bench-{index}:heartbeat:2"
+            or row["operation"] != "heartbeat"
+            or row["expected_revision"] != 2
+            or row["payload_json"] != canonical
+            or row["input_digest"] != hashlib.sha256(canonical.encode()).hexdigest()
+            or row["phase"] != "completed-local"
+            or row["result_revision"] != 3
+            or row["error_code"] is not None
+            or row["remote_oid"] is not None
+        ):
+            errors.append(f"{task_id}: durable intent differs from requested heartbeat")
+        receipt = completed.get(str(row["receipt_id"]))
+        if receipt is None or row["commit_oid"] != receipt["commit_oid"]:
+            errors.append(f"{task_id}: durable intent commit does not match public receipt")
+    return errors
 
 
 def heartbeat_commit_errors(  # noqa: C901
@@ -1080,6 +1142,7 @@ def run_fast_heartbeat_probe(  # noqa: C901
         if subject != f"chore(state): heartbeat {receipt['task_id']}":
             errors.append(f"{commit_hash}: receipt task does not match commit task")
     errors.extend(heartbeat_effect_errors(state, before, before_bodies, started_at, finished_at))
+    errors.extend(receipt_queue_errors(state, completed))
     if dirty_checkout_digest(state) != before_dirty:
         errors.append("fast heartbeat left unrelated uncommitted state")
     if runtime_digest(state, normalize_time=False) != before_runtime:
@@ -1342,6 +1405,8 @@ def main() -> None:  # noqa: C901
             checked_batch(state, env, name, commands, args.timeout_seconds, 16)
         if args.only_strict_heartbeat:
             configure_fixture_signature_verification(state)
+            if list(coordinator_private_root(state).glob("fast-receipts.sqlite3*")):
+                raise RuntimeError("strict heartbeat fixture already has a fast receipt queue")
             before = {task_id: task_meta(state, task_id) for task_id in TASK_IDS}
             before_bodies = {
                 task_id: (state / "tasks" / f"{task_id}.md").read_text().split("---", 2)[2]
@@ -1380,6 +1445,8 @@ def main() -> None:  # noqa: C901
                 errors.append("strict heartbeat changed non-HEAD Git refs")
             if coordinator_other_digest(state) != before_private:
                 errors.append("strict heartbeat changed unrelated private Git state")
+            if list(coordinator_private_root(state).glob("fast-receipts.sqlite3*")):
+                errors.append("strict heartbeat created a fast receipt queue")
             if errors:
                 raise RuntimeError("strict heartbeat durability mismatch: " + "; ".join(errors))
             print(
