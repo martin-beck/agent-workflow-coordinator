@@ -10,7 +10,7 @@ import socket
 import stat
 import struct
 import sys
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager, suppress
 from pathlib import Path
 from typing import Any
@@ -200,9 +200,9 @@ def _require_request(request: Any) -> dict[str, Any]:
     raise RuntimeError("unknown fast receipt socket action")
 
 
-def _handle(core: Any, peer: socket.socket, path: Path) -> None:
-    from .fast_receipts import ReceiptStore
-
+def _handle(
+    core: Any, peer: socket.socket, submit: Callable[[dict[str, Any]], dict[str, Any]]
+) -> None:
     with peer:
         try:
             peer.settimeout(10)
@@ -215,25 +215,13 @@ def _handle(core: Any, peer: socket.socket, path: Path) -> None:
             if core.backend_selection()["backend"] != "git":
                 raise RuntimeError("fast receipts require Git authority")
             request = _require_request(json.loads(_read_line(peer, _MAX_REQUEST)))
-            with ReceiptStore(
-                path.parent / "fast-receipts.sqlite3",
-                core.project_binding()["project_id"],
-            ) as store:
-                if request["action"] == "heartbeat":
-                    result = store.enqueue_heartbeat(
-                        key=request["key"],
-                        task=request["task"],
-                        owner=request["owner"],
-                        expected_revision=request["expected_revision"],
-                        lease_minutes=request["lease_minutes"],
-                    )
-                else:
-                    found = store.read(request["receipt_id"])
-                    if found is None:
-                        raise RuntimeError("unknown fast receipt")
-                    result = found
+            result = submit(request)
             reply = {"ok": public_receipt(result)}
             peer.sendall(json.dumps(reply, sort_keys=True).encode() + b"\n")
+        except TimeoutError:
+            # A timed-out write may have committed; EOF makes the client retry
+            # through the same-key direct path instead of reporting success.
+            pass
         except (OSError, ValueError, RuntimeError, KeyError) as error:
             with suppress(OSError):
                 peer.sendall(json.dumps({"error": str(error)}).encode() + b"\n")
@@ -243,7 +231,10 @@ def _handle(core: Any, peer: socket.socket, path: Path) -> None:
 def socket_service(core: Any) -> Iterator[None]:  # noqa: C901
     """Serve queue/read requests beside, not inside, the authority executor."""
     import threading
-    from concurrent.futures import ThreadPoolExecutor
+    from concurrent.futures import Future, ThreadPoolExecutor
+    from queue import Full, Queue
+
+    from .fast_receipts import ReceiptStore
 
     path = core.coordinator_lock_path().parent / _SOCKET_NAME
     if path.exists() or path.is_symlink():
@@ -261,46 +252,104 @@ def socket_service(core: Any) -> Iterator[None]:  # noqa: C901
         if path.lstat().st_ino != old.st_ino:
             raise RuntimeError("fast receipt socket identity changed")
         path.unlink()
-    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as listener:
-        listener.bind(str(path))
-        path.chmod(0o600)
-        if not _safe_socket(path):
-            raise RuntimeError("fast receipt socket did not bind privately")
-        identity = path.lstat().st_ino
-        listener.listen(64)
-        listener.settimeout(0.05)
-        stop = threading.Event()
-        slots = threading.BoundedSemaphore(64)
-        with ThreadPoolExecutor(max_workers=32) as pool:
+    requests: Queue[tuple[dict[str, Any], Future[dict[str, Any]]] | None] = Queue(maxsize=64)
+    ready = threading.Event()
+    writer_error: list[Exception] = []
 
-            def accept_loop() -> None:
-                while not stop.is_set():
+    def write_requests() -> None:
+        try:
+            with ReceiptStore(
+                path.parent / "fast-receipts.sqlite3", core.project_binding()["project_id"]
+            ) as store:
+                ready.set()
+                while (item := requests.get()) is not None:
+                    request, future = item
                     try:
-                        peer, _ = listener.accept()
-                    except TimeoutError:
-                        continue
-                    except OSError:
-                        if stop.is_set():
-                            break
-                        raise
-                    if not slots.acquire(blocking=False):
-                        peer.close()
-                        continue
+                        if request["action"] == "heartbeat":
+                            result = store.enqueue_heartbeat(
+                                key=request["key"],
+                                task=request["task"],
+                                owner=request["owner"],
+                                expected_revision=request["expected_revision"],
+                                lease_minutes=request["lease_minutes"],
+                            )
+                        else:
+                            found = store.read(request["receipt_id"])
+                            if found is None:
+                                raise RuntimeError("unknown fast receipt")
+                            result = found
+                        future.set_result(result)
+                    except Exception as error:
+                        future.set_exception(error)
+        except Exception as error:
+            writer_error.append(error)
+            ready.set()
 
-                    def handle_one(connection: socket.socket) -> None:
+    writer = threading.Thread(target=write_requests, daemon=True)
+    writer.start()
+    if not ready.wait(timeout=10) or writer_error:
+        writer.join(timeout=1)
+        raise RuntimeError("fast receipt writer could not start") from (
+            writer_error[0] if writer_error else None
+        )
+
+    def submit(request: dict[str, Any]) -> dict[str, Any]:
+        if not writer.is_alive():
+            raise RuntimeError("fast receipt writer is unavailable")
+        future: Future[dict[str, Any]] = Future()
+        try:
+            requests.put((request, future), timeout=1)
+        except Full as error:
+            raise RuntimeError("fast receipt writer queue is saturated") from error
+        return future.result(timeout=9)
+
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as listener:
+            listener.bind(str(path))
+            path.chmod(0o600)
+            if not _safe_socket(path):
+                raise RuntimeError("fast receipt socket did not bind privately")
+            identity = path.lstat().st_ino
+            listener.listen(64)
+            listener.settimeout(0.05)
+            stop = threading.Event()
+            slots = threading.BoundedSemaphore(64)
+            with ThreadPoolExecutor(max_workers=32) as pool:
+
+                def accept_loop() -> None:
+                    while not stop.is_set():
                         try:
-                            _handle(core, connection, path)
-                        finally:
-                            slots.release()
+                            peer, _ = listener.accept()
+                        except TimeoutError:
+                            continue
+                        except OSError:
+                            if stop.is_set():
+                                break
+                            raise
+                        if not slots.acquire(blocking=False):
+                            peer.close()
+                            continue
 
-                    pool.submit(handle_one, peer)
+                        def handle_one(connection: socket.socket) -> None:
+                            try:
+                                _handle(core, connection, submit)
+                            finally:
+                                slots.release()
 
-            thread = threading.Thread(target=accept_loop, daemon=True)
-            thread.start()
-            try:
-                yield
-            finally:
-                stop.set()
-                thread.join(timeout=2)
-        if path.exists() and path.lstat().st_ino == identity:
-            path.unlink()
+                        pool.submit(handle_one, peer)
+
+                thread = threading.Thread(target=accept_loop, daemon=True)
+                thread.start()
+                try:
+                    yield
+                finally:
+                    stop.set()
+                    thread.join(timeout=2)
+            if path.exists() and path.lstat().st_ino == identity:
+                path.unlink()
+    finally:
+        if writer.is_alive():
+            requests.put(None, timeout=10)
+            writer.join(timeout=10)
+            if writer.is_alive():
+                raise RuntimeError("fast receipt writer did not stop")

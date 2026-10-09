@@ -147,7 +147,7 @@ class FastReceiptSocketTests(unittest.TestCase):
             with contextlib.redirect_stderr(error):
                 self.assertEqual(1, try_socket_fast(self.argv))
             self.assertIn("foreign fast receipt caller", error.getvalue())
-        self.assertFalse((self.private / "fast-receipts.sqlite3").exists())
+        self.assertEqual(0, self._intent_count())
 
     def test_stale_owned_socket_is_replaced_but_unsafe_socket_fails(self) -> None:
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as stale:
