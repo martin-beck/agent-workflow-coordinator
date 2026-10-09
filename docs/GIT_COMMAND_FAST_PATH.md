@@ -449,6 +449,42 @@ durable service supervision remains absent.
 
 ## Further candidate architecture, not yet implemented
 
+### Typed lifecycle-receipt expansion
+
+The heartbeat prototype is not an adequate generic command queue. The next
+implementation increment uses a closed, canonical descriptor for each
+admissible lifecycle transition:
+
+```json
+{
+  "version": 1,
+  "project_id": "bound project UUID",
+  "idempotency_key": "bounded caller token",
+  "operation": "one supported lifecycle operation",
+  "task_id": "AR-NNNN",
+  "expected_revision": 17,
+  "payload": {"operation-specific closed fields": "only"},
+  "input_digest": "sha256(canonical descriptor)"
+}
+```
+
+The receipt ID, phase, commit OID, result revision, remote observation, and
+failure classification are generated durable state, never caller-controlled
+descriptor fields. Same-key, different-descriptor retries fail. A worker must
+validate the descriptor, reconstruct only the operation's strict Namespace,
+call the existing Git mutation path, and verify an operation-specific signed,
+receipt-marked delta. Restart recovery may record the verified commit or
+ambiguity; it may not blindly rerun an interrupted transition.
+
+| Route | Generic typed receipt status | Required extra witness or boundary |
+| --- | --- | --- |
+| `claim`, `heartbeat`, `update`, `accept`, `release`, `promote`, `pause`, `resume`, `unblock`, `recover-expired`, `gate` | Admissible in principle | Exact revision must be captured even where the strict CLI historically omitted it; all strict admission and operation-specific output checks run again under the Git lock. |
+| `checkpoint` | Separate design required | It derives a source commit from the bound product worktree, so a receipt needs a captured, revalidated source-commit witness. |
+| `run` | Excluded | Arbitrary external effects cannot be safely replayed after an ambiguous crash. |
+| `reconcile`, especially `--push` | Separate contract | Fresh observation and synchronous remote completion are not lifecycle-transition queue semantics. |
+| `init`, `migrate`, `upgrade`, `rollback` | Excluded from this receipt family | Their multi-stage backup/equivalence and authority boundaries need dedicated protocol models. |
+| `snapshot`, `doctor`, `render-status --check`, `board`, `metrics`, service controls | Not receipt mutations | Read-only or unavailable Git routes require a cache/freshness design, not a mutation receipt. |
+
 Keep the CLI as the mandatory project-bound route. A repository-common local
 service could retain a generation-fenced task/dependency index and materialized
 projection digests across CLI invocations. It would watch task, index, Git,
