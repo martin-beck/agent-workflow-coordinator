@@ -1348,9 +1348,10 @@ def mutation_errors(
     path: Path,
     before: dict[Path, str | None],
     policy: EvidencePolicy | None = None,
+    tasks: list[Task] | None = None,
 ) -> list[str]:
     """Validate a Git mutation without gating on unrelated repository findings."""
-    tasks = all_tasks()
+    tasks = all_tasks() if tasks is None else tasks
     selected = [meta for candidate, meta, _ in tasks if candidate == path]
     if len(selected) != 1:
         return [f"{path.name}: mutation target is not unique"]
@@ -2486,7 +2487,14 @@ def mutate(args: argparse.Namespace, kind: str, policy: EvidencePolicy | None = 
             raise RuntimeError("BACKEND_CHANGED: retry using the selected backend")
         sync_replica_before_write()
         selected_policy = policy_snapshot(policy)
-        path, meta, body = locate(args.task)
+        tasks = all_tasks()
+        matches = [index for index, (_, item, _) in enumerate(tasks) if item["id"] == args.task]
+        if not matches:
+            raise RuntimeError(f"unknown task {args.task}")
+        if len(matches) != 1:
+            raise RuntimeError(f"duplicate task {args.task}")
+        index = matches[0]
+        path, meta, body = tasks[index]
         require_promotion_preflight(kind)
         before: dict[Path, str | None] = {path: path.read_text()}
         before.update(
@@ -2496,7 +2504,7 @@ def mutate(args: argparse.Namespace, kind: str, policy: EvidencePolicy | None = 
             }
         )
         committed = False
-        note = apply_transition(args, kind, meta, all_tasks(), selected_policy)
+        note = apply_transition(args, kind, meta, tasks, selected_policy)
         meta["task_revision"] += 1
         meta["updated_at"] = now()
         session_record = git_session_record(args, kind, meta, before)
@@ -2526,10 +2534,12 @@ def mutate(args: argparse.Namespace, kind: str, policy: EvidencePolicy | None = 
             if checkpoint_record is not None:
                 append_checkpoint(ROOT, checkpoint_record)
             write_task(path, meta, body)
-            views = rendered_task_views(all_tasks())
+            committed_meta, committed_body = read_task(path)
+            tasks[index] = (path, committed_meta, committed_body)
+            views = rendered_task_views(tasks)
             write_rendered_task_views(views)
             require_policy_unchanged(ROOT, selected_policy)
-            errors = mutation_errors(path, before, selected_policy)
+            errors = mutation_errors(path, before, selected_policy, tasks)
             if errors:
                 raise RuntimeError("\n".join(errors))
             for target in generated_paths():
