@@ -8,6 +8,7 @@ Only a bound service may turn an intent into a signed authority commit.
 
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import json
 import os
@@ -55,12 +56,20 @@ class ReceiptStore:
             self.connection = sqlite3.connect(path, timeout=10, isolation_level=None)
             self.connection.row_factory = sqlite3.Row
             self.connection.execute("PRAGMA busy_timeout=10000")
-            mode = str(self.connection.execute("PRAGMA journal_mode=WAL").fetchone()[0]).lower()
-            if mode != "wal":
-                raise RuntimeError("SQLITE_WAL_UNAVAILABLE: journal mode is not WAL")
+            if not self._schema_ready():
+                fcntl.flock(self._database_fd, fcntl.LOCK_EX)
+                try:
+                    if not self._schema_ready():
+                        mode = str(
+                            self.connection.execute("PRAGMA journal_mode=WAL").fetchone()[0]
+                        ).lower()
+                        if mode != "wal":
+                            raise RuntimeError("SQLITE_WAL_UNAVAILABLE: journal mode is not WAL")
+                        self._initialize()
+                finally:
+                    fcntl.flock(self._database_fd, fcntl.LOCK_UN)
             self.connection.execute("PRAGMA synchronous=FULL")
             self._assert_path()
-            self._initialize()
             self._retain_sidecars()
             os.fsync(self._parent_fd)
             self._closed = False
@@ -166,6 +175,26 @@ class ReceiptStore:
                 raise RuntimeError("receipt WAL sidecar is unavailable") from error
             self._sidecar_fds[suffix] = descriptor
         self._assert_path()
+
+    def _schema_ready(self) -> bool:
+        """Hot opens do not acquire the SQLite write transaction or change WAL mode."""
+        try:
+            mode = str(self.connection.execute("PRAGMA journal_mode").fetchone()[0]).lower()
+            version = self.connection.execute("PRAGMA user_version").fetchone()[0]
+        except sqlite3.OperationalError as error:
+            if "locked" not in str(error).lower():
+                raise
+            return False
+        if mode != "wal" or version != 3:
+            return False
+        binding = self.connection.execute(
+            "SELECT project_id FROM receipt_binding WHERE singleton=1"
+        ).fetchone()
+        if binding is None:
+            raise RuntimeError("receipt database has no project binding")
+        if binding["project_id"] != self.project_id:
+            raise RuntimeError("receipt database is bound to a different project")
+        return True
 
     def _initialize(self) -> None:
         try:

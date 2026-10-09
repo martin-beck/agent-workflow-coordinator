@@ -218,6 +218,38 @@ class FastReceiptTests(unittest.TestCase):
         count = store.connection.execute("SELECT count(*) FROM intents").fetchone()[0]
         self.assertEqual(16, count)
 
+    def test_cold_sixteen_processes_initialize_one_wal_queue(self) -> None:
+        arguments = [(str(self.path), self.project_id, worker) for worker in range(16)]
+        with ProcessPoolExecutor(max_workers=16) as executor:
+            results = list(executor.map(_independent_enqueue, arguments))
+        self.assertEqual(16, len({receipt_id for receipt_id, _ in results}))
+        self.assertTrue(all(phase == "queued-local" for _, phase in results))
+        with ReceiptStore(self.path, self.project_id) as store:
+            count = store.connection.execute("SELECT count(*) FROM intents").fetchone()[0]
+        self.assertEqual(16, count)
+
+    def test_hot_open_skips_schema_write_transaction(self) -> None:
+        original = self.store()
+        queued = self.submit(original)
+        original.close()
+        with (
+            patch.object(ReceiptStore, "_initialize", side_effect=AssertionError("cold init")),
+            ReceiptStore(self.path, self.project_id) as reopened,
+        ):
+            current = reopened.read(str(queued["receipt_id"]))
+        assert current is not None
+        self.assertEqual("queued-local", current["phase"])
+
+    def test_initialized_queue_without_project_binding_fails_closed(self) -> None:
+        original = self.store()
+        original.close()
+        connection = sqlite3.connect(self.path)
+        connection.execute("DELETE FROM receipt_binding")
+        connection.commit()
+        connection.close()
+        with self.assertRaisesRegex(RuntimeError, "no project binding"):
+            ReceiptStore(self.path, self.project_id)
+
     def test_sixteen_independent_retries_share_one_receipt(self) -> None:
         store = self.store()
         arguments = [(str(self.path), self.project_id)] * 16
