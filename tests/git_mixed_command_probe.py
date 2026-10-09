@@ -1251,6 +1251,7 @@ def run_fast_hostile_probe(  # noqa: C901
     before_runtime = runtime_digest(state, normalize_time=False)
     before_refs = non_head_refs_digest(state)
     before_private = coordinator_other_digest(state)
+    started_at = dt.datetime.now(dt.UTC)
     service = subprocess.Popen(
         [sys.executable, "tools/handoffctl.py", "fast", "worker", "--serve"],
         cwd=state,
@@ -1309,6 +1310,7 @@ def run_fast_hostile_probe(  # noqa: C901
         if len({item["receipt_id"] for item in receipts.values()}) != 16:
             raise RuntimeError("fast hostile submissions did not create 16 distinct receipts")
         completed: dict[int, dict[str, Any]] = {}
+        good_completed_at: float | None = None
         deadline = time.monotonic() + timeout
         while len(completed) < 16:
             if service.poll() is not None:
@@ -1341,9 +1343,14 @@ def run_fast_hostile_probe(  # noqa: C901
                     raise RuntimeError("fast hostile receipt identity changed")
                 if current["phase"] in {"completed-local", "rejected", "ambiguous"}:
                     completed[index] = current
+                    if index == 8 and current["phase"] == "completed-local":
+                        good_completed_at = time.monotonic()
             if len(completed) < 16:
                 time.sleep(0.1)
-        local_wall_ms = (time.monotonic() - started) * 1000
+        if good_completed_at is None:
+            raise RuntimeError("fast hostile good worker never completed locally")
+        good_local_wall_ms = (good_completed_at - started) * 1000
+        finished_at = dt.datetime.now(dt.UTC)
     finally:
         for process in running:
             if process.poll() is None:
@@ -1391,40 +1398,116 @@ def run_fast_hostile_probe(  # noqa: C901
         check=False,
         capture_output=True,
     )
-    message = subprocess.run(  # noqa: S603
-        ["git", "show", "-s", "--format=%B", commits[0]],  # noqa: S607
+    commit = subprocess.run(  # noqa: S603
+        ["git", "show", "-s", "--format=%P%x00%an%x00%ae%x00%s%x00%B", commits[0]],  # noqa: S607
         cwd=state,
         check=True,
         capture_output=True,
         text=True,
     ).stdout
+    parents, author_name, author_email, subject, message = commit.split("\0", 4)
+    paths = subprocess.run(  # noqa: S603
+        ["git", "diff-tree", "-r", "--no-commit-id", "--name-only", "-z", commits[0]],  # noqa: S607
+        cwd=state,
+        check=True,
+        capture_output=True,
+    ).stdout.split(b"\0")
     if (
         verified.returncode
-        or message.splitlines()[0] != f"chore(state): heartbeat {task}"
+        or len(parents.split()) != 1
+        or subject != f"chore(state): heartbeat {task}"
+        or [path for path in paths if path] != [f"tasks/{task}.md".encode()]
+        or (author_name, author_email) != ("Fixture", "fixture@example.invalid")
+        or not has_matching_dco_trailer(message, author_name, author_email)
         or message.splitlines().count(f"Handoffctl-Receipt: {good['receipt_id']}") != 1
-        or not any(line.startswith("Signed-off-by: ") for line in message.splitlines())
     ):
-        raise RuntimeError("fast hostile good commit lacks exact signature or receipt evidence")
+        raise RuntimeError("fast hostile good commit lacks exact path, signature, DCO or receipt")
     after = task_meta(state, task)
     after_body = (state / "tasks" / f"{task}.md").read_text().split("---", 2)[2]
+
+    def unchanged(item: dict[str, Any]) -> dict[str, Any]:
+        return {
+            key: value
+            for key, value in item.items()
+            if key not in {"task_revision", "updated_at", "claim_expires"}
+        }
+
+    try:
+        updated = dt.datetime.fromisoformat(after["updated_at"])
+        expiry = dt.datetime.fromisoformat(after["claim_expires"])
+    except (KeyError, TypeError, ValueError) as error:
+        raise RuntimeError("fast hostile heartbeat timestamps are invalid") from error
     if (
         after["task_revision"] != before[task]["task_revision"] + 1
-        or after["owner"] != "bench-0"
-        or after["status"] != "in_progress"
-        or "Heartbeat by bench-0." not in after_body.removeprefix(before_body)
+        or unchanged(after) != unchanged(before[task])
+        or not started_at - dt.timedelta(seconds=2)
+        <= updated
+        <= finished_at + dt.timedelta(seconds=2)
+        or abs((expiry - updated - dt.timedelta(minutes=20)).total_seconds()) > 1
+        or after_body != before_body + f"\n- {after['updated_at']}: Heartbeat by bench-0.\n"
         or any(task_meta(state, other) != meta for other, meta in before.items() if other != task)
     ):
         raise RuntimeError("fast hostile batch changed authority beyond one good heartbeat")
     path = coordinator_private_root(state) / "fast-receipts.sqlite3"
     with contextlib.closing(sqlite3.connect(f"file:{path}?mode=ro", uri=True)) as connection:
-        rows = connection.execute("SELECT receipt_id, phase, commit_oid FROM intents").fetchall()
-    if (
-        len(rows) != 16
-        or {row[0] for row in rows} != {item["receipt_id"] for item in completed.values()}
-        or sum(row[1] == "completed-local" and row[2] == commits[0] for row in rows) != 1
-        or sum(row[1] == "rejected" and row[2] is None for row in rows) != 15
-    ):
+        connection.row_factory = sqlite3.Row
+        rows = connection.execute("SELECT * FROM intents").fetchall()
+    if len(rows) != 16 or {row["receipt_id"] for row in rows} != {
+        item["receipt_id"] for item in completed.values()
+    }:
         raise RuntimeError("fast hostile public receipts disagree with durable queue")
+    project_id = json.loads((state / "coordinator.binding.json").read_text())["project_id"]
+    by_receipt = {row["receipt_id"]: row for row in rows}
+    for index, command in enumerate(fast_hostile_commands()):
+        public = completed[index]
+        row = by_receipt[public["receipt_id"]]
+        payload = {
+            "expected_revision": int(command[6]),
+            "lease_minutes": int(command[8]),
+            "operation": "heartbeat",
+            "owner": command[4],
+            "project_id": project_id,
+            "task": task,
+        }
+        canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+        expected_phase = "completed-local" if index == 8 else "rejected"
+        expected_oid = commits[0] if index == 8 else None
+        if (
+            row["project_id"] != project_id
+            or row["idempotency_key"] != command[10]
+            or row["operation"] != "heartbeat"
+            or row["task_id"] != task
+            or row["expected_revision"] != int(command[6])
+            or row["payload_json"] != canonical
+            or row["input_digest"] != hashlib.sha256(canonical.encode()).hexdigest()
+            or row["phase"] != expected_phase
+            or row["commit_oid"] != expected_oid
+            or row["result_revision"] != (3 if index == 8 else None)
+            or row["error_code"] != (None if index == 8 else "ADMISSION_REJECTED")
+            or row["remote_oid"] is not None
+            or any(
+                public[field] != row[field]
+                for field in (
+                    "receipt_id",
+                    "project_id",
+                    "operation",
+                    "task_id",
+                    "expected_revision",
+                    "phase",
+                    "started_at",
+                    "commit_oid",
+                    "result_revision",
+                    "error_code",
+                    "remote_oid",
+                    "remote_observed_at",
+                    "publication_error",
+                    "created_at",
+                )
+            )
+        ):
+            raise RuntimeError(
+                "fast hostile durable row differs from typed request or public receipt"
+            )
     if (
         dirty_checkout_digest(state) != before_dirty
         or runtime_digest(state, normalize_time=False) != before_runtime
@@ -1443,7 +1526,7 @@ def run_fast_hostile_probe(  # noqa: C901
                 "malicious_rejected": 15,
                 "good_completed_local": 1,
                 "signed_commits": 1,
-                "good_local_wall_ms": round(local_wall_ms, 1),
+                "good_local_wall_ms": round(good_local_wall_ms, 1),
                 "integrity": checks,
             }
         ),
