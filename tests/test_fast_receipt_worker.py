@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import json
 import subprocess
 import tempfile
 import unittest
@@ -166,6 +167,26 @@ class FastReceiptWorkerTests(unittest.TestCase):
         assert result is not None
         self.assertEqual("ambiguous", result["phase"])
         self.assertEqual(0, core.calls)
+
+    def test_changed_valid_payload_with_stale_digest_never_executes(self) -> None:
+        receipt_id = self.enqueue()
+        queued = self.store.read(receipt_id)
+        assert queued is not None
+        original_digest = queued["input_digest"]
+        payload = json.loads(str(queued["payload_json"]))
+        payload["lease_minutes"] = 21
+        changed = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+        self.store.connection.execute(
+            "UPDATE intents SET payload_json=? WHERE receipt_id=?", (changed, receipt_id)
+        )
+        core = FakeCore(self.root, "success")
+        result = process_one(core, self.store)
+        assert result is not None
+        self.assertEqual("ambiguous", result["phase"])
+        self.assertIsNone(result["commit_oid"])
+        self.assertEqual(0, core.calls)
+        self.assertEqual(original_digest, result["input_digest"])
+        self.assertEqual(changed, result["payload_json"])
 
     def test_stale_admission_is_rejected_without_local_commit(self) -> None:
         self.enqueue()
