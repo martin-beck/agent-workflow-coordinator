@@ -49,10 +49,15 @@ class FastReceiptCLITests(unittest.TestCase):
         self.path = self.root / "private/fast-receipts.sqlite3"
 
     def invoke(self, action: str, **values: object) -> dict[str, object]:
+        if action in {"worker", "publisher"}:
+            values.setdefault("serve", False)
+            values.setdefault("poll_seconds", 0.05 if action == "worker" else 5.0)
         output = io.StringIO()
         with redirect_stdout(output):
             result = dispatch_fast(self.core, argparse.Namespace(fast_action=action, **values))
         self.assertEqual(0, result)
+        if not output.getvalue():
+            return {}
         decoded = json.loads(output.getvalue())
         self.assertIsInstance(decoded, dict)
         return cast(dict[str, object], decoded)
@@ -111,6 +116,23 @@ class FastReceiptCLITests(unittest.TestCase):
         self.assertEqual(
             "queued-local", self.invoke("receipt", receipt_id=queued["receipt_id"])["phase"]
         )
+
+    def test_resident_local_and_publication_services_are_separate(self) -> None:
+        with (
+            patch("tools.fast_receipt_cli.serve_local") as local,
+            patch("tools.fast_receipt_cli.serve_publication") as remote,
+        ):
+            self.assertEqual({}, self.invoke("worker", serve=True, limit=7, poll_seconds=0.1))
+            self.assertEqual({}, self.invoke("publisher", serve=True, poll_seconds=5.0))
+        local.assert_called_once()
+        remote.assert_called_once()
+        self.assertEqual(7, local.call_args.kwargs["limit"])
+        self.assertEqual(5.0, remote.call_args.kwargs["poll_seconds"])
+
+    def test_one_cycle_publisher_returns_remote_receipts_only(self) -> None:
+        with patch("tools.fast_receipt_cli.publish_pending", return_value=[]) as publish:
+            self.assertEqual({"remote": []}, self.invoke("publisher"))
+        publish.assert_called_once()
 
     def test_parser_requires_explicit_fast_heartbeat_fence_and_key(self) -> None:
         with (

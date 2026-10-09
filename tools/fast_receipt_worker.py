@@ -12,6 +12,7 @@ import json
 import os
 import re
 import stat
+import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from typing import Any
@@ -39,9 +40,8 @@ def _require_bound_store(core: Any, store: ReceiptStore) -> None:
 
 
 @contextmanager
-def service_lock(core: Any) -> Iterator[None]:
-    """Fence recovery and execution to one process per Git common directory."""
-    path = core.coordinator_lock_path().parent / "fast-receipts.service.lock"
+def _private_lock(core: Any, filename: str) -> Iterator[None]:
+    path = core.coordinator_lock_path().parent / filename
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     parent = path.parent.lstat()
     if (
@@ -70,6 +70,20 @@ def service_lock(core: Any) -> Iterator[None]:
     finally:
         fcntl.flock(descriptor, fcntl.LOCK_UN)
         os.close(descriptor)
+
+
+@contextmanager
+def service_lock(core: Any) -> Iterator[None]:
+    """Fence recovery and execution to one process per Git common directory."""
+    with _private_lock(core, "fast-receipts.service.lock"):
+        yield
+
+
+@contextmanager
+def publication_lock(core: Any) -> Iterator[None]:
+    """Fence remote observation/push without blocking local intent execution."""
+    with _private_lock(core, "fast-receipts.publication.lock"):
+        yield
 
 
 def _git(core: Any, *args: str, check: bool = True) -> str:
@@ -285,6 +299,24 @@ def process_pending(core: Any, store: ReceiptStore, *, limit: int = 16) -> list[
         return outcomes
 
 
+def serve_local(
+    core: Any, store: ReceiptStore, *, limit: int = 16, poll_seconds: float = 0.05
+) -> None:
+    """Run one resident local executor; a restart never blindly replays running work."""
+    if not 1 <= limit <= 1024 or not 0.01 <= poll_seconds <= 60:
+        raise ValueError("invalid local receipt service limits")
+    with service_lock(core):
+        recover_running(core, store)
+        while True:
+            count = 0
+            for _ in range(limit):
+                if process_one(core, store) is None:
+                    break
+                count += 1
+            if count == 0:
+                time.sleep(poll_seconds)
+
+
 def _is_ancestor(core: Any, older: str, newer: str) -> bool:
     result = core.run(
         ["git", "-C", str(core.ROOT), "merge-base", "--is-ancestor", older, newer],
@@ -396,3 +428,13 @@ def publish_pending(core: Any, store: ReceiptStore) -> list[dict[str, Any]]:
             for item in pending
         ]
     return _finish_publications(core, store, pending, local_head, remote_head)
+
+
+def serve_publication(core: Any, store: ReceiptStore, *, poll_seconds: float = 5.0) -> None:
+    """Observe remote completion in a separate fenced process from local writes."""
+    if not 0.1 <= poll_seconds <= 60:
+        raise ValueError("invalid publication polling interval")
+    with publication_lock(core):
+        while True:
+            publish_pending(core, store)
+            time.sleep(poll_seconds)

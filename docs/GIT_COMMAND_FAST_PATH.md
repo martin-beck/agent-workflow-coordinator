@@ -367,9 +367,13 @@ It returns a durable `queued-local` receipt and does not claim a heartbeat
 has occurred. `handoffctl fast receipt RECEIPT_ID` reads its current phase;
 `handoffctl fast worker --limit N` performs one explicitly invoked batch,
 including local commit verification and a separate remote observation attempt.
-There is no continuously running service, wake-up mechanism, or broad
-per-command latency qualification yet. The worker handles no command other
-than heartbeat. Arbitrary
+`handoffctl fast worker --serve` runs a resident local executor under one
+repository-common service lock. `handoffctl fast publisher --serve` uses a
+different lock for remote observation and publication, so a slow push does not
+hold the local executor's service lock. These are manually started processes;
+there is no service supervisor, wake-up mechanism, or broad per-command
+latency qualification yet. The worker handles no command other than heartbeat.
+Arbitrary
 `run` payloads cannot be retried after ambiguous execution without risking
 double effects; they require a distinct design. This prototype is not 5%
 evidence, a general all-command fast path, or release qualification. The

@@ -17,8 +17,11 @@ from tools import fast_receipt_worker as worker
 from tools.fast_receipt_worker import (
     process_one,
     process_pending,
+    publication_lock,
     publish_pending,
     recover_running,
+    serve_local,
+    serve_publication,
     service_lock,
     verify_local_commit,
 )
@@ -319,6 +322,55 @@ class FastReceiptWorkerTests(unittest.TestCase):
         for limit in (0, -1, 1025):
             with self.subTest(limit=limit), self.assertRaisesRegex(ValueError, "batch limit"):
                 process_pending(core, self.store, limit=limit)
+
+    def test_resident_local_service_recovers_then_drains_and_releases_lock(self) -> None:
+        core = FakeCore(self.root, "success")
+        processed = {"phase": "completed-local"}
+        with (
+            patch.object(worker, "recover_running", return_value=[]) as recover,
+            patch.object(worker, "process_one", side_effect=[processed, None, None]) as execute,
+            patch("tools.fast_receipt_worker.time.sleep", side_effect=KeyboardInterrupt) as sleep,
+            self.assertRaises(KeyboardInterrupt),
+        ):
+            serve_local(core, self.store, limit=2, poll_seconds=0.02)
+        recover.assert_called_once_with(core, self.store)
+        self.assertEqual(3, execute.call_count)
+        sleep.assert_called_once_with(0.02)
+        with service_lock(core):
+            pass
+
+    def test_publisher_lock_is_independent_and_released_after_stop(self) -> None:
+        core = FakeCore(self.root, "success")
+        with publication_lock(core):
+            with service_lock(core):
+                pass
+            with self.assertRaisesRegex(RuntimeError, "already active"), publication_lock(core):
+                pass
+        with (
+            patch.object(worker, "publish_pending", return_value=[]) as publish,
+            patch("tools.fast_receipt_worker.time.sleep", side_effect=KeyboardInterrupt) as sleep,
+            self.assertRaises(KeyboardInterrupt),
+        ):
+            serve_publication(core, self.store, poll_seconds=1.0)
+        publish.assert_called_once_with(core, self.store)
+        sleep.assert_called_once_with(1.0)
+        with publication_lock(core):
+            pass
+
+    def test_resident_service_limits_reject_without_claiming_lock(self) -> None:
+        core = FakeCore(self.root, "success")
+        for limit, polling in ((0, 0.05), (1, 0.0), (1025, 0.05), (1, 61.0)):
+            with (
+                self.subTest(limit=limit, polling=polling),
+                self.assertRaisesRegex(ValueError, "service limits"),
+            ):
+                serve_local(core, self.store, limit=limit, poll_seconds=polling)
+        for polling in (0.0, 61.0):
+            with (
+                self.subTest(publication_polling=polling),
+                self.assertRaisesRegex(ValueError, "publication polling"),
+            ):
+                serve_publication(core, self.store, poll_seconds=polling)
 
     def test_heartbeat_delta_rejects_wrong_state_lease_and_body(self) -> None:
         core = FakeCore(self.root, "success")

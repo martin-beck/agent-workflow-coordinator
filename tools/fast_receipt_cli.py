@@ -8,7 +8,13 @@ import json
 from argparse import Namespace
 from typing import Any
 
-from .fast_receipt_worker import process_pending, publish_pending
+from .fast_receipt_worker import (
+    process_pending,
+    publication_lock,
+    publish_pending,
+    serve_local,
+    serve_publication,
+)
 from .fast_receipts import ReceiptStore
 
 _PUBLIC_FIELDS = (
@@ -18,6 +24,7 @@ _PUBLIC_FIELDS = (
     "task_id",
     "expected_revision",
     "phase",
+    "started_at",
     "commit_oid",
     "result_revision",
     "error_code",
@@ -57,14 +64,31 @@ def dispatch_fast(core: Any, args: Namespace) -> int:
             print(json.dumps(public_receipt(found), sort_keys=True))
             return 0
         if args.fast_action == "worker":
+            if args.serve:
+                serve_local(core, store, limit=args.limit, poll_seconds=args.poll_seconds)
+                return 0
             local = process_pending(core, store, limit=args.limit)
-            remote = publish_pending(core, store)
+            with publication_lock(core):
+                remote = publish_pending(core, store)
             print(
                 json.dumps(
                     {
                         "local": [public_receipt(item) for item in local],
                         "remote": [public_receipt(item) for item in remote],
                     },
+                    sort_keys=True,
+                )
+            )
+            return 0
+        if args.fast_action == "publisher":
+            if args.serve:
+                serve_publication(core, store, poll_seconds=args.poll_seconds)
+                return 0
+            with publication_lock(core):
+                remote = publish_pending(core, store)
+            print(
+                json.dumps(
+                    {"remote": [public_receipt(item) for item in remote]},
                     sort_keys=True,
                 )
             )
