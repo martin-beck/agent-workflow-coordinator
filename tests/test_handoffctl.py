@@ -3297,6 +3297,30 @@ class HandoffTest(unittest.TestCase):
                 CORE.introduced_content_errors({path: prior}),
             )
 
+    def test_privacy_prefilters_preserve_every_pattern_and_unicode_casefold(self) -> None:
+        path = self.root / "notes.txt"
+        cases = (
+            ("absolute Linux home path", "/home/example"),
+            ("absolute Windows user path", "C:\\Users\\example"),
+            ("private host alias", "ai-ws"),
+            ("private or loopback IP", "127.0.0.1"),
+            ("possible credential", "token = example"),
+            ("private key", "-----BEGIN OPENSSH PRIVATE KEY-----"),
+            ("session-like UUID", "12345678-1234-1234-1234-123456789abc"),
+            ("private host alias", "a\u0130-ws"),
+            ("possible credential", "pa\u017f\u017fword: example"),
+        )
+        for label, content in cases:
+            with self.subTest(label=label, content=content):
+                path.write_text(content)
+                self.assertTrue(CORE.possible_privacy_pattern(content, content.lower(), label))
+                self.assertIn(f"notes.txt: {label}", CORE.privacy_errors())
+        path.write_text("token=127.0.0.1")
+        errors = CORE.privacy_errors()
+        self.assertIn("notes.txt: possible credential", errors)
+        self.assertIn("notes.txt: private or loopback IP", errors)
+        self.assertTrue(CORE.possible_privacy_pattern("plain", "plain", "future pattern"))
+
     def test_mutation_keeps_global_active_key_uniqueness(self) -> None:
         self.make_task(
             "AR-0001",

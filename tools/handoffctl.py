@@ -674,6 +674,7 @@ PRIVATE = (
         "session-like UUID",
     ),
 )
+PRIVATE_HEX_DIGITS = frozenset("0123456789abcdefABCDEF")
 
 UUID_PRIVACY_EXEMPT = frozenset(
     {
@@ -1140,6 +1141,52 @@ def privacy_pattern_applies(relative: Path, label: str) -> bool:
     return label != "session-like UUID" or relative not in UUID_PRIVACY_EXEMPT
 
 
+def possible_uuid_pattern(text: str) -> bool:
+    """Reject text without the fixed ASCII shape of any UUID regex match."""
+    if len(text) < 36:
+        return False
+    hyphen = text.find("-", 8)
+    while hyphen >= 0:
+        if (
+            hyphen + 28 <= len(text)
+            and text[hyphen + 5] == "-"
+            and text[hyphen + 10] == "-"
+            and text[hyphen + 15] == "-"
+            and all(char in PRIVATE_HEX_DIGITS for char in text[hyphen - 8 : hyphen])
+        ):
+            return True
+        hyphen = text.find("-", hyphen + 1)
+    return False
+
+
+def possible_privacy_pattern(text: str, lowered: str, label: str) -> bool:
+    """Use only necessary literals before the authoritative privacy regex."""
+    # Python's Unicode IGNORECASE can match non-ASCII case variants of ASCII
+    # literals that lower() does not turn into those same ASCII byte sequences.
+    if not text.isascii():
+        return True
+    if label == "absolute Linux home path":
+        return "/home/" in text
+    if label == "absolute Windows user path":
+        return ":\\users\\" in lowered
+    if label == "private host alias":
+        return "ai-ws" in lowered
+    if label == "private or loopback IP":
+        return "10." in text or "127." in text
+    if label == "possible credential":
+        return any(
+            word in lowered
+            for word in ("password", "passwd", "token", "secret", "api_key", "api-key", "apikey")
+        )
+    if label == "private key":
+        return "-----BEGIN " in text
+    if label == "session-like UUID":
+        return possible_uuid_pattern(text)
+    # New pattern families must retain the full regex until a necessary
+    # prefilter is reviewed; an unknown label must never suppress a finding.
+    return True
+
+
 def privacy_errors() -> list[str]:
     errors: list[str] = []
     for path in sorted(ROOT.rglob("*")):
@@ -1160,10 +1207,11 @@ def privacy_errors() -> list[str]:
             text = path.read_text()
         except UnicodeDecodeError:
             continue
+        lowered = text.lower()
         for regex, label in PRIVATE:
             if not privacy_pattern_applies(relative, label):
                 continue
-            if regex.search(text):
+            if possible_privacy_pattern(text, lowered, label) and regex.search(text):
                 errors.append(f"{relative}: {label}")
     return errors
 
@@ -2638,7 +2686,9 @@ def mutate(args: argparse.Namespace, kind: str, policy: EvidencePolicy | None = 
             write_rendered_task_views(views)
             require_policy_unchanged(ROOT, selected_policy)
             errors = mutation_errors(
-                path, before, selected_policy,
+                path,
+                before,
+                selected_policy,
                 rendered_snapshot=(view_tasks, views, view_settings),
             )
             if errors:
