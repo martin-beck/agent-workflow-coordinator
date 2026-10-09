@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import patch
 
+from tools import fast_receipt_worker as worker
 from tools.fast_receipt_worker import (
     process_one,
     process_pending,
@@ -56,6 +57,10 @@ class FakeCore:
     def run(self, command: list[str], *, check: bool = True) -> subprocess.CompletedProcess[str]:
         del check
         return subprocess.CompletedProcess(command, 0, "")
+
+    def _transition_note(self, body: str, note: str, at: str) -> str:
+        del body, note, at
+        return "expected heartbeat body\n"
 
 
 class PublicationCore(FakeCore):
@@ -137,6 +142,30 @@ class FastReceiptWorkerTests(unittest.TestCase):
         current = other.read(str(queued["receipt_id"]))
         assert current is not None
         self.assertEqual("queued-local", current["phase"])
+
+    def test_non_git_backend_rejects_without_reserving(self) -> None:
+        receipt_id = self.enqueue()
+        core = FakeCore(self.root, "success")
+        with (
+            patch.object(core, "backend_selection", return_value={"backend": "sqlite"}),
+            self.assertRaisesRegex(RuntimeError, "require Git authority"),
+        ):
+            process_one(core, self.store)
+        current = self.store.read(receipt_id)
+        assert current is not None
+        self.assertEqual("queued-local", current["phase"])
+        self.assertEqual(0, core.calls)
+
+    def test_corrupt_canonical_intent_never_executes(self) -> None:
+        receipt_id = self.enqueue()
+        self.store.connection.execute(
+            "UPDATE intents SET payload_json='{}' WHERE receipt_id=?", (receipt_id,)
+        )
+        core = FakeCore(self.root, "success")
+        result = process_one(core, self.store)
+        assert result is not None
+        self.assertEqual("ambiguous", result["phase"])
+        self.assertEqual(0, core.calls)
 
     def test_stale_admission_is_rejected_without_local_commit(self) -> None:
         self.enqueue()
@@ -224,6 +253,23 @@ class FastReceiptWorkerTests(unittest.TestCase):
         self.assertEqual(receipt_id, outcomes[0]["receipt_id"])
         self.assertEqual(0, core.calls)
 
+    def test_restart_rejects_unverifiable_marked_commit_without_replay(self) -> None:
+        receipt_id = self.enqueue()
+        self.store.claim_next()
+        core = FakeCore(self.root, "success")
+        with (
+            patch("tools.fast_receipt_worker.find_receipt_commit", return_value="a" * 40),
+            patch(
+                "tools.fast_receipt_worker.verify_local_commit",
+                side_effect=RuntimeError("signature is not trusted"),
+            ),
+        ):
+            outcomes = recover_running(core, self.store)
+        self.assertEqual("ambiguous", outcomes[0]["phase"])
+        self.assertEqual("COMMIT_EVIDENCE_UNKNOWN", outcomes[0]["error_code"])
+        self.assertEqual(receipt_id, outcomes[0]["receipt_id"])
+        self.assertEqual(0, core.calls)
+
     def test_service_lock_rejects_competing_executor(self) -> None:
         core = FakeCore(self.root, "success")
 
@@ -233,6 +279,110 @@ class FastReceiptWorkerTests(unittest.TestCase):
 
         with service_lock(core), self.assertRaisesRegex(RuntimeError, "already active"):
             compete()
+
+    def test_service_lock_rejects_public_directory_and_lock_file(self) -> None:
+        core = FakeCore(self.root, "success")
+        directory = self.root / "private"
+        directory.chmod(0o755)
+        with self.assertRaisesRegex(RuntimeError, "directory is not private"), service_lock(core):
+            pass
+        directory.chmod(0o700)
+        lock = directory / "fast-receipts.service.lock"
+        lock.write_text("")
+        lock.chmod(0o644)
+        with self.assertRaisesRegex(RuntimeError, "lock is unsafe"), service_lock(core):
+            pass
+
+    def test_batch_bounds_are_enforced_before_service_lock(self) -> None:
+        core = FakeCore(self.root, "success")
+        for limit in (0, -1, 1025):
+            with self.subTest(limit=limit), self.assertRaisesRegex(ValueError, "batch limit"):
+                process_pending(core, self.store, limit=limit)
+
+    def test_heartbeat_delta_rejects_wrong_state_lease_and_body(self) -> None:
+        core = FakeCore(self.root, "success")
+        before = {
+            "id": "AR-0120",
+            "owner": "worker-a",
+            "status": "in_progress",
+            "task_revision": 1,
+            "priority": "P1",
+            "updated_at": "2026-10-09T09:00:00+00:00",
+            "claim_expires": "2026-10-09T09:20:00+00:00",
+        }
+        after = {
+            **before,
+            "task_revision": 2,
+            "updated_at": "2026-10-09T10:00:00+00:00",
+            "claim_expires": "2026-10-09T10:20:00+00:00",
+        }
+        intent = {"task_id": "AR-0120", "expected_revision": 1}
+        payload = {"owner": "worker-a", "lease_minutes": 20}
+        record = (before, "before\n", after, "expected heartbeat body\n")
+        with patch.object(worker, "_task_change", return_value=record):
+            self.assertEqual(2, worker._verify_heartbeat_delta(core, intent, payload, "a" * 40))
+        cases = (
+            ("before-owner", "before", "owner", "other", "task state"),
+            ("before-status", "before", "status", "open", "task state"),
+            ("after-revision", "after", "task_revision", 3, "task state"),
+            ("after-priority", "after", "priority", "P0", "non-heartbeat"),
+            ("naive-time", "after", "updated_at", "2026-10-09T10:00:00", "naive"),
+            ("wrong-lease", "after", "claim_expires", "2026-10-09T10:19:00+00:00", "lease"),
+        )
+        for label, side, field, value, message in cases:
+            with self.subTest(label=label):
+                changed_before, changed_after = dict(before), dict(after)
+                (changed_before if side == "before" else changed_after)[field] = value
+                with (
+                    patch.object(
+                        worker,
+                        "_task_change",
+                        return_value=(
+                            changed_before,
+                            "before\n",
+                            changed_after,
+                            "expected heartbeat body\n",
+                        ),
+                    ),
+                    self.assertRaisesRegex(RuntimeError, message),
+                ):
+                    worker._verify_heartbeat_delta(core, intent, payload, "a" * 40)
+        with (
+            patch.object(
+                worker, "_task_change", return_value=(before, "before\n", after, "forged body\n")
+            ),
+            self.assertRaisesRegex(RuntimeError, "body does not match"),
+        ):
+            worker._verify_heartbeat_delta(core, intent, payload, "a" * 40)
+
+    def test_commit_task_shape_and_path_scope_fail_closed(self) -> None:
+        core = FakeCore(self.root, "success")
+        for source, message in (
+            ("not front matter\n", "no front matter"),
+            ("---\n{}\n", "incomplete"),
+            ("---\n[]\n---\nbody", "invalid"),
+        ):
+            with (
+                self.subTest(message=message),
+                patch.object(worker, "_git", return_value=source),
+                self.assertRaisesRegex(RuntimeError, message),
+            ):
+                worker._task_record(core, "a" * 40, "tasks/AR-0120.md")
+        for paths, message in (
+            ("CURRENT.md\n", "exactly one target"),
+            ("tasks/AR-0120.md\nCURRENT.md\n", "outside target"),
+        ):
+            with (
+                self.subTest(message=message),
+                patch.object(worker, "_git", return_value=paths),
+                self.assertRaisesRegex(RuntimeError, message),
+            ):
+                worker._task_change(core, "a" * 40, "AR-0120")
+        with (
+            patch.object(worker, "_git", side_effect=["tasks/AR-0120.md\n", "bad-parent"]),
+            self.assertRaisesRegex(RuntimeError, "no valid parent"),
+        ):
+            worker._task_change(core, "a" * 40, "AR-0120")
 
     def test_bounded_service_drains_queued_intents_once(self) -> None:
         self.enqueue()
@@ -285,6 +435,33 @@ class FastReceiptWorkerTests(unittest.TestCase):
             outcomes = publish_pending(core, self.store)
         self.assertEqual("completed-local", outcomes[0]["phase"])
         self.assertEqual("REMOTE_NOT_CONTAINING_COMMIT", outcomes[0]["publication_error"])
+
+    def test_replication_disabled_nonmain_and_moved_local_stay_unpublished(self) -> None:
+        receipt_id = self.complete_local()
+        core = PublicationCore(self.root, "success")
+        with patch.object(core, "replication_enabled", return_value=False):
+            disabled = publish_pending(core, self.store)
+        self.assertEqual("REPLICATION_DISABLED", disabled[0]["publication_error"])
+        with patch.object(worker, "_git", return_value="feature\n"):
+            nonmain = publish_pending(core, self.store)
+        self.assertEqual("STATE_BRANCH_NOT_MAIN", nonmain[0]["publication_error"])
+        with (
+            patch.object(worker, "_observe_remote_main", return_value="c" * 40),
+            patch.object(worker, "_is_ancestor", return_value=False),
+        ):
+            moved = publish_pending(core, self.store)
+        self.assertEqual("LOCAL_BRANCH_MOVED", moved[0]["publication_error"])
+        self.assertEqual(receipt_id, moved[0]["receipt_id"])
+        self.assertEqual("completed-local", moved[0]["phase"])
+
+    def test_invalid_local_head_never_attempts_publication(self) -> None:
+        self.complete_local()
+        core = PublicationCore(self.root, "success")
+        with (
+            patch.object(worker, "_git", side_effect=["main", "not-an-oid"]),
+            self.assertRaisesRegex(RuntimeError, "local publication head"),
+        ):
+            publish_pending(core, self.store)
 
     def test_observed_descendant_ref_publishes_without_push(self) -> None:
         self.complete_local()
