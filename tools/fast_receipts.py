@@ -42,6 +42,7 @@ class ReceiptStore:
             raise RuntimeError("SQLITE_VERSION_UNSUPPORTED: SQLite 3.37 or newer is required")
         require_local_filesystem(path)
         self._parent_fd, self._database_fd = self._open_private_path()
+        self._sidecar_fds: dict[str, int] = {}
         try:
             self.connection = sqlite3.connect(path, timeout=10, isolation_level=None)
             self.connection.row_factory = sqlite3.Row
@@ -52,10 +53,13 @@ class ReceiptStore:
             self.connection.execute("PRAGMA synchronous=FULL")
             self._assert_path()
             self._initialize()
+            self._retain_sidecars()
             self._closed = False
         except BaseException:
             if hasattr(self, "connection"):
                 self.connection.close()
+            for descriptor in self._sidecar_fds.values():
+                os.close(descriptor)
             os.close(self._database_fd)
             os.close(self._parent_fd)
             raise
@@ -123,6 +127,24 @@ class ReceiptStore:
                 or stat.S_IMODE(sidecar.st_mode) != 0o600
             ):
                 raise RuntimeError("receipt database sidecar is unsafe")
+            retained = self._sidecar_fds.get(suffix)
+            if retained is not None:
+                status = os.fstat(retained)
+                if (status.st_dev, status.st_ino) != (sidecar.st_dev, sidecar.st_ino):
+                    raise RuntimeError("receipt database sidecar identity changed")
+
+    def _retain_sidecars(self) -> None:
+        for suffix in ("-wal", "-shm"):
+            try:
+                descriptor = os.open(
+                    self.path.name + suffix,
+                    os.O_RDWR | os.O_NOFOLLOW,
+                    dir_fd=self._parent_fd,
+                )
+            except OSError as error:
+                raise RuntimeError("receipt WAL sidecar is unavailable") from error
+            self._sidecar_fds[suffix] = descriptor
+        self._assert_path()
 
     def _initialize(self) -> None:
         try:
@@ -174,6 +196,8 @@ class ReceiptStore:
             return
         self._closed = True
         self.connection.close()
+        for descriptor in self._sidecar_fds.values():
+            os.close(descriptor)
         os.close(self._database_fd)
         os.close(self._parent_fd)
 

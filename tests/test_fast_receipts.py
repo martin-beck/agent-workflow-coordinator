@@ -155,6 +155,15 @@ class FastReceiptTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "sidecar is unsafe"):
             self.submit(store)
 
+    def test_private_wal_sidecar_replacement_is_detected(self) -> None:
+        store = self.store()
+        replacement = self.path.parent / "replacement-wal"
+        replacement.write_bytes(b"replacement")
+        replacement.chmod(0o600)
+        replacement.replace(Path(str(self.path) + "-wal"))
+        with self.assertRaisesRegex(RuntimeError, "sidecar identity changed"):
+            self.submit(store)
+
     def test_rejects_nonlocal_filesystem_before_database_open(self) -> None:
         with (
             patch(
