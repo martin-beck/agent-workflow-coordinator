@@ -312,10 +312,14 @@ integrity checks green. Its four-each heartbeat/update/`run`/reconcile batch
 still had **six lock timeouts**, despite green post-batch static/live doctors;
 maximum measured exclusive holds were 3.284 seconds for `git_mutate` and
 2.182 seconds for `git_reconcile`. A prior `4eba510` run also had six mixed
-timeouts. The final `79b2f9b` refactor restored the complexity gate but has
-not yet been remeasured in that 16-worker probe. These results do not meet
-the accepted-worker liveness or per-command 5% targets, and no opt-in receipt
-runtime is implemented yet. The checkpoint is a partial optimization only.
+timeouts. The final `79b2f9b` refactor restored the complexity gate. An
+exact-head rerun with the same runtime at `e7cdaa1` passed 16/16 claims in
+5.885 seconds and the adversarial batch in 1.091 seconds, but the accepted
+mixed batch still had **seven lock timeouts**. Its largest `git_mutate` hold
+was 3.065 seconds and `git_reconcile` hold was 1.177 seconds; static/live
+doctors remained green. These results do not meet the accepted-worker
+liveness or per-command 5% targets, and no opt-in receipt runtime is
+implemented yet. The checkpoint is a partial optimization only.
 
 ## Command inventory and lower bounds
 
