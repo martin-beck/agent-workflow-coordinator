@@ -19,6 +19,7 @@ from git_mixed_command_probe import (
     checked_batch,
     error_class,
     has_matching_dco_trailer,
+    heartbeat_effect_errors,
     require_unchanged_sources,
     route_name,
     stabilize_disposable_claims,
@@ -27,6 +28,72 @@ from git_mixed_command_probe import (
 
 
 class GitMixedCommandProbeTests(unittest.TestCase):
+    def test_heartbeat_effect_checker_rejects_noop_wrong_lease_and_body(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory)
+            tasks = state / "tasks"
+            tasks.mkdir()
+            now = dt.datetime.now(dt.UTC).replace(microsecond=0)
+            before: dict[str, dict[str, object]] = {}
+            bodies: dict[str, str] = {}
+            for index, task_id in enumerate(TASK_IDS):
+                body = "\n\nFixture body.\n"
+                bodies[task_id] = body
+                old = {
+                    "id": task_id,
+                    "status": "in_progress",
+                    "owner": f"bench-{index}",
+                    "task_revision": 2,
+                    "claim_expires": (now + dt.timedelta(hours=2)).isoformat(),
+                    "updated_at": (now - dt.timedelta(minutes=1)).isoformat(),
+                }
+                before[task_id] = old
+                new = dict(old)
+                new["task_revision"] = 3
+                new["claim_expires"] = (now + dt.timedelta(minutes=20)).isoformat()
+                new["updated_at"] = now.isoformat()
+                (tasks / f"{task_id}.md").write_text(
+                    "---\n"
+                    + json.dumps(new)
+                    + "\n---"
+                    + body
+                    + f"\n- {new['updated_at']}: Heartbeat by bench-{index}.\n"
+                )
+            self.assertEqual(
+                [],
+                heartbeat_effect_errors(
+                    state, before, bodies, now, now + dt.timedelta(seconds=1)
+                ),
+            )
+            target = tasks / f"{TASK_IDS[0]}.md"
+            original = target.read_text()
+            target.write_text(original.replace('"task_revision": 3', '"task_revision": 2'))
+            self.assertTrue(
+                any(
+                    "revision did not advance" in error
+                    for error in heartbeat_effect_errors(state, before, bodies, now, now)
+                )
+            )
+            target.write_text(
+                original.replace(
+                    (now + dt.timedelta(minutes=20)).isoformat(),
+                    (now + dt.timedelta(minutes=2)).isoformat(),
+                )
+            )
+            self.assertTrue(
+                any(
+                    "lease does not match" in error
+                    for error in heartbeat_effect_errors(state, before, bodies, now, now)
+                )
+            )
+            target.write_text(original.replace("Heartbeat by bench-0.", "No heartbeat."))
+            self.assertTrue(
+                any(
+                    "history/body does not match" in error
+                    for error in heartbeat_effect_errors(state, before, bodies, now, now)
+                )
+            )
+
     def test_dco_requires_actual_matching_final_trailer(self) -> None:
         identity = "Fixture <fixture@example.invalid>"
         self.assertTrue(

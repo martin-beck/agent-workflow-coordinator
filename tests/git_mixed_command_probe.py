@@ -14,6 +14,7 @@ import datetime as dt
 import hashlib
 import json
 import math
+import os
 import statistics
 import subprocess
 import sys
@@ -110,6 +111,162 @@ def acceptance_unchanged_fields(meta: dict[str, Any]) -> dict[str, Any]:
         for key, value in meta.items()
         if key not in {"task_revision", "updated_at", "spec_acceptance"}
     }
+
+
+def heartbeat_effect_errors(  # noqa: C901
+    state: Path,
+    before: dict[str, dict[str, Any]],
+    bodies: dict[str, str],
+    started_at: dt.datetime,
+    finished_at: dt.datetime,
+) -> list[str]:
+    """Bind every successful route to the exact requested heartbeat effect."""
+    errors: list[str] = []
+    for index, task_id in enumerate(TASK_IDS):
+        after = task_meta(state, task_id)
+        original = before[task_id]
+        if after.get("owner") != f"bench-{index}" or after.get("status") != "in_progress":
+            errors.append(f"{task_id}: owner or status changed")
+        if after.get("task_revision") != original["task_revision"] + 1:
+            errors.append(f"{task_id}: revision did not advance once")
+        def unchanged(item: dict[str, Any]) -> dict[str, Any]:
+            return {
+            key: value
+            for key, value in item.items()
+            if key not in {"task_revision", "updated_at", "claim_expires"}
+            }
+        if unchanged(after) != unchanged(original):
+            errors.append(f"{task_id}: unrelated metadata changed")
+        try:
+            expiry = dt.datetime.fromisoformat(after["claim_expires"])
+            updated = dt.datetime.fromisoformat(after["updated_at"])
+        except (KeyError, TypeError, ValueError) as error:
+            errors.append(f"{task_id}: invalid heartbeat timestamp: {error}")
+            continue
+        if not (
+            started_at + dt.timedelta(minutes=20, seconds=-2)
+            <= expiry
+            <= finished_at + dt.timedelta(minutes=20, seconds=2)
+        ):
+            errors.append(f"{task_id}: lease does not match requested 20 minutes")
+        if not started_at - dt.timedelta(seconds=2) <= updated <= finished_at + dt.timedelta(
+            seconds=2
+        ):
+            errors.append(f"{task_id}: updated_at is outside the operation window")
+        expected_body = (
+            bodies[task_id] + f"\n- {after['updated_at']}: Heartbeat by bench-{index}.\n"
+        )
+        if (state / "tasks" / f"{task_id}.md").read_text().split("---", 2)[2] != expected_body:
+            errors.append(f"{task_id}: heartbeat history/body does not match request")
+    return errors
+
+
+def coordinator_other_digest(state: Path) -> bytes:
+    """Fence unexpected private Git-common-directory effects beyond receipt files."""
+    common_name = subprocess.run(
+        ["git", "rev-parse", "--git-common-dir"],  # noqa: S607
+        cwd=state,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    common = Path(common_name)
+    if not common.is_absolute():
+        common = state / common
+    root = common / "handoffctl"
+    allowed = {
+        "state.lock",
+        "fast-receipts.sqlite3",
+        "fast-receipts.sqlite3-wal",
+        "fast-receipts.sqlite3-shm",
+        "fast-receipts.service.lock",
+        "fast-receipts.publication.lock",
+    }
+    digest = hashlib.sha256()
+    if root.exists():
+        for path in sorted(root.rglob("*")):
+            relative = path.relative_to(root)
+            if relative.parts[0] in allowed:
+                if len(relative.parts) != 1 or not path.is_file() or path.is_symlink():
+                    raise RuntimeError("receipt path has unexpected shape")
+                continue
+            digest.update(os.fsencode(str(relative)) + b"\0")
+            if path.is_symlink():
+                digest.update(b"symlink\0" + os.fsencode(path.readlink()))
+            elif path.is_file():
+                digest.update(path.read_bytes())
+            else:
+                digest.update(b"directory\0")
+    return digest.digest()
+
+
+def heartbeat_commit_errors(  # noqa: C901
+    state: Path, starting_head: str, receipt_ids: dict[str, str] | None = None
+) -> tuple[int, list[str]]:
+    """Require one exact signed, DCO task commit for each requested heartbeat."""
+    revisions = subprocess.run(  # noqa: S603
+        ["git", "rev-list", f"{starting_head}..HEAD"],  # noqa: S607
+        cwd=state,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.splitlines()
+    errors: list[str] = []
+    if len(revisions) != len(TASK_IDS) or not history_extends(state, starting_head):
+        errors.append("heartbeat batch did not add 16 extending commits")
+    if receipt_ids is not None and set(revisions) != set(receipt_ids):
+        errors.append("fast receipt commits do not match exact Git history")
+    seen: set[str] = set()
+    for commit_hash in revisions:
+        commit = subprocess.run(  # noqa: S603
+            ["git", "show", "-s", "--format=%P%x00%an%x00%ae%x00%s%x00%B", commit_hash],  # noqa: S607
+            cwd=state,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
+        parents, author_name, author_email, subject, message = commit.split("\0", 4)
+        if len(parents.split()) != 1:
+            errors.append(f"{commit_hash}: heartbeat commit is not single-parent")
+        prefix = "chore(state): heartbeat "
+        task_id = subject.removeprefix(prefix)
+        if not subject.startswith(prefix) or task_id not in TASK_IDS or task_id in seen:
+            errors.append(f"{commit_hash}: heartbeat commit subject or task is invalid")
+        else:
+            seen.add(task_id)
+            paths = subprocess.run(  # noqa: S603
+                ["git", "diff-tree", "-r", "--no-commit-id", "--name-only", "-z", commit_hash],  # noqa: S607
+                cwd=state,
+                check=True,
+                capture_output=True,
+            ).stdout.split(b"\0")
+            if [path for path in paths if path] != [f"tasks/{task_id}.md".encode()]:
+                errors.append(f"{commit_hash}: unrelated committed path changed")
+        if subprocess.run(  # noqa: S603
+            ["git", "verify-commit", commit_hash],  # noqa: S607
+            cwd=state,
+            check=False,
+            capture_output=True,
+        ).returncode:
+            errors.append(f"{commit_hash}: signature did not verify")
+        if (author_name, author_email) != ("Fixture", "fixture@example.invalid") or not (
+            has_matching_dco_trailer(message, author_name, author_email)
+        ):
+            errors.append(f"{commit_hash}: matching author/DCO trailer missing")
+        marker = (
+            f"Handoffctl-Receipt: {receipt_ids[commit_hash]}"
+            if receipt_ids and commit_hash in receipt_ids
+            else None
+        )
+        if receipt_ids is not None and (marker is None or message.splitlines().count(marker) != 1):
+            errors.append(f"{commit_hash}: matching receipt marker missing")
+        if receipt_ids is None and any(
+            line.startswith("Handoffctl-Receipt: ") for line in message.splitlines()
+        ):
+            errors.append(f"{commit_hash}: strict heartbeat has unexpected receipt marker")
+    if seen != set(TASK_IDS):
+        errors.append("heartbeat batch did not commit each task exactly once")
+    return len(revisions), errors
 
 
 def acceptance_errors(state: Path, before: dict[str, dict[str, Any]]) -> list[str]:
@@ -755,7 +912,17 @@ def run_fast_heartbeat_probe(  # noqa: C901
 ) -> None:
     """Exercise 16 queued CLI submissions against one resident signed-Git executor."""
     configure_fixture_signature_verification(state)
+    before = {task_id: task_meta(state, task_id) for task_id in TASK_IDS}
+    before_bodies = {
+        task_id: (state / "tasks" / f"{task_id}.md").read_text().split("---", 2)[2]
+        for task_id in TASK_IDS
+    }
     starting_head = git_head(state)
+    before_dirty = dirty_checkout_digest(state)
+    before_runtime = runtime_digest(state, normalize_time=False)
+    before_refs = non_head_refs_digest(state)
+    before_private = coordinator_other_digest(state)
+    started_at = dt.datetime.now(dt.UTC)
     service = subprocess.Popen(
         [sys.executable, "tools/handoffctl.py", "fast", "worker", "--serve"],
         cwd=state,
@@ -821,6 +988,9 @@ def run_fast_heartbeat_probe(  # noqa: C901
                 receipt.get("phase") != "queued-local"
                 or receipt.get("commit_oid") is not None
                 or receipt.get("remote_oid") is not None
+                or receipt.get("operation") != "heartbeat"
+                or receipt.get("task_id") != TASK_IDS[len(queued)]
+                or receipt.get("expected_revision") != 2
             ):
                 raise RuntimeError("fast enqueue falsely reported completed authority")
             queued.append(receipt)
@@ -850,6 +1020,14 @@ def run_fast_heartbeat_probe(  # noqa: C901
                 if read.returncode:
                     raise RuntimeError("fast receipt lookup failed: " + read.stderr[:500].decode())
                 current = json.loads(read.stdout)
+                original = pending[receipt_id]
+                if (
+                    current.get("receipt_id") != receipt_id
+                    or current.get("task_id") != original["task_id"]
+                    or current.get("operation") != "heartbeat"
+                    or current.get("expected_revision") != 2
+                ):
+                    raise RuntimeError("fast receipt identity changed after enqueue")
                 if current["phase"] == "completed-local":
                     if (
                         current["result_revision"] != 3
@@ -864,6 +1042,7 @@ def run_fast_heartbeat_probe(  # noqa: C901
             if pending:
                 time.sleep(0.1)
         local_wall_ms = (time.monotonic() - batch_started) * 1000
+        finished_at = dt.datetime.now(dt.UTC)
     finally:
         for process, _ in launched:
             if process.poll() is None:
@@ -880,68 +1059,37 @@ def run_fast_heartbeat_probe(  # noqa: C901
         except subprocess.TimeoutExpired:
             service.kill()
             service.communicate()
-    revisions = subprocess.run(  # noqa: S603
-        ["git", "rev-list", f"{starting_head}..HEAD"],  # noqa: S607
-        cwd=state,
-        env=env,
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout.splitlines()
-    if len(revisions) != 16 or not history_extends(state, starting_head):
-        raise RuntimeError("fast heartbeat batch did not add 16 extending signed commits")
     by_commit = {str(item["commit_oid"]): item for item in completed.values()}
-    if set(revisions) != set(by_commit):
-        raise RuntimeError("fast receipt commits do not match the exact Git history")
-    for commit_hash in revisions:
-        verified = subprocess.run(  # noqa: S603
-            ["git", "verify-commit", commit_hash],  # noqa: S607
+    if len(by_commit) != len(TASK_IDS) or {
+        receipt["task_id"] for receipt in by_commit.values()
+    } != set(TASK_IDS):
+        raise RuntimeError("fast receipt task/commit mapping is not one-to-one")
+    count, errors = heartbeat_commit_errors(
+        state,
+        starting_head,
+        {commit_hash: str(receipt["receipt_id"]) for commit_hash, receipt in by_commit.items()},
+    )
+    for commit_hash, receipt in by_commit.items():
+        subject = subprocess.run(  # noqa: S603
+            ["git", "show", "-s", "--format=%s", commit_hash],  # noqa: S607
             cwd=state,
-            env=env,
-            check=False,
-            capture_output=True,
-        )
-        if verified.returncode:
-            raise RuntimeError(f"fast heartbeat signature invalid: {commit_hash}")
-        receipt = by_commit[commit_hash]
-        changed = subprocess.run(  # noqa: S603
-            ["git", "diff-tree", "-r", "--no-commit-id", "--name-only", commit_hash],  # noqa: S607
-            cwd=state,
-            env=env,
             check=True,
             capture_output=True,
             text=True,
-        ).stdout.splitlines()
-        if changed != [f"tasks/{receipt['task_id']}.md"]:
-            raise RuntimeError(f"fast commit changed paths outside its task: {commit_hash}")
-        message = subprocess.run(  # noqa: S603
-            ["git", "show", "-s", "--format=%B", commit_hash],  # noqa: S607
-            cwd=state,
-            env=env,
-            check=True,
-            capture_output=True,
-            text=True,
-        ).stdout
-        if message.splitlines().count(f"Handoffctl-Receipt: {receipt['receipt_id']}") != 1:
-            raise RuntimeError(f"fast commit has no unique matching receipt marker: {commit_hash}")
-        identity = (
-            subprocess.run(  # noqa: S603
-                ["git", "show", "-s", "--format=%cn%x00%ce", commit_hash],  # noqa: S607
-                cwd=state,
-                env=env,
-                check=True,
-                capture_output=True,
-                text=True,
-            )
-            .stdout.strip()
-            .split("\0")
-        )
-        if len(identity) != 2 or not has_matching_dco_trailer(message, identity[0], identity[1]):
-            raise RuntimeError(f"fast commit DCO trailer invalid: {commit_hash}")
-    for index, task_id in enumerate(TASK_IDS):
-        meta = json.loads((state / "tasks" / f"{task_id}.md").read_text().split("---", 2)[1])
-        if meta["task_revision"] != 3 or meta["owner"] != f"bench-{index}":
-            raise RuntimeError(f"fast heartbeat mutated wrong task state: {task_id}")
+        ).stdout.strip()
+        if subject != f"chore(state): heartbeat {receipt['task_id']}":
+            errors.append(f"{commit_hash}: receipt task does not match commit task")
+    errors.extend(heartbeat_effect_errors(state, before, before_bodies, started_at, finished_at))
+    if dirty_checkout_digest(state) != before_dirty:
+        errors.append("fast heartbeat left unrelated uncommitted state")
+    if runtime_digest(state, normalize_time=False) != before_runtime:
+        errors.append("fast heartbeat changed ignored runtime state")
+    if non_head_refs_digest(state) != before_refs:
+        errors.append("fast heartbeat changed non-HEAD Git refs")
+    if coordinator_other_digest(state) != before_private:
+        errors.append("fast heartbeat changed unrelated private Git state")
+    if errors:
+        raise RuntimeError("fast heartbeat durability mismatch: " + "; ".join(errors))
     checks = doctor(state, env)
     if any(checks.values()):
         raise RuntimeError("post-fast heartbeat doctors failed")
@@ -955,7 +1103,8 @@ def run_fast_heartbeat_probe(  # noqa: C901
                 "enqueue_p95_ms": round(sorted(latencies)[math.ceil(0.95 * len(latencies)) - 1], 1),
                 "local_wall_ms": round(local_wall_ms, 1),
                 "completed_local": 16,
-                "signed_commits": len(revisions),
+                "signed_commits": count,
+                "no_unrelated_effects": True,
                 "integrity": checks,
             }
         ),
@@ -1192,16 +1341,56 @@ def main() -> None:  # noqa: C901
         for name, commands in batches:
             checked_batch(state, env, name, commands, args.timeout_seconds, 16)
         if args.only_strict_heartbeat:
+            configure_fixture_signature_verification(state)
+            before = {task_id: task_meta(state, task_id) for task_id in TASK_IDS}
+            before_bodies = {
+                task_id: (state / "tasks" / f"{task_id}.md").read_text().split("---", 2)[2]
+                for task_id in TASK_IDS
+            }
+            starting_head = git_head(state)
+            before_dirty = dirty_checkout_digest(state)
+            before_runtime = runtime_digest(state, normalize_time=False)
+            before_refs = non_head_refs_digest(state)
+            before_private = coordinator_other_digest(state)
+            started_at = dt.datetime.now(dt.UTC)
             checked_batch(
                 state,
                 env,
                 "strict_heartbeat",
                 [
-                    ["heartbeat", task_id, "--owner", f"bench-{index}", "--expected-revision", "2"]
+                    [
+                        "heartbeat", task_id, "--owner", f"bench-{index}",
+                        "--expected-revision", "2", "--lease-minutes", "20",
+                    ]
                     for index, task_id in enumerate(TASK_IDS)
                 ],
                 args.timeout_seconds,
                 16,
+            )
+            finished_at = dt.datetime.now(dt.UTC)
+            count, errors = heartbeat_commit_errors(state, starting_head)
+            errors.extend(
+                heartbeat_effect_errors(state, before, before_bodies, started_at, finished_at)
+            )
+            if dirty_checkout_digest(state) != before_dirty:
+                errors.append("strict heartbeat left uncommitted state")
+            if runtime_digest(state, normalize_time=False) != before_runtime:
+                errors.append("strict heartbeat changed ignored runtime state")
+            if non_head_refs_digest(state) != before_refs:
+                errors.append("strict heartbeat changed non-HEAD Git refs")
+            if coordinator_other_digest(state) != before_private:
+                errors.append("strict heartbeat changed unrelated private Git state")
+            if errors:
+                raise RuntimeError("strict heartbeat durability mismatch: " + "; ".join(errors))
+            print(
+                json.dumps(
+                    {
+                        "after": "strict_heartbeat",
+                        "signed_commits": count,
+                        "no_unrelated_effects": True,
+                    }
+                ),
+                flush=True,
             )
             require_unchanged_sources(
                 {
