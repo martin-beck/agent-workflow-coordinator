@@ -317,9 +317,9 @@ exact-head rerun with the same runtime at `e7cdaa1` passed 16/16 claims in
 5.885 seconds and the adversarial batch in 1.091 seconds, but the accepted
 mixed batch still had **seven lock timeouts**. Its largest `git_mutate` hold
 was 3.065 seconds and `git_reconcile` hold was 1.177 seconds; static/live
-doctors remained green. These results do not meet the accepted-worker
-liveness or per-command 5% targets, and no opt-in receipt runtime is
-implemented yet. The checkpoint is a partial optimization only.
+doctors remained green. These historical results did not meet the
+accepted-worker liveness or per-command 5% targets. The later opt-in
+heartbeat-only receipt prototype below does not close the all-command gap.
 
 ## Command inventory and lower bounds
 
@@ -381,6 +381,24 @@ Arbitrary
 double effects; they require a distinct design. This prototype is not 5%
 evidence, a general all-command fast path, or release qualification. The
 strict commands remain the compatibility path.
+
+On a frozen copy of ASB state 65ce1b74 with 751 tasks and 750 product
+worktrees, the signed 18c54f2 prototype passed a 16-process fast-heartbeat
+probe: all 16 queued intents became distinct, owner/revision-fenced,
+20-minute local heartbeats with 16 verified signed/DCO commits. The audit
+matched each public receipt to its exact durable SQLite row and task commit,
+rejected extra intents, checked unrelated working-tree/runtime/ref effects,
+and passed both static and live doctors; source checkout inputs were unchanged.
+Queue acknowledgement had 297.9 ms p50 and 371.5 ms maximum, while all
+16 local commits completed in 7.999 seconds wall time. A paired strict
+16-process run on the same frozen fixture passed its exact-effect and
+integrity checks at 2032.0 ms p50. The raw queue/strict p50 ratio is 14.7%,
+not 5%, and these are different completion boundaries. Independent exact-head
+review found no remaining P1/P2 defect in the benchmark false-pass repairs.
+Full unit tests pass, but precise whole-source branch coverage is 94.52%:
+the CI command's integer rounding reports 95%, whereas literal >=95.00%
+remains unqualified. No all-command PR or release is warranted from this
+evidence.
 
 ## Further candidate architecture, not yet implemented
 
