@@ -569,6 +569,44 @@ class FastReceiptWorkerTests(unittest.TestCase):
         self.assertIsNone(outcomes[0]["remote_oid"])
         self.assertEqual(receipt_id, outcomes[0]["receipt_id"])
 
+    def test_batch_timeout_preserves_prior_remote_ack_and_retries_remaining(self) -> None:
+        first_id = self.complete_local()
+        second = self.store.enqueue_heartbeat(
+            key="worker-b:heartbeat:1",
+            task="AR-0121",
+            owner="worker-b",
+            expected_revision=1,
+            lease_minutes=20,
+        )
+        second_id = str(second["receipt_id"])
+        self.store.claim_next()
+        self.store.record_local_commit(second_id, "c" * 40, 2)
+        core = PublicationCore(self.root, "success")
+        with (
+            patch.object(worker, "_observe_remote_main", return_value="b" * 40),
+            patch.object(worker, "_publish_if_needed", return_value="b" * 40),
+            patch.object(
+                worker,
+                "_is_ancestor",
+                side_effect=[True, True, SubprocessTimeoutError("ancestry timeout")],
+            ),
+        ):
+            outcomes = publish_pending(core, self.store)
+        self.assertEqual(["published-remote", "completed-local"], [x["phase"] for x in outcomes])
+        self.assertEqual(first_id, outcomes[0]["receipt_id"])
+        self.assertEqual("b" * 40, outcomes[0]["remote_oid"])
+        self.assertEqual(second_id, outcomes[1]["receipt_id"])
+        self.assertEqual("PUBLICATION_TIMEOUT", outcomes[1]["publication_error"])
+        self.assertIsNone(outcomes[1]["remote_oid"])
+        with (
+            patch.object(worker, "_observe_remote_main", return_value="b" * 40),
+            patch.object(worker, "_is_ancestor", return_value=True),
+        ):
+            retried = publish_pending(core, self.store)
+        self.assertEqual(1, len(retried))
+        self.assertEqual("published-remote", retried[0]["phase"])
+        self.assertEqual(second_id, retried[0]["receipt_id"])
+
     def test_diverged_remote_cannot_be_published(self) -> None:
         self.complete_local()
         core = PublicationCore(self.root, "success")

@@ -439,10 +439,19 @@ def publish_pending(core: Any, store: ReceiptStore) -> list[dict[str, Any]]:
         timeout_type = getattr(core, "SubprocessTimeoutError", None)
         if not isinstance(timeout_type, type) or not isinstance(error, timeout_type):
             raise
-        return [
-            store.record_publication_failure(str(item["receipt_id"]), "PUBLICATION_TIMEOUT")
-            for item in pending
-        ]
+        outcomes: list[dict[str, Any]] = []
+        for item in pending:
+            receipt_id = str(item["receipt_id"])
+            current = store.read(receipt_id)
+            if current is None:
+                raise RuntimeError("pending receipt disappeared during publication") from error
+            if current["phase"] == "published-remote":
+                outcomes.append(current)
+            elif current["phase"] == "completed-local":
+                outcomes.append(store.record_publication_failure(receipt_id, "PUBLICATION_TIMEOUT"))
+            else:
+                raise RuntimeError("pending receipt entered an invalid phase") from error
+        return outcomes
 
 
 def serve_publication(core: Any, store: ReceiptStore, *, poll_seconds: float = 5.0) -> None:
