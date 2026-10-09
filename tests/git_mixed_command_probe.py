@@ -780,11 +780,7 @@ def strict_acceptance_commit_errors(state: Path, starting_head: str) -> tuple[in
     errors: list[str] = []
     if len(revisions) != len(TASK_IDS) or not history_extends(state, starting_head):
         errors.append("acceptance batch did not add 16 extending commits")
-    allowed_paths = {
-        *(f"tasks/{task_id}.md".encode() for task_id in TASK_IDS),
-        b"CURRENT.md",
-        b"STATUS.md",
-    }
+    seen_tasks: set[str] = set()
     for commit_hash in revisions:
         parents = subprocess.run(  # noqa: S603
             ["git", "show", "-s", "--format=%P", commit_hash],  # noqa: S607
@@ -801,11 +797,6 @@ def strict_acceptance_commit_errors(state: Path, starting_head: str) -> tuple[in
             capture_output=True,
             check=True,
         ).stdout.split(b"\0")
-        if any(
-            path and path not in allowed_paths and not path.startswith(b"status/")
-            for path in changed_paths
-        ):
-            errors.append(f"{commit_hash}: unrelated committed path changed")
         verified = subprocess.run(  # noqa: S603
             ["git", "verify-commit", commit_hash],  # noqa: S607
             cwd=state,
@@ -815,17 +806,27 @@ def strict_acceptance_commit_errors(state: Path, starting_head: str) -> tuple[in
         if verified.returncode:
             errors.append(f"{commit_hash}: signature did not verify")
         identity_message = subprocess.run(  # noqa: S603
-            ["git", "show", "-s", "--format=%an%x00%ae%x00%B", commit_hash],  # noqa: S607
+            ["git", "show", "-s", "--format=%an%x00%ae%x00%s%x00%B", commit_hash],  # noqa: S607
             cwd=state,
             capture_output=True,
             text=True,
             check=True,
         ).stdout
-        author_name, author_email, message = identity_message.split("\0", 2)
+        author_name, author_email, subject, message = identity_message.split("\0", 3)
+        prefix = "chore(state): accept "
+        task_id = subject.removeprefix(prefix)
+        if not subject.startswith(prefix) or task_id not in TASK_IDS or task_id in seen_tasks:
+            errors.append(f"{commit_hash}: acceptance commit subject or task is invalid")
+        else:
+            seen_tasks.add(task_id)
+            if [path for path in changed_paths if path] != [f"tasks/{task_id}.md".encode()]:
+                errors.append(f"{commit_hash}: unrelated committed path changed")
         if (author_name, author_email) != ("Fixture", "fixture@example.invalid") or not (
             has_matching_dco_trailer(message, author_name, author_email)
         ):
             errors.append(f"{commit_hash}: matching DCO trailer missing")
+    if seen_tasks != set(TASK_IDS):
+        errors.append("acceptance batch did not commit each task exactly once")
     return len(revisions), errors
 
 

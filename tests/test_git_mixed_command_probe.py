@@ -57,9 +57,11 @@ class GitMixedCommandProbeTests(unittest.TestCase):
                 return subprocess.CompletedProcess(argv, 1, b"", b"invalid signature")
             if argv[1] == "show" and argv[3] == "--format=%P":
                 return subprocess.CompletedProcess(argv, 0, "parent\n")
-            if argv[1] == "show" and argv[3] == "--format=%an%x00%ae%x00%B":
+            if argv[1] == "show" and argv[3] == "--format=%an%x00%ae%x00%s%x00%B":
                 return subprocess.CompletedProcess(
-                    argv, 0, "Fixture\0fixture@example.invalid\0missing"
+                    argv,
+                    0,
+                    "Fixture\0fixture@example.invalid\0chore(state): accept AR-9000\0missing",
                 )
             if argv[1] == "interpret-trailers":
                 return subprocess.CompletedProcess(argv, 0, "")
@@ -79,15 +81,18 @@ class GitMixedCommandProbeTests(unittest.TestCase):
             if argv[1] == "rev-list":
                 return subprocess.CompletedProcess(argv, 0, "newer\nolder\n")
             if argv[1] == "diff-tree":
-                path = b"secret.txt\0" if argv[-1] == "older" else b"tasks/AR-9000.md\0"
+                path = b"secret.txt\0" if argv[-1] == "older" else b"tasks/AR-9001.md\0"
                 return subprocess.CompletedProcess(argv, 0, path)
             if argv[1] == "verify-commit":
                 return subprocess.CompletedProcess(argv, 0, b"")
             if argv[1] == "show" and argv[3] == "--format=%P":
                 return subprocess.CompletedProcess(argv, 0, "parent\n")
-            if argv[1] == "show" and argv[3] == "--format=%an%x00%ae%x00%B":
+            if argv[1] == "show" and argv[3] == "--format=%an%x00%ae%x00%s%x00%B":
+                task_id = "AR-9000" if argv[-1] == "older" else "AR-9001"
                 return subprocess.CompletedProcess(
-                    argv, 0, "Fixture\0fixture@example.invalid\0subject\n"
+                    argv,
+                    0,
+                    f"Fixture\0fixture@example.invalid\0chore(state): accept {task_id}\0subject\n",
                 )
             if argv[1] == "interpret-trailers":
                 return subprocess.CompletedProcess(
