@@ -155,6 +155,47 @@ class FastReceiptSocketTests(unittest.TestCase):
             self.assertTrue(_safe_socket(self.path))
         self.assertFalse(self.path.exists())
 
+    def test_active_service_cannot_be_replaced(self) -> None:
+        with socket_service(self.core):
+            with self.assertRaisesRegex(RuntimeError, "already active"), socket_service(self.core):
+                pass
+            self.assertTrue(_safe_socket(self.path))
+
+    def test_unknown_receipt_and_malformed_protocol_do_not_write_intents(self) -> None:
+        with socket_service(self.core):
+            for request, diagnostic in (
+                ({"protocol": 2, "action": "receipt", "receipt_id": "x"}, "protocol"),
+                ({"protocol": 1, "action": "receipt", "receipt_id": "a" * 32}, "unknown"),
+                ({"protocol": 1, "action": "unknown"}, "action"),
+                (
+                    {
+                        "protocol": 1,
+                        "action": "heartbeat",
+                        "task": "AR-0120",
+                        "owner": "worker-a",
+                        "expected_revision": True,
+                        "lease_minutes": 20,
+                        "key": "bad",
+                    },
+                    "fields",
+                ),
+            ):
+                with (
+                    self.subTest(request=request),
+                    socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as peer,
+                ):
+                    peer.settimeout(2)
+                    peer.connect(str(self.path))
+                    peer.sendall(json.dumps(request).encode() + b"\n")
+                    reply = json.loads(peer.recv(4096))
+                    self.assertIn(diagnostic, reply["error"])
+            self.assertEqual(0, self._intent_count())
+
+    def test_socket_absence_and_invalid_cli_shape_use_strict_fallback(self) -> None:
+        with patch("tools.fast_receipt_socket._socket_path", return_value=self.path):
+            self.assertIsNone(try_socket_fast(self.argv))
+        self.assertIsNone(try_socket_fast(["fast", "heartbeat", "AR-0120"]))
+
 
 if __name__ == "__main__":
     unittest.main()
