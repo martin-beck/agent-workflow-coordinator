@@ -79,6 +79,52 @@ def task_meta(state: Path, task_id: str) -> dict[str, Any]:
     return cast(dict[str, Any], json.loads(path.read_text().split("---", 2)[1]))
 
 
+def acceptances(state: Path) -> list[list[str]]:
+    """Give each claimed fixture task one independent spec-acceptance write."""
+    return [
+        [
+            "accept",
+            task_id,
+            "--owner",
+            f"bench-{index}",
+            "--expected-revision",
+            str(task_meta(state, task_id)["task_revision"]),
+            "--evidence-class",
+            "mechanical",
+            "--evidence-ref",
+            f"quality/{task_id}",
+            "--evidence-digest",
+            "sha256:" + "a" * 64,
+            "--note",
+            "Disposable concurrency acceptance.",
+        ]
+        for index, task_id in enumerate(TASK_IDS)
+    ]
+
+
+def acceptance_errors(state: Path, revisions: dict[str, int]) -> list[str]:
+    """Reject a success-only result if any strict acceptance was not recorded."""
+    errors: list[str] = []
+    for index, task_id in enumerate(TASK_IDS):
+        meta = task_meta(state, task_id)
+        acceptance = meta.get("spec_acceptance")
+        expected = {
+            "spec_ref": meta.get("spec_ref"),
+            "spec_revision": meta.get("spec_revision"),
+            "status": "pass",
+            "evidence_class": "mechanical",
+            "evidence_ref": f"quality/{task_id}",
+            "evidence_digest": "sha256:" + "a" * 64,
+        }
+        if meta.get("owner") != f"bench-{index}":
+            errors.append(f"{task_id}: owner changed")
+        if meta.get("task_revision") != revisions[task_id] + 1:
+            errors.append(f"{task_id}: revision did not advance once")
+        if acceptance != expected:
+            errors.append(f"{task_id}: acceptance does not match request")
+    return errors
+
+
 def add_fixture_tasks(state: Path, env: dict[str, str]) -> None:
     template = json.loads((state / "tasks/AR-1686.md").read_text().split("---", 2)[1])
     spec = json.loads((state / "specs/AR-1686.json").read_text())
@@ -686,13 +732,14 @@ def checked_batch(
         raise RuntimeError(f"{name}: unexpected route outcome or failed integrity check")
 
 
-def main() -> None:
+def main() -> None:  # noqa: C901
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--state", type=Path, required=True)
     parser.add_argument("--product", type=Path, required=True)
     parser.add_argument("--timeout-seconds", type=float, default=300)
     parser.add_argument("--only-mutations", action="store_true")
     parser.add_argument("--only-adversarial", action="store_true")
+    parser.add_argument("--only-accept", action="store_true")
     parser.add_argument("--only-roles", action="store_true")
     args = parser.parse_args()
     source_state = args.state.resolve()
@@ -755,11 +802,51 @@ def main() -> None:
             ()
             if args.only_roles
             else initial_batches[-1:]
-            if args.only_mutations or args.only_adversarial
+            if args.only_mutations or args.only_adversarial or args.only_accept
             else initial_batches
         )
         for name, commands in batches:
             checked_batch(state, env, name, commands, args.timeout_seconds, 16)
+        if args.only_accept:
+            revisions = {
+                task_id: task_meta(state, task_id)["task_revision"] for task_id in TASK_IDS
+            }
+            starting_head = git_head(state)
+            checked_batch(state, env, "acceptances", acceptances(state), args.timeout_seconds, 16)
+            errors = acceptance_errors(state, revisions)
+            commits = subprocess.run(  # noqa: S603
+                ["git", "rev-list", "--count", f"{starting_head}..HEAD"],  # noqa: S607
+                cwd=state,
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            if int(commits.stdout) != 16 or not history_extends(state, starting_head):
+                errors.append("acceptance batch did not add 16 extending signed-commit candidates")
+            if errors:
+                raise RuntimeError("acceptance durability mismatch: " + "; ".join(errors))
+            print(
+                json.dumps(
+                    {
+                        "after": "acceptances",
+                        "matching_acceptance_records": len(TASK_IDS),
+                        "extending_commits": int(commits.stdout),
+                    }
+                ),
+                flush=True,
+            )
+            require_unchanged_sources(
+                {
+                    "source_product_inputs_changed": product_input_digest(source_product)
+                    != product_digest,
+                    "source_state_head_changed": git_head(source_state) != state_head,
+                    "source_state_inputs_changed": product_input_digest(
+                        source_state, include_runtime=True
+                    )
+                    != state_digest,
+                }
+            )
+            return
         if not args.only_roles:
             adversarial = adversarial_probe(state, env, args.timeout_seconds)
             print(json.dumps(adversarial), flush=True)

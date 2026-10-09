@@ -11,6 +11,9 @@ from pathlib import Path
 from unittest import mock
 
 from git_mixed_command_probe import (
+    TASK_IDS,
+    acceptance_errors,
+    acceptances,
     adversarial_commands,
     checked_batch,
     error_class,
@@ -21,6 +24,56 @@ from git_mixed_command_probe import (
 
 
 class GitMixedCommandProbeTests(unittest.TestCase):
+    def test_acceptance_errors_reject_missing_or_wrong_records(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            tasks = Path(directory) / "tasks"
+            tasks.mkdir()
+            revisions: dict[str, int] = {}
+            for index, task_id in enumerate(TASK_IDS):
+                revisions[task_id] = 2
+                meta = {
+                    "owner": f"bench-{index}",
+                    "task_revision": 3,
+                    "spec_ref": f"specs/{task_id}.json",
+                    "spec_revision": 1,
+                    "spec_acceptance": {
+                        "spec_ref": f"specs/{task_id}.json",
+                        "spec_revision": 1,
+                        "status": "pass",
+                        "evidence_class": "mechanical",
+                        "evidence_ref": f"quality/{task_id}",
+                        "evidence_digest": "sha256:" + "a" * 64,
+                    },
+                }
+                (tasks / f"{task_id}.md").write_text("---\n" + json.dumps(meta) + "\n---\n")
+            self.assertEqual([], acceptance_errors(Path(directory), revisions))
+            bad = tasks / f"{TASK_IDS[0]}.md"
+            meta = json.loads(bad.read_text().split("---", 2)[1])
+            del meta["spec_acceptance"]
+            bad.write_text("---\n" + json.dumps(meta) + "\n---\n")
+            self.assertIn(
+                "acceptance does not match request",
+                acceptance_errors(Path(directory), revisions)[0],
+            )
+
+    def test_acceptances_bind_each_owner_revision_and_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            tasks = Path(directory) / "tasks"
+            tasks.mkdir()
+            for index, task_id in enumerate(TASK_IDS):
+                (tasks / f"{task_id}.md").write_text(
+                    "---\n" + json.dumps({"task_revision": index + 2}) + "\n---\n"
+                )
+            commands = acceptances(Path(directory))
+            self.assertEqual(16, len(commands))
+            self.assertEqual(16, len({tuple(command) for command in commands}))
+            for index, command in enumerate(commands):
+                self.assertEqual(["accept", TASK_IDS[index]], command[:2])
+                self.assertEqual(f"bench-{index}", command[3])
+                self.assertEqual(str(index + 2), command[5])
+                self.assertEqual("mechanical", command[7])
+                self.assertEqual(f"quality/{TASK_IDS[index]}", command[9])
+
     def test_stabilize_claims_only_changes_disposable_active_tasks(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             tasks = Path(directory) / "tasks"
