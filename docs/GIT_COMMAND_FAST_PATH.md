@@ -442,8 +442,10 @@ split frames still work and an oversized frame does not stall the service.
 An injected peer reset is isolated to that connection, so the acceptor keeps
 serving a subsequent good request.
 This is not a fairness guarantee under an unbounded malicious flood: the
-64-connection pre-admission cap and 64-item writer queue can still reject a
-good request, and durable service supervision remains absent.
+64-connection pre-admission cap evicts the oldest incomplete peer when a new
+connection arrives, so a complete request can progress through a finite
+partial-frame flood. The 64-item writer queue can still reject a request, and
+durable service supervision remains absent.
 
 ## Further candidate architecture, not yet implemented
 

@@ -378,6 +378,39 @@ class FastReceiptSocketTests(unittest.TestCase):
             for peer in stalled:
                 peer.close()
 
+    def test_complete_request_evicts_oldest_partial_peer_at_admission_limit(self) -> None:
+        stalled: list[socket.socket] = []
+        try:
+            with socket_service(self.core):
+                for _ in range(64):
+                    peer = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                    peer.connect(str(self.path))
+                    peer.sendall(b"{")
+                    stalled.append(peer)
+                with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as good:
+                    good.settimeout(2)
+                    good.connect(str(self.path))
+                    good.sendall(
+                        json.dumps(
+                            {
+                                "protocol": 1,
+                                "action": "heartbeat",
+                                "task": "AR-0120",
+                                "owner": "worker-a",
+                                "expected_revision": 2,
+                                "lease_minutes": 20,
+                                "key": "good-at-admission-limit",
+                            }
+                        ).encode()
+                        + b"\n"
+                    )
+                    reply = json.loads(_read_line(good, 4096))
+                    self.assertEqual("queued-local", reply["ok"]["phase"])
+                self.assertEqual(1, self._intent_count())
+        finally:
+            for peer in stalled:
+                peer.close()
+
     def test_split_frame_is_accepted_and_oversize_frame_does_not_stall_service(self) -> None:
         request = json.dumps(
             {

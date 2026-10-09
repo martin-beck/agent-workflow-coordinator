@@ -363,8 +363,10 @@ def socket_service(core: Any) -> Iterator[None]:  # noqa: C901
                                         except BlockingIOError:
                                             continue
                                         if len(pending) >= 64:
-                                            peer.close()
-                                            continue
+                                            oldest = next(iter(pending))
+                                            selector.unregister(oldest)
+                                            pending.pop(oldest)
+                                            oldest.close()
                                         peer.setblocking(False)
                                         pending[peer] = (bytearray(), time.monotonic() + 1.0)
                                         selector.register(peer, selectors.EVENT_READ)
