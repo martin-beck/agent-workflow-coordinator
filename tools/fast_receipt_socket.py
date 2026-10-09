@@ -6,10 +6,12 @@ from __future__ import annotations
 
 import json
 import os
+import selectors
 import socket
 import stat
 import struct
 import sys
+import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager, suppress
 from pathlib import Path
@@ -218,7 +220,10 @@ def _require_request(request: Any) -> dict[str, Any]:
 
 
 def _handle(
-    core: Any, peer: socket.socket, submit: Callable[[dict[str, Any]], dict[str, Any]]
+    core: Any,
+    peer: socket.socket,
+    submit: Callable[[dict[str, Any]], dict[str, Any]],
+    raw: bytes | None = None,
 ) -> None:
     with peer:
         try:
@@ -231,7 +236,9 @@ def _handle(
             core.assert_project_binding(caller)
             if core.backend_selection()["backend"] != "git":
                 raise RuntimeError("fast receipts require Git authority")
-            request = _require_request(json.loads(_read_line(peer, _MAX_REQUEST)))
+            request = _require_request(
+                json.loads(raw if raw is not None else _read_line(peer, _MAX_REQUEST))
+            )
             result = submit(request)
             reply = {"ok": public_receipt(result)}
             peer.sendall(json.dumps(reply, sort_keys=True).encode() + b"\n")
@@ -331,33 +338,81 @@ def socket_service(core: Any) -> Iterator[None]:  # noqa: C901
             if not _safe_socket(path):
                 raise RuntimeError("fast receipt socket did not bind privately")
             identity = path.lstat().st_ino
-            listener.listen(64)
-            listener.settimeout(0.05)
+            listener.listen(128)
+            listener.setblocking(False)
             stop = threading.Event()
-            slots = threading.BoundedSemaphore(64)
+            slots = threading.BoundedSemaphore(32)
             with ThreadPoolExecutor(max_workers=32) as pool:
 
-                def accept_loop() -> None:
-                    while not stop.is_set():
+                def accept_loop() -> None:  # noqa: C901 - bounded socket admission state machine
+                    pending: dict[socket.socket, tuple[bytearray, float]] = {}
+                    with selectors.DefaultSelector() as selector:
+                        selector.register(listener, selectors.EVENT_READ)
                         try:
-                            peer, _ = listener.accept()
-                        except TimeoutError:
-                            continue
-                        except OSError:
-                            if stop.is_set():
-                                break
-                            raise
-                        if not slots.acquire(blocking=False):
-                            peer.close()
-                            continue
+                            while not stop.is_set():
+                                now = time.monotonic()
+                                for peer, (_buffer, deadline) in list(pending.items()):
+                                    if now >= deadline:
+                                        selector.unregister(peer)
+                                        pending.pop(peer)
+                                        peer.close()
+                                for key, _mask in selector.select(timeout=0.05):
+                                    if key.fileobj is listener:
+                                        try:
+                                            peer, _ = listener.accept()
+                                        except BlockingIOError:
+                                            continue
+                                        if len(pending) >= 64:
+                                            peer.close()
+                                            continue
+                                        peer.setblocking(False)
+                                        pending[peer] = (bytearray(), time.monotonic() + 1.0)
+                                        selector.register(peer, selectors.EVENT_READ)
+                                        continue
+                                    selected = key.fileobj
+                                    if not isinstance(selected, socket.socket):
+                                        raise RuntimeError("invalid fast receipt selector peer")
+                                    peer = selected
+                                    buffer, _deadline = pending[peer]
+                                    try:
+                                        chunk = peer.recv(_MAX_REQUEST + 2 - len(buffer))
+                                    except BlockingIOError:
+                                        continue
+                                    if not chunk:
+                                        selector.unregister(peer)
+                                        pending.pop(peer)
+                                        peer.close()
+                                        continue
+                                    buffer.extend(chunk)
+                                    if b"\n" not in buffer and len(buffer) <= _MAX_REQUEST:
+                                        continue
+                                    selector.unregister(peer)
+                                    pending.pop(peer)
+                                    line, separator, remainder = bytes(buffer).partition(b"\n")
+                                    if not separator or remainder or len(line) > _MAX_REQUEST:
+                                        peer.close()
+                                        continue
+                                    if not slots.acquire(blocking=False):
+                                        peer.close()
+                                        continue
+                                    peer.setblocking(True)
 
-                        def handle_one(connection: socket.socket) -> None:
-                            try:
-                                _handle(core, connection, submit)
-                            finally:
-                                slots.release()
+                                    def handle_one(connection: socket.socket, raw: bytes) -> None:
+                                        try:
+                                            _handle(core, connection, submit, raw)
+                                        finally:
+                                            slots.release()
 
-                        pool.submit(handle_one, peer)
+                                    try:
+                                        pool.submit(handle_one, peer, line)
+                                    except RuntimeError:
+                                        slots.release()
+                                        peer.close()
+                                        raise
+                        finally:
+                            for peer in pending:
+                                selector.unregister(peer)
+                                peer.close()
 
                 thread = threading.Thread(target=accept_loop, daemon=True)
                 thread.start()

@@ -345,6 +345,64 @@ class FastReceiptSocketTests(unittest.TestCase):
                 self.assertEqual(original["receipt_id"], retried["receipt_id"])
             self.assertEqual(1, self._intent_count())
 
+    def test_slow_clients_cannot_starve_a_complete_good_request(self) -> None:
+        stalled: list[socket.socket] = []
+        try:
+            with socket_service(self.core):
+                for _ in range(32):
+                    peer = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                    peer.connect(str(self.path))
+                    peer.sendall(b"{")
+                    stalled.append(peer)
+                with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as good:
+                    good.settimeout(2)
+                    good.connect(str(self.path))
+                    good.sendall(
+                        json.dumps(
+                            {
+                                "protocol": 1,
+                                "action": "heartbeat",
+                                "task": "AR-0120",
+                                "owner": "worker-a",
+                                "expected_revision": 2,
+                                "lease_minutes": 20,
+                                "key": "good-under-slow-clients",
+                            }
+                        ).encode()
+                        + b"\n"
+                    )
+                    reply = json.loads(_read_line(good, 4096))
+                    self.assertEqual("queued-local", reply["ok"]["phase"])
+                self.assertEqual(1, self._intent_count())
+        finally:
+            for peer in stalled:
+                peer.close()
+
+    def test_split_frame_is_accepted_and_oversize_frame_does_not_stall_service(self) -> None:
+        request = json.dumps(
+            {
+                "protocol": 1,
+                "action": "heartbeat",
+                "task": "AR-0120",
+                "owner": "worker-a",
+                "expected_revision": 2,
+                "lease_minutes": 20,
+                "key": "split-frame",
+            }
+        ).encode()
+        with socket_service(self.core):
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as hostile:
+                hostile.connect(str(self.path))
+                hostile.sendall(b"x" * 4097 + b"\n")
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as good:
+                good.settimeout(2)
+                good.connect(str(self.path))
+                good.sendall(request[:12])
+                good.sendall(request[12:] + b"\n")
+                reply = json.loads(_read_line(good, 4096))
+                self.assertEqual("queued-local", reply["ok"]["phase"])
+            self.assertEqual(1, self._intent_count())
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -434,6 +434,15 @@ probe, while noting that its four repaired audit gates lack dedicated negative
 unit cases. This is heartbeat-scoped hostile evidence, not proof of liveness
 for every fast command or every failure mode.
 
+A subsequent socket admission repair keeps incomplete request frames in a
+bounded, one-second nonblocking selector stage instead of occupying any of
+the 32 execution threads. Focused tests now show one complete good heartbeat
+receives a durable queued receipt while 32 same-UID peers hold partial frames;
+split frames still work and an oversized frame does not stall the service.
+This is not a fairness guarantee under an unbounded malicious flood: the
+64-connection pre-admission cap and 64-item writer queue can still reject a
+good request, and durable service supervision remains absent.
+
 ## Further candidate architecture, not yet implemented
 
 Keep the CLI as the mandatory project-bound route. A repository-common local
