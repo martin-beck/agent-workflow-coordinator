@@ -26,9 +26,12 @@ from tools.fast_receipt_worker import (
     verify_local_commit,
 )
 from tools.fast_receipts import ReceiptStore
+from tools.handoffctl import SubprocessTimeoutError
 
 
 class FakeCore:
+    SubprocessTimeoutError = SubprocessTimeoutError
+
     def __init__(self, root: Path, outcome: str) -> None:
         self.ROOT = root
         self.outcome = outcome
@@ -492,6 +495,78 @@ class FastReceiptWorkerTests(unittest.TestCase):
         self.assertEqual(1, len(outcomes))
         self.assertEqual("completed-local", outcomes[0]["phase"])
         self.assertEqual("REMOTE_UNKNOWN", outcomes[0]["publication_error"])
+        self.assertEqual(receipt_id, outcomes[0]["receipt_id"])
+
+    def test_transient_publication_timeout_retries_to_exact_remote_receipt(self) -> None:
+        receipt_id = self.complete_local()
+        core = PublicationCore(self.root, "success")
+        with (
+            patch.object(
+                worker,
+                "_observe_remote_main",
+                side_effect=[SubprocessTimeoutError("network timeout"), "b" * 40],
+            ),
+            patch.object(worker, "_is_ancestor", return_value=True),
+        ):
+            first = publish_pending(core, self.store)
+            self.assertEqual("completed-local", first[0]["phase"])
+            self.assertEqual("PUBLICATION_TIMEOUT", first[0]["publication_error"])
+            self.assertIsNone(first[0]["remote_oid"])
+            second = publish_pending(core, self.store)
+        self.assertEqual("published-remote", second[0]["phase"])
+        self.assertEqual("b" * 40, second[0]["remote_oid"])
+        self.assertEqual(receipt_id, second[0]["receipt_id"])
+
+    def test_resident_publisher_survives_timeout_and_observes_next_ref(self) -> None:
+        receipt_id = self.complete_local()
+        core = PublicationCore(self.root, "success")
+        with (
+            patch.object(
+                worker,
+                "_observe_remote_main",
+                side_effect=[SubprocessTimeoutError("remote timeout"), "b" * 40],
+            ),
+            patch.object(worker, "_is_ancestor", return_value=True),
+            patch(
+                "tools.fast_receipt_worker.time.sleep",
+                side_effect=[None, KeyboardInterrupt],
+            ) as sleep,
+            self.assertRaises(KeyboardInterrupt),
+        ):
+            serve_publication(core, self.store, poll_seconds=1.0)
+        self.assertEqual(2, sleep.call_count)
+        current = self.store.read(receipt_id)
+        assert current is not None
+        self.assertEqual("published-remote", current["phase"])
+        self.assertEqual("b" * 40, current["remote_oid"])
+
+    def test_timed_out_push_remains_local_without_false_ack(self) -> None:
+        receipt_id = self.complete_local()
+        core = PublicationCore(self.root, "success")
+        original_run = core.run
+
+        def timeout_push(
+            command: list[str], *, check: bool = True
+        ) -> subprocess.CompletedProcess[str]:
+            if "push" in command:
+                raise SubprocessTimeoutError("push timeout")
+            return original_run(command, check=check)
+
+        def relation(_core: Any, older: str, newer: str) -> bool:
+            return (older, newer) in {
+                ("a" * 40, "b" * 40),
+                ("c" * 40, "b" * 40),
+            }
+
+        with (
+            patch.object(worker, "_observe_remote_main", return_value="c" * 40),
+            patch.object(worker, "_is_ancestor", side_effect=relation),
+            patch.object(core, "run", side_effect=timeout_push),
+        ):
+            outcomes = publish_pending(core, self.store)
+        self.assertEqual("completed-local", outcomes[0]["phase"])
+        self.assertEqual("PUBLICATION_TIMEOUT", outcomes[0]["publication_error"])
+        self.assertIsNone(outcomes[0]["remote_oid"])
         self.assertEqual(receipt_id, outcomes[0]["receipt_id"])
 
     def test_diverged_remote_cannot_be_published(self) -> None:

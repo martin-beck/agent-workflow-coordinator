@@ -370,7 +370,10 @@ including local commit verification and a separate remote observation attempt.
 `handoffctl fast worker --serve` runs a resident local executor under one
 repository-common service lock. `handoffctl fast publisher --serve` uses a
 different lock for remote observation and publication, so a slow push does not
-hold the local executor's service lock. These are manually started processes;
+hold the local executor's service lock. A bounded subprocess timeout records
+`PUBLICATION_TIMEOUT` on each affected local receipt; the resident publisher
+continues and retries at its bounded polling interval without asserting remote
+success. These are manually started processes;
 there is no service supervisor, wake-up mechanism, or broad per-command
 latency qualification yet. The worker handles no command other than heartbeat.
 Arbitrary

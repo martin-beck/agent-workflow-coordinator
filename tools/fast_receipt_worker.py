@@ -395,12 +395,9 @@ def _finish_publications(
     return outcomes
 
 
-def publish_pending(core: Any, store: ReceiptStore) -> list[dict[str, Any]]:
-    """Observe exact remote ancestry after optional non-force publication."""
-    _require_bound_store(core, store)
-    pending = store.pending_publication()
-    if not pending:
-        return []
+def _publish_selected(
+    core: Any, store: ReceiptStore, pending: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
     if not core.replication_enabled():
         return [
             store.record_publication_failure(str(item["receipt_id"]), "REPLICATION_DISABLED")
@@ -428,6 +425,24 @@ def publish_pending(core: Any, store: ReceiptStore) -> list[dict[str, Any]]:
             for item in pending
         ]
     return _finish_publications(core, store, pending, local_head, remote_head)
+
+
+def publish_pending(core: Any, store: ReceiptStore) -> list[dict[str, Any]]:
+    """Observe exact remote ancestry; a bounded timeout remains a local receipt."""
+    _require_bound_store(core, store)
+    pending = store.pending_publication()
+    if not pending:
+        return []
+    try:
+        return _publish_selected(core, store, pending)
+    except Exception as error:
+        timeout_type = getattr(core, "SubprocessTimeoutError", None)
+        if not isinstance(timeout_type, type) or not isinstance(error, timeout_type):
+            raise
+        return [
+            store.record_publication_failure(str(item["receipt_id"]), "PUBLICATION_TIMEOUT")
+            for item in pending
+        ]
 
 
 def serve_publication(core: Any, store: ReceiptStore, *, poll_seconds: float = 5.0) -> None:
