@@ -915,7 +915,7 @@ class FormalEvidenceTests(unittest.TestCase):
         self.assertFalse(manifest["profiles"]["portable-smoke"]["exhaustive"])
         self.assertFalse(manifest["profiles"]["pr-fast"]["exhaustive"])
         self.assertEqual(
-            ["HandoffctlFast", "OracleInteractionGates"],
+            ["HandoffctlFast", "HandoffctlReceiptsFast", "OracleInteractionGates"],
             manifest["profiles"]["pr-fast"]["models"],
         )
         self.assertIn("safety-only", manifest["profiles"]["pr-fast"]["claims"])
@@ -936,8 +936,8 @@ class FormalEvidenceTests(unittest.TestCase):
             manifest["profiles"]["portable-smoke"]["models"],
             manifest["profiles"]["full-exhaustive"]["models"],
         )
-        self.assertEqual(6, len(manifest["profiles"]["full-exhaustive"]["models"]))
-        self.assertEqual(6, len(manifest["profiles"]["pr-publication"]["models"]))
+        self.assertEqual(7, len(manifest["profiles"]["full-exhaustive"]["models"]))
+        self.assertEqual(7, len(manifest["profiles"]["pr-publication"]["models"]))
         pr_config = (FORMAL_ROOT / "HandoffctlPR.cfg").read_text()
         self.assertIn("Processes = {p1}", pr_config)
         self.assertIn("EventualCompletion", pr_config)
