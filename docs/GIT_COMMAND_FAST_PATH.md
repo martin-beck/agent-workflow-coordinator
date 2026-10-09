@@ -379,7 +379,19 @@ continues and retries at its bounded polling interval without asserting remote
 success. These are manually started processes;
 there is no service supervisor, wake-up mechanism, or broad per-command
 latency qualification yet. The worker handles no command other than
-heartbeat, promote, and claim.
+heartbeat, promote, claim, and the bounded `update` subset. Separately,
+`handoffctl fast observe --max-age-seconds N` is an opt-in read contract: a
+resident service coalesces one full product scan for concurrent callers and
+returns the exact observation, input and observation digests, age, and either
+`fresh-scan` or `bounded-cache` freshness. Its `strict_equivalent: false`
+marker is mandatory: it is not a fast `doctor --live` or `snapshot`, never
+validates generated views under the strict read lock, and a direct fallback
+has no cross-process cache. Configuration, binding, backend, or service
+restart invalidate the cache; callers choose a bounded cache age between zero
+and 300 seconds explicitly. A product Git/worktree change is deliberately not
+probed on a cache hit: until the selected age expires it may return the prior
+observation. Callers requiring an immediately revalidated Git/listing witness
+must use the strict route.
 Arbitrary
 `run` payloads cannot be retried after ambiguous execution without risking
 double effects; they require a distinct design. This prototype is not 5%
@@ -452,6 +464,51 @@ partial-frame flood. The 64-item writer queue can still reject a request, and
 durable service supervision remains absent.
 
 ## Further candidate architecture, not yet implemented
+
+### 2026-10-09 ASB-scale strict-route reproduction
+
+An isolated frozen fixture built from ASB state `17ec0565868437087ca3ad4715ce57480888f4ed`
+(767 task records) and the complete 302-worktree product inventory was used
+to compare baseline `97fa3ad6af0291368de0e715806955e63ef5dc54` with candidate
+`ea683fbd2f65d16c77fc0c5893295df4123788d7`. Source state and product
+inputs were fingerprinted before and after the run and did not change.
+
+The strict read routes are not a scalable completion contract at this size.
+At 64 concurrent callers, plain `doctor` and `render-status --check` still
+succeeded for both revisions (candidate p50 1.955 s and 1.259 s,
+respectively), but `doctor --live` completed only 13/64 candidate callers
+and `snapshot` only 14/64. Retained diagnostics show that every caller runs
+its own full product scan: simultaneous `git status --porcelain=v1` and
+`git rev-list --left-right --count origin/main...HEAD` subprocesses over the
+same worktree inventory exceed the 30-second per-subprocess bound. The
+remaining callers return `SUBPROCESS_TIMEOUT`; this is scan amplification,
+not a state mutation or receipt-result failure.
+
+Strict Git mutation is worse under load: at 16 candidate `reconcile` calls,
+13 succeeded and three timed out on the coordinator lock; at 32, none
+succeeded (30 lock timeouts and two other errors); at 64, none succeeded
+(10 lock timeouts and 54 other errors). Candidate and baseline reconcile
+state trees also differed at eight or more workers, so the paired strict
+reconcile results are explicitly non-qualifying and need path-level
+diagnosis before any semantic comparison claim. These data are evidence for
+the separate opt-in fast contract, not evidence that the strict route is
+fixed or that any 5% predicate has passed.
+
+The eventual immediate read-service design requirement is therefore a
+project-bound, single-flight observation cache. One resident observer may
+perform a full scan for a declared input generation; concurrent fast readers
+receive the same immutable observation plus its binding digest, product
+worktree-listing digest, origin/main and remote-main witnesses, observation
+timestamp, and explicit freshness policy. A cache hit must never be labelled
+as a fresh strict `doctor --live` or `snapshot`: callers select either a
+bounded-age cached-observation receipt or the existing strict fresh route.
+Filesystem/Git events, changed listing/binding/policy/configuration, observer
+restart, missed-event detection, or a failed revalidation invalidate the
+entry and cause a new full scan or an explicit unavailable result. This
+service must use the existing project-common socket ownership, peer checks,
+bounded admission, and crash-safe durable metadata; it cannot add a global
+daemon or silently bypass the CLI. This is a future event-driven design, not
+the initial bounded-age `fast observe` implementation above.
 
 The first expansion from the initial receipt trio is now implemented locally
 for `fast update`: it accepts a non-empty, canonical subset of only

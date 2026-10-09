@@ -8,6 +8,7 @@ import json
 from argparse import Namespace
 from typing import Any
 
+from .fast_observation import ObservationCache
 from .fast_receipt_socket import public_receipt
 from .fast_receipt_worker import (
     process_pending,
@@ -24,6 +25,16 @@ def dispatch_fast(core: Any, args: Namespace) -> int:  # noqa: C901 - explicit r
     core.assert_project_binding()
     if core.backend_selection()["backend"] != "git":
         raise RuntimeError("fast receipts require Git authority")
+    if args.fast_action == "observe":
+        # Without the resident socket there is no cross-process cache.  This
+        # remains an explicit alternate observation contract, but the direct
+        # fallback always performs a fresh bounded scan.
+        try:
+            observed = ObservationCache().observe(core, args.max_age_seconds)
+        except ValueError as error:
+            raise RuntimeError(str(error)) from error
+        print(json.dumps(observed, sort_keys=True))
+        return 0
     path = core.coordinator_lock_path().parent / "fast-receipts.sqlite3"
     with ReceiptStore(path, core.project_binding()["project_id"]) as store:
         if args.fast_action == "heartbeat":

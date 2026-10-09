@@ -13,9 +13,11 @@ import socket
 import sqlite3
 import tempfile
 import threading
+import time
 import unittest
 import uuid
 from pathlib import Path
+from typing import cast
 from unittest.mock import patch
 
 from tools.fast_receipt_socket import (
@@ -24,6 +26,7 @@ from tools.fast_receipt_socket import (
     _read_line,
     _require_request,
     _safe_socket,
+    _send_reply,
     socket_service,
     try_socket_fast,
 )
@@ -35,6 +38,7 @@ class FakeBoundCore:
         self.root = root
         self.project_id = project_id
         self.reject_caller = False
+        self.scan_count = 0
 
     def coordinator_lock_path(self) -> Path:
         return self.root / "state.lock"
@@ -48,6 +52,20 @@ class FakeBoundCore:
 
     def project_binding(self) -> dict[str, str]:
         return {"project_id": self.project_id}
+
+    def config(self) -> dict[str, str]:
+        return {"projects_root": "/fixture", "product_worktree": "product"}
+
+    def project_scan(self) -> dict[str, object]:
+        self.scan_count += 1
+        return {
+            "remote_main": "a" * 40,
+            "origin_main": "b" * 40,
+            "primary_head": "c" * 40,
+            "worktrees": [],
+            "prs": [],
+            "runs": [],
+        }
 
 
 class FastReceiptSocketTests(unittest.TestCase):
@@ -84,6 +102,10 @@ class FastReceiptSocketTests(unittest.TestCase):
         self.assertEqual(
             {"protocol": 1, "action": "receipt", "receipt_id": "a" * 32},
             _fast_request(["fast", "receipt", "a" * 32]),
+        )
+        self.assertEqual(
+            {"protocol": 1, "action": "observe", "max_age_seconds": 30},
+            _fast_request(["fast", "observe", "--max-age-seconds", "30"]),
         )
         self.assertEqual(
             {
@@ -175,6 +197,7 @@ class FastReceiptSocketTests(unittest.TestCase):
         self.assertIsNone(_fast_request(["fast", "heartbeat", "--bad", *self.argv[3:]]))
         self.assertIsNone(_fast_request([*self.argv, "--unknown", "value"]))
         self.assertIsNone(_fast_request(self.argv[:-2]))
+        self.assertIsNone(_fast_request(["fast", "observe", "--max-age-seconds", "301"]))
         invalid = list(self.argv)
         invalid[6] = "not-a-revision"
         self.assertIsNone(_fast_request(invalid))
@@ -240,6 +263,13 @@ class FastReceiptSocketTests(unittest.TestCase):
             writer.sendall(b"12345")
             with self.assertRaisesRegex(RuntimeError, "too large"):
                 _read_line(reader, 4)
+        reader, writer = socket.socketpair()
+        with reader, writer, patch("tools.fast_receipt_socket._MAX_REPLY", 128):
+            _send_reply(writer, {"ok": {"observation": "x" * 256}})
+            reply = json.loads(_read_line(reader, 128))
+        self.assertEqual(
+            "FAST_OBSERVATION_REPLY_TOO_LARGE: use direct fast observe", reply["error"]
+        )
         with self.assertRaisesRegex(RuntimeError, "lookup"):
             _require_request({"protocol": 1, "action": "receipt", "receipt_id": "a", "extra": 1})
         with self.assertRaisesRegex(RuntimeError, "heartbeat request"):
@@ -328,6 +358,100 @@ class FastReceiptSocketTests(unittest.TestCase):
                 self._intent_count(),
             )
         self.assertFalse(self.path.exists())
+
+    def test_bound_service_returns_explicit_cached_observation_without_receipt_write(self) -> None:
+        argv = ["fast", "observe", "--max-age-seconds", "30"]
+        with (
+            socket_service(self.core),
+            patch("tools.fast_receipt_socket._socket_path", return_value=self.path),
+            contextlib.redirect_stdout(io.StringIO()) as output,
+        ):
+            self.assertEqual(0, try_socket_fast(argv))
+            first = json.loads(output.getvalue())
+            output.seek(0)
+            output.truncate(0)
+            self.assertEqual(0, try_socket_fast(argv))
+            second = json.loads(output.getvalue())
+        self.assertEqual("cached-observation-v1", first["contract"])
+        self.assertFalse(first["strict_equivalent"])
+        self.assertEqual("fresh-scan", first["freshness"])
+        self.assertEqual("bounded-cache", second["freshness"])
+        self.assertEqual(first["observation_sha256"], second["observation_sha256"])
+        self.assertEqual(1, self.core.scan_count)
+        self.assertEqual(0, self._intent_count())
+
+    def test_oversized_observation_returns_bounded_direct_fallback_signal(self) -> None:
+        argv = ["fast", "observe", "--max-age-seconds", "30"]
+        oversized = {
+            "remote_main": "a" * 40,
+            "origin_main": "b" * 40,
+            "primary_head": "c" * 40,
+            "worktrees": [{"name": "x" * 512}],
+            "prs": [],
+            "runs": [],
+        }
+        with (
+            patch.object(self.core, "project_scan", return_value=oversized),
+            patch("tools.fast_receipt_socket._MAX_REPLY", 128),
+            socket_service(self.core),
+            patch("tools.fast_receipt_socket._socket_path", return_value=self.path),
+            contextlib.redirect_stderr(io.StringIO()) as errors,
+        ):
+            self.assertIsNone(try_socket_fast(argv))
+        self.assertEqual("", errors.getvalue())
+
+    def test_sixty_four_observation_callers_share_one_cold_scan(self) -> None:
+        request = (
+            json.dumps({"protocol": 1, "action": "observe", "max_age_seconds": 0}).encode() + b"\n"
+        )
+        started = threading.Event()
+        release = threading.Event()
+        original = self.core.project_scan
+
+        def slow_scan() -> dict[str, object]:
+            started.set()
+            self.assertTrue(release.wait(2))
+            return original()
+
+        replies: list[dict[str, object]] = []
+        errors: list[BaseException] = []
+
+        def observe() -> None:
+            try:
+                with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as peer:
+                    peer.settimeout(5)
+                    peer.connect(str(self.path))
+                    peer.sendall(request)
+                    replies.append(json.loads(_read_line(peer, 131072)))
+            except BaseException as error:  # pragma: no cover - asserted below
+                errors.append(error)
+
+        with (
+            patch.object(self.core, "project_scan", side_effect=slow_scan),
+            socket_service(self.core),
+            patch("tools.fast_receipt_socket._socket_path", return_value=self.path),
+        ):
+            callers = [threading.Thread(target=observe) for _ in range(64)]
+            for caller in callers:
+                caller.start()
+            self.assertTrue(started.wait(1))
+            # Allow all admitted calls to reach the 64-handler pool before
+            # completing the single zero-age generation.
+            time.sleep(0.1)
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                self.assertEqual(0, try_socket_fast(self.argv))
+            self.assertEqual("queued-local", json.loads(output.getvalue())["phase"])
+            release.set()
+            for caller in callers:
+                caller.join(5)
+        self.assertFalse(errors)
+        self.assertEqual(64, len(replies))
+        self.assertEqual(1, self.core.scan_count)
+        observations = [cast(dict[str, object], reply["ok"]) for reply in replies]
+        self.assertEqual(
+            {"cached-observation-v1"}, {str(reply["contract"]) for reply in observations}
+        )
 
     def test_bound_service_queues_typed_promote_receipt(self) -> None:
         argv = [
