@@ -453,6 +453,16 @@ durable service supervision remains absent.
 
 ## Further candidate architecture, not yet implemented
 
+The first expansion from the initial receipt trio is now implemented locally
+for `fast update`: it accepts a non-empty, canonical subset of only
+`status` (which must remain `in_progress`), `priority`, `summary`, and
+`next_action`, plus the owner, exact revision, note, and idempotency key.
+The resident worker re-runs strict owner/revision/role admission and accepts
+local completion only after validating the signed receipt-marked commit and
+the exact requested metadata delta. It reports local durability separately
+from publication. This is deliberately not evidence that strict `update`,
+other lifecycle commands, or the all-command 5% target are complete.
+
 ### Typed lifecycle-receipt expansion
 
 The heartbeat prototype is not an adequate generic command queue. The next

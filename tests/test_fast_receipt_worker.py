@@ -52,7 +52,7 @@ class FakeCore:
 
     def mutate(self, args: Any, kind: str) -> None:
         self.calls += 1
-        if kind not in {"claim", "heartbeat", "promote"}:
+        if kind not in {"claim", "heartbeat", "promote", "update"}:
             raise AssertionError(kind)
         if self.outcome == "stale":
             raise RuntimeError("stale revision: expected 1, current 2")
@@ -136,6 +136,17 @@ class FastReceiptWorkerTests(unittest.TestCase):
         )
         return str(receipt["receipt_id"])
 
+    def enqueue_update(self) -> str:
+        receipt = self.store.enqueue_update(
+            key="worker-a:update:1",
+            task="AR-0120",
+            owner="worker-a",
+            expected_revision=1,
+            changes={"priority": "P1", "next_action": "Run focused tests."},
+            note="Refined execution plan.",
+        )
+        return str(receipt["receipt_id"])
+
     def complete_local(self) -> str:
         receipt_id = self.enqueue()
         self.store.claim_next()
@@ -174,6 +185,33 @@ class FastReceiptWorkerTests(unittest.TestCase):
         self.assertEqual("completed-local", result["phase"])
         self.assertEqual(receipt_id, verify.call_args.args[1]["receipt_id"])
         self.assertEqual(1, core.calls)
+
+    def test_update_uses_closed_typed_namespace_and_verified_commit(self) -> None:
+        receipt_id = self.enqueue_update()
+        core = FakeCore(self.root, "success")
+        with patch("tools.fast_receipt_worker.verify_local_commit", return_value=2) as verify:
+            result = process_one(core, self.store)
+        assert result is not None
+        self.assertEqual("completed-local", result["phase"])
+        self.assertEqual(receipt_id, verify.call_args.args[1]["receipt_id"])
+        self.assertEqual(1, core.calls)
+
+    def test_update_with_unexpected_change_never_executes(self) -> None:
+        receipt_id = self.enqueue_update()
+        queued = self.store.read(receipt_id)
+        assert queued is not None
+        payload = json.loads(str(queued["payload_json"]))
+        payload["changes"]["owner"] = "injected"
+        canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+        import hashlib
+
+        self.store.connection.execute(
+            "UPDATE intents SET payload_json=?, input_digest=? WHERE receipt_id=?",
+            (canonical, hashlib.sha256(canonical.encode()).hexdigest(), receipt_id),
+        )
+        result = process_one(FakeCore(self.root, "success"), self.store)
+        assert result is not None
+        self.assertEqual("ambiguous", result["phase"])
 
     def test_claim_role_denial_is_rejected_not_ambiguous(self) -> None:
         receipt_id = self.enqueue_claim()
@@ -595,6 +633,86 @@ class FastReceiptWorkerTests(unittest.TestCase):
         ):
             worker._verify_promote_delta(core, promote_intent, promote_payload, "a" * 40)
 
+    def test_update_delta_accepts_only_the_queued_closed_change_set(self) -> None:
+        core = FakeCore(self.root, "success")
+        before = {
+            "id": "AR-0120",
+            "owner": "worker-a",
+            "status": "in_progress",
+            "claim_expires": "2026-10-09T10:20:00+00:00",
+            "task_revision": 1,
+            "priority": "P2",
+            "summary": "Original summary.",
+            "next_action": "Original action.",
+            "updated_at": "2026-10-09T09:00:00+00:00",
+        }
+        after = {
+            **before,
+            "task_revision": 2,
+            "priority": "P1",
+            "next_action": "Run focused tests.",
+            "updated_at": "2026-10-09T10:00:00+00:00",
+        }
+        intent = {"task_id": "AR-0120", "expected_revision": 1}
+        payload = {
+            "owner": "worker-a",
+            "changes": {"priority": "P1", "next_action": "Run focused tests."},
+            "note": "Refined execution plan.",
+        }
+        with (
+            patch.object(
+                worker,
+                "_task_change",
+                return_value=(before, "before\n", after, "expected heartbeat body\n"),
+            ) as changed,
+            patch.object(worker, "_verify_update_session") as session,
+        ):
+            self.assertEqual(2, worker._verify_update_delta(core, intent, payload, "a" * 40))
+        self.assertEqual(
+            frozenset(("sessions/AR-0120.jsonl",)), changed.call_args.kwargs["sidecars"]
+        )
+        session.assert_called_once()
+        for field, value, message in (
+            ("owner", "worker-b", "task state"),
+            ("summary", "injected", "fields outside"),
+            ("priority", "P3", "fields outside"),
+            ("claim_expires", "", "non-update"),
+        ):
+            altered = dict(after)
+            altered[field] = value
+            with (
+                self.subTest(field=field),
+                patch.object(
+                    worker,
+                    "_task_change",
+                    return_value=(before, "before\n", altered, "expected heartbeat body\n"),
+                ),
+                patch.object(worker, "_verify_update_session"),
+                self.assertRaisesRegex(RuntimeError, message),
+            ):
+                worker._verify_update_delta(core, intent, payload, "a" * 40)
+
+    def test_update_session_requires_the_exact_canonical_append(self) -> None:
+        core = FakeCore(self.root, "success")
+        after = {"updated_at": "2026-10-09T10:00:00+00:00"}
+        expected = {"task": "AR-0120", "task_revision": 2}
+        core.build_session_record = lambda *_args: expected  # type: ignore[attr-defined]
+        with (
+            patch.object(worker, "_git", side_effect=["a" * 40, "", ""]),
+            patch.object(worker, "_session_rows", side_effect=[[], [expected]]),
+        ):
+            worker._verify_update_session(
+                core, "b" * 40, "sessions/AR-0120.jsonl", "AR-0120", after
+            )
+        with (
+            patch.object(worker, "_git", side_effect=["a" * 40, "", ""]),
+            patch.object(worker, "_session_rows", side_effect=[[], [{"task": "forged"}]]),
+            self.assertRaisesRegex(RuntimeError, "session does not match"),
+        ):
+            worker._verify_update_session(
+                core, "b" * 40, "sessions/AR-0120.jsonl", "AR-0120", after
+            )
+
     def test_verify_local_commit_dispatch_and_fail_closed_metadata(self) -> None:
         core = FakeCore(self.root, "success")
         core.project_settings = lambda: {"commit_signoff": False}  # type: ignore[method-assign]
@@ -617,7 +735,7 @@ class FastReceiptWorkerTests(unittest.TestCase):
             ):
                 self.assertEqual(2, verify_local_commit(core, intent, oid))
 
-        for operation in ("heartbeat", "claim", "promote"):
+        for operation in ("heartbeat", "claim", "promote", "update"):
             with self.subTest(operation=operation):
                 verify(operation)
         base = {

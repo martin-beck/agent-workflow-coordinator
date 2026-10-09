@@ -27,6 +27,7 @@ else:  # pragma: no cover - direct vendored import
     from sqlite_storage import require_local_filesystem  # type: ignore[import-not-found,no-redef]
 
 _TOKEN = re.compile(r"[A-Za-z0-9._:-]{1,128}\Z")
+_PRIORITIES = frozenset(("P0", "P1", "P2", "P3", "P4"))
 _PHASE_QUEUED = "queued-local"
 _PHASE_RUNNING = "running"
 _PHASE_LOCAL = "completed-local"
@@ -349,6 +350,57 @@ class ReceiptStore:
             "expected_revision": expected_revision,
             "note": note,
             "operation": "promote",
+            "project_id": self.project_id,
+            "task": task,
+        }
+        return self._enqueue(
+            key=key, task=task, expected_revision=expected_revision, payload=payload
+        )
+
+    def enqueue_update(
+        self,
+        *,
+        key: str,
+        task: str,
+        owner: str,
+        expected_revision: int,
+        changes: dict[str, str],
+        note: str,
+    ) -> dict[str, Any]:
+        """Fsync a closed owner-held metadata update for later strict admission."""
+        allowed = {"status", "priority", "summary", "next_action"}
+        if (
+            not _TOKEN.fullmatch(key)
+            or not _TOKEN.fullmatch(task)
+            or not _TOKEN.fullmatch(owner)
+            or not isinstance(expected_revision, int)
+            or isinstance(expected_revision, bool)
+            or expected_revision < 1
+            or not isinstance(changes, dict)
+            or not changes
+            or set(changes) - allowed
+            or not all(
+                isinstance(name, str)
+                and isinstance(value, str)
+                and 1 <= len(value) <= 4096
+                and "\x00" not in value
+                for name, value in changes.items()
+            )
+            or not isinstance(note, str)
+            or not 1 <= len(note) <= 4096
+            or "\x00" in note
+        ):
+            raise ValueError("invalid update receipt intent")
+        if "status" in changes and changes["status"] != "in_progress":
+            raise ValueError("fast update status must remain in_progress")
+        if "priority" in changes and changes["priority"] not in _PRIORITIES:
+            raise ValueError("invalid fast update priority")
+        payload = {
+            "changes": dict(sorted(changes.items())),
+            "expected_revision": expected_revision,
+            "note": note,
+            "operation": "update",
+            "owner": owner,
             "project_id": self.project_id,
             "task": task,
         }

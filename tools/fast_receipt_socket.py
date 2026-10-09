@@ -132,6 +132,45 @@ def _fast_request(argv: list[str]) -> dict[str, Any] | None:  # noqa: C901 - str
             "note": promote_options["--note"],
             "key": promote_options["--key"],
         }
+    if argv[:2] == ["fast", "update"] and len(argv) >= 11:
+        if argv[2].startswith("-") or len(argv[3:]) % 2:
+            return None
+        update_options = dict(zip(argv[3::2], argv[4::2], strict=True))
+        allowed = {
+            "--owner",
+            "--expected-revision",
+            "--status",
+            "--priority",
+            "--summary",
+            "--next-action",
+            "--note",
+            "--key",
+        }
+        if len(update_options) != len(argv[3::2]) or set(update_options) - allowed:
+            return None
+        if not {"--owner", "--expected-revision", "--note", "--key"} <= set(update_options):
+            return None
+        changes = {
+            name.removeprefix("--").replace("-", "_"): value
+            for name, value in update_options.items()
+            if name in {"--status", "--priority", "--summary", "--next-action"}
+        }
+        if not changes:
+            return None
+        try:
+            revision = int(update_options["--expected-revision"])
+        except ValueError:
+            return None
+        return {
+            "protocol": 1,
+            "action": "update",
+            "task": argv[2],
+            "owner": update_options["--owner"],
+            "expected_revision": revision,
+            "changes": changes,
+            "note": update_options["--note"],
+            "key": update_options["--key"],
+        }
     if argv[:2] not in (["fast", "heartbeat"], ["fast", "claim"]) or len(argv) < 9:
         return None
     if argv[2].startswith("-") or len(argv[3:]) % 2:
@@ -184,6 +223,7 @@ def try_socket_fast(argv: list[str]) -> int | None:
             ["fast", "heartbeat"],
             ["fast", "claim"],
             ["fast", "promote"],
+            ["fast", "update"],
             ["fast", "receipt"],
         ):
             return _fallback_or_error()
@@ -248,6 +288,34 @@ def _require_request(request: Any) -> dict[str, Any]:  # noqa: C901 - strict wir
             or not all(isinstance(request[field], str) for field in ("task", "note", "key"))
         ):
             raise RuntimeError("invalid fast promote request fields")
+        return request
+    if action == "update":
+        if set(request) != {
+            "protocol",
+            "action",
+            "task",
+            "owner",
+            "expected_revision",
+            "changes",
+            "note",
+            "key",
+        }:
+            raise RuntimeError("invalid fast update request")
+        changes = request["changes"]
+        if (
+            not isinstance(request["expected_revision"], int)
+            or isinstance(request["expected_revision"], bool)
+            or not all(
+                isinstance(request[field], str) for field in ("task", "owner", "note", "key")
+            )
+            or not isinstance(changes, dict)
+            or not changes
+            or set(changes) - {"status", "priority", "summary", "next_action"}
+            or not all(isinstance(value, str) for value in changes.values())
+            or changes.get("status") not in {None, "in_progress"}
+            or changes.get("priority") not in {None, "P0", "P1", "P2", "P3", "P4"}
+        ):
+            raise RuntimeError("invalid fast update request fields")
         return request
     raise RuntimeError("unknown fast receipt socket action")
 
@@ -347,6 +415,15 @@ def socket_service(core: Any) -> Iterator[None]:  # noqa: C901
                                 key=request["key"],
                                 task=request["task"],
                                 expected_revision=request["expected_revision"],
+                                note=request["note"],
+                            )
+                        elif request["action"] == "update":
+                            result = store.enqueue_update(
+                                key=request["key"],
+                                task=request["task"],
+                                owner=request["owner"],
+                                expected_revision=request["expected_revision"],
+                                changes=request["changes"],
                                 note=request["note"],
                             )
                         else:

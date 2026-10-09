@@ -94,6 +94,21 @@ class FastReceiptCLITests(unittest.TestCase):
         values.update(overrides)
         return self.invoke("claim", **values)
 
+    def update(self, **overrides: object) -> dict[str, object]:
+        values: dict[str, object] = {
+            "key": "worker-a:update:1",
+            "task": "AR-0120",
+            "owner": "worker-a",
+            "expected_revision": 1,
+            "status": None,
+            "priority": "P1",
+            "summary": None,
+            "next_action": "Run focused tests.",
+            "note": "Refined the execution plan.",
+        }
+        values.update(overrides)
+        return self.invoke("update", **values)
+
     def test_enqueue_is_durable_but_not_completed(self) -> None:
         queued = self.heartbeat()
         self.assertEqual("queued-local", queued["phase"])
@@ -126,6 +141,14 @@ class FastReceiptCLITests(unittest.TestCase):
         self.assertEqual("claim", queued["operation"])
         self.assertEqual("queued-local", queued["phase"])
         self.assertEqual(queued, self.claim())
+
+    def test_update_is_a_durable_closed_fenced_receipt(self) -> None:
+        queued = self.update()
+        self.assertEqual("update", queued["operation"])
+        self.assertEqual("queued-local", queued["phase"])
+        self.assertEqual(queued, self.update())
+        with self.assertRaises(ValueError):
+            self.update(priority=None, next_action=None)
 
     def test_unknown_receipt_and_non_git_backend_fail_closed(self) -> None:
         self.core.backend = "sqlite"
@@ -233,6 +256,35 @@ class FastReceiptCLITests(unittest.TestCase):
         args = dispatch.call_args.args[0]
         self.assertEqual("promote", args.fast_action)
         self.assertEqual(7, args.expected_revision)
+
+    def test_parser_accepts_fenced_fast_update(self) -> None:
+        with (
+            patch.object(handoffctl, "assert_project_binding"),
+            patch.object(handoffctl, "dispatch_bound_command", return_value=0) as dispatch,
+            patch(
+                "sys.argv",
+                [
+                    "handoffctl",
+                    "fast",
+                    "update",
+                    "AR-0120",
+                    "--owner",
+                    "worker-a",
+                    "--expected-revision",
+                    "7",
+                    "--priority",
+                    "P1",
+                    "--note",
+                    "Refined.",
+                    "--key",
+                    "worker-a:update:7",
+                ],
+            ),
+        ):
+            self.assertEqual(0, handoffctl.main())
+        args = dispatch.call_args.args[0]
+        self.assertEqual("update", args.fast_action)
+        self.assertEqual("P1", args.priority)
 
 
 if __name__ == "__main__":

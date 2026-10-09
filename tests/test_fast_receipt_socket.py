@@ -108,6 +108,37 @@ class FastReceiptSocketTests(unittest.TestCase):
                 ]
             ),
         )
+        self.assertEqual(
+            {
+                "protocol": 1,
+                "action": "update",
+                "task": "AR-0120",
+                "owner": "worker-a",
+                "expected_revision": 2,
+                "changes": {"priority": "P1", "next_action": "Run tests."},
+                "note": "Refined plan.",
+                "key": "worker-a:update:2",
+            },
+            _fast_request(
+                [
+                    "fast",
+                    "update",
+                    "AR-0120",
+                    "--owner",
+                    "worker-a",
+                    "--expected-revision",
+                    "2",
+                    "--priority",
+                    "P1",
+                    "--next-action",
+                    "Run tests.",
+                    "--note",
+                    "Refined plan.",
+                    "--key",
+                    "worker-a:update:2",
+                ]
+            ),
+        )
 
     def test_git_common_directory_resolves_main_and_linked_worktree(self) -> None:
         root = Path(self.directory.name)
@@ -169,6 +200,23 @@ class FastReceiptSocketTests(unittest.TestCase):
             _fast_request(
                 [
                     "fast",
+                    "update",
+                    "AR-0120",
+                    "--owner",
+                    "worker-a",
+                    "--expected-revision",
+                    "2",
+                    "--note",
+                    "no metadata",
+                    "--key",
+                    "worker-a:update:2",
+                ]
+            )
+        )
+        self.assertIsNone(
+            _fast_request(
+                [
+                    "fast",
                     "promote",
                     "-AR-0120",
                     "--expected-revision",
@@ -205,6 +253,19 @@ class FastReceiptSocketTests(unittest.TestCase):
                     "expected_revision": True,
                     "note": "Open",
                     "key": "worker-a:promote:2",
+                }
+            )
+        with self.assertRaisesRegex(RuntimeError, "update request fields"):
+            _require_request(
+                {
+                    "protocol": 1,
+                    "action": "update",
+                    "task": "AR-0120",
+                    "owner": "worker-a",
+                    "expected_revision": 2,
+                    "changes": {"owner": "injected"},
+                    "note": "Refined.",
+                    "key": "worker-a:update:2",
                 }
             )
 
