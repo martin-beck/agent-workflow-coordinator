@@ -757,6 +757,17 @@ def configure_fixture_signature_verification(state: Path) -> None:
     )
 
 
+def has_matching_dco_trailer(message: str, author_name: str, author_email: str) -> bool:
+    trailers = subprocess.run(
+        ["git", "interpret-trailers", "--parse"],  # noqa: S607
+        input=message,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.splitlines()
+    return f"Signed-off-by: {author_name} <{author_email}>" in trailers
+
+
 def strict_acceptance_commit_errors(state: Path, starting_head: str) -> tuple[int, list[str]]:
     """Check ancestry, changed-path scope, SSH signatures, and DCO for strict commits."""
     revisions = subprocess.run(  # noqa: S603
@@ -769,23 +780,32 @@ def strict_acceptance_commit_errors(state: Path, starting_head: str) -> tuple[in
     errors: list[str] = []
     if len(revisions) != len(TASK_IDS) or not history_extends(state, starting_head):
         errors.append("acceptance batch did not add 16 extending commits")
-    changed_paths = subprocess.run(  # noqa: S603
-        ["git", "diff", "--name-only", "-z", f"{starting_head}..HEAD"],  # noqa: S607
-        cwd=state,
-        capture_output=True,
-        check=True,
-    ).stdout.split(b"\0")
     allowed_paths = {
         *(f"tasks/{task_id}.md".encode() for task_id in TASK_IDS),
         b"CURRENT.md",
         b"STATUS.md",
     }
-    if any(
-        path and path not in allowed_paths and not path.startswith(b"status/")
-        for path in changed_paths
-    ):
-        errors.append("acceptance batch changed unrelated committed paths")
     for commit_hash in revisions:
+        parents = subprocess.run(  # noqa: S603
+            ["git", "show", "-s", "--format=%P", commit_hash],  # noqa: S607
+            cwd=state,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.split()
+        if len(parents) != 1:
+            errors.append(f"{commit_hash}: acceptance commit is not single-parent")
+        changed_paths = subprocess.run(  # noqa: S603
+            ["git", "diff-tree", "-r", "--no-commit-id", "--name-only", "-z", commit_hash],  # noqa: S607
+            cwd=state,
+            capture_output=True,
+            check=True,
+        ).stdout.split(b"\0")
+        if any(
+            path and path not in allowed_paths and not path.startswith(b"status/")
+            for path in changed_paths
+        ):
+            errors.append(f"{commit_hash}: unrelated committed path changed")
         verified = subprocess.run(  # noqa: S603
             ["git", "verify-commit", commit_hash],  # noqa: S607
             cwd=state,
@@ -794,14 +814,17 @@ def strict_acceptance_commit_errors(state: Path, starting_head: str) -> tuple[in
         )
         if verified.returncode:
             errors.append(f"{commit_hash}: signature did not verify")
-        message = subprocess.run(  # noqa: S603
-            ["git", "show", "-s", "--format=%B", commit_hash],  # noqa: S607
+        identity_message = subprocess.run(  # noqa: S603
+            ["git", "show", "-s", "--format=%an%x00%ae%x00%B", commit_hash],  # noqa: S607
             cwd=state,
             capture_output=True,
             text=True,
             check=True,
         ).stdout
-        if "Signed-off-by: Fixture <fixture@example.invalid>" not in message:
+        author_name, author_email, message = identity_message.split("\0", 2)
+        if (author_name, author_email) != ("Fixture", "fixture@example.invalid") or not (
+            has_matching_dco_trailer(message, author_name, author_email)
+        ):
             errors.append(f"{commit_hash}: matching DCO trailer missing")
     return len(revisions), errors
 

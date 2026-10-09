@@ -18,6 +18,7 @@ from git_mixed_command_probe import (
     adversarial_commands,
     checked_batch,
     error_class,
+    has_matching_dco_trailer,
     require_unchanged_sources,
     route_name,
     stabilize_disposable_claims,
@@ -26,16 +27,42 @@ from git_mixed_command_probe import (
 
 
 class GitMixedCommandProbeTests(unittest.TestCase):
+    def test_dco_requires_actual_matching_final_trailer(self) -> None:
+        identity = "Fixture <fixture@example.invalid>"
+        self.assertTrue(
+            has_matching_dco_trailer(
+                f"subject\n\nSigned-off-by: {identity}\n", "Fixture", "fixture@example.invalid"
+            )
+        )
+        self.assertFalse(
+            has_matching_dco_trailer(
+                f"subject\n\nMention Signed-off-by: {identity} in prose.\n",
+                "Fixture",
+                "fixture@example.invalid",
+            )
+        )
+        self.assertFalse(
+            has_matching_dco_trailer(
+                f"subject\n\nSigned-off-by: {identity}\n", "Other", "other@example.invalid"
+            )
+        )
+
     def test_acceptance_commit_checker_rejects_unsigned_or_missing_dco(self) -> None:
         def fake_run(argv: list[str], **_kwargs: object) -> subprocess.CompletedProcess[object]:
             if argv[1] == "rev-list":
                 return subprocess.CompletedProcess(argv, 0, "abc123\n")
-            if argv[1] == "diff":
+            if argv[1] == "diff-tree":
                 return subprocess.CompletedProcess(argv, 0, b"tasks/AR-9000.md\0")
             if argv[1] == "verify-commit":
                 return subprocess.CompletedProcess(argv, 1, b"", b"invalid signature")
-            if argv[1] == "show":
-                return subprocess.CompletedProcess(argv, 0, "missing trailer")
+            if argv[1] == "show" and argv[3] == "--format=%P":
+                return subprocess.CompletedProcess(argv, 0, "parent\n")
+            if argv[1] == "show" and argv[3] == "--format=%an%x00%ae%x00%B":
+                return subprocess.CompletedProcess(
+                    argv, 0, "Fixture\0fixture@example.invalid\0missing"
+                )
+            if argv[1] == "interpret-trailers":
+                return subprocess.CompletedProcess(argv, 0, "")
             raise AssertionError(argv)
 
         with (
@@ -46,6 +73,34 @@ class GitMixedCommandProbeTests(unittest.TestCase):
         self.assertEqual(1, count)
         self.assertTrue(any("signature did not verify" in error for error in errors))
         self.assertTrue(any("DCO trailer missing" in error for error in errors))
+
+    def test_acceptance_commit_checker_catches_intermediate_unrelated_path(self) -> None:
+        def fake_run(argv: list[str], **_kwargs: object) -> subprocess.CompletedProcess[object]:
+            if argv[1] == "rev-list":
+                return subprocess.CompletedProcess(argv, 0, "newer\nolder\n")
+            if argv[1] == "diff-tree":
+                path = b"secret.txt\0" if argv[-1] == "older" else b"tasks/AR-9000.md\0"
+                return subprocess.CompletedProcess(argv, 0, path)
+            if argv[1] == "verify-commit":
+                return subprocess.CompletedProcess(argv, 0, b"")
+            if argv[1] == "show" and argv[3] == "--format=%P":
+                return subprocess.CompletedProcess(argv, 0, "parent\n")
+            if argv[1] == "show" and argv[3] == "--format=%an%x00%ae%x00%B":
+                return subprocess.CompletedProcess(
+                    argv, 0, "Fixture\0fixture@example.invalid\0subject\n"
+                )
+            if argv[1] == "interpret-trailers":
+                return subprocess.CompletedProcess(
+                    argv, 0, "Signed-off-by: Fixture <fixture@example.invalid>\n"
+                )
+            raise AssertionError(argv)
+
+        with (
+            mock.patch("git_mixed_command_probe.subprocess.run", side_effect=fake_run),
+            mock.patch("git_mixed_command_probe.history_extends", return_value=True),
+        ):
+            _, errors = strict_acceptance_commit_errors(Path("disposable"), "starting")
+        self.assertTrue(any("unrelated committed path changed" in error for error in errors))
 
     def test_acceptance_errors_reject_missing_or_wrong_records(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
