@@ -4,11 +4,14 @@
 
 from __future__ import annotations
 
+import os
+import sqlite3
 import tempfile
 import unittest
 import uuid
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
+from unittest.mock import patch
 
 from tools.fast_receipts import ReceiptConflictError, ReceiptStore
 
@@ -25,6 +28,22 @@ def _independent_enqueue(arguments: tuple[str, str, int]) -> tuple[str, str]:
             lease_minutes=20,
         )
         return str(receipt["receipt_id"]), str(receipt["phase"])
+    finally:
+        store.close()
+
+
+def _same_key_enqueue(arguments: tuple[str, str]) -> str:
+    path, project_id = arguments
+    store = ReceiptStore(Path(path), project_id)
+    try:
+        receipt = store.enqueue_heartbeat(
+            key="shared:heartbeat:1",
+            task="AR-0120",
+            owner="worker-a",
+            expected_revision=1,
+            lease_minutes=20,
+        )
+        return str(receipt["receipt_id"])
     finally:
         store.close()
 
@@ -88,12 +107,11 @@ class FastReceiptTests(unittest.TestCase):
                 self.submit(store, **change)
         self.assertEqual(0, store.connection.execute("SELECT count(*) FROM intents").fetchone()[0])
 
-    def test_foreign_project_cannot_read_receipt(self) -> None:
+    def test_foreign_project_cannot_open_bound_database(self) -> None:
         store = self.store()
-        receipt = self.submit(store)
-        foreign = ReceiptStore(self.path, str(uuid.uuid4()))
-        self.addCleanup(foreign.close)
-        self.assertIsNone(foreign.read(str(receipt["receipt_id"])))
+        self.submit(store)
+        with self.assertRaisesRegex(RuntimeError, "different project"):
+            ReceiptStore(self.path, str(uuid.uuid4()))
 
     def test_symlinked_database_is_rejected(self) -> None:
         self.path.parent.mkdir(mode=0o700)
@@ -109,6 +127,53 @@ class FastReceiptTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "not private"):
             ReceiptStore(self.path, self.project_id)
 
+    def test_existing_hardlink_is_rejected(self) -> None:
+        self.path.parent.mkdir(mode=0o700)
+        original = self.path.parent / "other"
+        original.write_bytes(b"")
+        original.chmod(0o600)
+        os.link(original, self.path)
+        with self.assertRaisesRegex(RuntimeError, "private regular owned"):
+            ReceiptStore(self.path, self.project_id)
+
+    def test_database_replacement_is_rejected_before_enqueue(self) -> None:
+        store = self.store()
+        original = self.path.parent / "original"
+        self.path.rename(original)
+        self.path.write_bytes(b"replacement")
+        self.path.chmod(0o600)
+        with self.assertRaisesRegex(RuntimeError, "identity changed"):
+            self.submit(store)
+
+    def test_unsafe_wal_sidecar_is_rejected_before_enqueue(self) -> None:
+        store = self.store()
+        target = self.path.parent / "target"
+        target.write_bytes(b"not a wal")
+        wal = Path(str(self.path) + "-wal")
+        wal.unlink(missing_ok=True)
+        wal.symlink_to(target)
+        with self.assertRaisesRegex(RuntimeError, "sidecar is unsafe"):
+            self.submit(store)
+
+    def test_rejects_nonlocal_filesystem_before_database_open(self) -> None:
+        with (
+            patch(
+                "tools.fast_receipts.require_local_filesystem",
+                side_effect=RuntimeError("SQLITE_UNSUPPORTED_FILESYSTEM"),
+            ),
+            self.assertRaisesRegex(RuntimeError, "SQLITE_UNSUPPORTED_FILESYSTEM"),
+        ):
+            ReceiptStore(self.path, self.project_id)
+        self.assertFalse(self.path.exists())
+
+    def test_rejects_non_wal_connection(self) -> None:
+        memory = sqlite3.connect(":memory:", isolation_level=None)
+        with (
+            patch("tools.fast_receipts.sqlite3.connect", return_value=memory),
+            self.assertRaisesRegex(RuntimeError, "SQLITE_WAL_UNAVAILABLE"),
+        ):
+            ReceiptStore(self.path, self.project_id)
+
     def test_sixteen_independent_submitters_preserve_all_intents(self) -> None:
         store = self.store()
         arguments = [(str(self.path), self.project_id, worker) for worker in range(16)]
@@ -118,6 +183,15 @@ class FastReceiptTests(unittest.TestCase):
         self.assertTrue(all(phase == "queued-local" for _, phase in results))
         count = store.connection.execute("SELECT count(*) FROM intents").fetchone()[0]
         self.assertEqual(16, count)
+
+    def test_sixteen_independent_retries_share_one_receipt(self) -> None:
+        store = self.store()
+        arguments = [(str(self.path), self.project_id)] * 16
+        with ProcessPoolExecutor(max_workers=16) as executor:
+            receipt_ids = list(executor.map(_same_key_enqueue, arguments))
+        self.assertEqual(1, len(set(receipt_ids)))
+        count = store.connection.execute("SELECT count(*) FROM intents").fetchone()[0]
+        self.assertEqual(1, count)
 
 
 if __name__ == "__main__":
