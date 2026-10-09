@@ -20,6 +20,7 @@ from git_mixed_command_probe import (
     adversarial_commands,
     checked_batch,
     error_class,
+    fast_hostile_commands,
     has_matching_dco_trailer,
     heartbeat_effect_errors,
     receipt_queue_errors,
@@ -443,6 +444,16 @@ class GitMixedCommandProbeTests(unittest.TestCase):
         )
         self.assertEqual(15, sum(command != commands[-1] for command in commands))
         self.assertEqual(2, sum("write_text" in " ".join(command) for command in commands))
+
+    def test_fast_hostile_batch_has_one_good_and_fifteen_competing_intents(self) -> None:
+        commands = fast_hostile_commands()
+        self.assertEqual(16, len(commands))
+        self.assertEqual(16, len({command[-1] for command in commands}))
+        self.assertEqual(
+            1, sum(command[6] == "2" and command[4] == "bench-0" for command in commands)
+        )
+        self.assertEqual(8, sum(command[4] != "bench-0" for command in commands))
+        self.assertEqual(7, sum(command[6] == "1" for command in commands))
 
     def test_source_drift_fails_probe(self) -> None:
         with self.assertRaisesRegex(RuntimeError, "source inputs changed"):

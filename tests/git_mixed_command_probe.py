@@ -1213,6 +1213,244 @@ def run_fast_heartbeat_probe(  # noqa: C901
     )
 
 
+def fast_hostile_commands() -> list[list[str]]:
+    """One valid owner races 15 wrong-owner or stale-revision heartbeats."""
+    commands: list[list[str]] = []
+    for index in range(16):
+        good = index == 8
+        owner = "bench-0" if good or index % 2 == 0 else f"mallory-{index}"
+        revision = "2" if good or index % 2 else "1"
+        commands.append(
+            [
+                "fast",
+                "heartbeat",
+                TASK_IDS[0],
+                "--owner",
+                owner,
+                "--expected-revision",
+                revision,
+                "--lease-minutes",
+                "20",
+                "--key",
+                f"hostile-{index}:heartbeat:2",
+            ]
+        )
+    return commands
+
+
+def run_fast_hostile_probe(  # noqa: C901
+    state: Path, env: dict[str, str], timeout: float
+) -> None:
+    """Prove one good socket worker progresses amid 15 invalid durable intents."""
+    configure_fixture_signature_verification(state)
+    task = TASK_IDS[0]
+    before = {task_id: task_meta(state, task_id) for task_id in TASK_IDS}
+    before_body = (state / "tasks" / f"{task}.md").read_text().split("---", 2)[2]
+    starting_head = git_head(state)
+    before_dirty = dirty_checkout_digest(state)
+    before_runtime = runtime_digest(state, normalize_time=False)
+    before_refs = non_head_refs_digest(state)
+    before_private = coordinator_other_digest(state)
+    service = subprocess.Popen(
+        [sys.executable, "tools/handoffctl.py", "fast", "worker", "--serve"],
+        cwd=state,
+        env=env,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+    )
+    socket_path = coordinator_private_root(state) / "fast-receipts.sock"
+    required_env = {**env, "HANDOFFCTL_FAST_REQUIRE_SOCKET": "1"}
+    running: list[subprocess.Popen[bytes]] = []
+    started = time.monotonic()
+    receipts: dict[int, dict[str, Any]] = {}
+    try:
+        while True:
+            if service.poll() is not None:
+                diagnostic = service.stderr.read(500) if service.stderr else b""
+                raise RuntimeError(
+                    "fast hostile service exited: " + diagnostic.decode(errors="replace")
+                )
+            try:
+                with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as probe:
+                    probe.settimeout(0.2)
+                    probe.connect(str(socket_path))
+                break
+            except (FileNotFoundError, ConnectionRefusedError) as error:
+                if time.monotonic() - started >= timeout:
+                    raise RuntimeError("fast hostile socket readiness timeout") from error
+                time.sleep(0.01)
+        running.extend(
+            subprocess.Popen(  # noqa: S603
+                [sys.executable, "tools/handoffctl.py", *command],
+                cwd=state,
+                env=required_env,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            for command in fast_hostile_commands()
+        )
+        for index, process in enumerate(running):
+            output, diagnostic = process.communicate(timeout=timeout)
+            if process.returncode:
+                raise RuntimeError(
+                    f"fast hostile enqueue {index} failed: "
+                    + diagnostic[:500].decode(errors="replace")
+                )
+            receipt = json.loads(output)
+            if (
+                receipt.get("phase") != "queued-local"
+                or receipt.get("task_id") != task
+                or receipt.get("commit_oid") is not None
+            ):
+                raise RuntimeError("fast hostile enqueue reported non-queued authority")
+            receipts[index] = receipt
+        if len({item["receipt_id"] for item in receipts.values()}) != 16:
+            raise RuntimeError("fast hostile submissions did not create 16 distinct receipts")
+        completed: dict[int, dict[str, Any]] = {}
+        deadline = time.monotonic() + timeout
+        while len(completed) < 16:
+            if service.poll() is not None:
+                raise RuntimeError("fast hostile worker exited before terminal receipts")
+            if time.monotonic() >= deadline:
+                raise RuntimeError("fast hostile good-worker liveness timeout")
+            for index, original in receipts.items():
+                if index in completed:
+                    continue
+                observed = subprocess.run(  # noqa: S603
+                    [
+                        sys.executable,
+                        "tools/handoffctl.py",
+                        "fast",
+                        "receipt",
+                        original["receipt_id"],
+                    ],
+                    cwd=state,
+                    env=required_env,
+                    check=False,
+                    capture_output=True,
+                    timeout=30,
+                )
+                if observed.returncode:
+                    raise RuntimeError(
+                        "fast hostile receipt lookup failed: " + observed.stderr[:500].decode()
+                    )
+                current = json.loads(observed.stdout)
+                if current["receipt_id"] != original["receipt_id"] or current["task_id"] != task:
+                    raise RuntimeError("fast hostile receipt identity changed")
+                if current["phase"] in {"completed-local", "rejected", "ambiguous"}:
+                    completed[index] = current
+            if len(completed) < 16:
+                time.sleep(0.1)
+        local_wall_ms = (time.monotonic() - started) * 1000
+    finally:
+        for process in running:
+            if process.poll() is None:
+                process.terminate()
+            with contextlib.suppress(subprocess.TimeoutExpired):
+                process.communicate(timeout=5)
+            if process.poll() is None:
+                process.kill()
+                process.communicate()
+        if service.poll() is None:
+            service.terminate()
+        try:
+            service.communicate(timeout=10)
+        except subprocess.TimeoutExpired as error:
+            service.kill()
+            service.communicate()
+            raise RuntimeError("fast hostile worker did not stop gracefully") from error
+    if service.returncode != 0:
+        raise RuntimeError("fast hostile worker failed graceful shutdown")
+    good = completed[8]
+    if (
+        good["phase"] != "completed-local"
+        or good["result_revision"] != 3
+        or not good["commit_oid"]
+        or good["remote_oid"] is not None
+        or any(completed[index]["phase"] != "rejected" for index in range(16) if index != 8)
+    ):
+        raise RuntimeError("fast hostile outcome misclassified a good or bad worker")
+    commits = subprocess.run(  # noqa: S603
+        ["git", "rev-list", f"{starting_head}..HEAD"],  # noqa: S607
+        cwd=state,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.splitlines()
+    if (
+        len(commits) != 1
+        or commits[0] != good["commit_oid"]
+        or not history_extends(state, starting_head)
+    ):
+        raise RuntimeError("fast hostile batch did not add exactly one extending good commit")
+    verified = subprocess.run(  # noqa: S603
+        ["git", "verify-commit", commits[0]],  # noqa: S607
+        cwd=state,
+        check=False,
+        capture_output=True,
+    )
+    message = subprocess.run(  # noqa: S603
+        ["git", "show", "-s", "--format=%B", commits[0]],  # noqa: S607
+        cwd=state,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+    if (
+        verified.returncode
+        or message.splitlines()[0] != f"chore(state): heartbeat {task}"
+        or message.splitlines().count(f"Handoffctl-Receipt: {good['receipt_id']}") != 1
+        or not any(line.startswith("Signed-off-by: ") for line in message.splitlines())
+    ):
+        raise RuntimeError("fast hostile good commit lacks exact signature or receipt evidence")
+    after = task_meta(state, task)
+    after_body = (state / "tasks" / f"{task}.md").read_text().split("---", 2)[2]
+    if (
+        after["task_revision"] != before[task]["task_revision"] + 1
+        or after["owner"] != "bench-0"
+        or after["status"] != "in_progress"
+        or "Heartbeat by bench-0." not in after_body.removeprefix(before_body)
+        or any(task_meta(state, other) != meta for other, meta in before.items() if other != task)
+    ):
+        raise RuntimeError("fast hostile batch changed authority beyond one good heartbeat")
+    path = coordinator_private_root(state) / "fast-receipts.sqlite3"
+    with contextlib.closing(sqlite3.connect(f"file:{path}?mode=ro", uri=True)) as connection:
+        rows = connection.execute("SELECT receipt_id, phase, commit_oid FROM intents").fetchall()
+    if (
+        len(rows) != 16
+        or {row[0] for row in rows} != {item["receipt_id"] for item in completed.values()}
+        or sum(row[1] == "completed-local" and row[2] == commits[0] for row in rows) != 1
+        or sum(row[1] == "rejected" and row[2] is None for row in rows) != 15
+    ):
+        raise RuntimeError("fast hostile public receipts disagree with durable queue")
+    if (
+        dirty_checkout_digest(state) != before_dirty
+        or runtime_digest(state, normalize_time=False) != before_runtime
+        or non_head_refs_digest(state) != before_refs
+        or coordinator_other_digest(state) != before_private
+    ):
+        raise RuntimeError("fast hostile batch changed unrelated state")
+    checks = doctor(state, env)
+    if any(checks.values()):
+        raise RuntimeError("fast hostile post-batch doctors failed")
+    print(
+        json.dumps(
+            {
+                "batch": "fast_hostile",
+                "workers": 16,
+                "malicious_rejected": 15,
+                "good_completed_local": 1,
+                "signed_commits": 1,
+                "good_local_wall_ms": round(local_wall_ms, 1),
+                "integrity": checks,
+            }
+        ),
+        flush=True,
+    )
+
+
 def configure_fixture_signature_verification(state: Path) -> None:
     """Trust only the ephemeral key that signed this disposable state clone."""
     public_key = (state.parent / "signing-key.pub").read_text().strip()
@@ -1370,6 +1608,7 @@ def main() -> None:  # noqa: C901
     parser.add_argument("--only-accept", action="store_true")
     parser.add_argument("--only-roles", action="store_true")
     parser.add_argument("--only-fast-heartbeat", action="store_true")
+    parser.add_argument("--only-fast-hostile", action="store_true")
     parser.add_argument("--only-strict-heartbeat", action="store_true")
     args = parser.parse_args()
     source_state = args.state.resolve()
@@ -1436,6 +1675,7 @@ def main() -> None:  # noqa: C901
             or args.only_adversarial
             or args.only_accept
             or args.only_fast_heartbeat
+            or args.only_fast_hostile
             or args.only_strict_heartbeat
             else initial_batches
         )
@@ -1517,6 +1757,20 @@ def main() -> None:  # noqa: C901
             return
         if args.only_fast_heartbeat:
             run_fast_heartbeat_probe(state, env, args.timeout_seconds)
+            require_unchanged_sources(
+                {
+                    "source_product_inputs_changed": product_input_digest(source_product)
+                    != product_digest,
+                    "source_state_head_changed": git_head(source_state) != state_head,
+                    "source_state_inputs_changed": product_input_digest(
+                        source_state, include_runtime=True
+                    )
+                    != state_digest,
+                }
+            )
+            return
+        if args.only_fast_hostile:
+            run_fast_hostile_probe(state, env, args.timeout_seconds)
             require_unchanged_sources(
                 {
                     "source_product_inputs_changed": product_input_digest(source_product)
