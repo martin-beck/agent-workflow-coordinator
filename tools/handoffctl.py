@@ -2141,6 +2141,13 @@ def require_release_admission(
 
 
 def apply_claim(args: argparse.Namespace, meta: Meta, tasks: list[Task]) -> str:
+    if (
+        getattr(args, "_receipt_id", None) is not None
+        and args.expected_revision != meta["task_revision"]
+    ):
+        raise RuntimeError(
+            f"stale revision: expected {args.expected_revision}, current {meta['task_revision']}"
+        )
     if args.lease_minutes <= 0:
         raise RuntimeError("lease must be positive")
     if meta.get("status") != "open":
@@ -2669,7 +2676,7 @@ def require_project_settings_unchanged(settings: Meta) -> None:
 def mutate(args: argparse.Namespace, kind: str, policy: EvidencePolicy | None = None) -> None:  # noqa: C901
     receipt_id = getattr(args, "_receipt_id", None)
     if receipt_id is not None and (
-        kind not in {"heartbeat", "promote"}
+        kind not in {"claim", "heartbeat", "promote"}
         or not isinstance(receipt_id, str)
         or not re.fullmatch(r"[0-9a-f]{32}", receipt_id)
         or getattr(args, "expected_revision", None) is None
@@ -3930,6 +3937,12 @@ def main() -> int:
     fast_heartbeat.add_argument("--expected-revision", type=int, required=True)
     fast_heartbeat.add_argument("--lease-minutes", type=int, default=120)
     fast_heartbeat.add_argument("--key", required=True)
+    fast_claim = fast_actions.add_parser("claim")
+    fast_claim.add_argument("task")
+    fast_claim.add_argument("--owner", required=True)
+    fast_claim.add_argument("--expected-revision", type=int, required=True)
+    fast_claim.add_argument("--lease-minutes", type=int, default=120)
+    fast_claim.add_argument("--key", required=True)
     fast_promote = fast_actions.add_parser("promote")
     fast_promote.add_argument("task")
     fast_promote.add_argument("--expected-revision", type=int, required=True)

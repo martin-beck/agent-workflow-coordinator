@@ -36,6 +36,16 @@ def dispatch_fast(core: Any, args: Namespace) -> int:  # noqa: C901 - explicit r
             )
             print(json.dumps(public_receipt(receipt), sort_keys=True))
             return 0
+        if args.fast_action == "claim":
+            receipt = store.enqueue_claim(
+                key=args.key,
+                task=args.task,
+                owner=args.owner,
+                expected_revision=args.expected_revision,
+                lease_minutes=args.lease_minutes,
+            )
+            print(json.dumps(public_receipt(receipt), sort_keys=True))
+            return 0
         if args.fast_action == "promote":
             receipt = store.enqueue_promote(
                 key=args.key,

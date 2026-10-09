@@ -132,7 +132,7 @@ def _fast_request(argv: list[str]) -> dict[str, Any] | None:  # noqa: C901 - str
             "note": promote_options["--note"],
             "key": promote_options["--key"],
         }
-    if argv[:2] != ["fast", "heartbeat"] or len(argv) < 9:
+    if argv[:2] not in (["fast", "heartbeat"], ["fast", "claim"]) or len(argv) < 9:
         return None
     if argv[2].startswith("-") or len(argv[3:]) % 2:
         return None
@@ -152,7 +152,7 @@ def _fast_request(argv: list[str]) -> dict[str, Any] | None:  # noqa: C901 - str
         return None
     return {
         "protocol": 1,
-        "action": "heartbeat",
+        "action": argv[1],
         "task": argv[2],
         "owner": options["--owner"],
         "expected_revision": revision,
@@ -180,7 +180,12 @@ def try_socket_fast(argv: list[str]) -> int | None:
     """Use the warm bound service when available; otherwise use the direct CLI."""
     request = _fast_request(argv)
     if request is None:
-        if argv[:2] in (["fast", "heartbeat"], ["fast", "promote"], ["fast", "receipt"]):
+        if argv[:2] in (
+            ["fast", "heartbeat"],
+            ["fast", "claim"],
+            ["fast", "promote"],
+            ["fast", "receipt"],
+        ):
             return _fallback_or_error()
         return None
     path = _socket_path(Path(__file__).resolve().parent.parent)
@@ -214,7 +219,7 @@ def _require_request(request: Any) -> dict[str, Any]:  # noqa: C901 - strict wir
         if set(request) != {"protocol", "action", "receipt_id"}:
             raise RuntimeError("invalid fast receipt lookup")
         return request
-    if action == "heartbeat":
+    if action in {"heartbeat", "claim"}:
         if set(request) != {
             "protocol",
             "action",
@@ -224,7 +229,7 @@ def _require_request(request: Any) -> dict[str, Any]:  # noqa: C901 - strict wir
             "lease_minutes",
             "key",
         }:
-            raise RuntimeError("invalid fast heartbeat request")
+            raise RuntimeError(f"invalid fast {action} request")
         if (
             not isinstance(request["expected_revision"], int)
             or isinstance(request["expected_revision"], bool)
@@ -232,7 +237,7 @@ def _require_request(request: Any) -> dict[str, Any]:  # noqa: C901 - strict wir
             or isinstance(request["lease_minutes"], bool)
             or not all(isinstance(request[field], str) for field in ("task", "owner", "key"))
         ):
-            raise RuntimeError("invalid fast heartbeat request fields")
+            raise RuntimeError(f"invalid fast {action} request fields")
         return request
     if action == "promote":
         if set(request) != {"protocol", "action", "task", "expected_revision", "note", "key"}:
@@ -323,6 +328,14 @@ def socket_service(core: Any) -> Iterator[None]:  # noqa: C901
                     try:
                         if request["action"] == "heartbeat":
                             result = store.enqueue_heartbeat(
+                                key=request["key"],
+                                task=request["task"],
+                                owner=request["owner"],
+                                expected_revision=request["expected_revision"],
+                                lease_minutes=request["lease_minutes"],
+                            )
+                        elif request["action"] == "claim":
+                            result = store.enqueue_claim(
                                 key=request["key"],
                                 task=request["task"],
                                 owner=request["owner"],

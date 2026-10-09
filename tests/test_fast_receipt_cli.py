@@ -83,6 +83,17 @@ class FastReceiptCLITests(unittest.TestCase):
         values.update(overrides)
         return self.invoke("promote", **values)
 
+    def claim(self, **overrides: object) -> dict[str, object]:
+        values: dict[str, object] = {
+            "key": "worker-a:claim:1",
+            "task": "AR-0120",
+            "owner": "worker-a",
+            "expected_revision": 1,
+            "lease_minutes": 20,
+        }
+        values.update(overrides)
+        return self.invoke("claim", **values)
+
     def test_enqueue_is_durable_but_not_completed(self) -> None:
         queued = self.heartbeat()
         self.assertEqual("queued-local", queued["phase"])
@@ -109,6 +120,12 @@ class FastReceiptCLITests(unittest.TestCase):
         self.assertEqual("promote", queued["operation"])
         self.assertEqual("queued-local", queued["phase"])
         self.assertEqual(queued, self.promote())
+
+    def test_claim_is_a_durable_fenced_receipt(self) -> None:
+        queued = self.claim()
+        self.assertEqual("claim", queued["operation"])
+        self.assertEqual("queued-local", queued["phase"])
+        self.assertEqual(queued, self.claim())
 
     def test_unknown_receipt_and_non_git_backend_fail_closed(self) -> None:
         self.core.backend = "sqlite"

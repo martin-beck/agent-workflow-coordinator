@@ -311,6 +311,34 @@ class ReceiptStore:
             key=key, task=task, expected_revision=expected_revision, payload=payload
         )
 
+    def enqueue_claim(
+        self,
+        *,
+        key: str,
+        task: str,
+        owner: str,
+        expected_revision: int,
+        lease_minutes: int,
+    ) -> dict[str, Any]:
+        """Fsync a revision-fenced claim intent; authority admission stays strict."""
+        if not _TOKEN.fullmatch(key) or not _TOKEN.fullmatch(task):
+            raise ValueError("invalid receipt key or task")
+        if not _TOKEN.fullmatch(owner):
+            raise ValueError("invalid owner")
+        if expected_revision < 1 or not 1 <= lease_minutes <= 1440:
+            raise ValueError("invalid revision or lease")
+        payload = {
+            "expected_revision": expected_revision,
+            "lease_minutes": lease_minutes,
+            "operation": "claim",
+            "owner": owner,
+            "project_id": self.project_id,
+            "task": task,
+        }
+        return self._enqueue(
+            key=key, task=task, expected_revision=expected_revision, payload=payload
+        )
+
     def enqueue_promote(
         self, *, key: str, task: str, expected_revision: int, note: str
     ) -> dict[str, Any]:

@@ -132,6 +132,36 @@ class FastReceiptTests(unittest.TestCase):
                 note="Changed note.",
             )
 
+    def test_claim_intent_is_canonical_and_conflict_fenced(self) -> None:
+        store = self.store()
+        first = store.enqueue_claim(
+            key="worker-a:claim:1",
+            task="AR-0120",
+            owner="worker-a",
+            expected_revision=1,
+            lease_minutes=20,
+        )
+        self.assertEqual("claim", first["operation"])
+        self.assertEqual(
+            {
+                "expected_revision": 1,
+                "lease_minutes": 20,
+                "operation": "claim",
+                "owner": "worker-a",
+                "project_id": self.project_id,
+                "task": "AR-0120",
+            },
+            json.loads(str(first["payload_json"])),
+        )
+        with self.assertRaises(ReceiptConflictError):
+            store.enqueue_claim(
+                key="worker-a:claim:1",
+                task="AR-0120",
+                owner="worker-b",
+                expected_revision=1,
+                lease_minutes=20,
+            )
+
     def test_promote_rejects_invalid_note_and_revision_without_row(self) -> None:
         store = self.store()
         for values in (

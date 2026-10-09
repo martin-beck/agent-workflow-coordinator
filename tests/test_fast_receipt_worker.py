@@ -52,7 +52,7 @@ class FakeCore:
 
     def mutate(self, args: Any, kind: str) -> None:
         self.calls += 1
-        if kind not in {"heartbeat", "promote"}:
+        if kind not in {"claim", "heartbeat", "promote"}:
             raise AssertionError(kind)
         if self.outcome == "stale":
             raise RuntimeError("stale revision: expected 1, current 2")
@@ -124,6 +124,16 @@ class FastReceiptWorkerTests(unittest.TestCase):
         )
         return str(receipt["receipt_id"])
 
+    def enqueue_claim(self) -> str:
+        receipt = self.store.enqueue_claim(
+            key="worker-a:claim:1",
+            task="AR-0120",
+            owner="worker-a",
+            expected_revision=1,
+            lease_minutes=20,
+        )
+        return str(receipt["receipt_id"])
+
     def complete_local(self) -> str:
         receipt_id = self.enqueue()
         self.store.claim_next()
@@ -145,6 +155,16 @@ class FastReceiptWorkerTests(unittest.TestCase):
 
     def test_promote_uses_typed_namespace_and_verified_commit(self) -> None:
         receipt_id = self.enqueue_promote()
+        core = FakeCore(self.root, "success")
+        with patch("tools.fast_receipt_worker.verify_local_commit", return_value=2) as verify:
+            result = process_one(core, self.store)
+        assert result is not None
+        self.assertEqual("completed-local", result["phase"])
+        self.assertEqual(receipt_id, verify.call_args.args[1]["receipt_id"])
+        self.assertEqual(1, core.calls)
+
+    def test_claim_uses_typed_namespace_and_verified_commit(self) -> None:
+        receipt_id = self.enqueue_claim()
         core = FakeCore(self.root, "success")
         with patch("tools.fast_receipt_worker.verify_local_commit", return_value=2) as verify:
             result = process_one(core, self.store)

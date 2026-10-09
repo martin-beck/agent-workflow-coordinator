@@ -30,10 +30,13 @@ _REJECTABLE = (
     "is owned by",
     "heartbeat requires an active task",
     "is not planned",
+    "is not open",
     "unfinished dependencies",
     "has active claim metadata",
+    "owner already holds",
 )
 _HEARTBEAT_FIELDS = frozenset(("task_revision", "updated_at", "claim_expires"))
+_CLAIM_FIELDS = frozenset(("task_revision", "updated_at", "claim_expires", "owner", "status"))
 _PROMOTE_FIELDS = frozenset(("task_revision", "updated_at", "status"))
 
 
@@ -231,6 +234,43 @@ def _verify_promote_delta(
     return expected_before + 1
 
 
+def _verify_claim_delta(
+    core: Any, intent: dict[str, Any], payload: dict[str, Any], oid: str
+) -> int:
+    before, before_body, after, after_body = _task_change(core, oid, str(intent["task_id"]))
+    expected_before = int(intent["expected_revision"])
+    owner = payload.get("owner")
+    if (
+        before.get("id") != intent["task_id"]
+        or before.get("status") != "open"
+        or before.get("owner")
+        or before.get("claim_expires")
+        or before.get("task_revision") != expected_before
+        or after.get("id") != intent["task_id"]
+        or after.get("status") != "in_progress"
+        or after.get("owner") != owner
+        or after.get("task_revision") != expected_before + 1
+    ):
+        raise RuntimeError("receipt commit task state does not match claim intent")
+    before_stable = {key: value for key, value in before.items() if key not in _CLAIM_FIELDS}
+    after_stable = {key: value for key, value in after.items() if key not in _CLAIM_FIELDS}
+    if before_stable != after_stable:
+        raise RuntimeError("receipt commit changes non-claim task fields")
+    updated = dt.datetime.fromisoformat(str(after["updated_at"]))
+    expiry = dt.datetime.fromisoformat(str(after["claim_expires"]))
+    if updated.tzinfo is None or expiry.tzinfo is None:
+        raise RuntimeError("receipt commit claim timestamps are naive")
+    requested = int(payload["lease_minutes"]) * 60
+    if abs((expiry - updated).total_seconds() - requested) > 2:
+        raise RuntimeError("receipt commit lease does not match queued claim")
+    expected_body = core._transition_note(
+        before_body, f"Claimed by {owner}.", str(after["updated_at"])
+    )
+    if after_body != expected_body:
+        raise RuntimeError("receipt commit body does not match claim")
+    return expected_before + 1
+
+
 def _require_signed_branch_commit(core: Any, oid: str) -> None:
     if not _OID.fullmatch(oid):
         raise RuntimeError("invalid receipt commit oid")
@@ -254,18 +294,19 @@ def verify_local_commit(core: Any, intent: dict[str, Any], oid: str) -> int:
     if lines.count(marker) != 1:
         raise RuntimeError("receipt commit marker is missing or duplicated")
     operation = str(intent["operation"])
-    if operation not in {"heartbeat", "promote"}:
+    if operation not in {"claim", "heartbeat", "promote"}:
         raise RuntimeError("receipt operation is unsupported")
     if not lines or lines[0] != f"chore(state): {operation} {intent['task_id']}":
         raise RuntimeError("receipt commit operation does not match intent")
     payload = json.loads(str(intent["payload_json"]))
     if not isinstance(payload, dict):
         raise RuntimeError("receipt intent payload is invalid")
-    expected = (
-        _verify_heartbeat_delta(core, intent, payload, oid)
-        if operation == "heartbeat"
-        else _verify_promote_delta(core, intent, payload, oid)
-    )
+    if operation == "heartbeat":
+        expected = _verify_heartbeat_delta(core, intent, payload, oid)
+    elif operation == "claim":
+        expected = _verify_claim_delta(core, intent, payload, oid)
+    else:
+        expected = _verify_promote_delta(core, intent, payload, oid)
     if core.project_settings()["commit_signoff"]:
         committer = _git(core, "show", "-s", "--format=%cn <%ce>", oid).strip()
         if lines.count(f"Signed-off-by: {committer}") != 1:
@@ -300,13 +341,13 @@ def _validated_intent(intent: dict[str, Any]) -> dict[str, Any]:
         or payload.get("expected_revision") != intent["expected_revision"]
     ):
         raise RuntimeError("receipt intent does not match canonical typed fields")
-    if payload.get("operation") == "heartbeat" and (
+    if payload.get("operation") in {"heartbeat", "claim"} and (
         set(payload)
         != {"expected_revision", "lease_minutes", "operation", "owner", "project_id", "task"}
         or not isinstance(payload.get("owner"), str)
         or not isinstance(payload.get("lease_minutes"), int)
     ):
-        raise RuntimeError("receipt heartbeat intent fields are invalid")
+        raise RuntimeError(f"receipt {payload.get('operation')} intent fields are invalid")
     if payload.get("operation") == "promote" and (
         set(payload) != {"expected_revision", "note", "operation", "project_id", "task"}
         or not isinstance(payload.get("note"), str)
@@ -314,7 +355,7 @@ def _validated_intent(intent: dict[str, Any]) -> dict[str, Any]:
         or "\x00" in payload["note"]
     ):
         raise RuntimeError("receipt promote intent fields are invalid")
-    if payload.get("operation") not in {"heartbeat", "promote"}:
+    if payload.get("operation") not in {"claim", "heartbeat", "promote"}:
         raise RuntimeError("receipt operation is unsupported")
     return payload
 
@@ -329,7 +370,7 @@ def process_one(core: Any, store: ReceiptStore) -> dict[str, Any] | None:
     try:
         payload = _validated_intent(intent)
         operation = str(payload["operation"])
-        if operation == "heartbeat":
+        if operation in {"heartbeat", "claim"}:
             args = argparse.Namespace(
                 task=intent["task_id"],
                 owner=payload["owner"],

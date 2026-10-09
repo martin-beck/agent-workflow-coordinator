@@ -2316,6 +2316,36 @@ class HandoffTest(unittest.TestCase):
         self.assertEqual("open", CORE.read_task(path)[0]["status"])
         run_git(["git", "-C", str(self.root), "verify-commit", str(promoted["commit_oid"])])
 
+        claim = store.enqueue_claim(
+            key="worker-a:claim:1",
+            task="AR-0001",
+            owner="worker-a",
+            expected_revision=5,
+            lease_minutes=20,
+        )
+        with patch.object(CORE, "assert_project_binding"):
+            claimed = process_one(CORE, store)
+        assert claimed is not None
+        self.assertEqual("completed-local", claimed["phase"], claimed)
+        self.assertEqual(claim["receipt_id"], claimed["receipt_id"])
+        self.assertEqual(6, claimed["result_revision"])
+        self.assertEqual("in_progress", CORE.read_task(path)[0]["status"])
+        run_git(["git", "-C", str(self.root), "verify-commit", str(claimed["commit_oid"])])
+
+        stale = store.enqueue_claim(
+            key="worker-b:claim:stale",
+            task="AR-0001",
+            owner="worker-b",
+            expected_revision=5,
+            lease_minutes=20,
+        )
+        with patch.object(CORE, "assert_project_binding"):
+            rejected = process_one(CORE, store)
+        assert rejected is not None
+        self.assertEqual("rejected", rejected["phase"])
+        self.assertEqual(stale["receipt_id"], rejected["receipt_id"])
+        self.assertEqual(6, CORE.read_task(path)[0]["task_revision"])
+
     def fake_scan(self) -> dict[str, object]:
         return {
             "remote_main": "a" * 40,
