@@ -36,6 +36,7 @@ class FakeCore:
         self.ROOT = root
         self.outcome = outcome
         self.calls = 0
+        self.status_view = True
 
     def assert_project_binding(self) -> None:
         return None
@@ -78,7 +79,7 @@ class FakeCore:
         return {"STATUS.md": "status\n"}
 
     def project_settings(self) -> dict[str, bool]:
-        return {"status_view": True}
+        return {"status_view": self.status_view}
 
 
 class PublicationCore(FakeCore):
@@ -508,6 +509,42 @@ class FastReceiptWorkerTests(unittest.TestCase):
             self.assertRaisesRegex(RuntimeError, "no valid parent"),
         ):
             worker._task_change(core, "a" * 40, "AR-0120")
+
+    def test_task_views_skip_disabled_status_projections(self) -> None:
+        core = FakeCore(self.root, "success")
+        core.status_view = False
+        with patch.object(worker, "_git", return_value=""):
+            self.assertEqual({"CURRENT.md": "current\n"}, worker._task_views(core, "a" * 40))
+
+    def test_projection_verifier_accepts_pruned_status_shard(self) -> None:
+        core = FakeCore(self.root, "success")
+        before = ({"id": "AR-0120"}, "before\n")
+        after = ({"id": "AR-0120"}, "after\n")
+        with (
+            patch.object(worker, "_task_record", side_effect=[before, after]),
+            patch.object(
+                worker,
+                "_task_views",
+                side_effect=[
+                    {"CURRENT.md": "current\n", "status/STATUS-old.md": "old\n"},
+                    {"CURRENT.md": "current\n"},
+                ],
+            ),
+            patch.object(
+                worker,
+                "_git",
+                side_effect=[
+                    "tasks/AR-0120.md\nstatus/STATUS-old.md\n",
+                    "b" * 40,
+                    "current\n",
+                    "",
+                ],
+            ),
+        ):
+            self.assertEqual(
+                (before[0], before[1], after[0], after[1]),
+                worker._task_change(core, "a" * 40, "AR-0120"),
+            )
 
     def test_bounded_service_drains_queued_intents_once(self) -> None:
         self.enqueue()
