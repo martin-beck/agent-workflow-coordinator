@@ -8,7 +8,7 @@
     },
     "pr-fast": {
       "exhaustive": false,
-      "models": ["HandoffctlFast", "OracleInteractionGates"],
+      "models": ["HandoffctlFast", "HandoffctlReceiptsFast", "OracleInteractionGates"],
       "claims": "required bounded safety-only merge gate; no liveness, full formal evidence, or release attestation"
     },
     "pr-publication": {
@@ -18,6 +18,7 @@
         "HandoffctlLocks",
         "HandoffctlRun",
         "HandoffctlStorage",
+        "HandoffctlReceipts",
         "HandoffctlPR",
         "HandoffctlRecovery"
       ],
@@ -30,6 +31,7 @@
         "HandoffctlLocks",
         "HandoffctlRun",
         "HandoffctlStorage",
+        "HandoffctlReceipts",
         "Handoffctl",
         "HandoffctlRecovery"
       ],

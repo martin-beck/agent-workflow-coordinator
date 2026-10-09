@@ -30,6 +30,8 @@ and does not depend on a package registry, network fetch, submodule, or upstream
 - Every accepted mutation is serialized by one repository-common POSIX `flock(2)`, including
   processes launched from different worktrees of the same local clone.
 - Exact task revisions reject stale concurrent writers.
+- heartbeat accepts an optional --expected-revision fence; callers that omit it keep the
+  existing owner-only renewal behavior.
 - One owner can hold one active task; a task, branch and worktree have one active owner.
 - Pre-commit failures restore task and generated-view files.
 - Lock, Git/GitHub and wrapped-command waits are bounded and classified.

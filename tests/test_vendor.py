@@ -162,6 +162,9 @@ class VendorTest(unittest.TestCase):
             "formal/handoffctl/HandoffctlRecovery.tla",
             "formal/handoffctl/HandoffctlRun.cfg",
             "formal/handoffctl/HandoffctlRun.tla",
+            "formal/handoffctl/HandoffctlReceipts.cfg",
+            "formal/handoffctl/HandoffctlReceiptsFast.cfg",
+            "formal/handoffctl/HandoffctlReceipts.tla",
             "formal/handoffctl/HandoffctlStorage.cfg",
             "formal/handoffctl/HandoffctlStorage.tla",
             "formal/handoffctl/attest.py",
@@ -250,6 +253,7 @@ exec "$@"
                 "HandoffctlLocks",
                 "HandoffctlRun",
                 "HandoffctlStorage",
+                "HandoffctlReceipts",
                 "HandoffctlPR",
                 "HandoffctlRecovery",
             },
@@ -415,6 +419,16 @@ exec "$@"
         )
         self.assertEqual(0, help_result.returncode, help_result.stderr)
         self.assertIn("unblock", help_result.stdout)
+        fast_help = subprocess.run(  # noqa: S603
+            [sys.executable, "-S", str(self.target / "tools/handoffctl.py"), "fast", "--help"],
+            cwd=self.target,
+            check=False,
+            capture_output=True,
+            text=True,
+            env={"PATH": os.environ["PATH"], "PYTHONPATH": str(self.target)},
+        )
+        self.assertEqual(0, fast_help.returncode, fast_help.stderr)
+        self.assertIn("heartbeat,claim,promote,receipt,worker,publisher", fast_help.stdout)
         embedded_guide = (self.target / "docs/agent-workflow-coordinator.md").read_text()
         self.assertIn("tools/handoffctl unblock", embedded_guide)
 
@@ -633,7 +647,10 @@ exec "$@"
         sys.path.insert(0, str(self.target / "tools"))
         try:
             runtime = cast(Any, importlib.util.module_from_spec(runtime_spec))
-            runtime_spec.loader.exec_module(runtime)
+            # The privacy test scans the vendored tree itself. Importing the
+            # large runtime must not create a pyc inside that clean fixture.
+            with patch.object(sys, "dont_write_bytecode", True):
+                runtime_spec.loader.exec_module(runtime)
             runtime.ROOT = self.target
             self.assertEqual([], runtime.privacy_errors())
             leaked = self.target / "leaked-fixture.txt"

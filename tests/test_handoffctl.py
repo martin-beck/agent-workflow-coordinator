@@ -23,6 +23,10 @@ from unittest.mock import patch
 
 from fixture_ids import project_uuid
 
+from tools.fast_receipt_cli import dispatch_fast
+from tools.fast_receipt_worker import process_one, publish_pending, verify_local_commit
+from tools.fast_receipts import ReceiptStore
+
 SOURCE = Path(__file__).resolve().parent.parent / "tools/handoffctl.py"
 sys.path.insert(0, str(SOURCE.parent))
 SPEC = importlib.util.spec_from_file_location("handoffctl_core", SOURCE)
@@ -412,6 +416,14 @@ class HandoffTest(unittest.TestCase):
 
     def test_binding_checks_root_origin_product_and_caller(self) -> None:
         completed = subprocess.CompletedProcess([], 0, str(self.root) + "\n", "")
+        other = self.root.parent / f"{self.root.name}-other"
+        with (
+            patch.object(CORE, "run", return_value=completed),
+            patch.object(CORE, "git_repository_slug", return_value="owner/state"),
+            patch.object(CORE.Path, "cwd", return_value=self.root),
+            self.assertRaisesRegex(RuntimeError, "must be called"),
+        ):
+            CORE.assert_project_binding(other)
         with (
             patch.object(CORE, "run", return_value=completed),
             patch.object(CORE, "git_repository_slug", return_value="other/state"),
@@ -419,7 +431,6 @@ class HandoffTest(unittest.TestCase):
         ):
             CORE.assert_project_binding()
 
-        other = self.root.parent / f"{self.root.name}-other"
         wrong_top = subprocess.CompletedProcess([], 0, str(other) + "\n", "")
         with (
             patch.object(CORE, "run", return_value=wrong_top),
@@ -2031,6 +2042,309 @@ class HandoffTest(unittest.TestCase):
                     ),
                     "update",
                 )
+
+    def test_heartbeat_optional_revision_fences_stale_worker(self) -> None:
+        path = self.make_task(
+            status="in_progress",
+            owner="worker-a",
+            claim_expires="2099-01-01T00:00:00+00:00",
+        )
+        initial = path.read_bytes()
+        with patch.object(CORE, "commit", return_value=True) as commit:
+            with self.assertRaisesRegex(RuntimeError, "stale revision"):
+                CORE.mutate(
+                    argparse.Namespace(
+                        task="AR-0001",
+                        owner="worker-a",
+                        lease_minutes=20,
+                        expected_revision=2,
+                    ),
+                    "heartbeat",
+                )
+            self.assertEqual(initial, path.read_bytes())
+            commit.assert_not_called()
+            CORE.mutate(
+                argparse.Namespace(
+                    task="AR-0001",
+                    owner="worker-a",
+                    lease_minutes=20,
+                    expected_revision=1,
+                ),
+                "heartbeat",
+            )
+            self.assertEqual(2, CORE.read_task(path)[0]["task_revision"])
+            with self.assertRaisesRegex(RuntimeError, "stale revision"):
+                CORE.mutate(
+                    argparse.Namespace(
+                        task="AR-0001",
+                        owner="worker-a",
+                        lease_minutes=20,
+                        expected_revision=1,
+                    ),
+                    "heartbeat",
+                )
+            self.assertEqual(2, CORE.read_task(path)[0]["task_revision"])
+
+    def test_fast_heartbeat_marks_local_commit_without_reporting_push(self) -> None:
+        path = self.make_task(
+            status="in_progress",
+            owner="worker-a",
+            claim_expires="2099-01-01T00:00:00+00:00",
+        )
+        receipt_id = "a" * 32
+        args = argparse.Namespace(
+            task="AR-0001",
+            owner="worker-a",
+            lease_minutes=20,
+            expected_revision=1,
+            _receipt_id=receipt_id,
+        )
+        with (
+            patch.object(CORE, "commit", return_value=True) as commit,
+            patch.object(CORE, "push_replica") as push,
+            patch.object(CORE, "current_commit_oid", return_value="b" * 40),
+        ):
+            CORE.mutate(args, "heartbeat")
+        self.assertIn(f"Handoffctl-Receipt: {receipt_id}", commit.call_args.args[0])
+        push.assert_not_called()
+        self.assertEqual("b" * 40, args._committed_oid)
+        self.assertEqual(2, args._committed_revision)
+        self.assertEqual(2, CORE.read_task(path)[0]["task_revision"])
+
+    def test_fast_heartbeat_rejects_missing_fence_or_invalid_marker(self) -> None:
+        path = self.make_task(
+            status="in_progress",
+            owner="worker-a",
+            claim_expires="2099-01-01T00:00:00+00:00",
+        )
+        before = path.read_bytes()
+        for receipt_id, revision in (("wrong", 1), ("a" * 32, None)):
+            with self.subTest(receipt_id=receipt_id, revision=revision):
+                with self.assertRaisesRegex(RuntimeError, "invalid fast receipt"):
+                    CORE.mutate(
+                        argparse.Namespace(
+                            task="AR-0001",
+                            owner="worker-a",
+                            lease_minutes=20,
+                            expected_revision=revision,
+                            _receipt_id=receipt_id,
+                        ),
+                        "heartbeat",
+                    )
+                self.assertEqual(before, path.read_bytes())
+
+    def test_real_signed_fast_heartbeat_receipt_matches_git_commit(self) -> None:
+        path = self.make_task(
+            status="in_progress",
+            owner="worker-a",
+            claim_expires="2099-01-01T00:00:00+00:00",
+        )
+        run_git(["git", "init", "-q", "--initial-branch=main", str(self.root)])
+        for name, value in (
+            ("user.name", "Receipt Fixture"),
+            ("user.email", "fixture@example.invalid"),
+            ("gpg.format", "ssh"),
+        ):
+            run_git(["git", "-C", str(self.root), "config", name, value])
+        keys = TemporaryDirectory()
+        self.addCleanup(keys.cleanup)
+        key = Path(keys.name) / "signing-key"
+        subprocess.run(  # noqa: S603
+            ["/usr/bin/ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(key)],
+            check=True,
+        )
+        allowed = Path(keys.name) / "allowed-signers"
+        allowed.write_text(
+            f"fixture@example.invalid {key.with_suffix('.pub').read_text().strip()}\n"
+        )
+        run_git(["git", "-C", str(self.root), "config", "user.signingkey", str(key)])
+        run_git(["git", "-C", str(self.root), "config", "gpg.ssh.allowedSignersFile", str(allowed)])
+        run_git(
+            [
+                "git",
+                "-C",
+                str(self.root),
+                "add",
+                ".handoffctl.json",
+                "coordinator.binding.json",
+                "tasks",
+                "CURRENT.md",
+                "STATUS.md",
+            ]
+        )
+        run_git(["git", "-C", str(self.root), "commit", "-qm", "fixture baseline"])
+        remote = Path(keys.name) / "remote.git"
+        run_git(["git", "init", "--bare", "-q", "--initial-branch=main", str(remote)])
+        run_git(["git", "-C", str(self.root), "remote", "add", "origin", str(remote)])
+        run_git(["git", "-C", str(self.root), "push", "origin", "HEAD:refs/heads/main"])
+        with (
+            patch.object(CORE, "assert_project_binding"),
+            patch("builtins.print") as printed_receipt,
+        ):
+            dispatch_fast(
+                CORE,
+                argparse.Namespace(
+                    fast_action="heartbeat",
+                    key="worker-a:heartbeat:1",
+                    task="AR-0001",
+                    owner="worker-a",
+                    expected_revision=1,
+                    lease_minutes=20,
+                ),
+            )
+        queued = json.loads(printed_receipt.call_args.args[0])
+        self.assertEqual("queued-local", queued["phase"])
+        store = ReceiptStore(
+            CORE.coordinator_lock_path().parent / "fast-receipts.sqlite3", project_uuid("1")
+        )
+        self.addCleanup(store.close)
+        with patch.object(CORE, "assert_project_binding"):
+            result = process_one(CORE, store)
+        assert result is not None
+        self.assertEqual("completed-local", result["phase"])
+        self.assertEqual(2, result["result_revision"])
+        self.assertEqual(2, CORE.read_task(path)[0]["task_revision"])
+        self.assertEqual(queued["receipt_id"], result["receipt_id"])
+        run_git(["git", "-C", str(self.root), "verify-commit", str(result["commit_oid"])])
+        CORE.CONFIG.parent.mkdir(exist_ok=True)
+        CORE.CONFIG.write_text(json.dumps({"push_enabled": True}))
+        with patch.object(CORE, "assert_project_binding"):
+            publication = publish_pending(CORE, store)
+        self.assertEqual(1, len(publication))
+        self.assertEqual("published-remote", publication[0]["phase"], publication[0])
+        self.assertEqual(result["commit_oid"], publication[0]["remote_oid"])
+        self.assertEqual([], store.pending_publication())
+
+        view_forged = store.enqueue_heartbeat(
+            key="worker-a:heartbeat:2",
+            task="AR-0001",
+            owner="worker-a",
+            expected_revision=2,
+            lease_minutes=20,
+        )
+        meta, body = CORE.read_task(path)
+        meta["task_revision"] = 3
+        meta["updated_at"] = CORE.now()
+        meta["claim_expires"] = (
+            dt.datetime.fromisoformat(meta["updated_at"]) + dt.timedelta(minutes=20)
+        ).isoformat()
+        CORE.write_task(
+            path,
+            meta,
+            CORE._transition_note(body, "Heartbeat by worker-a.", meta["updated_at"]),
+        )
+        (self.root / "CURRENT.md").write_text("corrupted generated view\n")
+        run_git(
+            ["git", "-C", str(self.root), "add", str(path.relative_to(self.root)), "CURRENT.md"]
+        )
+        run_git(
+            [
+                "git",
+                "-C",
+                str(self.root),
+                "commit",
+                "-S",
+                "-s",
+                "-m",
+                "chore(state): heartbeat AR-0001",
+                "-m",
+                f"Handoffctl-Receipt: {view_forged['receipt_id']}",
+            ]
+        )
+        with self.assertRaisesRegex(RuntimeError, "task projection does not match"):
+            verify_local_commit(CORE, view_forged, CORE.current_commit_oid())
+        claimed = store.claim_next()
+        assert claimed is not None
+        self.assertEqual(view_forged["receipt_id"], claimed["receipt_id"])
+        store.record_ambiguity(str(view_forged["receipt_id"]), "TEST_FORGED")
+
+        field_forged = store.enqueue_heartbeat(
+            key="worker-a:heartbeat:3",
+            task="AR-0001",
+            owner="worker-a",
+            expected_revision=3,
+            lease_minutes=20,
+        )
+        meta, body = CORE.read_task(path)
+        meta["priority"] = "P0"
+        meta["task_revision"] = 4
+        meta["updated_at"] = CORE.now()
+        meta["claim_expires"] = (
+            dt.datetime.fromisoformat(meta["updated_at"]) + dt.timedelta(minutes=20)
+        ).isoformat()
+        CORE.write_task(path, meta, body)
+        run_git(["git", "-C", str(self.root), "add", str(path.relative_to(self.root))])
+        run_git(
+            [
+                "git",
+                "-C",
+                str(self.root),
+                "commit",
+                "-S",
+                "-s",
+                "-m",
+                "chore(state): heartbeat AR-0001",
+                "-m",
+                f"Handoffctl-Receipt: {field_forged['receipt_id']}",
+            ]
+        )
+        with self.assertRaisesRegex(RuntimeError, "task projection does not match"):
+            verify_local_commit(CORE, field_forged, CORE.current_commit_oid())
+        claimed = store.claim_next()
+        assert claimed is not None
+        self.assertEqual(field_forged["receipt_id"], claimed["receipt_id"])
+        store.record_ambiguity(str(field_forged["receipt_id"]), "TEST_FORGED")
+
+        meta, body = CORE.read_task(path)
+        meta.update({"status": "planned", "owner": "", "claim_expires": ""})
+        CORE.write_task(path, meta, body)
+        CORE.write_rendered_task_views(CORE.rendered_task_views(CORE.all_tasks()))
+        run_git(["git", "-C", str(self.root), "add", "-A"])
+        run_git(["git", "-C", str(self.root), "commit", "-qS", "-m", "fixture promote baseline"])
+        promote = store.enqueue_promote(
+            key="worker-a:promote:1",
+            task="AR-0001",
+            expected_revision=4,
+            note="Dependencies verified.",
+        )
+        with patch.object(CORE, "assert_project_binding"):
+            promoted = process_one(CORE, store)
+        assert promoted is not None
+        self.assertEqual("completed-local", promoted["phase"], promoted)
+        self.assertEqual(promote["receipt_id"], promoted["receipt_id"])
+        self.assertEqual(5, promoted["result_revision"])
+        self.assertEqual("open", CORE.read_task(path)[0]["status"])
+        run_git(["git", "-C", str(self.root), "verify-commit", str(promoted["commit_oid"])])
+
+        claim = store.enqueue_claim(
+            key="worker-a:claim:1",
+            task="AR-0001",
+            owner="worker-a",
+            expected_revision=5,
+            lease_minutes=20,
+        )
+        with patch.object(CORE, "assert_project_binding"):
+            claimed = process_one(CORE, store)
+        assert claimed is not None
+        self.assertEqual("completed-local", claimed["phase"], claimed)
+        self.assertEqual(claim["receipt_id"], claimed["receipt_id"])
+        self.assertEqual(6, claimed["result_revision"])
+        self.assertEqual("in_progress", CORE.read_task(path)[0]["status"])
+        run_git(["git", "-C", str(self.root), "verify-commit", str(claimed["commit_oid"])])
+
+        stale = store.enqueue_claim(
+            key="worker-b:claim:stale",
+            task="AR-0001",
+            owner="worker-b",
+            expected_revision=5,
+            lease_minutes=20,
+        )
+        with patch.object(CORE, "assert_project_binding"):
+            rejected = process_one(CORE, store)
+        assert rejected is not None
+        self.assertEqual("rejected", rejected["phase"])
+        self.assertEqual(stale["receipt_id"], rejected["receipt_id"])
+        self.assertEqual(6, CORE.read_task(path)[0]["task_revision"])
 
     def fake_scan(self) -> dict[str, object]:
         return {

@@ -4,7 +4,9 @@
 """Safety checks for 16-lane Git-backed mixed-route classification."""
 
 import datetime as dt
+import hashlib
 import json
+import sqlite3
 import subprocess
 import tempfile
 import unittest
@@ -18,7 +20,10 @@ from git_mixed_command_probe import (
     adversarial_commands,
     checked_batch,
     error_class,
+    fast_hostile_commands,
     has_matching_dco_trailer,
+    heartbeat_effect_errors,
+    receipt_queue_errors,
     require_unchanged_sources,
     route_name,
     stabilize_disposable_claims,
@@ -27,6 +32,193 @@ from git_mixed_command_probe import (
 
 
 class GitMixedCommandProbeTests(unittest.TestCase):
+    def test_heartbeat_effect_checker_rejects_noop_wrong_lease_and_body(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory)
+            tasks = state / "tasks"
+            tasks.mkdir()
+            now = dt.datetime.now(dt.UTC).replace(microsecond=0)
+            before: dict[str, dict[str, object]] = {}
+            bodies: dict[str, str] = {}
+            for index, task_id in enumerate(TASK_IDS):
+                body = "\n\nFixture body.\n"
+                bodies[task_id] = body
+                old = {
+                    "id": task_id,
+                    "status": "in_progress",
+                    "owner": f"bench-{index}",
+                    "task_revision": 2,
+                    "claim_expires": (now + dt.timedelta(hours=2)).isoformat(),
+                    "updated_at": (now - dt.timedelta(minutes=1)).isoformat(),
+                }
+                before[task_id] = old
+                new = dict(old)
+                new["task_revision"] = 3
+                new["claim_expires"] = (now + dt.timedelta(minutes=20)).isoformat()
+                new["updated_at"] = now.isoformat()
+                (tasks / f"{task_id}.md").write_text(
+                    "---\n"
+                    + json.dumps(new)
+                    + "\n---"
+                    + body
+                    + f"\n- {new['updated_at']}: Heartbeat by bench-{index}.\n"
+                )
+            self.assertEqual(
+                [],
+                heartbeat_effect_errors(state, before, bodies, now, now + dt.timedelta(seconds=1)),
+            )
+            target = tasks / f"{TASK_IDS[0]}.md"
+            original = target.read_text()
+            target.write_text(original.replace('"task_revision": 3', '"task_revision": 2'))
+            self.assertTrue(
+                any(
+                    "revision did not advance" in error
+                    for error in heartbeat_effect_errors(state, before, bodies, now, now)
+                )
+            )
+            target.write_text(
+                original.replace(
+                    (now + dt.timedelta(minutes=20)).isoformat(),
+                    (now + dt.timedelta(minutes=2)).isoformat(),
+                )
+            )
+            self.assertTrue(
+                any(
+                    "lease does not match" in error
+                    for error in heartbeat_effect_errors(state, before, bodies, now, now)
+                )
+            )
+            target.write_text(original.replace("Heartbeat by bench-0.", "No heartbeat."))
+            self.assertTrue(
+                any(
+                    "history/body does not match" in error
+                    for error in heartbeat_effect_errors(state, before, bodies, now, now)
+                )
+            )
+            target.write_text(
+                original.replace(
+                    f'"updated_at": "{now.isoformat()}"',
+                    f'"updated_at": "{(now - dt.timedelta(minutes=5)).isoformat()}"',
+                )
+            )
+            self.assertTrue(
+                any(
+                    "lease duration differs" in error
+                    for error in heartbeat_effect_errors(
+                        state, before, bodies, now - dt.timedelta(minutes=5), now
+                    )
+                )
+            )
+
+    def test_receipt_queue_checker_rejects_extra_durable_intent(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory)
+            private = state / "private"
+            private.mkdir()
+            project_id = "11111111-1111-4111-8111-111111111111"
+            (state / "coordinator.binding.json").write_text(json.dumps({"project_id": project_id}))
+            database = private / "fast-receipts.sqlite3"
+            completed: dict[str, dict[str, object]] = {}
+            with sqlite3.connect(database) as connection:
+                connection.execute("CREATE TABLE receipt_binding(singleton INT, project_id TEXT)")
+                connection.execute("INSERT INTO receipt_binding VALUES (1, ?)", (project_id,))
+                connection.execute(
+                    "CREATE TABLE intents(receipt_id TEXT, project_id TEXT, "
+                    "idempotency_key TEXT, operation TEXT, task_id TEXT, "
+                    "expected_revision INT, payload_json TEXT, input_digest TEXT, "
+                    "phase TEXT, result_revision INT, error_code TEXT, remote_oid TEXT, "
+                    "commit_oid TEXT)"
+                )
+                for index, task_id in enumerate(TASK_IDS):
+                    receipt_id = f"{index:032x}"
+                    commit_oid = f"{index:040x}"
+                    payload = {
+                        "expected_revision": 2,
+                        "lease_minutes": 20,
+                        "operation": "heartbeat",
+                        "owner": f"bench-{index}",
+                        "project_id": project_id,
+                        "task": task_id,
+                    }
+                    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+                    completed[receipt_id] = {
+                        "project_id": project_id,
+                        "operation": "heartbeat",
+                        "task_id": task_id,
+                        "expected_revision": 2,
+                        "phase": "completed-local",
+                        "commit_oid": commit_oid,
+                        "result_revision": 3,
+                        "error_code": None,
+                        "remote_oid": None,
+                    }
+                    connection.execute(
+                        "INSERT INTO intents VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        (
+                            receipt_id,
+                            project_id,
+                            f"bench-{index}:heartbeat:2",
+                            "heartbeat",
+                            task_id,
+                            2,
+                            canonical,
+                            hashlib.sha256(canonical.encode()).hexdigest(),
+                            "completed-local",
+                            3,
+                            None,
+                            None,
+                            commit_oid,
+                        ),
+                    )
+            with mock.patch(
+                "git_mixed_command_probe.coordinator_private_root", return_value=private
+            ):
+                self.assertEqual([], receipt_queue_errors(state, completed))
+                with sqlite3.connect(database) as connection:
+                    connection.execute(
+                        "INSERT INTO intents VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        (
+                            "extra",
+                            project_id,
+                            "extra",
+                            "heartbeat",
+                            TASK_IDS[0],
+                            2,
+                            "{}",
+                            "bad",
+                            "queued-local",
+                            None,
+                            None,
+                            None,
+                            None,
+                        ),
+                    )
+                self.assertTrue(
+                    any(
+                        "missing or extra durable intents" in error
+                        for error in receipt_queue_errors(state, completed)
+                    )
+                )
+                with sqlite3.connect(database) as connection:
+                    connection.execute("DELETE FROM intents WHERE receipt_id='extra'")
+                    rows = connection.execute(
+                        "SELECT receipt_id, idempotency_key, task_id, payload_json, "
+                        "input_digest FROM intents WHERE receipt_id IN (?, ?) ORDER BY receipt_id",
+                        ("0" * 32, "0" * 31 + "1"),
+                    ).fetchall()
+                    for current, other in ((rows[0], rows[1]), (rows[1], rows[0])):
+                        connection.execute(
+                            "UPDATE intents SET idempotency_key=?, task_id=?, "
+                            "payload_json=?, input_digest=? WHERE receipt_id=?",
+                            (*other[1:], current[0]),
+                        )
+                self.assertTrue(
+                    any(
+                        "does not match public receipt" in error
+                        for error in receipt_queue_errors(state, completed)
+                    )
+                )
+
     def test_dco_requires_actual_matching_final_trailer(self) -> None:
         identity = "Fixture <fixture@example.invalid>"
         self.assertTrue(
@@ -252,6 +444,16 @@ class GitMixedCommandProbeTests(unittest.TestCase):
         )
         self.assertEqual(15, sum(command != commands[-1] for command in commands))
         self.assertEqual(2, sum("write_text" in " ".join(command) for command in commands))
+
+    def test_fast_hostile_batch_has_one_good_and_fifteen_competing_intents(self) -> None:
+        commands = fast_hostile_commands()
+        self.assertEqual(16, len(commands))
+        self.assertEqual(16, len({command[-1] for command in commands}))
+        self.assertEqual(
+            1, sum(command[6] == "2" and command[4] == "bench-0" for command in commands)
+        )
+        self.assertEqual(8, sum(command[4] != "bench-0" for command in commands))
+        self.assertEqual(7, sum(command[6] == "1" for command in commands))
 
     def test_source_drift_fails_probe(self) -> None:
         with self.assertRaisesRegex(RuntimeError, "source inputs changed"):

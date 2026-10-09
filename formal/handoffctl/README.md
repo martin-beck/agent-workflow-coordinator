@@ -120,6 +120,16 @@ project and one foreign caller, including rejection without mutation and fair pr
 exhaustive proofs of the abstractions, not proofs of Linux, Git, Python, or the filesystem
 implementation.
 
+HandoffctlReceipts.tla checks bounded opt-in receipt phases: an enqueued
+intent is not a successful transition, local completion requires a verified
+commit, remote completion requires an observed remote ref, and crash recovery
+either finds that commit or retains an explicit ambiguous outcome. It models
+finite executor/publisher crash and restart with weak fairness; it does not
+prove operating-system service supervision, denial-of-service resistance, or
+implementation correspondence. Its liveness property is conditional on both
+services eventually remaining available; repeated crashes are therefore an
+explicitly nonterminal environmental condition, not a false completion claim.
+
 `HandoffctlStorage.tla` checks both selected backends, transaction mutual exclusion, one accepted
 revision increment per process, prepared SQLite authority before selector switch, eventual command
 completion and eventual migration switch under weak fairness. Real independent-process tests connect
@@ -174,12 +184,12 @@ the JAR or modify coordinator state.
 
 Formal tiers are explicit: `verify.sh --tier portable-smoke` runs one model
 and is non-exhaustive; it cannot produce publication or full evidence.
-`verify.sh --tier pr-publication` checks every invariant family. Five models
+`verify.sh --tier pr-publication` checks every invariant family. Six models
 use their full configurations; the general lifecycle model uses the
 one-process `HandoffctlPR.cfg`, while the separate lock and recovery models
 retain independent-process races. This exact-head PR tier is not the complete
 two-process lifecycle cross-product and cannot produce full release evidence.
-`verify.sh --tier full-exhaustive` runs all six full configurations on the
+`verify.sh --tier full-exhaustive` runs all seven full configurations on the
 scheduled weekly or manually dispatched gate. A release claim requires its
 fresh exact-head full attestation; neither smaller tier substitutes for it.
 

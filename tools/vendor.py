@@ -19,6 +19,10 @@ LOCK_NAME = "coordinator.vendor.json"
 SOURCE_FILES: tuple[tuple[str, str], ...] = (
     ("tools/handoffctl", "tools/handoffctl"),
     ("tools/handoffctl.py", "tools/handoffctl.py"),
+    ("tools/fast_receipts.py", "tools/fast_receipts.py"),
+    ("tools/fast_receipt_worker.py", "tools/fast_receipt_worker.py"),
+    ("tools/fast_receipt_cli.py", "tools/fast_receipt_cli.py"),
+    ("tools/fast_receipt_socket.py", "tools/fast_receipt_socket.py"),
     ("tools/runtime_bootstrap.py", "tools/runtime_bootstrap.py"),
     ("tools/upgrade_authority.py", "tools/upgrade_authority.py"),
     ("tools/admission_lease.py", "tools/admission_lease.py"),
@@ -47,6 +51,10 @@ SOURCE_FILES: tuple[tuple[str, str], ...] = (
     ("tools/tlc_runner.py", "tools/tlc_runner.py"),
     ("tools/vendor.py", "tools/handoffctl_vendor.py"),
     ("tests/test_handoffctl.py", "tests/test_handoffctl.py"),
+    ("tests/test_fast_receipts.py", "tests/test_fast_receipts.py"),
+    ("tests/test_fast_receipt_worker.py", "tests/test_fast_receipt_worker.py"),
+    ("tests/test_fast_receipt_cli.py", "tests/test_fast_receipt_cli.py"),
+    ("tests/test_fast_receipt_socket.py", "tests/test_fast_receipt_socket.py"),
     ("tests/test_sqlite_storage.py", "tests/test_sqlite_storage.py"),
     ("tests/fixture_ids.py", "tests/fixture_ids.py"),
     ("tests/test_task_spec.py", "tests/test_task_spec.py"),
@@ -123,6 +131,18 @@ SOURCE_FILES: tuple[tuple[str, str], ...] = (
     ("formal/handoffctl/HandoffctlRecovery.tla", "formal/handoffctl/HandoffctlRecovery.tla"),
     ("formal/handoffctl/HandoffctlRun.cfg", "formal/handoffctl/HandoffctlRun.cfg"),
     ("formal/handoffctl/HandoffctlRun.tla", "formal/handoffctl/HandoffctlRun.tla"),
+    (
+        "formal/handoffctl/HandoffctlReceipts.cfg",
+        "formal/handoffctl/HandoffctlReceipts.cfg",
+    ),
+    (
+        "formal/handoffctl/HandoffctlReceiptsFast.cfg",
+        "formal/handoffctl/HandoffctlReceiptsFast.cfg",
+    ),
+    (
+        "formal/handoffctl/HandoffctlReceipts.tla",
+        "formal/handoffctl/HandoffctlReceipts.tla",
+    ),
     ("formal/handoffctl/HandoffctlStorage.cfg", "formal/handoffctl/HandoffctlStorage.cfg"),
     ("formal/handoffctl/HandoffctlStorage.tla", "formal/handoffctl/HandoffctlStorage.tla"),
     (

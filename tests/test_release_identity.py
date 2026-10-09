@@ -5,7 +5,10 @@
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
+import io
+import json
 import subprocess
 import tempfile
 import unittest
@@ -16,6 +19,7 @@ from tools.verify_release_identity import (
     ReleaseIdentityError,
     _signature_digest,
     _transition_path,
+    main,
     verify_transition,
 )
 
@@ -302,6 +306,45 @@ class ReleaseIdentityTests(unittest.TestCase):
             oversized.chmod(0o644)
             with self.assertRaisesRegex(ReleaseIdentityError, "exceeds size limit"):
                 _transition_path(Path("oversized.json"), root)
+
+    def test_cli_validates_transition_file_and_candidate_boundary(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            transition = self._transition_fixture(root)
+            source = root / "transition.json"
+            source.write_text(json.dumps(transition), encoding="utf-8")
+            source.chmod(0o644)
+            argv = [str(source), "--repository", str(root), "--workspace", str(root)]
+            with contextlib.redirect_stdout(io.StringIO()) as output:
+                self.assertEqual(0, main(argv))
+            self.assertEqual("pass", json.loads(output.getvalue())["status"])
+            with contextlib.redirect_stderr(io.StringIO()) as error:
+                self.assertEqual(1, main([*argv, "--candidate"]))
+            self.assertIn("already exists", error.getvalue())
+            source.write_text("{invalid", encoding="utf-8")
+            with contextlib.redirect_stderr(io.StringIO()) as error:
+                self.assertEqual(1, main(argv))
+            self.assertIn("invalid release identity", error.getvalue())
+
+    def test_missing_workspace_or_git_identity_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with self.assertRaisesRegex(ReleaseIdentityError, "metadata is unavailable"):
+                _transition_path(Path("transition.json"), root / "missing")
+            with contextlib.redirect_stderr(io.StringIO()) as error:
+                self.assertEqual(
+                    1,
+                    main(
+                        [
+                            "transition.json",
+                            "--repository",
+                            str(root),
+                            "--workspace",
+                            str(root),
+                        ]
+                    ),
+                )
+            self.assertIn("regular workspace file", error.getvalue())
 
 
 if __name__ == "__main__":

@@ -3,6 +3,15 @@
 # SPDX-License-Identifier: MIT
 """Transactional, project-configurable coordination state."""
 
+import sys
+
+if __name__ == "__main__" and len(sys.argv) > 2 and sys.argv[1] == "fast":
+    from fast_receipt_socket import try_socket_fast  # type: ignore[import-not-found]
+
+    _FAST_EXIT = try_socket_fast(sys.argv[1:])
+    if _FAST_EXIT is not None:
+        raise SystemExit(_FAST_EXIT)
+
 import argparse
 import contextlib
 import datetime as dt
@@ -13,7 +22,6 @@ import os
 import re
 import stat
 import subprocess
-import sys
 import tempfile
 import textwrap
 import threading
@@ -527,7 +535,7 @@ def configured_product_checkout(binding: Meta) -> tuple[Path, Path]:
     return projects_root, product.resolve()
 
 
-def assert_project_binding() -> None:
+def assert_project_binding(caller_cwd: Path | None = None) -> None:
     """Fail closed when this initialized coordinator is called from another project."""
     settings = project_settings()
     binding = project_binding()
@@ -544,7 +552,7 @@ def assert_project_binding() -> None:
     if CONFIG.exists():
         projects_root, product = configured_product_checkout(binding)
         allowed.append(product)
-    current = Path.cwd().resolve()
+    current = (Path.cwd() if caller_cwd is None else caller_cwd).resolve()
     if projects_root is not None and inside(current, projects_root):
         candidate = run(
             ["git", "-C", str(current), "rev-parse", "--show-toplevel"], check=False
@@ -1607,6 +1615,13 @@ def commit(message: str, paths: list[Path]) -> bool:
         raise
 
 
+def current_commit_oid() -> str:
+    oid = run(["git", "-C", str(ROOT), "rev-parse", "HEAD"]).stdout.strip()
+    if not re.fullmatch(r"[0-9a-f]{40}", oid):
+        raise RuntimeError("cannot identify signed receipt commit")
+    return oid
+
+
 def replication_enabled() -> bool:
     """Return whether this checkout is the configured writable replica."""
     return CONFIG.exists() and bool(config().get("push_enabled", False))
@@ -2126,6 +2141,13 @@ def require_release_admission(
 
 
 def apply_claim(args: argparse.Namespace, meta: Meta, tasks: list[Task]) -> str:
+    if (
+        getattr(args, "_receipt_id", None) is not None
+        and args.expected_revision != meta["task_revision"]
+    ):
+        raise RuntimeError(
+            f"stale revision: expected {args.expected_revision}, current {meta['task_revision']}"
+        )
     if args.lease_minutes <= 0:
         raise RuntimeError("lease must be positive")
     if meta.get("status") != "open":
@@ -2396,6 +2418,7 @@ def apply_owned_change(  # noqa: C901
     if kind == "heartbeat":
         if args.lease_minutes <= 0 or meta.get("status") != "in_progress":
             raise RuntimeError("heartbeat requires an active task and positive lease")
+        require_optional_revision(args, meta)
         meta["claim_expires"] = (
             (dt.datetime.now(dt.UTC) + dt.timedelta(minutes=args.lease_minutes))
             .replace(microsecond=0)
@@ -2422,6 +2445,13 @@ def apply_owned_change(  # noqa: C901
         if value is not None:
             meta[name] = value
     return str(args.note)
+
+
+def require_optional_revision(args: argparse.Namespace, meta: Meta) -> None:
+    """Reject a supplied lifecycle fence without changing legacy owner-only calls."""
+    requested = getattr(args, "expected_revision", None)
+    if requested is not None and requested != meta["task_revision"]:
+        raise RuntimeError(f"stale revision: expected {requested}, current {meta['task_revision']}")
 
 
 def apply_checkpoint(args: argparse.Namespace, meta: Meta) -> str:
@@ -2646,8 +2676,91 @@ def require_project_settings_unchanged(settings: Meta) -> None:
         raise RuntimeError("PROJECT_CONFIG_CHANGED: retry after a stable project profile")
 
 
-def mutate(args: argparse.Namespace, kind: str, policy: EvidencePolicy | None = None) -> None:  # noqa: C901
+def fast_receipt_id(args: argparse.Namespace, kind: str) -> str | None:
+    """Validate receipt-only mutation arguments before selecting an authority backend."""
+    receipt_id = getattr(args, "_receipt_id", None)
+    if receipt_id is None:
+        return None
+    if (
+        kind not in {"claim", "heartbeat", "promote"}
+        or not isinstance(receipt_id, str)
+        or not re.fullmatch(r"[0-9a-f]{32}", receipt_id)
+        or getattr(args, "expected_revision", None) is None
+    ):
+        raise RuntimeError("invalid fast receipt mutation")
+    return receipt_id
+
+
+def persist_git_mutation(
+    args: argparse.Namespace,
+    kind: str,
+    receipt_id: str | None,
+    path: Path,
+    meta: Meta,
+    body: str,
+    before: dict[Path, str | None],
+    selected_policy: EvidencePolicy,
+    session_record: Meta | None,
+    checkpoint_record: Meta | None,
+) -> None:
+    """Write, validate, commit, and retain one locked Git mutation transaction."""
+    committed = False
+    try:
+        if session_record is not None:
+            append_session_record(ROOT, session_record)
+        if checkpoint_record is not None:
+            append_checkpoint(ROOT, checkpoint_record)
+        write_task(path, meta, body)
+        view_tasks = all_tasks()
+        view_settings = project_settings()
+        views = rendered_task_views(view_tasks)
+        require_project_settings_unchanged(view_settings)
+        write_rendered_task_views(views)
+        require_policy_unchanged(ROOT, selected_policy)
+        errors = mutation_errors(
+            path,
+            before,
+            selected_policy,
+            rendered_snapshot=(view_tasks, views, view_settings),
+        )
+        if errors:
+            raise RuntimeError("\n".join(errors))
+        for target in generated_paths():
+            before.setdefault(target, None)
+        committed = commit_persisted_mutation(args, kind, receipt_id, before, meta)
+        if receipt_id is None:
+            push_replica()
+    except Exception:
+        if not committed:
+            restore_paths(before)
+        raise
+
+
+def commit_persisted_mutation(
+    args: argparse.Namespace,
+    kind: str,
+    receipt_id: str | None,
+    before: dict[Path, str | None],
+    meta: Meta,
+) -> bool:
+    """Commit a validated mutation and expose receipt-only local evidence."""
+    message = f"chore(state): {kind} {args.task}"
+    if receipt_id is not None:
+        message += f"\n\nHandoffctl-Receipt: {receipt_id}"
+    committed = commit(message, changed_paths(before, include_deleted=True))
+    if receipt_id is not None and not committed:
+        raise RuntimeError("fast receipt mutation produced no signed commit")
+    if receipt_id is not None:
+        args._committed_oid = current_commit_oid()
+        args._committed_revision = meta["task_revision"]
+    return committed
+
+
+def mutate(args: argparse.Namespace, kind: str, policy: EvidencePolicy | None = None) -> None:
+    receipt_id = fast_receipt_id(args, kind)
     if backend_selection()["backend"] == "sqlite":
+        if receipt_id is not None:
+            raise RuntimeError("fast receipts require Git authority")
         mutate_sqlite(args, kind, policy)
         return
     with locked(phase="git_mutate"):
@@ -2664,7 +2777,6 @@ def mutate(args: argparse.Namespace, kind: str, policy: EvidencePolicy | None = 
                 for target in generated_paths()
             }
         )
-        committed = False
         note = apply_transition(args, kind, meta, all_tasks(), selected_policy)
         meta["task_revision"] += 1
         meta["updated_at"] = now()
@@ -2689,38 +2801,18 @@ def mutate(args: argparse.Namespace, kind: str, policy: EvidencePolicy | None = 
                 )
                 + "\n"
             )
-        try:
-            if session_record is not None:
-                append_session_record(ROOT, session_record)
-            if checkpoint_record is not None:
-                append_checkpoint(ROOT, checkpoint_record)
-            write_task(path, meta, body)
-            view_tasks = all_tasks()
-            view_settings = project_settings()
-            views = rendered_task_views(view_tasks)
-            require_project_settings_unchanged(view_settings)
-            write_rendered_task_views(views)
-            require_policy_unchanged(ROOT, selected_policy)
-            errors = mutation_errors(
-                path,
-                before,
-                selected_policy,
-                rendered_snapshot=(view_tasks, views, view_settings),
-            )
-            if errors:
-                raise RuntimeError("\n".join(errors))
-            for target in generated_paths():
-                before.setdefault(target, None)
-            touched = changed_paths(before, include_deleted=True)
-            committed = commit(f"chore(state): {kind} {args.task}", touched)
-            push_replica()
-        except Exception:
-            # A signed local commit is already durable even when replication fails.
-            # Keep its worktree representation intact so a later reconcile can safely
-            # inspect and retry the push instead of silently rolling state backward.
-            if not committed:
-                restore_paths(before)
-            raise
+        persist_git_mutation(
+            args,
+            kind,
+            receipt_id,
+            path,
+            meta,
+            body,
+            before,
+            selected_policy,
+            session_record,
+            checkpoint_record,
+        )
 
 
 def _transition_note(body: str, note: str, at: str) -> str:
@@ -3787,8 +3879,15 @@ def dispatch_read_only_command(args: argparse.Namespace) -> None:
         cmd_metrics()
 
 
-def dispatch_bound_command(args: argparse.Namespace) -> int:  # noqa: C901
-    """Dispatch a command only after the permanent project binding has passed."""
+def dispatch_fast_command(args: argparse.Namespace) -> int:
+    """Dispatch the opt-in receipt contract after normal project binding."""
+    from tools.fast_receipt_cli import dispatch_fast
+
+    return dispatch_fast(sys.modules[__name__], args)
+
+
+def dispatch_bound_standard_command(args: argparse.Namespace) -> int:  # noqa: C901
+    """Dispatch every non-fast command after permanent project binding."""
     if args.cmd == "reconcile":
         reconcile(do_commit=args.commit, push=args.push)
     elif args.cmd == "roles":
@@ -3817,6 +3916,13 @@ def dispatch_bound_command(args: argparse.Namespace) -> int:  # noqa: C901
     elif args.cmd == "upgrade":
         return cmd_upgrade(args)
     return 0
+
+
+def dispatch_bound_command(args: argparse.Namespace) -> int:
+    """Dispatch a bound command while retaining the opt-in receipt route."""
+    if args.cmd == "fast":
+        return dispatch_fast_command(args)
+    return dispatch_bound_standard_command(args)
 
 
 def main() -> int:
@@ -3879,6 +3985,34 @@ def main() -> int:
     item.add_argument("task")
     item.add_argument("--owner", required=True)
     item.add_argument("--expected-revision", type=int, required=True)
+    item = commands.add_parser("fast")
+    fast_actions = item.add_subparsers(dest="fast_action", required=True)
+    fast_heartbeat = fast_actions.add_parser("heartbeat")
+    fast_heartbeat.add_argument("task")
+    fast_heartbeat.add_argument("--owner", required=True)
+    fast_heartbeat.add_argument("--expected-revision", type=int, required=True)
+    fast_heartbeat.add_argument("--lease-minutes", type=int, default=120)
+    fast_heartbeat.add_argument("--key", required=True)
+    fast_claim = fast_actions.add_parser("claim")
+    fast_claim.add_argument("task")
+    fast_claim.add_argument("--owner", required=True)
+    fast_claim.add_argument("--expected-revision", type=int, required=True)
+    fast_claim.add_argument("--lease-minutes", type=int, default=120)
+    fast_claim.add_argument("--key", required=True)
+    fast_promote = fast_actions.add_parser("promote")
+    fast_promote.add_argument("task")
+    fast_promote.add_argument("--expected-revision", type=int, required=True)
+    fast_promote.add_argument("--note", required=True)
+    fast_promote.add_argument("--key", required=True)
+    fast_receipt = fast_actions.add_parser("receipt")
+    fast_receipt.add_argument("receipt_id")
+    fast_worker = fast_actions.add_parser("worker")
+    fast_worker.add_argument("--limit", type=int, default=16)
+    fast_worker.add_argument("--serve", action="store_true")
+    fast_worker.add_argument("--poll-seconds", type=float, default=0.05)
+    fast_publisher = fast_actions.add_parser("publisher")
+    fast_publisher.add_argument("--serve", action="store_true")
+    fast_publisher.add_argument("--poll-seconds", type=float, default=5.0)
     item = commands.add_parser("directive")
     directive_commands = item.add_subparsers(dest="directive_action", required=True)
     directive = directive_commands.add_parser("create")
@@ -3913,6 +4047,8 @@ def main() -> int:
         item.add_argument("task")
         item.add_argument("--owner", required=True)
         item.add_argument("--lease-minutes", type=int, default=120)
+        if name == "heartbeat":
+            item.add_argument("--expected-revision", type=int)
     item = commands.add_parser("release")
     item.add_argument("task")
     item.add_argument("--owner", required=True)

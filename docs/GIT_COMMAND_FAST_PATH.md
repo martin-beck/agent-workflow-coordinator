@@ -317,9 +317,9 @@ exact-head rerun with the same runtime at `e7cdaa1` passed 16/16 claims in
 5.885 seconds and the adversarial batch in 1.091 seconds, but the accepted
 mixed batch still had **seven lock timeouts**. Its largest `git_mutate` hold
 was 3.065 seconds and `git_reconcile` hold was 1.177 seconds; static/live
-doctors remained green. These results do not meet the accepted-worker
-liveness or per-command 5% targets, and no opt-in receipt runtime is
-implemented yet. The checkpoint is a partial optimization only.
+doctors remained green. These historical results did not meet the
+accepted-worker liveness or per-command 5% targets. The later opt-in
+heartbeat-only receipt prototype below does not close the all-command gap.
 
 ## Command inventory and lower bounds
 
@@ -343,20 +343,151 @@ meeting the 5% target. A fast-mode timing must name which receipt boundary it
 measures; comparing a queued receipt to a strict completed response without
 labelling the changed contract is invalid.
 
-The proposed opt-in receipt sequence is `queued-local` (fsynced intent only,
-no authority transition), `completed-local` (fenced, validated transition and
-signed Git commit, or a classified terminal rejection), then
-`published-remote` (exact remote ref observed at the committed revision).
-Receipt IDs bind project, operation kind, canonical argv digest, task and
-expected revision, and an idempotency key. A worker may retry with the same
-key and identical input without executing a mutation or `run` payload twice;
-different input under that key rejects. A receipt must expose its phase and
-failure classification, never call a queued `run` completed, and never call
-a local commit remotely published. Existing strict commands remain the
-compatibility path and can wait for the corresponding receipt boundary.
-This is a design contract, not implemented behavior or release evidence.
+The opt-in receipt sequence is `queued-local` (fsynced intent only, no
+authority transition), `running`, `completed-local` (fenced, validated
+transition and a verified signed Git commit), then `published-remote`
+(an observed exact remote-main ref that contains that commit). Terminal
+`rejected` and `ambiguous` phases are separate from success. A receipt
+exposes the exact phase and failure classification; neither a queued intent
+nor an uncertain push is reported as completed.
+
+The current prototype implements these phases for typed Git `heartbeat`,
+`promote`, and revision-fenced `claim` intents. It binds a private WAL queue to one project and an
+idempotency key and typed-input digest; same-key different-input retries
+reject. A single service lease fences execution and restart recovery. The
+internal worker verifies the signed, DCO-matching, marked task commit before
+recording local completion, and records remote publication only after
+observing a ref containing that commit. Real disposable signed-Git fixtures
+cover heartbeat, promote, and claim local receipts; heartbeat alone currently
+has a local-to-remote fixture. The strict heartbeat CLI retains its old
+owner-only form and accepts an optional exact-revision fence.
+
+The preliminary user-facing routes are
+`handoffctl fast heartbeat TASK --owner OWNER --expected-revision N --key KEY`,
+`handoffctl fast promote TASK --expected-revision N --note NOTE --key KEY`, and
+`handoffctl fast claim TASK --owner OWNER --expected-revision N --key KEY`.
+It returns a durable `queued-local` receipt and does not claim a heartbeat
+has occurred. `handoffctl fast receipt RECEIPT_ID` reads its current phase;
+`handoffctl fast worker --limit N` performs one explicitly invoked batch,
+including local commit verification and a separate remote observation attempt.
+`handoffctl fast worker --serve` runs a resident local executor under one
+repository-common service lock. `handoffctl fast publisher --serve` uses a
+different lock for remote observation and publication, so a slow push does not
+hold the local executor's service lock. A bounded subprocess timeout records
+`PUBLICATION_TIMEOUT` on each affected local receipt; the resident publisher
+continues and retries at its bounded polling interval without asserting remote
+success. These are manually started processes;
+there is no service supervisor, wake-up mechanism, or broad per-command
+latency qualification yet. The worker handles no command other than
+heartbeat, promote, and claim.
+Arbitrary
+`run` payloads cannot be retried after ambiguous execution without risking
+double effects; they require a distinct design. This prototype is not 5%
+evidence, a general all-command fast path, or release qualification. The
+strict commands remain the compatibility path.
+
+On a frozen copy of ASB state 65ce1b74 with 751 tasks and 750 product
+worktrees, the signed 18c54f2 prototype passed a 16-process fast-heartbeat
+probe: all 16 queued intents became distinct, owner/revision-fenced,
+20-minute local heartbeats with 16 verified signed/DCO commits. The audit
+matched each public receipt to its exact durable SQLite row and task commit,
+rejected extra intents, checked unrelated working-tree/runtime/ref effects,
+and passed both static and live doctors; source checkout inputs were unchanged.
+Queue acknowledgement had 297.9 ms p50 and 371.5 ms maximum, while all
+16 local commits completed in 7.999 seconds wall time. A paired strict
+16-process run on the same frozen fixture passed its exact-effect and
+integrity checks at 2032.0 ms p50. The raw queue/strict p50 ratio is 14.7%,
+not 5%, and these are different completion boundaries. Independent exact-head
+review found no remaining P1/P2 defect in the benchmark false-pass repairs.
+Full unit tests pass, but precise whole-source branch coverage is 94.52%:
+the CI command's integer rounding reports 95%, whereas literal >=95.00%
+remains unqualified. No all-command PR or release is warranted from this
+evidence.
+
+A later bound Unix-socket prototype keeps one SQLite receipt writer open while
+peer identity and project binding are checked for each request. The ASB probe
+now measures resident-service readiness separately and sets
+`HANDOFFCTL_FAST_REQUIRE_SOCKET=1` on every timed enqueue and receipt lookup,
+so a direct-path fallback cannot be misattributed to the socket. On exact
+candidate `bd615e91462c12c9264f703af9d55c563b0d2d90` and the same frozen
+ASB source fixture, one 16-worker run recorded 377.8 ms service readiness,
+143.2 ms enqueue p50, 170.5 ms maximum, and 7.638 s until all 16 local
+commits completed. All 16 signed/DCO commit and exact-receipt checks passed,
+static and live doctors passed, and the source inputs remained unchanged. The
+queue-acknowledgement p50 is about 7.0% of the earlier strict 2032.0 ms p50,
+but those are different completion boundaries and the samples are not a paired
+same-head speedup test. Neither the strict contract nor the all-command <=5%
+target is qualified. The socket-required environment flag is a benchmark
+route-attribution guard; ordinary fast clients retain same-key direct fallback
+when the resident service is absent or disconnects.
+
+At candidate `a764d1c`, the complete 1,814-test suite, formatting, Ruff, and
+Mypy passed, but exact whole-source branch coverage was 94.299%, below the
+unchanged 95.00% promotion gate.
+
+The separate hostile fast-route probe on exact candidate `d8df2736` and the
+same frozen ASB fixture launched 16 socket-required submissions against one
+claimed task: 15 wrong-owner or stale-revision intents and one valid owner.
+All 15 bad intents reached durable `rejected` receipts; the good intent reached
+`completed-local` in 1.397 seconds from service startup. Exactly one extending
+signed/DCO Git commit changed only the target task. The audit matched each
+public receipt to its full typed SQLite row and checked the exact task delta,
+unrelated state, static and live doctors, and unchanged source inputs. An
+independent exact-head review found no remaining P1/P2 false-pass gap in this
+probe, while noting that its four repaired audit gates lack dedicated negative
+unit cases. This is heartbeat-scoped hostile evidence, not proof of liveness
+for every fast command or every failure mode.
+
+A subsequent socket admission repair keeps incomplete request frames in a
+bounded, one-second nonblocking selector stage instead of occupying any of
+the 32 execution threads. Focused tests now show one complete good heartbeat
+receives a durable queued receipt while 32 same-UID peers hold partial frames;
+split frames still work and an oversized frame does not stall the service.
+An injected peer reset is isolated to that connection, so the acceptor keeps
+serving a subsequent good request.
+This is not a fairness guarantee under an unbounded malicious flood: the
+64-connection pre-admission cap evicts the oldest incomplete peer when a new
+connection arrives, so a complete request can progress through a finite
+partial-frame flood. The 64-item writer queue can still reject a request, and
+durable service supervision remains absent.
 
 ## Further candidate architecture, not yet implemented
+
+### Typed lifecycle-receipt expansion
+
+The heartbeat prototype is not an adequate generic command queue. The next
+implementation increment uses a closed, canonical descriptor for each
+admissible lifecycle transition:
+
+```json
+{
+  "version": 1,
+  "project_id": "bound project UUID",
+  "idempotency_key": "bounded caller token",
+  "operation": "one supported lifecycle operation",
+  "task_id": "AR-NNNN",
+  "expected_revision": 17,
+  "payload": {"operation-specific closed fields": "only"},
+  "input_digest": "sha256(canonical descriptor)"
+}
+```
+
+The receipt ID, phase, commit OID, result revision, remote observation, and
+failure classification are generated durable state, never caller-controlled
+descriptor fields. Same-key, different-descriptor retries fail. A worker must
+validate the descriptor, reconstruct only the operation's strict Namespace,
+call the existing Git mutation path, and verify an operation-specific signed,
+receipt-marked delta. Restart recovery may record the verified commit or
+ambiguity; it may not blindly rerun an interrupted transition.
+
+| Route | Generic typed receipt status | Required extra witness or boundary |
+| --- | --- | --- |
+| `claim`, `heartbeat`, `update`, `accept`, `release`, `promote`, `pause`, `resume`, `unblock`, `recover-expired`, `gate` | Admissible in principle | Exact revision must be captured even where the strict CLI historically omitted it; all strict admission and operation-specific output checks run again under the Git lock. |
+| `checkpoint` | Separate design required | It derives a source commit from the bound product worktree, so a receipt needs a captured, revalidated source-commit witness. |
+| `run` | Excluded | Arbitrary external effects cannot be safely replayed after an ambiguous crash. |
+| `reconcile`, especially `--push` | Separate contract | Fresh observation and synchronous remote completion are not lifecycle-transition queue semantics. |
+| `init`, `migrate`, `upgrade`, `rollback` | Excluded from this receipt family | Their multi-stage backup/equivalence and authority boundaries need dedicated protocol models. |
+| `snapshot`, `doctor`, `render-status --check`, `board`, `metrics`, service controls | Not receipt mutations | Read-only or unavailable Git routes require a cache/freshness design, not a mutation receipt. |
 
 Keep the CLI as the mandatory project-bound route. A repository-common local
 service could retain a generation-fenced task/dependency index and materialized
