@@ -24,7 +24,14 @@ def checked(*argv: str, cwd: Path | None = None) -> None:
 
 
 def prepare(
-    base: Path, source_state: Path, source_product: Path, label: str, candidate: bool
+    base: Path,
+    source_state: Path,
+    source_product: Path,
+    label: str,
+    candidate: bool,
+    *,
+    runtime_source: Path = SOURCE,
+    state_commit: str | None = None,
 ) -> tuple[Path, Path, dict[str, str]]:
     root = base / label
     state = root / "state"
@@ -32,6 +39,8 @@ def prepare(
     root.mkdir()
     checked("git", "clone", "-q", "--shared", str(source_state), str(state))
     checked("git", "clone", "-q", "--shared", str(source_product), str(product))
+    if state_commit is not None:
+        checked("git", "-C", str(state), "checkout", "-q", "-B", "benchmark", state_commit)
     state_origin = subprocess.run(  # noqa: S603
         ["git", "-C", str(source_state), "remote", "get-url", "origin"],  # noqa: S607
         check=True,
@@ -50,7 +59,7 @@ def prepare(
         for source_name, destination_name in SOURCE_FILES:
             target = state / destination_name
             target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(SOURCE / source_name, target)
+            shutil.copy2(runtime_source / source_name, target)
         # The released ASB vendor embeds these project-specific labels. Current
         # upstream requires the equivalent tracked, exact-HEAD extension.
         (state / "task-spec-policy.json").write_text(

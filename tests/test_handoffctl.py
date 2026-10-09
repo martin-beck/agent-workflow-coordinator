@@ -2151,6 +2151,50 @@ class HandoffTest(unittest.TestCase):
             {item["key"] for item in state["worktrees"]},
         )
 
+    def test_project_scan_observes_worktrees_concurrently_in_inventory_order(self) -> None:
+        product = self.root / "product"
+        second = self.root / "second"
+        product.mkdir()
+        second.mkdir()
+        CORE.CONFIG.parent.mkdir()
+        CORE.CONFIG.write_text(
+            json.dumps(
+                {
+                    "projects_root": str(self.root),
+                    "product_worktree": product.name,
+                    "github_repository": "owner/repo",
+                }
+            )
+        )
+        simultaneous = threading.Barrier(2, timeout=2)
+
+        def fake_run(args: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+            joined = " ".join(args)
+            if "worktree list" in joined:
+                stdout = (
+                    f"worktree {CORE.ROOT}\n"
+                    if str(CORE.ROOT) in args
+                    else f"worktree {product}\n\nworktree {second}\n"
+                )
+            elif args[:2] == ["gh", "pr"] or args[:2] == ["gh", "run"]:
+                stdout = "[]"
+            else:
+                stdout = "a" * 40 + "\n"
+            return subprocess.CompletedProcess(args, 0, stdout=stdout, stderr="")
+
+        def fake_scan(item: tuple[Path, str, str]) -> dict[str, object]:
+            simultaneous.wait()
+            if item[0] == product:
+                time.sleep(0.01)
+            return {"key": item[0].name}
+
+        with (
+            patch.object(CORE, "run", side_effect=fake_run),
+            patch.object(CORE, "scan_worktree", side_effect=fake_scan),
+        ):
+            state = CORE.project_scan()
+        self.assertEqual([product.name, second.name], [item["key"] for item in state["worktrees"]])
+
     def test_changed_paths_preserves_existing_and_deleted_semantics(self) -> None:
         changed = self.root / "changed.md"
         changed.write_text("after")
