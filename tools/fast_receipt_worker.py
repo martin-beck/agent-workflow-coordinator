@@ -11,7 +11,9 @@ import hashlib
 import json
 import os
 import re
+import signal
 import stat
+import threading
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -307,17 +309,26 @@ def serve_local(
         raise ValueError("invalid local receipt service limits")
     from .fast_receipt_socket import socket_service
 
-    with service_lock(core):
-        recover_running(core, store)
-        with socket_service(core):
-            while True:
-                count = 0
-                for _ in range(limit):
-                    if process_one(core, store) is None:
-                        break
-                    count += 1
-                if count == 0:
-                    time.sleep(poll_seconds)
+    stopping = threading.Event()
+    on_main_thread = threading.current_thread() is threading.main_thread()
+    previous_term = signal.getsignal(signal.SIGTERM) if on_main_thread else None
+    if on_main_thread:
+        signal.signal(signal.SIGTERM, lambda _signum, _frame: stopping.set())
+    try:
+        with service_lock(core):
+            recover_running(core, store)
+            with socket_service(core):
+                while not stopping.is_set():
+                    count = 0
+                    for _ in range(limit):
+                        if stopping.is_set() or process_one(core, store) is None:
+                            break
+                        count += 1
+                    if count == 0 and not stopping.is_set():
+                        time.sleep(poll_seconds)
+    finally:
+        if previous_term is not None:
+            signal.signal(signal.SIGTERM, previous_term)
 
 
 def _is_ancestor(core: Any, older: str, newer: str) -> bool:
