@@ -347,6 +347,10 @@ The proposed opt-in receipt sequence is `queued-local` (fsynced intent only,
 no authority transition), `completed-local` (fenced, validated transition and
 signed Git commit, or a classified terminal rejection), then
 `published-remote` (exact remote ref observed at the committed revision).
+The Git heartbeat route now accepts an optional exact-revision fence while
+preserving the old owner-only form. This is only a transition prerequisite:
+it does not enqueue work, issue a receipt, shorten the signing boundary, or
+qualify the 5% target.
 Receipt IDs bind project, operation kind, canonical argv digest, task and
 expected revision, and an idempotency key. A worker may retry with the same
 key and identical input without executing a mutation or `run` payload twice;
