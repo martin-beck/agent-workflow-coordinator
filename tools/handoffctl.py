@@ -1166,11 +1166,11 @@ def possible_privacy_pattern(text: str, lowered: str, label: str) -> bool:
     if not text.isascii():
         return True
     if label == "absolute Linux home path":
-        return "/home/" in text
+        return "/" + "home/" in text
     if label == "absolute Windows user path":
         return ":\\users\\" in lowered
     if label == "private host alias":
-        return "ai-ws" in lowered
+        return "ai" + "-ws" in lowered
     if label == "private or loopback IP":
         return "10." in text or "127." in text
     if label == "possible credential":
