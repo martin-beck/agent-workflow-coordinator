@@ -214,6 +214,7 @@ STATUSES = (
 LIFECYCLE_MUTATION_COMMANDS = (
     "claim",
     "heartbeat",
+    "accept",
     "release",
     "promote",
     "pause",
@@ -262,7 +263,7 @@ type Meta = dict[str, Any]
 type Task = tuple[Path, Meta, str]
 type State = dict[str, Any]
 
-COORDINATOR_VERSION = "0.3.59"
+COORDINATOR_VERSION = "0.4.0"
 DEFAULT_PROJECT_SETTINGS: Meta = {
     "schema_version": 1,
     "project_id": "00000000-0000-4000-8000-000000000000",
@@ -2268,6 +2269,33 @@ def require_promotion_preflight(kind: str) -> None:
         raise RuntimeError("promotion requires a clean state repository")
 
 
+def apply_accept(args: argparse.Namespace, meta: Meta, policy: EvidencePolicy | None) -> str:
+    """Record one owner's exact-revision assertion against the referenced spec."""
+    if meta.get("owner") != args.owner:
+        raise RuntimeError(f"{args.task} is owned by {meta.get('owner') or 'nobody'}")
+    require_role_admission(str(args.owner))
+    if meta.get("status") != "in_progress":
+        raise RuntimeError("accept requires an active task")
+    if "spec_ref" not in meta or "spec_revision" not in meta:
+        raise RuntimeError("accept requires a referenced task spec")
+    if args.expected_revision != meta["task_revision"]:
+        raise RuntimeError(
+            f"stale revision: expected {args.expected_revision}, current {meta['task_revision']}"
+        )
+    meta["spec_acceptance"] = {
+        "spec_ref": meta["spec_ref"],
+        "spec_revision": meta["spec_revision"],
+        "status": "pass",
+        "evidence_class": args.evidence_class,
+        "evidence_ref": args.evidence_ref,
+        "evidence_digest": args.evidence_digest,
+    }
+    error = done_admission_error(ROOT, meta, policy)
+    if error:
+        raise RuntimeError(error)
+    return str(args.note)
+
+
 def apply_owned_change(  # noqa: C901
     args: argparse.Namespace,
     kind: str,
@@ -2413,10 +2441,11 @@ def apply_transition(
         return apply_recover_expired(args, meta, tasks)
     if kind == "gate":
         return apply_gate(args, meta)
-    if kind == "checkpoint":
-        return apply_checkpoint(args, meta)
-    if kind == "rollback":
-        return apply_rollback(args, meta)
+    record_transition = {"checkpoint": apply_checkpoint, "rollback": apply_rollback}.get(kind)
+    if record_transition is not None:
+        return record_transition(args, meta)
+    if kind == "accept":
+        return apply_accept(args, meta, policy)
     return apply_owned_change(args, kind, meta, tasks, policy)
 
 
@@ -3742,6 +3771,14 @@ def main() -> int:
     item.add_argument(
         "--status", required=True, choices=[value for value in STATUSES if value != "in_progress"]
     )
+    item.add_argument("--note", required=True)
+    item = commands.add_parser("accept")
+    item.add_argument("task")
+    item.add_argument("--owner", required=True)
+    item.add_argument("--expected-revision", type=int, required=True)
+    item.add_argument("--evidence-class", required=True)
+    item.add_argument("--evidence-ref", required=True)
+    item.add_argument("--evidence-digest", required=True)
     item.add_argument("--note", required=True)
     item = commands.add_parser("promote")
     item.add_argument("task")

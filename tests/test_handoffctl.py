@@ -3632,6 +3632,70 @@ class HandoffTest(unittest.TestCase):
             CORE.mutate(args, "release")
         self.assertEqual("done", CORE.locate("AR-0001")[1]["status"])
 
+    def test_accept_records_spec_evidence_before_done_without_weakening_gate(self) -> None:
+        self.enable_additive_policy()
+        self.write_additive_spec()
+        self.make_task(
+            status="in_progress",
+            owner="worker-a",
+            claim_expires="2099-01-01T00:00:00+00:00",
+            spec_ref="spec.json",
+            spec_revision=1,
+        )
+        release = argparse.Namespace(
+            task="AR-0001", owner="worker-a", status="done", note="finished"
+        )
+        accept = argparse.Namespace(
+            task="AR-0001",
+            owner="worker-a",
+            expected_revision=1,
+            evidence_class="hosted",
+            evidence_ref="quality/AR-0001",
+            evidence_digest="sha256:" + "a" * 64,
+            note="reviewed evidence",
+        )
+        with (
+            patch.object(CORE, "sync_replica_before_write"),
+            patch.object(CORE, "commit", return_value=True),
+            patch.object(CORE, "push_replica"),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "spec_acceptance is incomplete"):
+                CORE.mutate(release, "release")
+            for replacement, message in (
+                ({"owner": "other"}, "owned by worker-a"),
+                ({"expected_revision": 2}, "stale revision"),
+                ({"evidence_class": "unknown"}, "evidence class is unknown"),
+                ({"evidence_ref": "../bad"}, "evidence ref is invalid"),
+                ({"evidence_digest": "sha256:bad"}, "evidence digest is invalid"),
+            ):
+                bad = argparse.Namespace(**{**vars(accept), **replacement})
+                with self.assertRaisesRegex(RuntimeError, message):
+                    CORE.mutate(bad, "accept")
+                self.assertNotIn("spec_acceptance", CORE.locate("AR-0001")[1])
+            CORE.mutate(accept, "accept")
+            accepted = CORE.locate("AR-0001")[1]
+            self.assertEqual(2, accepted["task_revision"])
+            self.assertEqual("in_progress", accepted["status"])
+            self.assertEqual("pass", accepted["spec_acceptance"]["status"])
+            CORE.mutate(release, "release")
+        self.assertEqual("done", CORE.locate("AR-0001")[1]["status"])
+
+    def test_accept_requires_active_task_with_referenced_spec(self) -> None:
+        self.make_task(
+            status="in_progress", owner="worker-a", claim_expires="2099-01-01T00:00:00+00:00"
+        )
+        args = argparse.Namespace(
+            task="AR-0001",
+            owner="worker-a",
+            expected_revision=1,
+            evidence_class="contract-test",
+            evidence_ref="quality/AR-0001",
+            evidence_digest="sha256:" + "a" * 64,
+            note="accepted",
+        )
+        with self.assertRaisesRegex(RuntimeError, "requires a referenced task spec"):
+            CORE.apply_accept(args, CORE.locate("AR-0001")[1], CORE.DEFAULT_EVIDENCE_POLICY)
+
     def test_policy_and_spec_failures_cover_every_read_only_preflight(self) -> None:
         self.make_task(
             status="in_progress",

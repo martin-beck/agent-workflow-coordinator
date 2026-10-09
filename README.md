@@ -110,11 +110,20 @@ tools/handoffctl claim AR-0001 --owner worker-unique --lease-minutes 120
 tools/handoffctl run --owner worker-unique AR-0001 -- command arg
 tools/handoffctl update AR-0001 --owner worker-unique --expected-revision 2 \
   --note "Verified result and next action"
+tools/handoffctl accept AR-0001 --owner worker-unique --expected-revision 3 \
+  --evidence-class contract-test --evidence-ref quality/AR-0001-tests.txt \
+  --evidence-digest sha256:YOUR_EXACT_64_HEX_DIGEST \
+  --note "Accepted the task spec against the cited evidence"
 tools/handoffctl release AR-0001 --owner worker-unique --status done \
   --note "Integrated and verified"
 tools/handoffctl reconcile --commit --push
 tools/handoffctl doctor --live
 ```
+
+`accept` records an owner-asserted, revision-bound acceptance of the task's referenced
+spec. It validates the spec reference, evidence class, reference and digest format;
+it does not independently prove the evidence contents or substitute for review.
+`release --status done` still rejects missing or invalid acceptance and open children.
 
 ## Develop
 
