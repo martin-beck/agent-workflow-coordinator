@@ -1180,6 +1180,8 @@ def introduced_content_errors(before: dict[Path, str | None]) -> list[str]:
         previous_size = len(previous_text.encode()) if previous is not None else 0
         if path.stat().st_size > 200000 and previous_size <= 200000:
             errors.append(f"{relative}: state file exceeds 200 KiB")
+        if current == previous_text:
+            continue
         for regex, label in PRIVATE:
             if not privacy_pattern_applies(relative, label):
                 continue
@@ -1350,6 +1352,8 @@ def mutation_errors(
     path: Path,
     before: dict[Path, str | None],
     policy: EvidencePolicy | None = None,
+    *,
+    rendered_snapshot: tuple[list[Task], dict[Path, str], Meta] | None = None,
 ) -> list[str]:
     """Validate a Git mutation without gating on unrelated repository findings."""
     tasks = all_tasks()
@@ -1360,7 +1364,7 @@ def mutation_errors(
     errors.extend(basic_task_errors(path, selected[0], policy))
     errors.extend(claim_errors(selected[0], {}, {}, {}))
     errors.extend(mutation_global_errors(tasks))
-    errors.extend(generated_view_errors(tasks))
+    errors.extend(generated_view_errors(tasks, rendered_snapshot=rendered_snapshot))
     errors.extend(introduced_content_errors(before))
     return errors
 
@@ -1391,18 +1395,40 @@ def status_projection_errors(expected: dict[str, str]) -> list[str]:
     return errors
 
 
-def generated_view_errors(tasks: list[Task]) -> list[str]:
+def generated_view_errors(
+    tasks: list[Task],
+    *,
+    rendered_snapshot: tuple[list[Task], dict[Path, str], Meta] | None = None,
+) -> list[str]:
     """Check both task-derived views without allowing renderer errors to escape."""
     errors: list[str] = []
     if not all(meta.get("status") in STATUSES for _, meta, _ in tasks):
         return errors
+    reusable_snapshot = (
+        rendered_snapshot
+        if rendered_snapshot is not None
+        and tasks == rendered_snapshot[0]
+        and project_settings() == rendered_snapshot[2]
+        else None
+    )
     current = ROOT / "CURRENT.md"
-    if current.exists() and current.read_text() != render_current(tasks):
+    expected_current = (
+        reusable_snapshot[1][current] if reusable_snapshot is not None else render_current(tasks)
+    )
+    if current.exists() and current.read_text() != expected_current:
         errors.append("CURRENT.md differs from generated tasks")
     if not project_settings()["status_view"]:
         return errors
     try:
-        expected_status = render_status_views(tasks)
+        expected_status = (
+            {
+                str(target.relative_to(ROOT)): content
+                for target, content in reusable_snapshot[1].items()
+                if target.name == "STATUS.md" or target.parent.name == "status"
+            }
+            if reusable_snapshot is not None
+            else render_status_views(tasks)
+        )
     except StatusRenderError as error:
         errors.extend(str(error).splitlines())
     else:
@@ -2480,7 +2506,24 @@ def unchanged_generated_view(path: Path, content: str) -> bool:
             return False
         expected = content.encode("utf-8")
         with os.fdopen(descriptor, "rb", closefd=False) as stream:
-            return stream.read(len(expected) + 1) == expected
+            if stream.read(len(expected) + 1) != expected:
+                return False
+        # A non-cooperating writer can replace the pathname while this inode is
+        # open. Do not mistake the old inode's bytes for the current view.
+        try:
+            current_parent = path.parent.lstat()
+            current = path.lstat()
+        except OSError:
+            return False
+        return (
+            stat.S_ISDIR(current_parent.st_mode)
+            and (current_parent.st_dev, current_parent.st_ino) == (parent.st_dev, parent.st_ino)
+            and stat.S_ISREG(current.st_mode)
+            and (current.st_dev, current.st_ino) == (found.st_dev, found.st_ino)
+            and current.st_nlink == 1
+            and current.st_uid == os.geteuid()
+            and stat.S_IMODE(current.st_mode) == 0o600
+        )
     finally:
         os.close(descriptor)
 
@@ -2587,10 +2630,17 @@ def mutate(args: argparse.Namespace, kind: str, policy: EvidencePolicy | None = 
             if checkpoint_record is not None:
                 append_checkpoint(ROOT, checkpoint_record)
             write_task(path, meta, body)
-            views = rendered_task_views(all_tasks())
+            view_tasks = all_tasks()
+            view_settings = project_settings()
+            views = rendered_task_views(view_tasks)
+            if project_settings() != view_settings:
+                raise RuntimeError("PROJECT_CONFIG_CHANGED: retry after a stable project profile")
             write_rendered_task_views(views)
             require_policy_unchanged(ROOT, selected_policy)
-            errors = mutation_errors(path, before, selected_policy)
+            errors = mutation_errors(
+                path, before, selected_policy,
+                rendered_snapshot=(view_tasks, views, view_settings),
+            )
             if errors:
                 raise RuntimeError("\n".join(errors))
             for target in generated_paths():

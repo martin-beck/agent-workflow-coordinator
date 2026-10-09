@@ -3282,6 +3282,21 @@ class HandoffTest(unittest.TestCase):
         self.assertTrue(all(candidate.read_text() == before[candidate] for candidate in owned))
         self.assertEqual(1, CORE.read_task(path)[0]["task_revision"])
 
+    def test_unchanged_content_skips_privacy_patterns_but_checks_raw_size(self) -> None:
+        path = self.root / "unchanged.txt"
+        path.write_text("plain\n")
+        with patch.object(CORE, "privacy_pattern_applies", side_effect=AssertionError("rescanned")):
+            self.assertEqual([], CORE.introduced_content_errors({path: "plain\n"}))
+
+        prior = "x\n" * 90000
+        path.write_bytes(b"x\r\n" * 90000)
+        self.assertEqual(prior, path.read_text())
+        with patch.object(CORE, "privacy_pattern_applies", side_effect=AssertionError("rescanned")):
+            self.assertIn(
+                "unchanged.txt: state file exceeds 200 KiB",
+                CORE.introduced_content_errors({path: prior}),
+            )
+
     def test_mutation_keeps_global_active_key_uniqueness(self) -> None:
         self.make_task(
             "AR-0001",
@@ -3339,6 +3354,37 @@ class HandoffTest(unittest.TestCase):
         commit.assert_not_called()
         self.assertEqual(before_target, target.read_text())
         self.assertEqual("in_progress", CORE.read_task(sibling)[0]["status"])
+
+    def test_mutation_reuses_render_only_for_unchanged_task_and_profile_inputs(self) -> None:
+        target = self.make_task("AR-0001")
+        with (
+            patch.object(CORE, "render_status_views", wraps=CORE.render_status_views) as render,
+            patch.object(CORE, "commit", return_value=True),
+        ):
+            CORE.mutate(
+                argparse.Namespace(task="AR-0001", owner="worker-a", lease_minutes=10), "claim"
+            )
+        self.assertEqual(1, render.call_count)
+        self.assertEqual("in_progress", CORE.read_task(target)[0]["status"])
+
+        real_write_views = CORE.write_rendered_task_views
+        config = json.loads(CORE.PROJECT_CONFIG.read_text())
+
+        def change_profile_after_views(views: dict[Path, str]) -> None:
+            real_write_views(views)
+            config["project_title"] = "Externally changed title"
+            CORE.PROJECT_CONFIG.write_text(json.dumps(config))
+
+        with (
+            patch.object(CORE, "write_rendered_task_views", side_effect=change_profile_after_views),
+            patch.object(CORE, "commit", return_value=True) as commit,
+            self.assertRaisesRegex(RuntimeError, "CURRENT.md differs"),
+        ):
+            CORE.mutate(
+                argparse.Namespace(task="AR-0001", owner="worker-a", lease_minutes=10),
+                "heartbeat",
+            )
+        commit.assert_not_called()
 
     def test_mutation_requires_valid_target_even_with_unrelated_findings(self) -> None:
         target = self.make_task("AR-0001", extra="unsupported")
@@ -3924,6 +3970,27 @@ class HandoffTest(unittest.TestCase):
         self.assertFalse(
             CORE.unchanged_generated_view(self.root / "status/STATUS-0001.md", "status\n")
         )
+
+    def test_unchanged_generated_view_rejects_replacement_after_open(self) -> None:
+        candidate = self.root / "CURRENT.md"
+        candidate.write_text("current\n")
+        candidate.chmod(0o600)
+        other = self.root / "other-view"
+        other.write_text("current\n")
+        real_open = os.open
+
+        def replace_after_open(path: Path, flags: int, *args: Any, **kwargs: Any) -> int:
+            descriptor = real_open(path, flags, *args, **kwargs)
+            if Path(path) == candidate:
+                candidate.unlink()
+                candidate.symlink_to(other)
+            return descriptor
+
+        with patch.object(CORE.os, "open", side_effect=replace_after_open):
+            self.assertFalse(CORE.unchanged_generated_view(candidate, "current\n"))
+        CORE.write_rendered_task_views({candidate: "current\n"})
+        self.assertFalse(candidate.is_symlink())
+        self.assertEqual("current\n", other.read_text())
 
     def test_doctor_reports_replica_circuit_breaker(self) -> None:
         CORE.REPLICA_BLOCKED.parent.mkdir(exist_ok=True)
