@@ -416,9 +416,23 @@ same-head speedup test. Neither the strict contract nor the all-command <=5%
 target is qualified. The socket-required environment flag is a benchmark
 route-attribution guard; ordinary fast clients retain same-key direct fallback
 when the resident service is absent or disconnects.
+
 At candidate `a764d1c`, the complete 1,814-test suite, formatting, Ruff, and
 Mypy passed, but exact whole-source branch coverage was 94.299%, below the
 unchanged 95.00% promotion gate.
+
+The separate hostile fast-route probe on exact candidate `d8df2736` and the
+same frozen ASB fixture launched 16 socket-required submissions against one
+claimed task: 15 wrong-owner or stale-revision intents and one valid owner.
+All 15 bad intents reached durable `rejected` receipts; the good intent reached
+`completed-local` in 1.397 seconds from service startup. Exactly one extending
+signed/DCO Git commit changed only the target task. The audit matched each
+public receipt to its full typed SQLite row and checked the exact task delta,
+unrelated state, static and live doctors, and unchanged source inputs. An
+independent exact-head review found no remaining P1/P2 false-pass gap in this
+probe, while noting that its four repaired audit gates lack dedicated negative
+unit cases. This is heartbeat-scoped hostile evidence, not proof of liveness
+for every fast command or every failure mode.
 
 ## Further candidate architecture, not yet implemented
 
