@@ -264,8 +264,12 @@ failure under the unchanged ten-second lock deadline.
 At exact merged Coordinator `5249a62`, a separate 16-worker batch for the new
 `accept` route passed 16/16 after 16/16 claims on the same frozen fixture.
 Its maximum exclusive hold was 0.426 s, post-batch static/live doctors passed,
-and the observed source state and product bytes stayed unchanged. This tests
-the new route in one contention pattern, not the full command matrix.
+and the observed source state and product bytes stayed unchanged. A stronger
+rerun verified all 16 exact acceptance records, 16 extending SSH-signed/DCO
+commits, unchanged unrelated task fields and bodies, no unrelated committed or
+uncommitted paths, stable ignored runtime state and non-HEAD refs, and green
+doctors. This tests the new route in one contention pattern, not the full
+command matrix.
 
 A subsequent single-task-snapshot mutation experiment was rejected after
 independent review: although it preserved lock-respecting writers, it could

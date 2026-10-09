@@ -5,6 +5,7 @@
 
 import datetime as dt
 import json
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -20,17 +21,38 @@ from git_mixed_command_probe import (
     require_unchanged_sources,
     route_name,
     stabilize_disposable_claims,
+    strict_acceptance_commit_errors,
 )
 
 
 class GitMixedCommandProbeTests(unittest.TestCase):
+    def test_acceptance_commit_checker_rejects_unsigned_or_missing_dco(self) -> None:
+        def fake_run(argv: list[str], **_kwargs: object) -> subprocess.CompletedProcess[object]:
+            if argv[1] == "rev-list":
+                return subprocess.CompletedProcess(argv, 0, "abc123\n")
+            if argv[1] == "diff":
+                return subprocess.CompletedProcess(argv, 0, b"tasks/AR-9000.md\0")
+            if argv[1] == "verify-commit":
+                return subprocess.CompletedProcess(argv, 1, b"", b"invalid signature")
+            if argv[1] == "show":
+                return subprocess.CompletedProcess(argv, 0, "missing trailer")
+            raise AssertionError(argv)
+
+        with (
+            mock.patch("git_mixed_command_probe.subprocess.run", side_effect=fake_run),
+            mock.patch("git_mixed_command_probe.history_extends", return_value=True),
+        ):
+            count, errors = strict_acceptance_commit_errors(Path("disposable"), "starting")
+        self.assertEqual(1, count)
+        self.assertTrue(any("signature did not verify" in error for error in errors))
+        self.assertTrue(any("DCO trailer missing" in error for error in errors))
+
     def test_acceptance_errors_reject_missing_or_wrong_records(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             tasks = Path(directory) / "tasks"
             tasks.mkdir()
-            revisions: dict[str, int] = {}
+            before: dict[str, dict[str, object]] = {}
             for index, task_id in enumerate(TASK_IDS):
-                revisions[task_id] = 2
                 meta = {
                     "owner": f"bench-{index}",
                     "task_revision": 3,
@@ -45,15 +67,26 @@ class GitMixedCommandProbeTests(unittest.TestCase):
                         "evidence_digest": "sha256:" + "a" * 64,
                     },
                 }
+                before[task_id] = {
+                    key: value for key, value in meta.items() if key != "spec_acceptance"
+                }
+                before[task_id]["task_revision"] = 2
                 (tasks / f"{task_id}.md").write_text("---\n" + json.dumps(meta) + "\n---\n")
-            self.assertEqual([], acceptance_errors(Path(directory), revisions))
+            self.assertEqual([], acceptance_errors(Path(directory), before))
             bad = tasks / f"{TASK_IDS[0]}.md"
             meta = json.loads(bad.read_text().split("---", 2)[1])
             del meta["spec_acceptance"]
             bad.write_text("---\n" + json.dumps(meta) + "\n---\n")
             self.assertIn(
-                "acceptance does not match request",
-                acceptance_errors(Path(directory), revisions)[0],
+                "acceptance does not match request", acceptance_errors(Path(directory), before)[0]
+            )
+            meta["unrelated"] = "changed"
+            bad.write_text("---\n" + json.dumps(meta) + "\n---\n")
+            self.assertTrue(
+                any(
+                    "unrelated task fields changed" in error
+                    for error in acceptance_errors(Path(directory), before)
+                )
             )
 
     def test_acceptances_bind_each_owner_revision_and_evidence(self) -> None:

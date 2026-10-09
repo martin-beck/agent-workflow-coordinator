@@ -102,15 +102,24 @@ def acceptances(state: Path) -> list[list[str]]:
     ]
 
 
-def acceptance_errors(state: Path, revisions: dict[str, int]) -> list[str]:
+def acceptance_unchanged_fields(meta: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: value
+        for key, value in meta.items()
+        if key not in {"task_revision", "updated_at", "spec_acceptance"}
+    }
+
+
+def acceptance_errors(state: Path, before: dict[str, dict[str, Any]]) -> list[str]:
     """Reject a success-only result if any strict acceptance was not recorded."""
     errors: list[str] = []
     for index, task_id in enumerate(TASK_IDS):
         meta = task_meta(state, task_id)
+        original = before[task_id]
         acceptance = meta.get("spec_acceptance")
         expected = {
-            "spec_ref": meta.get("spec_ref"),
-            "spec_revision": meta.get("spec_revision"),
+            "spec_ref": original.get("spec_ref"),
+            "spec_revision": original.get("spec_revision"),
             "status": "pass",
             "evidence_class": "mechanical",
             "evidence_ref": f"quality/{task_id}",
@@ -118,10 +127,14 @@ def acceptance_errors(state: Path, revisions: dict[str, int]) -> list[str]:
         }
         if meta.get("owner") != f"bench-{index}":
             errors.append(f"{task_id}: owner changed")
-        if meta.get("task_revision") != revisions[task_id] + 1:
+        if meta.get("task_revision") != original["task_revision"] + 1:
             errors.append(f"{task_id}: revision did not advance once")
         if acceptance != expected:
             errors.append(f"{task_id}: acceptance does not match request")
+        if acceptance_unchanged_fields(meta) != acceptance_unchanged_fields(original):
+            errors.append(f"{task_id}: unrelated task fields changed")
+        if "spec_acceptance" in original:
+            errors.append(f"{task_id}: acceptance existed before request")
     return errors
 
 
@@ -732,7 +745,130 @@ def checked_batch(
         raise RuntimeError(f"{name}: unexpected route outcome or failed integrity check")
 
 
-def main() -> None:  # noqa: C901
+def configure_fixture_signature_verification(state: Path) -> None:
+    """Trust only the ephemeral key that signed this disposable state clone."""
+    public_key = (state.parent / "signing-key.pub").read_text().strip()
+    allowed = state.parent / "allowed-signers"
+    allowed.write_text(f"fixture@example.invalid {public_key}\n")
+    subprocess.run(  # noqa: S603
+        ["git", "config", "gpg.ssh.allowedSignersFile", str(allowed)],  # noqa: S607
+        cwd=state,
+        check=True,
+    )
+
+
+def strict_acceptance_commit_errors(state: Path, starting_head: str) -> tuple[int, list[str]]:
+    """Check ancestry, changed-path scope, SSH signatures, and DCO for strict commits."""
+    revisions = subprocess.run(  # noqa: S603
+        ["git", "rev-list", f"{starting_head}..HEAD"],  # noqa: S607
+        cwd=state,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.splitlines()
+    errors: list[str] = []
+    if len(revisions) != len(TASK_IDS) or not history_extends(state, starting_head):
+        errors.append("acceptance batch did not add 16 extending commits")
+    changed_paths = subprocess.run(  # noqa: S603
+        ["git", "diff", "--name-only", "-z", f"{starting_head}..HEAD"],  # noqa: S607
+        cwd=state,
+        capture_output=True,
+        check=True,
+    ).stdout.split(b"\0")
+    allowed_paths = {
+        *(f"tasks/{task_id}.md".encode() for task_id in TASK_IDS),
+        b"CURRENT.md",
+        b"STATUS.md",
+    }
+    if any(
+        path and path not in allowed_paths and not path.startswith(b"status/")
+        for path in changed_paths
+    ):
+        errors.append("acceptance batch changed unrelated committed paths")
+    for commit_hash in revisions:
+        verified = subprocess.run(  # noqa: S603
+            ["git", "verify-commit", commit_hash],  # noqa: S607
+            cwd=state,
+            capture_output=True,
+            check=False,
+        )
+        if verified.returncode:
+            errors.append(f"{commit_hash}: signature did not verify")
+        message = subprocess.run(  # noqa: S603
+            ["git", "show", "-s", "--format=%B", commit_hash],  # noqa: S607
+            cwd=state,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout
+        if "Signed-off-by: Fixture <fixture@example.invalid>" not in message:
+            errors.append(f"{commit_hash}: matching DCO trailer missing")
+    return len(revisions), errors
+
+
+def run_acceptance_probe(
+    state: Path,
+    env: dict[str, str],
+    timeout: float,
+    source_state: Path,
+    source_product: Path,
+    state_head: str,
+    state_digest: str,
+    product_digest: str,
+) -> None:
+    configure_fixture_signature_verification(state)
+    before = {task_id: task_meta(state, task_id) for task_id in TASK_IDS}
+    before_bodies = {
+        task_id: (state / "tasks" / f"{task_id}.md").read_text().split("---", 2)[2]
+        for task_id in TASK_IDS
+    }
+    starting_head = git_head(state)
+    before_dirty = dirty_checkout_digest(state)
+    before_runtime = runtime_digest(state, normalize_time=False)
+    before_refs = non_head_refs_digest(state)
+    checked_batch(state, env, "acceptances", acceptances(state), timeout, 16)
+    errors = acceptance_errors(state, before)
+    for task_id in TASK_IDS:
+        after = task_meta(state, task_id)
+        body = (state / "tasks" / f"{task_id}.md").read_text().split("---", 2)[2]
+        expected = (
+            before_bodies[task_id]
+            + f"\n- {after['updated_at']}: Disposable concurrency acceptance.\n"
+        )
+        if body != expected:
+            errors.append(f"{task_id}: unrelated task body changed")
+    commit_count, commit_errors = strict_acceptance_commit_errors(state, starting_head)
+    errors.extend(commit_errors)
+    if dirty_checkout_digest(state) != before_dirty:
+        errors.append("acceptance batch left uncommitted state changes")
+    if runtime_digest(state, normalize_time=False) != before_runtime:
+        errors.append("acceptance batch changed ignored runtime state")
+    if non_head_refs_digest(state) != before_refs:
+        errors.append("acceptance batch changed non-HEAD Git refs")
+    if errors:
+        raise RuntimeError("acceptance durability mismatch: " + "; ".join(errors))
+    print(
+        json.dumps(
+            {
+                "after": "acceptances",
+                "matching_acceptance_records": len(TASK_IDS),
+                "verified_signed_dco_commits": commit_count,
+                "no_unrelated_effects": True,
+            }
+        ),
+        flush=True,
+    )
+    require_unchanged_sources(
+        {
+            "source_product_inputs_changed": product_input_digest(source_product) != product_digest,
+            "source_state_head_changed": git_head(source_state) != state_head,
+            "source_state_inputs_changed": product_input_digest(source_state, include_runtime=True)
+            != state_digest,
+        }
+    )
+
+
+def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--state", type=Path, required=True)
     parser.add_argument("--product", type=Path, required=True)
@@ -808,43 +944,15 @@ def main() -> None:  # noqa: C901
         for name, commands in batches:
             checked_batch(state, env, name, commands, args.timeout_seconds, 16)
         if args.only_accept:
-            revisions = {
-                task_id: task_meta(state, task_id)["task_revision"] for task_id in TASK_IDS
-            }
-            starting_head = git_head(state)
-            checked_batch(state, env, "acceptances", acceptances(state), args.timeout_seconds, 16)
-            errors = acceptance_errors(state, revisions)
-            commits = subprocess.run(  # noqa: S603
-                ["git", "rev-list", "--count", f"{starting_head}..HEAD"],  # noqa: S607
-                cwd=state,
-                capture_output=True,
-                text=True,
-                check=True,
-            )
-            if int(commits.stdout) != 16 or not history_extends(state, starting_head):
-                errors.append("acceptance batch did not add 16 extending signed-commit candidates")
-            if errors:
-                raise RuntimeError("acceptance durability mismatch: " + "; ".join(errors))
-            print(
-                json.dumps(
-                    {
-                        "after": "acceptances",
-                        "matching_acceptance_records": len(TASK_IDS),
-                        "extending_commits": int(commits.stdout),
-                    }
-                ),
-                flush=True,
-            )
-            require_unchanged_sources(
-                {
-                    "source_product_inputs_changed": product_input_digest(source_product)
-                    != product_digest,
-                    "source_state_head_changed": git_head(source_state) != state_head,
-                    "source_state_inputs_changed": product_input_digest(
-                        source_state, include_runtime=True
-                    )
-                    != state_digest,
-                }
+            run_acceptance_probe(
+                state,
+                env,
+                args.timeout_seconds,
+                source_state,
+                source_product,
+                state_head,
+                state_digest,
+                product_digest,
             )
             return
         if not args.only_roles:
