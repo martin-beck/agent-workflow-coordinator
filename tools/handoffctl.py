@@ -11,6 +11,7 @@ import hashlib
 import json
 import os
 import re
+import stat
 import subprocess
 import sys
 import tempfile
@@ -2459,6 +2460,31 @@ def rendered_task_views(tasks: list[Task]) -> dict[Path, str]:
     return views
 
 
+def unchanged_generated_view(path: Path, content: str) -> bool:
+    """Avoid an fsync only for an ordinary, already-correct projection file."""
+    try:
+        parent = path.parent.lstat()
+        if not stat.S_ISDIR(parent.st_mode):
+            return False
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except OSError:
+        return False
+    try:
+        found = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(found.st_mode)
+            or found.st_nlink != 1
+            or found.st_uid != os.geteuid()
+            or stat.S_IMODE(found.st_mode) != 0o600
+        ):
+            return False
+        expected = content.encode("utf-8")
+        with os.fdopen(descriptor, "rb", closefd=False) as stream:
+            return stream.read(len(expected) + 1) == expected
+    finally:
+        os.close(descriptor)
+
+
 def write_status_views(views: dict[str, str]) -> None:
     """Atomically replace the root status index and remove obsolete shards."""
     expected_paths = {ROOT / relative for relative in views}
@@ -2468,7 +2494,9 @@ def write_status_views(views: dict[str, str]) -> None:
         ):
             path.unlink(missing_ok=True)
     for relative, content in views.items():
-        atomic(ROOT / relative, content)
+        target = ROOT / relative
+        if not unchanged_generated_view(target, content):
+            atomic(target, content)
 
 
 def write_rendered_task_views(views: dict[Path, str]) -> None:
@@ -2480,7 +2508,11 @@ def write_rendered_task_views(views: dict[Path, str]) -> None:
     }
     write_status_views(status_views)
     for target, content in views.items():
-        if target.name != "STATUS.md" and target.parent.name != "status":
+        if (
+            target.name != "STATUS.md"
+            and target.parent.name != "status"
+            and not unchanged_generated_view(target, content)
+        ):
             atomic(target, content)
 
 

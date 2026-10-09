@@ -2645,17 +2645,17 @@ class HandoffTest(unittest.TestCase):
         real_atomic = CORE.atomic
         failed = False
 
-        def fail_status_once(target: Path, text: str) -> None:
+        def fail_project_once(target: Path, text: str) -> None:
             nonlocal failed
-            if target.name == "STATUS.md" and not failed:
+            if target.name == "PROJECT_STATE.md" and not failed:
                 failed = True
-                raise OSError("injected status write failure")
+                raise OSError("injected project view write failure")
             real_atomic(target, text)
 
         with (
             patch.object(CORE, "project_scan", return_value=state),
-            patch.object(CORE, "atomic", side_effect=fail_status_once),
-            self.assertRaisesRegex(OSError, "injected status write failure"),
+            patch.object(CORE, "atomic", side_effect=fail_project_once),
+            self.assertRaisesRegex(OSError, "injected project view write failure"),
         ):
             CORE.reconcile(do_commit=False)
         self.assertEqual(before_task, path.read_text())
@@ -3312,6 +3312,34 @@ class HandoffTest(unittest.TestCase):
         self.assertIn("active branch also used", str(raised.exception))
         self.assertTrue(all(candidate.read_text() == before[candidate] for candidate in before))
 
+    def test_mutation_still_detects_out_of_band_sibling_edit_after_view_write(self) -> None:
+        target = self.make_task("AR-0001")
+        sibling = self.make_task("AR-0002")
+        before_target = target.read_text()
+        real_write_views = CORE.write_rendered_task_views
+
+        def edit_sibling_after_views(views: dict[Path, str]) -> None:
+            real_write_views(views)
+            meta, body = CORE.read_task(sibling)
+            meta.update(
+                status="in_progress",
+                owner="worker-a",
+                claim_expires="2099-01-01T00:00:00+00:00",
+            )
+            CORE.write_task(sibling, meta, body)
+
+        with (
+            patch.object(CORE, "write_rendered_task_views", side_effect=edit_sibling_after_views),
+            patch.object(CORE, "commit", return_value=True) as commit,
+            self.assertRaisesRegex(RuntimeError, "active owner also used"),
+        ):
+            CORE.mutate(
+                argparse.Namespace(task="AR-0001", owner="worker-a", lease_minutes=10), "claim"
+            )
+        commit.assert_not_called()
+        self.assertEqual(before_target, target.read_text())
+        self.assertEqual("in_progress", CORE.read_task(sibling)[0]["status"])
+
     def test_mutation_requires_valid_target_even_with_unrelated_findings(self) -> None:
         target = self.make_task("AR-0001", extra="unsupported")
         before = {
@@ -3844,6 +3872,58 @@ class HandoffTest(unittest.TestCase):
         stale.write_text("stale", encoding="utf-8")
         CORE.write_status_views({"STATUS.md": "current\n"})
         self.assertFalse(stale.exists())
+
+    def test_unchanged_generated_views_avoid_replacement_but_repair_unsafe_files(self) -> None:
+        current = self.root / "CURRENT.md"
+        status = self.root / "status/STATUS-0001.md"
+        views = {current: "current\n", status: "status\n"}
+        CORE.write_rendered_task_views(views)
+        original_inodes = (current.stat().st_ino, status.stat().st_ino)
+        with patch.object(CORE, "atomic", wraps=CORE.atomic) as atomic_write:
+            CORE.write_rendered_task_views(views)
+        atomic_write.assert_not_called()
+        self.assertEqual(original_inodes, (current.stat().st_ino, status.stat().st_ino))
+
+        with patch.object(CORE, "atomic", wraps=CORE.atomic) as atomic_write:
+            CORE.write_rendered_task_views({current: "changed\n", status: "status\n"})
+        self.assertEqual(1, atomic_write.call_count)
+        self.assertEqual("changed\n", current.read_text())
+
+        status.chmod(0o644)
+        self.assertFalse(CORE.unchanged_generated_view(status, "status\n"))
+        CORE.write_rendered_task_views({current: "changed\n", status: "status\n"})
+        self.assertEqual(0o600, status.stat().st_mode & 0o777)
+
+        other = self.root / "other-view"
+        other.write_text("status\n")
+        status.unlink()
+        status.symlink_to(other)
+        self.assertFalse(CORE.unchanged_generated_view(status, "status\n"))
+        CORE.write_rendered_task_views({current: "changed\n", status: "status\n"})
+        self.assertFalse(status.is_symlink())
+        self.assertEqual("status\n", other.read_text())
+
+        status.unlink()
+        os.link(other, status)
+        self.assertFalse(CORE.unchanged_generated_view(status, "status\n"))
+        CORE.write_rendered_task_views({current: "changed\n", status: "status\n"})
+        self.assertEqual(1, status.stat().st_nlink)
+        self.assertEqual("status\n", other.read_text())
+
+        status.unlink()
+        CORE.write_rendered_task_views({current: "changed\n", status: "status\n"})
+        self.assertEqual("status\n", status.read_text())
+
+    def test_unchanged_generated_view_rejects_symlink_parent(self) -> None:
+        real = self.root / "real-status"
+        real.mkdir()
+        candidate = real / "STATUS-0001.md"
+        candidate.write_text("status\n")
+        candidate.chmod(0o600)
+        (self.root / "status").symlink_to(real, target_is_directory=True)
+        self.assertFalse(
+            CORE.unchanged_generated_view(self.root / "status/STATUS-0001.md", "status\n")
+        )
 
     def test_doctor_reports_replica_circuit_breaker(self) -> None:
         CORE.REPLICA_BLOCKED.parent.mkdir(exist_ok=True)
