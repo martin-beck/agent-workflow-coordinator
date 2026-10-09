@@ -1006,46 +1006,43 @@ def project_scan() -> State:
         if path.resolve() not in coordinator_paths and path not in seen_paths:
             paths.append((path, head, branch))
             seen_paths.add(path)
-    # Each checkout owns a separate index; preserve Git's inventory order while
-    # bounding the number of child processes in flight. No observation is cached.
-    with ThreadPoolExecutor(max_workers=min(32, max(1, len(paths)))) as workers:
-        worktrees = list(workers.map(scan_worktree, paths))
     github = settings["github_repository"]
-    prs = json.loads(
-        run_github_observation(
-            [
-                "gh",
-                "pr",
-                "list",
-                "-R",
-                github,
-                "--state",
-                "open",
-                "--limit",
-                "100",
-                "--json",
-                "number,title,headRefName,headRefOid,baseRefName,isDraft,mergeStateStatus,statusCheckRollup",
-            ]
-        ).stdout
-    )
-    runs = json.loads(
-        run_github_observation(
-            [
-                "gh",
-                "run",
-                "list",
-                "-R",
-                github,
-                "--limit",
-                "12",
-                "--json",
-                "databaseId,headSha,status,conclusion,workflowName,event",
-            ]
-        ).stdout
-    )
-    remote_line = run(
-        ["git", "-C", str(repo), "ls-remote", "origin", "refs/heads/main"]
-    ).stdout.strip()
+    pr_args = [
+        "gh",
+        "pr",
+        "list",
+        "-R",
+        github,
+        "--state",
+        "open",
+        "--limit",
+        "100",
+        "--json",
+        "number,title,headRefName,headRefOid,baseRefName,isDraft,mergeStateStatus,statusCheckRollup",
+    ]
+    run_args = [
+        "gh",
+        "run",
+        "list",
+        "-R",
+        github,
+        "--limit",
+        "12",
+        "--json",
+        "databaseId,headSha,status,conclusion,workflowName,event",
+    ]
+    # Checkouts own separate Git indexes. Observe all fields freshly, but overlap
+    # the independent GitHub and remote reads with the bounded checkout scan.
+    with ThreadPoolExecutor(max_workers=min(32, max(1, len(paths))) + 3) as workers:
+        prs_result = workers.submit(run_github_observation, pr_args)
+        runs_result = workers.submit(run_github_observation, run_args)
+        remote_result = workers.submit(
+            run, ["git", "-C", str(repo), "ls-remote", "origin", "refs/heads/main"]
+        )
+        worktrees = list(workers.map(scan_worktree, paths))
+        prs = json.loads(prs_result.result().stdout)
+        runs = json.loads(runs_result.result().stdout)
+        remote_line = remote_result.result().stdout.strip()
     if not remote_line:
         raise RuntimeError("remote main is missing")
     return {

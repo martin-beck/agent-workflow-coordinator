@@ -48,6 +48,29 @@ A smoke comparison of identical v0.3.59 runtime copies already ranged from
 succeeded. This is host/scheduling variability, not a candidate speedup.
 One-sample or baseline-first numbers are insufficient for the 5% gate.
 
+The first implemented step observes independent product worktrees with a
+bounded 32-worker pool. It preserves Git's inventory order, reads every
+checkout freshly, and leaves the authoritative observation boundary intact.
+With the 750-task/746-worktree ASB fixture pinned to state commit
+`f41d59edfb1615117a3aff5bf965001486b509a5`, baseline
+`c9c21332841b80c967b174893596df1f3326b30b` and candidate
+`0149d0c0c72785f44b31ef548843e68c16be548e`, alternating two single-worker
+samples gave these command wall times (seconds):
+
+| Route | Baseline | Candidate | Candidate / paired baseline range |
+| --- | ---: | ---: | ---: |
+| `doctor --live` | 18.093, 17.147 | 1.929, 1.865 | 10.7%, 10.9% |
+| `snapshot` | 15.025, 20.324 | 2.005, 1.889 | 13.3%, 9.3% |
+| `reconcile` | 19.420, 20.952 | 2.076, 2.089 | 10.7%, 10.0% |
+
+All 12 measured commands returned success. The source product HEAD and
+worktree listing stayed stable; the source state HEAD moved because other
+workers continued work, but both fixture clones used the same pinned commit.
+The candidate uses roughly 10--13% of baseline wall time for these routes,
+not the required 5%, and it still consumes roughly 14 CPU-seconds per live
+command. This is a local first-stage result, not a concurrency, cold-start,
+failure-mode, or all-command qualification.
+
 ## Command inventory and lower bounds
 
 | Git-backed route | Completion required by the current contract | Principal work and target caveat |
