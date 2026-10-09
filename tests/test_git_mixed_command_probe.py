@@ -17,6 +17,10 @@ class GitMixedCommandProbeTests(unittest.TestCase):
 
     def test_expected_rejections_are_not_success(self) -> None:
         self.assertEqual("lock_timeout", error_class(b"LOCK_TIMEOUT"))
+        self.assertEqual("wrong_owner", error_class(b"AR-9000 is owned by bench-0"))
+        self.assertEqual("wrong_owner", error_class(b"task claim does not match owner"))
+        self.assertEqual("stale_task_revision", error_class(b"stale revision: expected 2"))
+        self.assertEqual("malformed_gate_artifact", error_class(b"--before must use REF=DIGEST"))
         self.assertEqual("stale_role_revision", error_class(b"stale role revision"))
         self.assertEqual(
             "unsupported_git_route", error_class(b"board requires the SQLite authority")

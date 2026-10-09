@@ -16,6 +16,7 @@ from git_command_latency_benchmark import (
     digest_stream,
     percentile,
     product_input_digest,
+    snapshot_body_digest,
 )
 
 
@@ -42,6 +43,14 @@ class GitCommandLatencyBenchmarkTests(unittest.TestCase):
             (hashlib.sha256(payload).hexdigest(), len(payload)), digest_stream(io.BytesIO(payload))
         )
 
+    def test_snapshot_body_digest_only_ignores_valid_commit_prefix(self) -> None:
+        body = b"# Current\nunchanged\n"
+        first = io.BytesIO(b"STATE_COMMIT=" + b"a" * 40 + b"\n" + body)
+        second = io.BytesIO(b"STATE_COMMIT=" + b"b" * 40 + b"\n" + body)
+        self.assertEqual(snapshot_body_digest(first), snapshot_body_digest(second))
+        with self.assertRaises(ValueError):
+            snapshot_body_digest(io.BytesIO(b"STATE_COMMIT=invalid\n" + body))
+
     def test_product_fingerprint_detects_dirty_checkout_without_head_change(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -67,7 +76,10 @@ class GitCommandLatencyBenchmarkTests(unittest.TestCase):
             )
             before = product_input_digest(root)
             source.write_text("after\n")
-            self.assertNotEqual(before, product_input_digest(root))
+            dirty = product_input_digest(root)
+            self.assertNotEqual(before, dirty)
+            source.write_text("later\n")
+            self.assertNotEqual(dirty, product_input_digest(root))
 
 
 if __name__ == "__main__":

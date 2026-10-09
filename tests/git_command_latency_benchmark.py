@@ -15,6 +15,7 @@ import hashlib
 import json
 import math
 import os
+import re
 import resource
 import subprocess
 import sys
@@ -44,6 +45,15 @@ def git_head(root: Path) -> str:
     ).stdout.strip()
 
 
+def git_tree(root: Path) -> str:
+    return subprocess.run(  # noqa: S603
+        ["/usr/bin/git", "-C", str(root), "rev-parse", "HEAD^{tree}"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+
+
 def worktree_listing(root: Path) -> str:
     return subprocess.run(  # noqa: S603
         ["git", "-C", str(root), "worktree", "list", "--porcelain"],  # noqa: S607
@@ -54,7 +64,7 @@ def worktree_listing(root: Path) -> str:
 
 
 def product_input_digest(root: Path) -> str:
-    """Detect net changes to listed heads, refs, and checkout status."""
+    """Detect net changes to listed heads, refs, and dirty checkout bytes."""
     listing = worktree_listing(root)
     paths = [Path(line[9:]) for line in listing.splitlines() if line.startswith("worktree ")]
     digest = hashlib.sha256(listing.encode())
@@ -67,16 +77,48 @@ def product_input_digest(root: Path) -> str:
     observed_env = dict(os.environ)
     observed_env["GIT_OPTIONAL_LOCKS"] = "0"
 
-    def status(path: Path) -> bytes:
-        return subprocess.run(  # noqa: S603
+    def checkout_digest(path: Path) -> bytes:
+        observed = subprocess.run(  # noqa: S603
             ["git", "-C", str(path), "status", "--porcelain=v1", "-z"],  # noqa: S607
             env=observed_env,
             check=True,
             capture_output=True,
         ).stdout
+        checkout = hashlib.sha256(observed)
+        if observed:
+            diff = subprocess.run(  # noqa: S603
+                ["/usr/bin/git", "-C", str(path), "diff", "--binary", "HEAD"],
+                env=observed_env,
+                check=True,
+                capture_output=True,
+            ).stdout
+            checkout.update(diff)
+            untracked = subprocess.run(  # noqa: S603
+                [
+                    "/usr/bin/git",
+                    "-C",
+                    str(path),
+                    "ls-files",
+                    "--others",
+                    "--exclude-standard",
+                    "-z",
+                ],
+                env=observed_env,
+                check=True,
+                capture_output=True,
+            ).stdout
+            for name in untracked.split(b"\0"):
+                if not name:
+                    continue
+                entry = path / os.fsdecode(name)
+                checkout.update(name)
+                checkout.update(
+                    str(entry.readlink()).encode() if entry.is_symlink() else entry.read_bytes()
+                )
+        return checkout.digest()
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=32) as pool:
-        for path, observed in zip(paths, pool.map(status, paths), strict=True):
+        for path, observed in zip(paths, pool.map(checkout_digest, paths), strict=True):
             digest.update(str(path).encode())
             digest.update(observed)
     return digest.hexdigest()
@@ -117,13 +159,25 @@ def digest_stream(stream: BinaryIO) -> tuple[str, int]:
     return digest.hexdigest(), length
 
 
+def snapshot_body_digest(stream: BinaryIO) -> str:
+    """Compare snapshot bodies while preserving raw hashes of fixture commit IDs."""
+    stream.seek(0)
+    first = stream.readline(128)
+    if re.fullmatch(rb"STATE_COMMIT=[0-9a-f]{40}\n", first) is None:
+        raise ValueError("Git snapshot omitted its exact state commit")
+    digest = hashlib.sha256()
+    while chunk := stream.read(65536):
+        digest.update(chunk)
+    return digest.hexdigest()
+
+
 def wait_for_processes(
     running: list[tuple[subprocess.Popen[bytes], float, BinaryIO, BinaryIO]],
     route: str,
     started: float,
     timeout: float,
-) -> dict[int, tuple[float, str, str, int]]:
-    completed: dict[int, tuple[float, str, str, int]] = {}
+) -> dict[int, tuple[float, str, str, int, str]]:
+    completed: dict[int, tuple[float, str, str, int, str]] = {}
     while len(completed) != len(running):
         if time.monotonic() - started > timeout:
             for process, _, _, _ in running:
@@ -138,11 +192,17 @@ def wait_for_processes(
                 stderr.seek(0)
                 diagnostic = stderr.read(1_000_000)
                 output_hash, output_bytes = digest_stream(stdout)
+                body_hash = (
+                    snapshot_body_digest(stdout)
+                    if route == "snapshot" and process.returncode == 0
+                    else output_hash
+                )
                 completed[process.pid] = (
                     time.monotonic(),
                     classify(process.returncode, diagnostic),
                     output_hash,
                     output_bytes,
+                    body_hash,
                 )
         time.sleep(0.005)
     return completed
@@ -185,8 +245,13 @@ def measure(
             "max": percentile(latencies, 1),
         },
         "outcomes": outcomes,
-        "stdout_sha256": sorted({completed[process.pid][2] for process, _, _, _ in running}),
+        "stdout_sha256": sorted(completed[process.pid][2] for process, _, _, _ in running),
+        "snapshot_body_sha256": sorted(completed[process.pid][4] for process, _, _, _ in running)
+        if route == "snapshot"
+        else None,
         "stdout_bytes": [completed[process.pid][3] for process, _, _, _ in running],
+        "state_tree": git_tree(state),
+        "current_sha256": hashlib.sha256((state / "CURRENT.md").read_bytes()).hexdigest(),
         "child_cpu_ms": {
             "user": round((after[0] - before[0]) * 1000, 3),
             "system": round((after[1] - before[1]) * 1000, 3),
@@ -295,6 +360,13 @@ def run_samples(
                             "stdout_equal": baseline["stdout_sha256"] == candidate["stdout_sha256"],
                             "stdout_lengths_equal": baseline["stdout_bytes"]
                             == candidate["stdout_bytes"],
+                            "snapshot_bodies_equal": baseline["snapshot_body_sha256"]
+                            == candidate["snapshot_body_sha256"]
+                            if route == "snapshot"
+                            else None,
+                            "state_trees_equal": baseline["state_tree"] == candidate["state_tree"],
+                            "current_views_equal": baseline["current_sha256"]
+                            == candidate["current_sha256"],
                         },
                         sort_keys=True,
                     ),
@@ -370,6 +442,8 @@ def main() -> None:
             )
             configure(state, source_product, str(product_binding["product_repository"]), env)
             instances[label] = state, env
+        fixture_trees = {label: git_tree(state) for label, (state, _) in instances.items()}
+        print(json.dumps({"fixture_state_trees_equal": len(set(fixture_trees.values())) == 1}))
         run_samples(instances, routes, counts, args.repetitions, args.timeout_seconds)
         print(
             json.dumps(

@@ -116,6 +116,36 @@ successes; post-batch doctors remained green. The source ASB state head moved
 during the run due to other workers, though the probe itself used a pinned
 disposable clone; the observed product inputs did not change.
 
+Independent review found that the initial adversarial check would accept any
+nonzero hostile exit, including an unrelated lock timeout, and did not inspect
+the good worker's actual note. The repaired check requires each of the 15
+specific authority/validation rejection classes plus exactly one recorded
+good update. A targeted rerun at pinned ASB state
+`75d4feb27a1970d3d8d136a283027ec9e153b55a` passed: the good update
+finished in 1.056 seconds, all 15 expected rejection classes matched, exactly
+one commit and task-revision increment occurred, ownership was retained,
+static/live doctors were green, and both source state head and product input
+fingerprint remained stable. The reviewer also found two latency-harness
+blind spots; output fingerprints now preserve multiplicity, and the source
+product fingerprint includes tracked dirty diffs and untracked file bytes.
+These repaired harness assertions still need independent re-review and paired
+candidate/baseline reruns.
+
+A paired one-worker rerun on pinned ASB state
+`654f3195f0fe7e9a367561783960629fd451ace3` and product inputs stable
+throughout measured 12.658/1.454 seconds for baseline/candidate live doctor,
+15.567/1.370 seconds for snapshot, and 19.170/1.568 seconds for reconcile.
+That is roughly 11.5%, 8.8%, and 8.2% of baseline respectively, still above
+the 5% gate. Outputs and outcomes agreed for live doctor and reconcile. Raw
+snapshot hashes differed even though both fixture trees and CURRENT views were
+identical: each disposable fixture has its own signed state commit, and
+`snapshot` prints that commit on its first line. The harness now reports a
+separate body hash after verifying that exact-commit prefix; a follow-up
+snapshot-only rerun again found equal fixture trees and CURRENT views, with
+equal verified snapshot body hashes but different raw commit-bearing hashes.
+This is not an excuse to ignore any other output or
+side-effect difference.
+
 This matrix covers a meaningful subset, **not all commands**. `checkpoint`,
 `gate`, `promote`, `pause`/`resume`, `recover-expired`, `unblock`, Git
 `migrate`/`upgrade`/`rollback`, `init`, and replica-push/failure paths still

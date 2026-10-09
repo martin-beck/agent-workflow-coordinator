@@ -123,6 +123,12 @@ def wait_batch(
 def error_class(diagnostic: bytes) -> str:
     if b"LOCK_TIMEOUT" in diagnostic:
         return "lock_timeout"
+    if b" is owned by " in diagnostic or b"task claim does not match owner" in diagnostic:
+        return "wrong_owner"
+    if b"stale revision:" in diagnostic:
+        return "stale_task_revision"
+    if b"--before must use REF=DIGEST" in diagnostic:
+        return "malformed_gate_artifact"
     if b"usage:" in diagnostic:
         return "usage_error"
     if b"requires the SQLite authority" in diagnostic:
@@ -151,6 +157,7 @@ def batch(
     commands: list[list[str]],
     timeout: float,
     expected_success: set[int] | None = None,
+    expected_errors: dict[int, str] | None = None,
 ) -> dict[str, object]:
     if len(commands) != 16:
         raise ValueError("every batch must have exactly 16 simultaneous commands")
@@ -234,6 +241,12 @@ def batch(
             for entry in results
             if entry["index"] in expected_success
         )
+    if expected_errors is not None:
+        report["expected_errors_match"] = all(
+            entry["stderr_class"] == expected_errors[index]
+            for index, entry in enumerate(results)
+            if index in expected_errors
+        ) and len(expected_errors) == len(results) - len(expected_success or set())
     return report
 
 
@@ -355,6 +368,8 @@ def adversarial_commands(revision: int) -> list[list[str]]:
 def adversarial_probe(state: Path, env: dict[str, str], timeout: float) -> dict[str, object]:
     """Require one valid durable transition amid rejected competing calls."""
     before = task_meta(state, TASK_IDS[0])
+    task_path = state / "tasks" / f"{TASK_IDS[0]}.md"
+    before_text = task_path.read_text()
     head = git_head(state)
     result = batch(
         state,
@@ -363,8 +378,15 @@ def adversarial_probe(state: Path, env: dict[str, str], timeout: float) -> dict[
         adversarial_commands(int(before["task_revision"])),
         timeout,
         expected_success={15},
+        expected_errors={
+            **dict.fromkeys(range(9), "wrong_owner"),
+            **dict.fromkeys(range(9, 11), "stale_task_revision"),
+            **dict.fromkeys(range(11, 13), "wrong_owner"),
+            **dict.fromkeys(range(13, 15), "malformed_gate_artifact"),
+        },
     )
     after = task_meta(state, TASK_IDS[0])
+    after_text = task_path.read_text()
     commit_count = int(
         subprocess.run(  # noqa: S603
             ["git", "rev-list", "--count", f"{head}..HEAD"],  # noqa: S607
@@ -379,7 +401,15 @@ def adversarial_probe(state: Path, env: dict[str, str], timeout: float) -> dict[
     result["exactly_one_commit"] = commit_count == 1
     result["task_revision_advanced_once"] = after["task_revision"] == before["task_revision"] + 1
     result["owner_preserved"] = after["owner"] == before["owner"] == "bench-0"
-    result["good_worker_live"] = bool(result["expected_outcomes_match"]) and checks == {
+    result["good_update_recorded_once"] = (
+        before_text.count("Adversarial liveness witness.") == 0
+        and after_text.count("Adversarial liveness witness.") == 1
+    )
+    result["good_worker_live"] = (
+        bool(result["expected_outcomes_match"])
+        and bool(result["expected_errors_match"])
+        and bool(result["good_update_recorded_once"])
+    ) and checks == {
         "doctor": 0,
         "doctor_live": 0,
     }
@@ -546,6 +576,7 @@ def main() -> None:
     parser.add_argument("--product", type=Path, required=True)
     parser.add_argument("--timeout-seconds", type=float, default=300)
     parser.add_argument("--only-mutations", action="store_true")
+    parser.add_argument("--only-adversarial", action="store_true")
     parser.add_argument("--only-roles", action="store_true")
     args = parser.parse_args()
     source_state = args.state.resolve()
@@ -605,7 +636,7 @@ def main() -> None:
             ()
             if args.only_roles
             else initial_batches[-1:]
-            if args.only_mutations
+            if args.only_mutations or args.only_adversarial
             else initial_batches
         )
         for name, commands in batches:
@@ -619,8 +650,21 @@ def main() -> None:
                 and adversarial["exactly_one_commit"]
                 and adversarial["task_revision_advanced_once"]
                 and adversarial["owner_preserved"]
+                and adversarial["good_update_recorded_once"]
             ):
                 raise RuntimeError("adversarial concurrency integrity or liveness failure")
+        if args.only_adversarial:
+            print(
+                json.dumps(
+                    {
+                        "source_product_inputs_changed": product_input_digest(source_product)
+                        != product_digest,
+                        "source_state_head_changed": git_head(source_state) != state_head,
+                    }
+                ),
+                flush=True,
+            )
+            return
         mutation_batches = (
             ()
             if args.only_roles
