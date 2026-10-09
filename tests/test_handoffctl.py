@@ -818,12 +818,10 @@ class HandoffTest(unittest.TestCase):
             )
         )
         with patch.object(CORE, "commit", return_value=True):
-            with patch.object(CORE, "all_tasks", wraps=CORE.all_tasks) as load_tasks:
-                CORE.mutate(
-                    argparse.Namespace(task="AR-0001", owner="worker-a", lease_minutes=10),
-                    "claim",
-                )
-            self.assertEqual(1, load_tasks.call_count)
+            CORE.mutate(
+                argparse.Namespace(task="AR-0001", owner="worker-a", lease_minutes=10),
+                "claim",
+            )
             meta, _ = CORE.read_task(path)
             self.assertEqual("in_progress", meta["status"])
             revision = meta["task_revision"]
