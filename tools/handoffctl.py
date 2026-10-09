@@ -11,6 +11,7 @@ import hashlib
 import json
 import os
 import re
+import stat
 import subprocess
 import sys
 import tempfile
@@ -673,6 +674,7 @@ PRIVATE = (
         "session-like UUID",
     ),
 )
+PRIVATE_HEX_DIGITS = frozenset("0123456789abcdefABCDEF")
 
 UUID_PRIVACY_EXEMPT = frozenset(
     {
@@ -1139,6 +1141,64 @@ def privacy_pattern_applies(relative: Path, label: str) -> bool:
     return label != "session-like UUID" or relative not in UUID_PRIVACY_EXEMPT
 
 
+def possible_uuid_pattern(text: str) -> bool:
+    """Reject text without the fixed ASCII shape of any UUID regex match."""
+    if len(text) < 36:
+        return False
+    hyphen = text.find("-", 8)
+    while hyphen >= 0:
+        if (
+            hyphen + 28 <= len(text)
+            and text[hyphen + 5] == "-"
+            and text[hyphen + 10] == "-"
+            and text[hyphen + 15] == "-"
+            and all(char in PRIVATE_HEX_DIGITS for char in text[hyphen - 8 : hyphen])
+        ):
+            return True
+        hyphen = text.find("-", hyphen + 1)
+    return False
+
+
+def possible_privacy_pattern(text: str, lowered: str, label: str) -> bool:
+    """Use only necessary literals before the authoritative privacy regex."""
+    # Python's Unicode IGNORECASE can match non-ASCII case variants of ASCII
+    # literals that lower() does not turn into those same ASCII byte sequences.
+    if not text.isascii():
+        return True
+    if label == "absolute Linux home path":
+        return "/" + "home/" in text
+    if label == "absolute Windows user path":
+        return ":\\users\\" in lowered
+    if label == "private host alias":
+        return "ai" + "-ws" in lowered
+    if label == "private or loopback IP":
+        return "10." in text or "127." in text
+    if label == "possible credential":
+        return any(
+            word in lowered
+            for word in ("password", "passwd", "token", "secret", "api_key", "api-key", "apikey")
+        )
+    if label == "private key":
+        return "-----BEGIN " in text
+    if label == "session-like UUID":
+        return possible_uuid_pattern(text)
+    # New pattern families must retain the full regex until a necessary
+    # prefilter is reviewed; an unknown label must never suppress a finding.
+    return True
+
+
+def private_text_errors(relative: Path, text: str) -> list[str]:
+    """Keep the original regex and label ordering after cheap prefilters."""
+    lowered = text.lower()
+    return [
+        f"{relative}: {label}"
+        for regex, label in PRIVATE
+        if privacy_pattern_applies(relative, label)
+        and possible_privacy_pattern(text, lowered, label)
+        and regex.search(text)
+    ]
+
+
 def privacy_errors() -> list[str]:
     errors: list[str] = []
     for path in sorted(ROOT.rglob("*")):
@@ -1159,11 +1219,7 @@ def privacy_errors() -> list[str]:
             text = path.read_text()
         except UnicodeDecodeError:
             continue
-        for regex, label in PRIVATE:
-            if not privacy_pattern_applies(relative, label):
-                continue
-            if regex.search(text):
-                errors.append(f"{relative}: {label}")
+        errors.extend(private_text_errors(relative, text))
     return errors
 
 
@@ -1179,6 +1235,8 @@ def introduced_content_errors(before: dict[Path, str | None]) -> list[str]:
         previous_size = len(previous_text.encode()) if previous is not None else 0
         if path.stat().st_size > 200000 and previous_size <= 200000:
             errors.append(f"{relative}: state file exceeds 200 KiB")
+        if current == previous_text:
+            continue
         for regex, label in PRIVATE:
             if not privacy_pattern_applies(relative, label):
                 continue
@@ -1349,6 +1407,8 @@ def mutation_errors(
     path: Path,
     before: dict[Path, str | None],
     policy: EvidencePolicy | None = None,
+    *,
+    rendered_snapshot: tuple[list[Task], dict[Path, str], Meta] | None = None,
 ) -> list[str]:
     """Validate a Git mutation without gating on unrelated repository findings."""
     tasks = all_tasks()
@@ -1359,7 +1419,7 @@ def mutation_errors(
     errors.extend(basic_task_errors(path, selected[0], policy))
     errors.extend(claim_errors(selected[0], {}, {}, {}))
     errors.extend(mutation_global_errors(tasks))
-    errors.extend(generated_view_errors(tasks))
+    errors.extend(generated_view_errors(tasks, rendered_snapshot=rendered_snapshot))
     errors.extend(introduced_content_errors(before))
     return errors
 
@@ -1390,18 +1450,44 @@ def status_projection_errors(expected: dict[str, str]) -> list[str]:
     return errors
 
 
-def generated_view_errors(tasks: list[Task]) -> list[str]:
+def status_views_for_validation(
+    tasks: list[Task], snapshot: tuple[list[Task], dict[Path, str], Meta] | None
+) -> dict[str, str]:
+    if snapshot is None:
+        return render_status_views(tasks)
+    return {
+        str(target.relative_to(ROOT)): content
+        for target, content in snapshot[1].items()
+        if target.name == "STATUS.md" or target.parent.name == "status"
+    }
+
+
+def generated_view_errors(
+    tasks: list[Task],
+    *,
+    rendered_snapshot: tuple[list[Task], dict[Path, str], Meta] | None = None,
+) -> list[str]:
     """Check both task-derived views without allowing renderer errors to escape."""
     errors: list[str] = []
     if not all(meta.get("status") in STATUSES for _, meta, _ in tasks):
         return errors
+    reusable_snapshot = (
+        rendered_snapshot
+        if rendered_snapshot is not None
+        and tasks == rendered_snapshot[0]
+        and project_settings() == rendered_snapshot[2]
+        else None
+    )
     current = ROOT / "CURRENT.md"
-    if current.exists() and current.read_text() != render_current(tasks):
+    expected_current = (
+        reusable_snapshot[1][current] if reusable_snapshot is not None else render_current(tasks)
+    )
+    if current.exists() and current.read_text() != expected_current:
         errors.append("CURRENT.md differs from generated tasks")
     if not project_settings()["status_view"]:
         return errors
     try:
-        expected_status = render_status_views(tasks)
+        expected_status = status_views_for_validation(tasks, reusable_snapshot)
     except StatusRenderError as error:
         errors.extend(str(error).splitlines())
     else:
@@ -2459,6 +2545,49 @@ def rendered_task_views(tasks: list[Task]) -> dict[Path, str]:
     return views
 
 
+def safe_generated_view_inode(info: os.stat_result) -> bool:
+    return (
+        stat.S_ISREG(info.st_mode)
+        and info.st_nlink == 1
+        and info.st_uid == os.geteuid()
+        and stat.S_IMODE(info.st_mode) == 0o600
+    )
+
+
+def unchanged_generated_view(path: Path, content: str) -> bool:
+    """Avoid an fsync only for an ordinary, already-correct projection file."""
+    try:
+        parent = path.parent.lstat()
+        if not stat.S_ISDIR(parent.st_mode):
+            return False
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except OSError:
+        return False
+    try:
+        found = os.fstat(descriptor)
+        if not safe_generated_view_inode(found):
+            return False
+        expected = content.encode("utf-8")
+        with os.fdopen(descriptor, "rb", closefd=False) as stream:
+            if stream.read(len(expected) + 1) != expected:
+                return False
+        # A non-cooperating writer can replace the pathname while this inode is
+        # open. Do not mistake the old inode's bytes for the current view.
+        try:
+            current_parent = path.parent.lstat()
+            current = path.lstat()
+        except OSError:
+            return False
+        return (
+            stat.S_ISDIR(current_parent.st_mode)
+            and (current_parent.st_dev, current_parent.st_ino) == (parent.st_dev, parent.st_ino)
+            and (current.st_dev, current.st_ino) == (found.st_dev, found.st_ino)
+            and safe_generated_view_inode(current)
+        )
+    finally:
+        os.close(descriptor)
+
+
 def write_status_views(views: dict[str, str]) -> None:
     """Atomically replace the root status index and remove obsolete shards."""
     expected_paths = {ROOT / relative for relative in views}
@@ -2468,7 +2597,9 @@ def write_status_views(views: dict[str, str]) -> None:
         ):
             path.unlink(missing_ok=True)
     for relative, content in views.items():
-        atomic(ROOT / relative, content)
+        target = ROOT / relative
+        if not unchanged_generated_view(target, content):
+            atomic(target, content)
 
 
 def write_rendered_task_views(views: dict[Path, str]) -> None:
@@ -2480,7 +2611,11 @@ def write_rendered_task_views(views: dict[Path, str]) -> None:
     }
     write_status_views(status_views)
     for target, content in views.items():
-        if target.name != "STATUS.md" and target.parent.name != "status":
+        if (
+            target.name != "STATUS.md"
+            and target.parent.name != "status"
+            and not unchanged_generated_view(target, content)
+        ):
             atomic(target, content)
 
 
@@ -2504,6 +2639,11 @@ def git_session_record(
     record_path = session_path(ROOT, str(meta["id"]))
     before[record_path] = record_path.read_text() if record_path.exists() else None
     return record
+
+
+def require_project_settings_unchanged(settings: Meta) -> None:
+    if project_settings() != settings:
+        raise RuntimeError("PROJECT_CONFIG_CHANGED: retry after a stable project profile")
 
 
 def mutate(args: argparse.Namespace, kind: str, policy: EvidencePolicy | None = None) -> None:  # noqa: C901
@@ -2555,10 +2695,18 @@ def mutate(args: argparse.Namespace, kind: str, policy: EvidencePolicy | None = 
             if checkpoint_record is not None:
                 append_checkpoint(ROOT, checkpoint_record)
             write_task(path, meta, body)
-            views = rendered_task_views(all_tasks())
+            view_tasks = all_tasks()
+            view_settings = project_settings()
+            views = rendered_task_views(view_tasks)
+            require_project_settings_unchanged(view_settings)
             write_rendered_task_views(views)
             require_policy_unchanged(ROOT, selected_policy)
-            errors = mutation_errors(path, before, selected_policy)
+            errors = mutation_errors(
+                path,
+                before,
+                selected_policy,
+                rendered_snapshot=(view_tasks, views, view_settings),
+            )
             if errors:
                 raise RuntimeError("\n".join(errors))
             for target in generated_paths():

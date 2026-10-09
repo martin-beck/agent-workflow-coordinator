@@ -2645,17 +2645,17 @@ class HandoffTest(unittest.TestCase):
         real_atomic = CORE.atomic
         failed = False
 
-        def fail_status_once(target: Path, text: str) -> None:
+        def fail_project_once(target: Path, text: str) -> None:
             nonlocal failed
-            if target.name == "STATUS.md" and not failed:
+            if target.name == "PROJECT_STATE.md" and not failed:
                 failed = True
-                raise OSError("injected status write failure")
+                raise OSError("injected project view write failure")
             real_atomic(target, text)
 
         with (
             patch.object(CORE, "project_scan", return_value=state),
-            patch.object(CORE, "atomic", side_effect=fail_status_once),
-            self.assertRaisesRegex(OSError, "injected status write failure"),
+            patch.object(CORE, "atomic", side_effect=fail_project_once),
+            self.assertRaisesRegex(OSError, "injected project view write failure"),
         ):
             CORE.reconcile(do_commit=False)
         self.assertEqual(before_task, path.read_text())
@@ -3282,6 +3282,45 @@ class HandoffTest(unittest.TestCase):
         self.assertTrue(all(candidate.read_text() == before[candidate] for candidate in owned))
         self.assertEqual(1, CORE.read_task(path)[0]["task_revision"])
 
+    def test_unchanged_content_skips_privacy_patterns_but_checks_raw_size(self) -> None:
+        path = self.root / "unchanged.txt"
+        path.write_text("plain\n")
+        with patch.object(CORE, "privacy_pattern_applies", side_effect=AssertionError("rescanned")):
+            self.assertEqual([], CORE.introduced_content_errors({path: "plain\n"}))
+
+        prior = "x\n" * 90000
+        path.write_bytes(b"x\r\n" * 90000)
+        self.assertEqual(prior, path.read_text())
+        with patch.object(CORE, "privacy_pattern_applies", side_effect=AssertionError("rescanned")):
+            self.assertIn(
+                "unchanged.txt: state file exceeds 200 KiB",
+                CORE.introduced_content_errors({path: prior}),
+            )
+
+    def test_privacy_prefilters_preserve_every_pattern_and_unicode_casefold(self) -> None:
+        path = self.root / "notes.txt"
+        cases = (
+            ("absolute Linux home path", "/" + "home/example"),
+            ("absolute Windows user path", "C:" + "\\Users\\example"),
+            ("private host alias", "ai" + "-ws"),
+            ("private or loopback IP", "127." + "0.0.1"),
+            ("possible credential", "token" + " = example"),
+            ("private key", "-----BEGIN " + "OPENSSH PRIVATE KEY-----"),
+            ("session-like UUID", "12345678-1234-" + "1234-1234-123456789abc"),
+            ("private host alias", "a\u0130" + "-ws"),
+            ("possible credential", "pa\u017f\u017fword" + ": example"),
+        )
+        for label, content in cases:
+            with self.subTest(label=label, content=content):
+                path.write_text(content)
+                self.assertTrue(CORE.possible_privacy_pattern(content, content.lower(), label))
+                self.assertIn(f"notes.txt: {label}", CORE.privacy_errors())
+        path.write_text("token" + "=127." + "0.0.1")
+        errors = CORE.privacy_errors()
+        self.assertIn("notes.txt: possible credential", errors)
+        self.assertIn("notes.txt: private or loopback IP", errors)
+        self.assertTrue(CORE.possible_privacy_pattern("plain", "plain", "future pattern"))
+
     def test_mutation_keeps_global_active_key_uniqueness(self) -> None:
         self.make_task(
             "AR-0001",
@@ -3311,6 +3350,65 @@ class HandoffTest(unittest.TestCase):
         self.assertIn("active worktree_key also used", str(raised.exception))
         self.assertIn("active branch also used", str(raised.exception))
         self.assertTrue(all(candidate.read_text() == before[candidate] for candidate in before))
+
+    def test_mutation_still_detects_out_of_band_sibling_edit_after_view_write(self) -> None:
+        target = self.make_task("AR-0001")
+        sibling = self.make_task("AR-0002")
+        before_target = target.read_text()
+        real_write_views = CORE.write_rendered_task_views
+
+        def edit_sibling_after_views(views: dict[Path, str]) -> None:
+            real_write_views(views)
+            meta, body = CORE.read_task(sibling)
+            meta.update(
+                status="in_progress",
+                owner="worker-a",
+                claim_expires="2099-01-01T00:00:00+00:00",
+            )
+            CORE.write_task(sibling, meta, body)
+
+        with (
+            patch.object(CORE, "write_rendered_task_views", side_effect=edit_sibling_after_views),
+            patch.object(CORE, "commit", return_value=True) as commit,
+            self.assertRaisesRegex(RuntimeError, "active owner also used"),
+        ):
+            CORE.mutate(
+                argparse.Namespace(task="AR-0001", owner="worker-a", lease_minutes=10), "claim"
+            )
+        commit.assert_not_called()
+        self.assertEqual(before_target, target.read_text())
+        self.assertEqual("in_progress", CORE.read_task(sibling)[0]["status"])
+
+    def test_mutation_reuses_render_only_for_unchanged_task_and_profile_inputs(self) -> None:
+        target = self.make_task("AR-0001")
+        with (
+            patch.object(CORE, "render_status_views", wraps=CORE.render_status_views) as render,
+            patch.object(CORE, "commit", return_value=True),
+        ):
+            CORE.mutate(
+                argparse.Namespace(task="AR-0001", owner="worker-a", lease_minutes=10), "claim"
+            )
+        self.assertEqual(1, render.call_count)
+        self.assertEqual("in_progress", CORE.read_task(target)[0]["status"])
+
+        real_write_views = CORE.write_rendered_task_views
+        config = json.loads(CORE.PROJECT_CONFIG.read_text())
+
+        def change_profile_after_views(views: dict[Path, str]) -> None:
+            real_write_views(views)
+            config["project_title"] = "Externally changed title"
+            CORE.PROJECT_CONFIG.write_text(json.dumps(config))
+
+        with (
+            patch.object(CORE, "write_rendered_task_views", side_effect=change_profile_after_views),
+            patch.object(CORE, "commit", return_value=True) as commit,
+            self.assertRaisesRegex(RuntimeError, "CURRENT.md differs"),
+        ):
+            CORE.mutate(
+                argparse.Namespace(task="AR-0001", owner="worker-a", lease_minutes=10),
+                "heartbeat",
+            )
+        commit.assert_not_called()
 
     def test_mutation_requires_valid_target_even_with_unrelated_findings(self) -> None:
         target = self.make_task("AR-0001", extra="unsupported")
@@ -3844,6 +3942,79 @@ class HandoffTest(unittest.TestCase):
         stale.write_text("stale", encoding="utf-8")
         CORE.write_status_views({"STATUS.md": "current\n"})
         self.assertFalse(stale.exists())
+
+    def test_unchanged_generated_views_avoid_replacement_but_repair_unsafe_files(self) -> None:
+        current = self.root / "CURRENT.md"
+        status = self.root / "status/STATUS-0001.md"
+        views = {current: "current\n", status: "status\n"}
+        CORE.write_rendered_task_views(views)
+        original_inodes = (current.stat().st_ino, status.stat().st_ino)
+        with patch.object(CORE, "atomic", wraps=CORE.atomic) as atomic_write:
+            CORE.write_rendered_task_views(views)
+        atomic_write.assert_not_called()
+        self.assertEqual(original_inodes, (current.stat().st_ino, status.stat().st_ino))
+
+        with patch.object(CORE, "atomic", wraps=CORE.atomic) as atomic_write:
+            CORE.write_rendered_task_views({current: "changed\n", status: "status\n"})
+        self.assertEqual(1, atomic_write.call_count)
+        self.assertEqual("changed\n", current.read_text())
+
+        status.chmod(0o644)
+        self.assertFalse(CORE.unchanged_generated_view(status, "status\n"))
+        CORE.write_rendered_task_views({current: "changed\n", status: "status\n"})
+        self.assertEqual(0o600, status.stat().st_mode & 0o777)
+
+        other = self.root / "other-view"
+        other.write_text("status\n")
+        status.unlink()
+        status.symlink_to(other)
+        self.assertFalse(CORE.unchanged_generated_view(status, "status\n"))
+        CORE.write_rendered_task_views({current: "changed\n", status: "status\n"})
+        self.assertFalse(status.is_symlink())
+        self.assertEqual("status\n", other.read_text())
+
+        status.unlink()
+        os.link(other, status)
+        self.assertFalse(CORE.unchanged_generated_view(status, "status\n"))
+        CORE.write_rendered_task_views({current: "changed\n", status: "status\n"})
+        self.assertEqual(1, status.stat().st_nlink)
+        self.assertEqual("status\n", other.read_text())
+
+        status.unlink()
+        CORE.write_rendered_task_views({current: "changed\n", status: "status\n"})
+        self.assertEqual("status\n", status.read_text())
+
+    def test_unchanged_generated_view_rejects_symlink_parent(self) -> None:
+        real = self.root / "real-status"
+        real.mkdir()
+        candidate = real / "STATUS-0001.md"
+        candidate.write_text("status\n")
+        candidate.chmod(0o600)
+        (self.root / "status").symlink_to(real, target_is_directory=True)
+        self.assertFalse(
+            CORE.unchanged_generated_view(self.root / "status/STATUS-0001.md", "status\n")
+        )
+
+    def test_unchanged_generated_view_rejects_replacement_after_open(self) -> None:
+        candidate = self.root / "CURRENT.md"
+        candidate.write_text("current\n")
+        candidate.chmod(0o600)
+        other = self.root / "other-view"
+        other.write_text("current\n")
+        real_open = os.open
+
+        def replace_after_open(path: Path, flags: int, *args: Any, **kwargs: Any) -> int:
+            descriptor = real_open(path, flags, *args, **kwargs)
+            if Path(path) == candidate:
+                candidate.unlink()
+                candidate.symlink_to(other)
+            return descriptor
+
+        with patch.object(CORE.os, "open", side_effect=replace_after_open):
+            self.assertFalse(CORE.unchanged_generated_view(candidate, "current\n"))
+        CORE.write_rendered_task_views({candidate: "current\n"})
+        self.assertFalse(candidate.is_symlink())
+        self.assertEqual("current\n", other.read_text())
 
     def test_doctor_reports_replica_circuit_breaker(self) -> None:
         CORE.REPLICA_BLOCKED.parent.mkdir(exist_ok=True)
