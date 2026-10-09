@@ -684,7 +684,7 @@ exec "$@"
         ):
             VENDOR.release_identity(ROOT, CURRENT_VERSION)
         with (
-            patch.object(VENDOR, "git_output", side_effect=["", "b" * 40, "v0.4.1"]),
+            patch.object(VENDOR, "git_output", side_effect=["", "b" * 40, "v0.4.2"]),
             self.assertRaisesRegex(RuntimeError, "not tagged"),
         ):
             VENDOR.release_identity(ROOT, CURRENT_VERSION)

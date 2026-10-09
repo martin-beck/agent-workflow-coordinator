@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.4.1 - 2026-10-09
+
+- Add the opt-in `handoffctl fast observe --max-age-seconds N` bounded-age
+  Git observation contract. It coalesces concurrent scans without claiming
+  strict snapshot/doctor equivalence, protects receipt capacity, and fails
+  configuration/binding/backend changes closed.
+- Model bounded cache age, expiry, input change, timeout, and single-flight
+  behavior in the formal observation contract.
+
 ## 0.4.0 - 2026-10-09
 
 - Add an owner- and revision-bound `accept` command to record validated task-spec
