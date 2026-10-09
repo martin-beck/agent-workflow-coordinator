@@ -580,6 +580,12 @@ def role_removals(state: Path) -> list[list[str]]:
     ]
 
 
+def require_unchanged_sources(report: dict[str, bool]) -> None:
+    print(json.dumps(report), flush=True)
+    if any(report.values()):
+        raise RuntimeError("concurrency qualification invalid: source inputs changed")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--state", type=Path, required=True)
@@ -665,15 +671,12 @@ def main() -> None:
             ):
                 raise RuntimeError("adversarial concurrency integrity or liveness failure")
         if args.only_adversarial:
-            print(
-                json.dumps(
-                    {
-                        "source_product_inputs_changed": product_input_digest(source_product)
-                        != product_digest,
-                        "source_state_head_changed": git_head(source_state) != state_head,
-                    }
-                ),
-                flush=True,
+            require_unchanged_sources(
+                {
+                    "source_product_inputs_changed": product_input_digest(source_product)
+                    != product_digest,
+                    "source_state_head_changed": git_head(source_state) != state_head,
+                }
             )
             return
         mutation_batches = (
@@ -707,15 +710,12 @@ def main() -> None:
         ):
             print(json.dumps(batch(state, env, name, commands, args.timeout_seconds)), flush=True)
             print(json.dumps({"after": name, "integrity": doctor(state, env)}), flush=True)
-        print(
-            json.dumps(
-                {
-                    "source_product_inputs_changed": product_input_digest(source_product)
-                    != product_digest,
-                    "source_state_head_changed": git_head(source_state) != state_head,
-                }
-            ),
-            flush=True,
+        require_unchanged_sources(
+            {
+                "source_product_inputs_changed": product_input_digest(source_product)
+                != product_digest,
+                "source_state_head_changed": git_head(source_state) != state_head,
+            }
         )
 
 

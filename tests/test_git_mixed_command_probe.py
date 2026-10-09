@@ -6,7 +6,12 @@
 import unittest
 from pathlib import Path
 
-from git_mixed_command_probe import adversarial_commands, error_class, route_name
+from git_mixed_command_probe import (
+    adversarial_commands,
+    error_class,
+    require_unchanged_sources,
+    route_name,
+)
 
 
 class GitMixedCommandProbeTests(unittest.TestCase):
@@ -37,6 +42,12 @@ class GitMixedCommandProbeTests(unittest.TestCase):
         )
         self.assertEqual(15, sum(command != commands[-1] for command in commands))
         self.assertEqual(2, sum("write_text" in " ".join(command) for command in commands))
+
+    def test_source_drift_fails_probe(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "source inputs changed"):
+            require_unchanged_sources(
+                {"source_product_inputs_changed": True, "source_state_head_changed": False}
+            )
 
 
 if __name__ == "__main__":

@@ -173,6 +173,12 @@ head changed during that run. The harness exited nonzero as intended; its
 frozen, representative product fixture or quiet source interval is needed for
 post-repair performance qualification.
 
+Final exact-head review found the mixed-command probe still printed source
+drift without failing. Both its targeted adversarial and complete-route paths
+now exit nonzero if either the observed source state head or product inputs
+change. This keeps a successful probe exit from implying qualification on a
+moving source.
+
 This matrix covers a meaningful subset, **not all commands**. `checkpoint`,
 `gate`, `promote`, `pause`/`resume`, `recover-expired`, `unblock`, Git
 `migrate`/`upgrade`/`rollback`, `init`, and replica-push/failure paths still
