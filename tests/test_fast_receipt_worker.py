@@ -77,6 +77,9 @@ class FakeCore:
         del tasks
         return {"STATUS.md": "status\n"}
 
+    def project_settings(self) -> dict[str, bool]:
+        return {"status_view": True}
+
 
 class PublicationCore(FakeCore):
     def replication_enabled(self) -> bool:

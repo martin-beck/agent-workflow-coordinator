@@ -123,7 +123,8 @@ def _task_views(core: Any, oid: str) -> dict[str, str]:
             meta, body = _task_record(core, oid, name)
             tasks.append((core.ROOT / name, meta, body))
     views = {"CURRENT.md": core.render_current(tasks)}
-    views.update(core.render_status_views(tasks))
+    if core.project_settings()["status_view"]:
+        views.update(core.render_status_views(tasks))
     return views
 
 
@@ -149,13 +150,17 @@ def _task_change(core: Any, oid: str, task: str) -> tuple[dict[str, Any], str, d
         raise RuntimeError("receipt commit has no valid parent")
     before_meta, before_body = _task_record(core, parent, matches[0])
     after_meta, after_body = _task_record(core, oid, matches[0])
+    before_views = _task_views(core, parent)
     views = _task_views(core, oid)
-    if not projections <= set(views):
+    if not projections <= set(before_views) | set(views):
         raise RuntimeError("receipt commit changes paths outside target task")
     for projection, expected in views.items():
         found = _git(core, "show", f"{oid}:{projection}", check=False)
         if found != expected:
             raise RuntimeError("receipt commit task projection does not match committed tasks")
+    for projection in set(before_views) - set(views):
+        if _git(core, "ls-tree", "--name-only", oid, "--", projection).strip():
+            raise RuntimeError("receipt commit retains an obsolete task projection")
     return before_meta, before_body, after_meta, after_body
 
 
