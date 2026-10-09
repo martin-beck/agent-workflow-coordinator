@@ -375,7 +375,12 @@ def socket_service(core: Any) -> Iterator[None]:  # noqa: C901
                                     if not isinstance(selected, socket.socket):
                                         raise RuntimeError("invalid fast receipt selector peer")
                                     peer = selected
-                                    buffer, _deadline = pending[peer]
+                                    entry = pending.get(peer)
+                                    if entry is None:
+                                        # A listener event in this selected batch may have
+                                        # evicted this incomplete peer to admit a new client.
+                                        continue
+                                    buffer, _deadline = entry
                                     try:
                                         chunk = peer.recv(_MAX_REQUEST + 2 - len(buffer))
                                     except BlockingIOError:

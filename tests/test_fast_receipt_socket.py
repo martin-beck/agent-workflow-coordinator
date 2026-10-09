@@ -406,6 +406,8 @@ class FastReceiptSocketTests(unittest.TestCase):
                     )
                     reply = json.loads(_read_line(good, 4096))
                     self.assertEqual("queued-local", reply["ok"]["phase"])
+                stalled[0].settimeout(1)
+                self.assertEqual(b"", stalled[0].recv(1))
                 self.assertEqual(1, self._intent_count())
         finally:
             for peer in stalled:
