@@ -173,6 +173,74 @@ head changed during that run. The harness exited nonzero as intended; its
 frozen, representative product fixture or quiet source interval is needed for
 post-repair performance qualification.
 
+`tests/build_frozen_git_fixture.py` now constructs that disposable fixture
+from a read-only ASB state/product pair. It mirrors both Git object stores,
+pins the state commit, remote `main`, and each listed product worktree commit,
+then checks out each selected worktree in a fresh tree. It keeps canonical
+origin URLs for coordinator binding checks, while a fixture-local Git wrapper
+serves only the pinned product `ls-remote origin refs/heads/main` observation
+from the local mirror. Ignored build output and source dirty/untracked content
+are **not** copied, so this represents the complete clean tracked-worktree
+topology, not an exact byte copy of every active source checkout. Build it
+with an empty temporary output directory and sufficient free space:
+
+```sh
+python tests/build_frozen_git_fixture.py \
+  --source-state /path/to/asb-state --source-product /path/to/asb \
+  --output /tmp/your-empty-disposable-fixture
+```
+
+The 2026-10-09 fixture pinned ASB state
+`65ce1b74e39f06c22ec2dfdce706713793a3d132`, product primary
+`a9abcf2e63f761e314593e9abc6bf074b7418e5e`, and 750 product worktrees
+with 751 state tasks. The benchmark normalizes observed product metadata
+*once* before cloning its baseline/candidate states; otherwise reconcile
+time-stamps changed worktree observations at different setup times. It
+compares committed, staged, dirty, and untracked domain-state bytes while
+excluding only the exact files deliberately overlaid from the two runtimes;
+ignored `.runtime` authority state is included except ephemeral lock bytes
+and the wall-clock `at` value of the last-reconcile marker. It also compares
+Git history depth and requires each measured command to extend its starting
+HEAD without rewriting it. An exact overlay-byte fingerprint must stay
+unchanged within each command, as must every non-HEAD Git ref. Output,
+outcomes, and the generated current
+view are compared, and both source checkout inputs are fingerprinted before
+and after a run (including raw ignored runtime files in the source state). An earlier
+static `doctor` pair was 0.987 s baseline versus 1.014 s candidate; this
+route has no material speedup, and that run predates the stronger fingerprint
+checks, so it is diagnostic rather than final qualification. A final exact-patch
+static `doctor` pair passed all output, domain-byte, history, ref, overlay,
+and source-stability checks at 1.033 s baseline versus 1.045 s candidate;
+the 5% gate is not met.
+
+On the same frozen fixture, `tests/git_mixed_command_probe.py
+--only-adversarial` admitted all 16 disjoint claims without lock timeout
+(8.006 s batch wall, 7.368 s maximum lock wait). Then 15 wrong-owner,
+stale-revision, and malformed-gate invocations raced one legitimate update.
+All 15 failed with their specific expected rejection class; the good update
+finished in 1.285 s, exactly one commit and task-revision advance occurred,
+the note appeared once, ownership was retained, and the unauthorized `run`
+subprocess marker was absent. Static/live `doctor` passed; the source product
+input fingerprint and state HEAD stayed unchanged. Independent review then
+found that the probe did not inspect uncommitted effects elsewhere or dirty
+source-state drift. The repaired probe checks both and requires committed
+changes to stay within the good worker's task, session, and generated views.
+The stronger rerun on the same frozen fixture passed: 16/16 claims succeeded
+without timeout; the good update completed in 1.007 s among 15 specifically
+rejected requests, made exactly one commit and revision advance, left no
+unexpected committed, uncommitted, or ignored-runtime changes, and recorded
+exactly one session record matching the resulting task snapshot and its note once.
+Ownership, static/live doctor, source-state/product fingerprints, and the
+unauthorized-subprocess check all passed. The fixture builder now rejects
+output paths overlapping any linked state or product worktree. This latest
+repaired result also checks that non-HEAD refs and the starting Git ancestry
+are preserved. Independent review found and drove repairs for several
+false-pass paths and confirmed the final ancestry guard by inspection; the
+final exact-patch adversarial rerun passed on the same 750-worktree fixture:
+16/16 claims, all 15 expected hostile rejections, one good update in 0.662 s,
+one exact matching session record, one commit extending the starting HEAD,
+no non-HEAD ref or runtime changes, and green static/live doctors.
+
 Final exact-head review found the mixed-command probe still printed source
 drift without failing. Both its targeted adversarial and complete-route paths
 now exit nonzero if either the observed source state head or product inputs

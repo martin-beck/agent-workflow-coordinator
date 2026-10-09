@@ -79,21 +79,28 @@ def prepare(
             + "\n"
         )
         checked("git", "-C", str(state), "add", "task-spec-policy.json")
-        checked(
-            "git",
-            "-C",
-            str(state),
-            "-c",
-            "user.name=Fixture",
-            "-c",
-            "user.email=fixture@example.invalid",
-            "-c",
-            "commit.gpgsign=false",
-            "commit",
-            "-q",
-            "-m",
-            "fixture task-spec policy",
+        staged = subprocess.run(  # noqa: S603
+            ["git", "-C", str(state), "diff", "--cached", "--quiet", "--exit-code"],  # noqa: S607
+            check=False,
         )
+        if staged.returncode not in {0, 1}:
+            raise RuntimeError("failed to inspect the staged fixture task-spec policy")
+        if staged.returncode == 1:
+            checked(
+                "git",
+                "-C",
+                str(state),
+                "-c",
+                "user.name=Fixture",
+                "-c",
+                "user.email=fixture@example.invalid",
+                "-c",
+                "commit.gpgsign=false",
+                "commit",
+                "-q",
+                "-m",
+                "fixture task-spec policy",
+            )
     (state / ".runtime").mkdir(exist_ok=True)
     bin_dir = root / "bin"
     bin_dir.mkdir()
@@ -101,7 +108,13 @@ def prepare(
     gh.write_text("#!/usr/bin/env python3\nprint('[]')\n")
     gh.chmod(0o700)
     env = dict(os.environ)
-    env["PATH"] = str(bin_dir) + os.pathsep + env["PATH"]
+    fixture_bin = source_product.parent / "bin"
+    fixture_path = (
+        str(fixture_bin) + os.pathsep
+        if (source_product.parent / "fixture.json").exists() and (fixture_bin / "git").is_file()
+        else ""
+    )
+    env["PATH"] = str(bin_dir) + os.pathsep + fixture_path + env["PATH"]
     # Source worktrees are observed only; Git must not refresh their indexes.
     env["GIT_OPTIONAL_LOCKS"] = "0"
     return state, product, env
