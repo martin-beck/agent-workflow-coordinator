@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import argparse
+import datetime as dt
 import fcntl
 import hashlib
 import json
@@ -22,6 +23,19 @@ else:  # pragma: no cover - direct vendored import
 
 _OID = re.compile(r"[0-9a-f]{40}\Z")
 _REJECTABLE = ("stale revision", "is owned by", "heartbeat requires an active task")
+_HEARTBEAT_FIELDS = frozenset(("task_revision", "updated_at", "claim_expires"))
+
+
+def _require_bound_store(core: Any, store: ReceiptStore) -> None:
+    core.assert_project_binding()
+    if core.backend_selection()["backend"] != "git":
+        raise RuntimeError("fast receipts require Git authority")
+    expected = core.coordinator_lock_path().parent / "fast-receipts.sqlite3"
+    if (
+        store.project_id != core.project_binding()["project_id"]
+        or store.path.resolve() != expected.resolve()
+    ):
+        raise RuntimeError("fast receipt store does not match the bound project")
 
 
 @contextmanager
@@ -64,7 +78,22 @@ def _git(core: Any, *args: str, check: bool = True) -> str:
     return str(result.stdout)
 
 
-def _task_meta_at_commit(core: Any, oid: str, task: str) -> dict[str, Any]:
+def _task_record(core: Any, oid: str, path: str) -> tuple[dict[str, Any], str]:
+    source = _git(core, "show", f"{oid}:{path}")
+    if not source.startswith("---\n"):
+        raise RuntimeError("receipt task has no front matter")
+    end = source.find("\n---\n", 4)
+    if end < 0:
+        raise RuntimeError("receipt task front matter is incomplete")
+    value = json.loads(source[4:end])
+    if not isinstance(value, dict):
+        raise RuntimeError("receipt task front matter is invalid")
+    return value, source[end + 5 :]
+
+
+def _task_change(
+    core: Any, oid: str, task: str
+) -> tuple[dict[str, Any], str, dict[str, Any], str]:
     paths = _git(core, "diff-tree", "--no-commit-id", "--name-only", "-r", oid).splitlines()
     matches = [
         path
@@ -74,16 +103,55 @@ def _task_meta_at_commit(core: Any, oid: str, task: str) -> dict[str, Any]:
     ]
     if len(matches) != 1:
         raise RuntimeError("receipt commit does not change exactly one target task")
-    source = _git(core, "show", f"{oid}:{matches[0]}")
-    if not source.startswith("---\n"):
-        raise RuntimeError("receipt task has no front matter")
-    end = source.find("\n---\n", 4)
-    if end < 0:
-        raise RuntimeError("receipt task front matter is incomplete")
-    value = json.loads(source[4:end])
-    if not isinstance(value, dict):
-        raise RuntimeError("receipt task front matter is invalid")
-    return value
+    allowed = {matches[0], "CURRENT.md", "STATUS.md"}
+    if any(
+        path not in allowed and not re.fullmatch(r"status/STATUS-[^/]+\.md", path)
+        for path in paths
+    ):
+        raise RuntimeError("receipt commit changes paths outside task projections")
+    parent = _git(core, "rev-parse", f"{oid}^").strip()
+    if not _OID.fullmatch(parent):
+        raise RuntimeError("receipt commit has no valid parent")
+    before_meta, before_body = _task_record(core, parent, matches[0])
+    after_meta, after_body = _task_record(core, oid, matches[0])
+    return before_meta, before_body, after_meta, after_body
+
+
+def _verify_heartbeat_delta(
+    core: Any, intent: dict[str, Any], payload: dict[str, Any], oid: str
+) -> int:
+    before, before_body, after, after_body = _task_change(core, oid, str(intent["task_id"]))
+    expected_before = int(intent["expected_revision"])
+    owner = payload.get("owner")
+    if (
+        before.get("id") != intent["task_id"]
+        or before.get("owner") != owner
+        or before.get("status") != "in_progress"
+        or before.get("task_revision") != expected_before
+        or after.get("id") != intent["task_id"]
+        or after.get("owner") != owner
+        or after.get("status") != "in_progress"
+        or after.get("task_revision") != expected_before + 1
+    ):
+        raise RuntimeError("receipt commit task state does not match intent")
+    before_stable = {key: value for key, value in before.items() if key not in _HEARTBEAT_FIELDS}
+    after_stable = {key: value for key, value in after.items() if key not in _HEARTBEAT_FIELDS}
+    if before_stable != after_stable:
+        raise RuntimeError("receipt commit changes non-heartbeat task fields")
+    updated = dt.datetime.fromisoformat(str(after["updated_at"]))
+    expiry = dt.datetime.fromisoformat(str(after["claim_expires"]))
+    if updated.tzinfo is None or expiry.tzinfo is None:
+        raise RuntimeError("receipt commit heartbeat timestamps are naive")
+    seconds = (expiry - updated).total_seconds()
+    requested = int(payload["lease_minutes"]) * 60
+    if abs(seconds - requested) > 2:
+        raise RuntimeError("receipt commit lease does not match queued heartbeat")
+    expected_body = core._transition_note(
+        before_body, f"Heartbeat by {owner}.", str(after["updated_at"])
+    )
+    if after_body != expected_body:
+        raise RuntimeError("receipt commit body does not match heartbeat")
+    return expected_before + 1
 
 
 def _require_signed_branch_commit(core: Any, oid: str) -> None:
@@ -113,15 +181,7 @@ def verify_local_commit(core: Any, intent: dict[str, Any], oid: str) -> int:
     payload = json.loads(str(intent["payload_json"]))
     if not isinstance(payload, dict):
         raise RuntimeError("receipt intent payload is invalid")
-    meta = _task_meta_at_commit(core, oid, str(intent["task_id"]))
-    expected = int(intent["expected_revision"]) + 1
-    if (
-        meta.get("id") != intent["task_id"]
-        or meta.get("owner") != payload.get("owner")
-        or meta.get("status") != "in_progress"
-        or meta.get("task_revision") != expected
-    ):
-        raise RuntimeError("receipt commit task state does not match intent")
+    expected = _verify_heartbeat_delta(core, intent, payload, oid)
     if core.project_settings()["commit_signoff"]:
         committer = _git(core, "show", "-s", "--format=%cn <%ce>", oid).strip()
         if lines.count(f"Signed-off-by: {committer}") != 1:
@@ -164,9 +224,7 @@ def _validated_heartbeat_intent(intent: dict[str, Any]) -> dict[str, Any]:
 
 def process_one(core: Any, store: ReceiptStore) -> dict[str, Any] | None:
     """Execute one intent; unknown post-commit state remains explicitly ambiguous."""
-    core.assert_project_binding()
-    if core.backend_selection()["backend"] != "git":
-        raise RuntimeError("fast receipts require Git authority")
+    _require_bound_store(core, store)
     intent = store.claim_next()
     if intent is None:
         return None
@@ -199,9 +257,7 @@ def process_one(core: Any, store: ReceiptStore) -> dict[str, Any] | None:
 
 def recover_running(core: Any, store: ReceiptStore) -> list[dict[str, Any]]:
     """Resolve interrupted reservations without re-executing an external effect."""
-    core.assert_project_binding()
-    if core.backend_selection()["backend"] != "git":
-        raise RuntimeError("fast receipts require Git authority")
+    _require_bound_store(core, store)
     outcomes: list[dict[str, Any]] = []
     for intent in store.running():
         receipt_id = str(intent["receipt_id"])
@@ -312,9 +368,7 @@ def _finish_publications(
 
 def publish_pending(core: Any, store: ReceiptStore) -> list[dict[str, Any]]:
     """Observe exact remote ancestry after optional non-force publication."""
-    core.assert_project_binding()
-    if core.backend_selection()["backend"] != "git":
-        raise RuntimeError("fast receipts require Git authority")
+    _require_bound_store(core, store)
     pending = store.pending_publication()
     if not pending:
         return []

@@ -23,7 +23,7 @@ from unittest.mock import patch
 
 from fixture_ids import project_uuid
 
-from tools.fast_receipt_worker import process_one, publish_pending
+from tools.fast_receipt_worker import process_one, publish_pending, verify_local_commit
 from tools.fast_receipts import ReceiptStore
 
 SOURCE = Path(__file__).resolve().parent.parent / "tools/handoffctl.py"
@@ -2196,6 +2196,40 @@ class HandoffTest(unittest.TestCase):
         self.assertEqual("published-remote", publication[0]["phase"], publication[0])
         self.assertEqual(result["commit_oid"], publication[0]["remote_oid"])
         self.assertEqual([], store.pending_publication())
+
+        forged = store.enqueue_heartbeat(
+            key="worker-a:heartbeat:2",
+            task="AR-0001",
+            owner="worker-a",
+            expected_revision=2,
+            lease_minutes=20,
+        )
+        meta, body = CORE.read_task(path)
+        meta["priority"] = "P0"
+        meta["task_revision"] = 3
+        meta["updated_at"] = CORE.now()
+        meta["claim_expires"] = (
+            dt.datetime.fromisoformat(meta["updated_at"]) + dt.timedelta(minutes=20)
+        ).isoformat()
+        CORE.write_task(path, meta, body)
+        run_git(["git", "-C", str(self.root), "add", str(path.relative_to(self.root))])
+        run_git(
+            [
+                "git",
+                "-C",
+                str(self.root),
+                "commit",
+                "-S",
+                "-s",
+                "-m",
+                "chore(state): heartbeat AR-0001",
+                "-m",
+                f"Handoffctl-Receipt: {forged['receipt_id']}",
+            ]
+        )
+        forged_oid = CORE.current_commit_oid()
+        with self.assertRaisesRegex(RuntimeError, "non-heartbeat task fields"):
+            verify_local_commit(CORE, forged, forged_oid)
 
     def fake_scan(self) -> dict[str, object]:
         return {

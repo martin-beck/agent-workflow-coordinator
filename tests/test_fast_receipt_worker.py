@@ -35,6 +35,9 @@ class FakeCore:
     def coordinator_lock_path(self) -> Path:
         return self.ROOT / "private/state.lock"
 
+    def project_binding(self) -> dict[str, str]:
+        return {"project_id": (self.ROOT / ".project-id").read_text()}
+
     def backend_selection(self) -> dict[str, str]:
         return {"backend": "git"}
 
@@ -73,7 +76,9 @@ class FastReceiptWorkerTests(unittest.TestCase):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
-        self.store = ReceiptStore(self.root / "private/receipts.sqlite3", str(uuid.uuid4()))
+        project_id = str(uuid.uuid4())
+        (self.root / ".project-id").write_text(project_id)
+        self.store = ReceiptStore(self.root / "private/fast-receipts.sqlite3", project_id)
         self.addCleanup(self.store.close)
 
     def enqueue(self) -> str:
@@ -104,6 +109,34 @@ class FastReceiptWorkerTests(unittest.TestCase):
         self.assertEqual(receipt_id, verify.call_args.args[1]["receipt_id"])
         self.assertIsNone(process_one(core, self.store))
         self.assertEqual(1, core.calls)
+
+    def test_foreign_project_store_is_rejected_before_reservation(self) -> None:
+        receipt_id = self.enqueue()
+        (self.root / ".project-id").write_text(str(uuid.uuid4()))
+        core = FakeCore(self.root, "success")
+        with self.assertRaisesRegex(RuntimeError, "does not match the bound project"):
+            process_one(core, self.store)
+        current = self.store.read(receipt_id)
+        assert current is not None
+        self.assertEqual("queued-local", current["phase"])
+        self.assertEqual(0, core.calls)
+
+    def test_wrong_common_directory_store_is_rejected(self) -> None:
+        other = ReceiptStore(self.root / "private/other.sqlite3", self.store.project_id)
+        self.addCleanup(other.close)
+        queued = other.enqueue_heartbeat(
+            key="worker-a:heartbeat:1",
+            task="AR-0120",
+            owner="worker-a",
+            expected_revision=1,
+            lease_minutes=20,
+        )
+        core = FakeCore(self.root, "success")
+        with self.assertRaisesRegex(RuntimeError, "does not match the bound project"):
+            process_one(core, other)
+        current = other.read(str(queued["receipt_id"]))
+        assert current is not None
+        self.assertEqual("queued-local", current["phase"])
 
     def test_stale_admission_is_rejected_without_local_commit(self) -> None:
         self.enqueue()
