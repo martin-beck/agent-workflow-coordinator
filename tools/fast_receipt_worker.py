@@ -20,10 +20,13 @@ from contextlib import contextmanager
 from typing import Any
 
 if __package__:
-    from .fast_receipts import ReceiptStore
+    from .fast_receipts import ReceiptStore, validate_update_changes
     from .session_records import MAX_SESSION_RECORDS, validate_session_record
 else:  # pragma: no cover - direct vendored import
-    from fast_receipts import ReceiptStore  # type: ignore[import-not-found,no-redef]
+    from fast_receipts import (  # type: ignore[import-not-found,no-redef]
+        ReceiptStore,
+        validate_update_changes,
+    )
     from session_records import (  # type: ignore[import-not-found,no-redef]
         MAX_SESSION_RECORDS,
         validate_session_record,
@@ -471,17 +474,13 @@ def _validated_intent(intent: dict[str, Any]) -> dict[str, Any]:
         or not isinstance(payload.get("expected_revision"), int)
         or isinstance(payload.get("expected_revision"), bool)
         or payload["expected_revision"] < 1
-        or not isinstance(payload.get("changes"), dict)
-        or not payload["changes"]
-        or set(payload["changes"]) - {"status", "priority", "summary", "next_action"}
-        or not all(
-            isinstance(value, str) and 1 <= len(value) <= 4096 and "\x00" not in value
-            for value in payload["changes"].values()
-        )
-        or payload["changes"].get("status") not in {None, "in_progress"}
-        or payload["changes"].get("priority") not in {None, "P0", "P1", "P2", "P3", "P4"}
     ):
         raise RuntimeError("receipt update intent fields are invalid")
+    if payload.get("operation") == "update":
+        try:
+            validate_update_changes(payload.get("changes"))
+        except ValueError as error:
+            raise RuntimeError("receipt update intent fields are invalid") from error
     if payload.get("operation") not in {"claim", "heartbeat", "promote", "update"}:
         raise RuntimeError("receipt operation is unsupported")
     return payload

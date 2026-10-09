@@ -17,8 +17,17 @@ from contextlib import contextmanager, suppress
 from pathlib import Path
 from typing import Any
 
+if __package__:
+    from .fast_receipts import validate_update_changes
+else:  # pragma: no cover - direct vendored import
+    from fast_receipts import validate_update_changes  # type: ignore[import-not-found,no-redef]
+
 _SOCKET_NAME = "fast-receipts.sock"
-_MAX_REQUEST = 4096
+# A fully bounded update may carry a 4,000-character summary, a
+# 1,024-character next action, and a 4,096-character note.  json.dumps()
+# escapes non-ASCII input, so a maximum-length Unicode request is about 110
+# KiB on the wire.  The single-frame protocol stays bounded at 128 KiB.
+_MAX_REQUEST = 131072
 _MAX_REPLY = 16384
 _PUBLIC_FIELDS = (
     "receipt_id",
@@ -301,21 +310,18 @@ def _require_request(request: Any) -> dict[str, Any]:  # noqa: C901 - strict wir
             "key",
         }:
             raise RuntimeError("invalid fast update request")
-        changes = request["changes"]
         if (
             not isinstance(request["expected_revision"], int)
             or isinstance(request["expected_revision"], bool)
             or not all(
                 isinstance(request[field], str) for field in ("task", "owner", "note", "key")
             )
-            or not isinstance(changes, dict)
-            or not changes
-            or set(changes) - {"status", "priority", "summary", "next_action"}
-            or not all(isinstance(value, str) for value in changes.values())
-            or changes.get("status") not in {None, "in_progress"}
-            or changes.get("priority") not in {None, "P0", "P1", "P2", "P3", "P4"}
         ):
             raise RuntimeError("invalid fast update request fields")
+        try:
+            validate_update_changes(request["changes"])
+        except ValueError as error:
+            raise RuntimeError("invalid fast update request fields") from error
         return request
     raise RuntimeError("unknown fast receipt socket action")
 

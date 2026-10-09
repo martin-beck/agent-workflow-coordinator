@@ -27,6 +27,7 @@ from tools.fast_receipt_worker import (
 )
 from tools.fast_receipts import ReceiptStore
 from tools.handoffctl import SubprocessTimeoutError
+from tools.session_records import MAX_SESSION_RECORDS, build_session_record
 
 
 class FakeCore:
@@ -713,6 +714,44 @@ class FastReceiptWorkerTests(unittest.TestCase):
                 core, "b" * 40, "sessions/AR-0120.jsonl", "AR-0120", after
             )
 
+    def test_session_rows_validate_canonical_bounded_history(self) -> None:
+        def record(revision: int) -> dict[str, object]:
+            return build_session_record(
+                {
+                    "id": "AR-0120",
+                    "task_revision": revision,
+                    "status": "in_progress",
+                    "branch": "ar0120-example",
+                    "worktree_key": "example",
+                    "spec_ref": "spec.json",
+                    "spec_revision": 1,
+                    "next_action": "Continue the bounded task.",
+                },
+                "update",
+                f"2026-10-09T10:00:{revision:02d}+00:00",
+            )
+
+        first = record(1)
+        second = record(2)
+        source = "\n".join(
+            json.dumps(item, sort_keys=True, separators=(",", ":")) for item in (first, second)
+        )
+        self.assertEqual([first, second], worker._session_rows(source, "AR-0120"))
+        for source, message in (
+            ("not-json", "line 1 is invalid"),
+            (json.dumps([first]), "line 1 is invalid"),
+            (json.dumps({**first, "task": "AR-9999"}), "does not match target"),
+            ("\n".join(json.dumps(first) for _ in range(2)), "does not match target"),
+            (
+                "\n".join(
+                    json.dumps(record(number)) for number in range(1, MAX_SESSION_RECORDS + 2)
+                ),
+                "bounded retention",
+            ),
+        ):
+            with self.subTest(message=message), self.assertRaisesRegex(RuntimeError, message):
+                worker._session_rows(source, "AR-0120")
+
     def test_verify_local_commit_dispatch_and_fail_closed_metadata(self) -> None:
         core = FakeCore(self.root, "success")
         core.project_settings = lambda: {"commit_signoff": False}  # type: ignore[method-assign]
@@ -822,9 +861,27 @@ class FastReceiptWorkerTests(unittest.TestCase):
             }
 
         self.assertEqual(valid, worker._validated_intent(intent(valid)))
+        valid_update = {
+            "changes": {"next_action": "Run focused tests."},
+            "expected_revision": 1,
+            "note": "Refined the plan.",
+            "operation": "update",
+            "owner": "worker-a",
+            "project_id": self.store.project_id,
+            "task": "AR-0120",
+        }
+        self.assertEqual(valid_update, worker._validated_intent(intent(valid_update)))
         for payload, message in (
             ({**valid, "lease_minutes": True}, "claim intent fields"),
             ({**valid, "owner": 1}, "claim intent fields"),
+            (
+                {**valid_update, "changes": {"next_action": "line\nbreak"}},
+                "update intent fields",
+            ),
+            (
+                {**valid_update, "changes": {"summary": "x" * 4001}},
+                "update intent fields",
+            ),
             ({**valid, "operation": "unknown"}, "unsupported"),
             (["not", "an", "object"], "canonical typed fields"),
         ):

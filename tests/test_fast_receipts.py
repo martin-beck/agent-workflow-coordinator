@@ -183,8 +183,10 @@ class FastReceiptTests(unittest.TestCase):
             {"changes": {"status": "done"}},
             {"changes": {"priority": "invalid"}},
             {"changes": {"owner": "injected"}},
-            {"changes": {"summary": "x" * 4097}},
+            {"changes": {"summary": "x" * 4001}},
             {"changes": {"summary": "bad\x00value"}},
+            {"changes": {"next_action": "x" * 1025}},
+            {"changes": {"next_action": "line\nbreak"}},
         )
         for values in invalid_changes:
             with self.subTest(values=values), self.assertRaises(ValueError):
