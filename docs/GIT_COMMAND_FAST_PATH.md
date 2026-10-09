@@ -287,6 +287,36 @@ This matrix covers a meaningful subset, **not all commands**. `checkpoint`,
 require route-specific fixtures and differential review. The trace is a
 diagnostic on one host, not a statistical p95 or a 5% acceptance result.
 
+### Partial projection and privacy-scan checkpoint
+
+The signed AR-0120 checkpoint ending at `79b2f9b` avoids fsyncing unchanged,
+ordinary generated task views, reuses the rendered view during post-write
+validation only when the freshly reloaded tasks and project settings are
+identical, and applies conservative literal prefilters before the unchanged
+privacy regexes. It retains the full post-write task scan, fresh projection
+content checks, signed Git commits, and strict command completion semantics.
+Race tests cover a replaced projection pathname, out-of-band sibling task and
+profile edits, wrong-mode and linked views, and rollback. An independent
+exact-head review found no actionable P1/P2 defect. The native suite passed
+1,734 tests and the combined branch-coverage gate at 95%; the CCN-14,
+formatting, lint, typing, and strict vendor privacy-closure gates passed.
+
+On the frozen 750-worktree ASB fixture, an unprofiled full privacy pass took
+0.812/0.809 seconds without prefilters and 0.317/0.312 seconds with them,
+returning the same finding list. A single cProfiled, signed Git update took
+0.625 seconds before the view/unchanged-content reuse and 0.486 seconds after;
+these are exploratory individual samples, not a paired p95 result. The
+`02f5b45` 16-worker probe passed all 16 disjoint claims in 6.171 seconds and
+the 15-rejected/one-good adversarial batch in 1.189 seconds, with exact
+integrity checks green. Its four-each heartbeat/update/`run`/reconcile batch
+still had **six lock timeouts**, despite green post-batch static/live doctors;
+maximum measured exclusive holds were 3.284 seconds for `git_mutate` and
+2.182 seconds for `git_reconcile`. A prior `4eba510` run also had six mixed
+timeouts. The final `79b2f9b` refactor restored the complexity gate but has
+not yet been remeasured in that 16-worker probe. These results do not meet
+the accepted-worker liveness or per-command 5% targets, and no opt-in receipt
+runtime is implemented yet. The checkpoint is a partial optimization only.
+
 ## Command inventory and lower bounds
 
 | Git-backed route | Completion required by the current contract | Principal work and target caveat |
