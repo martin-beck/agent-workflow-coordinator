@@ -2197,7 +2197,7 @@ class HandoffTest(unittest.TestCase):
         self.assertEqual(result["commit_oid"], publication[0]["remote_oid"])
         self.assertEqual([], store.pending_publication())
 
-        forged = store.enqueue_heartbeat(
+        view_forged = store.enqueue_heartbeat(
             key="worker-a:heartbeat:2",
             task="AR-0001",
             owner="worker-a",
@@ -2205,8 +2205,47 @@ class HandoffTest(unittest.TestCase):
             lease_minutes=20,
         )
         meta, body = CORE.read_task(path)
-        meta["priority"] = "P0"
         meta["task_revision"] = 3
+        meta["updated_at"] = CORE.now()
+        meta["claim_expires"] = (
+            dt.datetime.fromisoformat(meta["updated_at"]) + dt.timedelta(minutes=20)
+        ).isoformat()
+        CORE.write_task(
+            path,
+            meta,
+            CORE._transition_note(body, "Heartbeat by worker-a.", meta["updated_at"]),
+        )
+        (self.root / "CURRENT.md").write_text("corrupted generated view\n")
+        run_git(
+            ["git", "-C", str(self.root), "add", str(path.relative_to(self.root)), "CURRENT.md"]
+        )
+        run_git(
+            [
+                "git",
+                "-C",
+                str(self.root),
+                "commit",
+                "-S",
+                "-s",
+                "-m",
+                "chore(state): heartbeat AR-0001",
+                "-m",
+                f"Handoffctl-Receipt: {view_forged['receipt_id']}",
+            ]
+        )
+        with self.assertRaisesRegex(RuntimeError, "outside target heartbeat task"):
+            verify_local_commit(CORE, view_forged, CORE.current_commit_oid())
+
+        field_forged = store.enqueue_heartbeat(
+            key="worker-a:heartbeat:3",
+            task="AR-0001",
+            owner="worker-a",
+            expected_revision=3,
+            lease_minutes=20,
+        )
+        meta, body = CORE.read_task(path)
+        meta["priority"] = "P0"
+        meta["task_revision"] = 4
         meta["updated_at"] = CORE.now()
         meta["claim_expires"] = (
             dt.datetime.fromisoformat(meta["updated_at"]) + dt.timedelta(minutes=20)
@@ -2224,12 +2263,11 @@ class HandoffTest(unittest.TestCase):
                 "-m",
                 "chore(state): heartbeat AR-0001",
                 "-m",
-                f"Handoffctl-Receipt: {forged['receipt_id']}",
+                f"Handoffctl-Receipt: {field_forged['receipt_id']}",
             ]
         )
-        forged_oid = CORE.current_commit_oid()
         with self.assertRaisesRegex(RuntimeError, "non-heartbeat task fields"):
-            verify_local_commit(CORE, forged, forged_oid)
+            verify_local_commit(CORE, field_forged, CORE.current_commit_oid())
 
     def fake_scan(self) -> dict[str, object]:
         return {

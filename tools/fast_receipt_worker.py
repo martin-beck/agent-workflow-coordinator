@@ -91,9 +91,7 @@ def _task_record(core: Any, oid: str, path: str) -> tuple[dict[str, Any], str]:
     return value, source[end + 5 :]
 
 
-def _task_change(
-    core: Any, oid: str, task: str
-) -> tuple[dict[str, Any], str, dict[str, Any], str]:
+def _task_change(core: Any, oid: str, task: str) -> tuple[dict[str, Any], str, dict[str, Any], str]:
     paths = _git(core, "diff-tree", "--no-commit-id", "--name-only", "-r", oid).splitlines()
     matches = [
         path
@@ -103,12 +101,11 @@ def _task_change(
     ]
     if len(matches) != 1:
         raise RuntimeError("receipt commit does not change exactly one target task")
-    allowed = {matches[0], "CURRENT.md", "STATUS.md"}
-    if any(
-        path not in allowed and not re.fullmatch(r"status/STATUS-[^/]+\.md", path)
-        for path in paths
-    ):
-        raise RuntimeError("receipt commit changes paths outside task projections")
+    # A heartbeat changes only revision, timestamps and its task history body;
+    # none of those fields are rendered in CURRENT/STATUS. If a future renderer
+    # changes that assumption, fail closed until this verifier is updated.
+    if paths != matches:
+        raise RuntimeError("receipt commit changes paths outside target heartbeat task")
     parent = _git(core, "rev-parse", f"{oid}^").strip()
     if not _OID.fullmatch(parent):
         raise RuntimeError("receipt commit has no valid parent")
