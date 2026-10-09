@@ -200,6 +200,40 @@ class FastReceiptTests(unittest.TestCase):
             ReceiptStore(self.path, self.project_id)
         self.assertFalse(self.path.exists())
 
+    def test_unsupported_sqlite_and_schema_fail_before_queue_admission(self) -> None:
+        with (
+            patch("tools.fast_receipts.sqlite3.sqlite_version_info", (3, 36, 0)),
+            self.assertRaisesRegex(RuntimeError, "SQLITE_VERSION_UNSUPPORTED"),
+        ):
+            ReceiptStore(self.path, self.project_id)
+        self.assertFalse(self.path.exists())
+        self.path.parent.mkdir(mode=0o700)
+        with sqlite3.connect(self.path) as connection:
+            connection.execute("PRAGMA user_version=2")
+        self.path.chmod(0o600)
+        with self.assertRaisesRegex(RuntimeError, "unsupported receipt database schema"):
+            ReceiptStore(self.path, self.project_id)
+
+    def test_invalid_ids_codes_and_missing_outcomes_fail_closed(self) -> None:
+        store = self.store()
+        unknown = uuid.uuid4().hex
+        with self.assertRaisesRegex(ValueError, "invalid receipt id"):
+            store.read("not-an-id")
+        with self.assertRaisesRegex(ValueError, "invalid receipt id"):
+            store._finish_running("not-an-id", "rejected")
+        with self.assertRaisesRegex(ValueError, "invalid rejection code"):
+            store.record_rejection(unknown, "bad code")
+        with self.assertRaisesRegex(ValueError, "invalid ambiguity code"):
+            store.record_ambiguity(unknown, "bad code")
+        with self.assertRaisesRegex(ValueError, "invalid observed remote oid"):
+            store.record_remote_observation(unknown, "not-an-oid")
+        with self.assertRaisesRegex(ValueError, "invalid publication failure code"):
+            store.record_publication_failure(unknown, "bad code")
+        with self.assertRaisesRegex(RuntimeError, "unknown receipt"):
+            store.record_rejection(unknown, "ADMISSION_REJECTED")
+        with self.assertRaisesRegex(RuntimeError, "not locally completed"):
+            store.record_publication_failure(unknown, "REMOTE_UNAVAILABLE")
+
     def test_rejects_non_wal_connection(self) -> None:
         memory = sqlite3.connect(":memory:", isolation_level=None)
         with (
