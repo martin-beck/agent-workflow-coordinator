@@ -144,7 +144,17 @@ class GitMixedCommandProbeTests(unittest.TestCase):
                         "task": task_id,
                     }
                     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
-                    completed[receipt_id] = {"commit_oid": commit_oid}
+                    completed[receipt_id] = {
+                        "project_id": project_id,
+                        "operation": "heartbeat",
+                        "task_id": task_id,
+                        "expected_revision": 2,
+                        "phase": "completed-local",
+                        "commit_oid": commit_oid,
+                        "result_revision": 3,
+                        "error_code": None,
+                        "remote_oid": None,
+                    }
                     connection.execute(
                         "INSERT INTO intents VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                         (
@@ -169,6 +179,25 @@ class GitMixedCommandProbeTests(unittest.TestCase):
                 self.assertTrue(
                     any(
                         "missing or extra durable intents" in error
+                        for error in receipt_queue_errors(state, completed)
+                    )
+                )
+                with sqlite3.connect(database) as connection:
+                    connection.execute("DELETE FROM intents WHERE receipt_id='extra'")
+                    rows = connection.execute(
+                        "SELECT receipt_id, idempotency_key, task_id, payload_json, "
+                        "input_digest FROM intents WHERE receipt_id IN (?, ?) ORDER BY receipt_id",
+                        ("0" * 32, "0" * 31 + "1"),
+                    ).fetchall()
+                    for current, other in ((rows[0], rows[1]), (rows[1], rows[0])):
+                        connection.execute(
+                            "UPDATE intents SET idempotency_key=?, task_id=?, "
+                            "payload_json=?, input_digest=? WHERE receipt_id=?",
+                            (*other[1:], current[0]),
+                        )
+                self.assertTrue(
+                    any(
+                        "does not match public receipt" in error
                         for error in receipt_queue_errors(state, completed)
                     )
                 )

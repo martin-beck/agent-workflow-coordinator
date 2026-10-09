@@ -257,8 +257,21 @@ def receipt_queue_errors(
         ):
             errors.append(f"{task_id}: durable intent differs from requested heartbeat")
         receipt = completed.get(str(row["receipt_id"]))
-        if receipt is None or row["commit_oid"] != receipt["commit_oid"]:
-            errors.append(f"{task_id}: durable intent commit does not match public receipt")
+        if receipt is None or any(
+            row[field] != receipt[field]
+            for field in (
+                "project_id",
+                "operation",
+                "task_id",
+                "expected_revision",
+                "phase",
+                "commit_oid",
+                "result_revision",
+                "error_code",
+                "remote_oid",
+            )
+        ):
+            errors.append(f"{task_id}: durable intent does not match public receipt")
     return errors
 
 
