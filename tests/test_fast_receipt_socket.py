@@ -8,6 +8,7 @@ import contextlib
 import io
 import json
 import os
+import queue
 import socket
 import sqlite3
 import tempfile
@@ -20,6 +21,8 @@ from unittest.mock import patch
 from tools.fast_receipt_socket import (
     _client_common_dir,
     _fast_request,
+    _read_line,
+    _require_request,
     _safe_socket,
     socket_service,
     try_socket_fast,
@@ -97,6 +100,50 @@ class FastReceiptSocketTests(unittest.TestCase):
         marker.write_text("not a gitdir")
         self.assertIsNone(_client_common_dir(root))
 
+    def test_git_metadata_rejects_symlink_and_malformed_common_directory(self) -> None:
+        root = Path(self.directory.name)
+        marker = root / ".git"
+        self.assertIsNone(_client_common_dir(root))
+        marker.symlink_to(self.private)
+        with self.assertRaisesRegex(RuntimeError, "symlink"):
+            _client_common_dir(root)
+        marker.unlink()
+        gitdir = root / "relative" / "worktrees" / "one"
+        gitdir.mkdir(parents=True)
+        marker.write_text("gitdir: relative/worktrees/one\n")
+        self.assertEqual(gitdir.resolve(), _client_common_dir(root))
+        (gitdir / "commondir").write_text("\n")
+        self.assertIsNone(_client_common_dir(root))
+        (gitdir / "commondir").write_text(str(self.private) + "\n")
+        self.assertEqual(self.private.resolve(), _client_common_dir(root))
+
+    def test_fast_parser_rejects_unknown_missing_and_noninteger_options(self) -> None:
+        self.assertIsNone(_fast_request(["fast", "heartbeat", "--bad", *self.argv[3:]]))
+        self.assertIsNone(_fast_request([*self.argv, "--unknown", "value"]))
+        self.assertIsNone(_fast_request(self.argv[:-2]))
+        invalid = list(self.argv)
+        invalid[6] = "not-a-revision"
+        self.assertIsNone(_fast_request(invalid))
+        invalid = list(self.argv)
+        invalid[8] = "not-a-lease"
+        self.assertIsNone(_fast_request(invalid))
+
+    def test_bounded_line_and_protocol_reject_malformed_messages(self) -> None:
+        reader, writer = socket.socketpair()
+        with reader, writer:
+            writer.sendall(b"ok\nextra")
+            with self.assertRaisesRegex(RuntimeError, "malformed"):
+                _read_line(reader, 16)
+        reader, writer = socket.socketpair()
+        with reader, writer:
+            writer.sendall(b"12345")
+            with self.assertRaisesRegex(RuntimeError, "too large"):
+                _read_line(reader, 4)
+        with self.assertRaisesRegex(RuntimeError, "lookup"):
+            _require_request({"protocol": 1, "action": "receipt", "receipt_id": "a", "extra": 1})
+        with self.assertRaisesRegex(RuntimeError, "heartbeat request"):
+            _require_request({"protocol": 1, "action": "heartbeat", "task": "AR-0120"})
+
     def test_unsafe_socket_symlink_is_not_followed(self) -> None:
         target = self.private / "target"
         target.write_text("not a socket")
@@ -106,6 +153,19 @@ class FastReceiptSocketTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "unsafe"), socket_service(self.core):
             pass
         self.assertTrue(self.path.is_symlink())
+
+    def test_socket_path_requires_private_parent_and_actual_socket(self) -> None:
+        target = self.private / "not-a-socket"
+        target.write_text("x")
+        with self.assertRaisesRegex(RuntimeError, "unsafe"):
+            _safe_socket(target)
+        with socket_service(self.core):
+            self.private.chmod(0o755)
+            try:
+                with self.assertRaisesRegex(RuntimeError, "unsafe"):
+                    _safe_socket(self.path)
+            finally:
+                self.private.chmod(0o700)
 
     def test_bound_service_returns_only_durable_queued_and_read_receipts(self) -> None:
         with (
@@ -150,6 +210,34 @@ class FastReceiptSocketTests(unittest.TestCase):
                 self.assertEqual(1, try_socket_fast(self.argv))
             self.assertIn("foreign fast receipt caller", error.getvalue())
         self.assertEqual(0, self._intent_count())
+
+    def test_non_git_peer_and_saturated_writer_reject_without_intent(self) -> None:
+        with (
+            socket_service(self.core),
+            patch("tools.fast_receipt_socket._socket_path", return_value=self.path),
+        ):
+            with (
+                patch.object(self.core, "backend_selection", return_value={"backend": "sqlite"}),
+                contextlib.redirect_stderr(io.StringIO()) as error,
+            ):
+                self.assertEqual(1, try_socket_fast(self.argv))
+            self.assertIn("require Git authority", error.getvalue())
+            with (
+                patch.object(queue.Queue, "put", side_effect=queue.Full),
+                contextlib.redirect_stderr(io.StringIO()) as error,
+            ):
+                self.assertEqual(1, try_socket_fast(self.argv))
+            self.assertIn("saturated", error.getvalue())
+            self.assertEqual(0, self._intent_count())
+
+    def test_writer_startup_failure_never_publishes_socket(self) -> None:
+        with (
+            patch("tools.fast_receipts.ReceiptStore", side_effect=RuntimeError("injected")),
+            self.assertRaisesRegex(RuntimeError, "could not start"),
+            socket_service(self.core),
+        ):
+            pass
+        self.assertFalse(self.path.exists())
 
     def test_stale_owned_socket_is_replaced_but_unsafe_socket_fails(self) -> None:
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as stale:
