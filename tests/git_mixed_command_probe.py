@@ -15,6 +15,7 @@ import hashlib
 import json
 import math
 import os
+import socket
 import sqlite3
 import statistics
 import subprocess
@@ -1000,6 +1001,7 @@ def run_fast_heartbeat_probe(  # noqa: C901
     before_refs = non_head_refs_digest(state)
     before_private = coordinator_other_digest(state)
     started_at = dt.datetime.now(dt.UTC)
+    service_started = time.monotonic()
     service = subprocess.Popen(
         [sys.executable, "tools/handoffctl.py", "fast", "worker", "--serve"],
         cwd=state,
@@ -1008,9 +1010,28 @@ def run_fast_heartbeat_probe(  # noqa: C901
         stdout=subprocess.DEVNULL,
         stderr=subprocess.PIPE,
     )
-    batch_started = time.monotonic()
     launched: list[tuple[subprocess.Popen[bytes], float]] = []
     try:
+        socket_path = coordinator_private_root(state) / "fast-receipts.sock"
+        ready_deadline = time.monotonic() + timeout
+        while True:
+            if service.poll() is not None:
+                diagnostic = service.stderr.read(500) if service.stderr else b""
+                raise RuntimeError(
+                    "resident fast worker exited before socket readiness: "
+                    + diagnostic.decode(errors="replace")
+                )
+            try:
+                with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as probe:
+                    probe.settimeout(0.2)
+                    probe.connect(str(socket_path))
+                break
+            except (FileNotFoundError, ConnectionRefusedError) as error:
+                if time.monotonic() >= ready_deadline:
+                    raise RuntimeError("resident fast socket readiness timeout") from error
+                time.sleep(0.01)
+        service_ready_ms = (time.monotonic() - service_started) * 1000
+        batch_started = time.monotonic()
         for index, task_id in enumerate(TASK_IDS):
             command = [
                 sys.executable,
@@ -1176,6 +1197,7 @@ def run_fast_heartbeat_probe(  # noqa: C901
             {
                 "batch": "fast_heartbeat",
                 "workers": 16,
+                "service_ready_ms": round(service_ready_ms, 1),
                 "enqueue_max_ms": round(max(latencies), 1),
                 "enqueue_p50_ms": round(statistics.median(latencies), 1),
                 "enqueue_p95_ms": round(sorted(latencies)[math.ceil(0.95 * len(latencies)) - 1], 1),
