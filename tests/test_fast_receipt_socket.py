@@ -7,9 +7,11 @@ from __future__ import annotations
 import contextlib
 import io
 import json
+import os
 import socket
 import sqlite3
 import tempfile
+import threading
 import unittest
 import uuid
 from pathlib import Path
@@ -197,6 +199,34 @@ class FastReceiptSocketTests(unittest.TestCase):
         with patch("tools.fast_receipt_socket._socket_path", return_value=self.path):
             self.assertIsNone(try_socket_fast(self.argv))
         self.assertIsNone(try_socket_fast(["fast", "heartbeat", "AR-0120"]))
+
+    def test_required_socket_rejects_absence_and_unrecognized_fast_shape(self) -> None:
+        with (
+            patch.dict(os.environ, {"HANDOFFCTL_FAST_REQUIRE_SOCKET": "1"}),
+            patch("tools.fast_receipt_socket._socket_path", return_value=self.path),
+            contextlib.redirect_stderr(io.StringIO()) as error,
+        ):
+            self.assertEqual(1, try_socket_fast(self.argv))
+            self.assertEqual(1, try_socket_fast(["fast", "heartbeat", "AR-0120"]))
+        self.assertIn("required but unavailable", error.getvalue())
+
+    def test_dead_writer_forces_same_key_fallback_not_terminal_error(self) -> None:
+        with (
+            socket_service(self.core),
+            patch("tools.fast_receipt_socket._socket_path", return_value=self.path),
+        ):
+            writer = next(
+                thread for thread in threading.enumerate() if thread.name == "fast-receipt-writer"
+            )
+            with patch.object(writer, "is_alive", return_value=False):
+                self.assertIsNone(try_socket_fast(self.argv))
+                with (
+                    patch.dict(os.environ, {"HANDOFFCTL_FAST_REQUIRE_SOCKET": "1"}),
+                    contextlib.redirect_stderr(io.StringIO()) as error,
+                ):
+                    self.assertEqual(1, try_socket_fast(self.argv))
+                self.assertIn("required but unavailable", error.getvalue())
+            self.assertEqual(0, self._intent_count())
 
     def test_disconnect_after_durable_enqueue_uses_same_key_fallback(self) -> None:
         with (

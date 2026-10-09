@@ -1032,6 +1032,7 @@ def run_fast_heartbeat_probe(  # noqa: C901
                 time.sleep(0.01)
         service_ready_ms = (time.monotonic() - service_started) * 1000
         batch_started = time.monotonic()
+        socket_required_env = {**env, "HANDOFFCTL_FAST_REQUIRE_SOCKET": "1"}
         for index, task_id in enumerate(TASK_IDS):
             command = [
                 sys.executable,
@@ -1053,7 +1054,7 @@ def run_fast_heartbeat_probe(  # noqa: C901
                     subprocess.Popen(  # noqa: S603
                         command,
                         cwd=state,
-                        env=env,
+                        env=socket_required_env,
                         stdin=subprocess.DEVNULL,
                         stdout=subprocess.PIPE,
                         stderr=subprocess.PIPE,
@@ -1110,7 +1111,7 @@ def run_fast_heartbeat_probe(  # noqa: C901
                 read = subprocess.run(  # noqa: S603
                     [sys.executable, "tools/handoffctl.py", "fast", "receipt", receipt_id],
                     cwd=state,
-                    env=env,
+                    env=socket_required_env,
                     check=False,
                     capture_output=True,
                     timeout=30,

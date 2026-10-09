@@ -36,6 +36,21 @@ _PUBLIC_FIELDS = (
 )
 
 
+class _TransportUnavailableError(ConnectionError):
+    """The resident path has no writer; callers must use same-key direct fallback."""
+
+
+def _require_socket() -> bool:
+    return os.environ.get("HANDOFFCTL_FAST_REQUIRE_SOCKET") == "1"
+
+
+def _fallback_or_error() -> int | None:
+    if not _require_socket():
+        return None
+    sys.stderr.write("ERROR: fast receipt socket was required but unavailable\n")
+    return 1
+
+
 def public_receipt(row: dict[str, Any]) -> dict[str, Any]:
     """Expose the exact bounded public receipt without private input or key."""
     return {field: row[field] for field in _PUBLIC_FIELDS}
@@ -145,10 +160,12 @@ def try_socket_fast(argv: list[str]) -> int | None:
     """Use the warm bound service when available; otherwise use the direct CLI."""
     request = _fast_request(argv)
     if request is None:
+        if argv[:2] in (["fast", "heartbeat"], ["fast", "receipt"]):
+            return _fallback_or_error()
         return None
     path = _socket_path(Path(__file__).resolve().parent.parent)
     if path is None or not _safe_socket(path):
-        return None
+        return _fallback_or_error()
     try:
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as peer:
             peer.settimeout(10)
@@ -158,7 +175,7 @@ def try_socket_fast(argv: list[str]) -> int | None:
     except (ConnectionError, OSError, TimeoutError):
         # A timed-out enqueue may have committed; the direct path uses the same
         # idempotency key and returns that durable row rather than duplicating it.
-        return None
+        return _fallback_or_error()
     response = json.loads(raw)
     if not isinstance(response, dict) or set(response) not in ({"ok"}, {"error"}):
         raise RuntimeError("fast receipt socket response is invalid")
@@ -218,6 +235,10 @@ def _handle(
             result = submit(request)
             reply = {"ok": public_receipt(result)}
             peer.sendall(json.dumps(reply, sort_keys=True).encode() + b"\n")
+        except _TransportUnavailableError:
+            # No reply forces the same-key client fallback.  An error reply
+            # would incorrectly make a dead service a terminal command failure.
+            pass
         except TimeoutError:
             # A timed-out write may have committed; EOF makes the client retry
             # through the same-key direct path instead of reporting success.
@@ -285,7 +306,7 @@ def socket_service(core: Any) -> Iterator[None]:  # noqa: C901
             writer_error.append(error)
             ready.set()
 
-    writer = threading.Thread(target=write_requests, daemon=True)
+    writer = threading.Thread(target=write_requests, name="fast-receipt-writer", daemon=True)
     writer.start()
     if not ready.wait(timeout=10) or writer_error:
         writer.join(timeout=1)
@@ -295,7 +316,7 @@ def socket_service(core: Any) -> Iterator[None]:  # noqa: C901
 
     def submit(request: dict[str, Any]) -> dict[str, Any]:
         if not writer.is_alive():
-            raise RuntimeError("fast receipt writer is unavailable")
+            raise _TransportUnavailableError("fast receipt writer is unavailable")
         future: Future[dict[str, Any]] = Future()
         try:
             requests.put((request, future), timeout=1)
