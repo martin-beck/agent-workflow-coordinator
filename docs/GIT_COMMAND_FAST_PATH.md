@@ -439,6 +439,8 @@ bounded, one-second nonblocking selector stage instead of occupying any of
 the 32 execution threads. Focused tests now show one complete good heartbeat
 receives a durable queued receipt while 32 same-UID peers hold partial frames;
 split frames still work and an oversized frame does not stall the service.
+An injected peer reset is isolated to that connection, so the acceptor keeps
+serving a subsequent good request.
 This is not a fairness guarantee under an unbounded malicious flood: the
 64-connection pre-admission cap and 64-item writer queue can still reject a
 good request, and durable service supervision remains absent.

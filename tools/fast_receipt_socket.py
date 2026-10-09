@@ -378,6 +378,11 @@ def socket_service(core: Any) -> Iterator[None]:  # noqa: C901
                                         chunk = peer.recv(_MAX_REQUEST + 2 - len(buffer))
                                     except BlockingIOError:
                                         continue
+                                    except OSError:
+                                        selector.unregister(peer)
+                                        pending.pop(peer)
+                                        peer.close()
+                                        continue
                                     if not chunk:
                                         selector.unregister(peer)
                                         pending.pop(peer)

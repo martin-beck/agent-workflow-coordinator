@@ -403,6 +403,42 @@ class FastReceiptSocketTests(unittest.TestCase):
                 self.assertEqual("queued-local", reply["ok"]["phase"])
             self.assertEqual(1, self._intent_count())
 
+    def test_peer_recv_error_does_not_kill_the_acceptor(self) -> None:
+        original_recv = socket.socket.recv
+        failed = threading.Event()
+
+        def fail_once(peer: socket.socket, size: int, flags: int = 0) -> bytes:
+            if not failed.is_set():
+                failed.set()
+                raise ConnectionResetError("injected peer reset")
+            return original_recv(peer, size, flags)
+
+        with socket_service(self.core), patch.object(socket.socket, "recv", fail_once):
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as hostile:
+                hostile.connect(str(self.path))
+                hostile.sendall(b"{")
+                self.assertTrue(failed.wait(2))
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as good:
+                good.settimeout(2)
+                good.connect(str(self.path))
+                good.sendall(
+                    json.dumps(
+                        {
+                            "protocol": 1,
+                            "action": "heartbeat",
+                            "task": "AR-0120",
+                            "owner": "worker-a",
+                            "expected_revision": 2,
+                            "lease_minutes": 20,
+                            "key": "after-peer-reset",
+                        }
+                    ).encode()
+                    + b"\n"
+                )
+                reply = json.loads(_read_line(good, 4096))
+                self.assertEqual("queued-local", reply["ok"]["phase"])
+            self.assertEqual(1, self._intent_count())
+
 
 if __name__ == "__main__":
     unittest.main()
