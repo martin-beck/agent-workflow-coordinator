@@ -139,6 +139,18 @@ class FastReceiptTests(unittest.TestCase):
         ):
             ReceiptStore(self.path, self.project_id)
         self.assertFalse(self.path.exists())
+        synced: list[tuple[int, int]] = []
+        real_sync = os.fsync
+
+        def record_sync(descriptor: int) -> None:
+            info = os.fstat(descriptor)
+            synced.append((info.st_dev, info.st_ino))
+            real_sync(descriptor)
+
+        with patch("tools.fast_receipts.os.fsync", side_effect=record_sync):
+            self.store()
+        ancestor = self.path.parent.parent.stat()
+        self.assertIn((ancestor.st_dev, ancestor.st_ino), synced)
 
     def test_existing_hardlink_is_rejected(self) -> None:
         self.path.parent.mkdir(mode=0o700)

@@ -67,16 +67,12 @@ class ReceiptStore:
 
     def _open_private_path(self) -> tuple[int, int]:
         parent = self.path.parent
+        parent.mkdir(mode=0o700, exist_ok=True)
+        ancestor_fd = os.open(parent.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
         try:
-            parent.mkdir(mode=0o700)
-        except FileExistsError:
-            pass
-        else:
-            ancestor_fd = os.open(parent.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-            try:
-                os.fsync(ancestor_fd)
-            finally:
-                os.close(ancestor_fd)
+            os.fsync(ancestor_fd)
+        finally:
+            os.close(ancestor_fd)
         info = parent.lstat()
         if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.geteuid() or info.st_mode & 0o077:
             raise RuntimeError("receipt directory is not private")
