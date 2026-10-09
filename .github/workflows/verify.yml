@@ -65,7 +65,7 @@ jobs:
           else
             echo "formal_changed=false" >> "$GITHUB_OUTPUT"
           fi
-          if [[ "$EVENT" != "pull_request" ]] || git diff --name-only "$BASE...$HEAD" | grep -Eq "^(formal/|tools/tlc_runner.py|tools/vendor.py|tools/handoffctl.py|pyproject.toml|uv.lock|CHANGELOG.md|coordinator.vendor.json|\\.github/workflows/(verify|formal)\\.yml)"; then
+          if [[ "$EVENT" != "pull_request" ]] || git diff --name-only "$BASE...$HEAD" | grep -Eq "^(formal/|tools/(tlc_runner|vendor|handoffctl|fast_receipt_(cli|socket|worker|s))\\.py|tests/test_fast_receipt_.*\\.py|pyproject.toml|uv.lock|CHANGELOG.md|coordinator.vendor.json|\\.github/workflows/(verify|formal)\\.yml)"; then
             echo "release_sensitive=true" >> "$GITHUB_OUTPUT"
           else
             echo "release_sensitive=false" >> "$GITHUB_OUTPUT"

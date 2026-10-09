@@ -347,6 +347,11 @@ def _validated_intent(intent: dict[str, Any]) -> dict[str, Any]:
         != {"expected_revision", "lease_minutes", "operation", "owner", "project_id", "task"}
         or not isinstance(payload.get("owner"), str)
         or not isinstance(payload.get("lease_minutes"), int)
+        or isinstance(payload.get("lease_minutes"), bool)
+        or not 1 <= payload["lease_minutes"] <= 1440
+        or not isinstance(payload.get("expected_revision"), int)
+        or isinstance(payload.get("expected_revision"), bool)
+        or payload["expected_revision"] < 1
     ):
         raise RuntimeError(f"receipt {payload.get('operation')} intent fields are invalid")
     if payload.get("operation") == "promote" and (
@@ -354,6 +359,9 @@ def _validated_intent(intent: dict[str, Any]) -> dict[str, Any]:
         or not isinstance(payload.get("note"), str)
         or not 1 <= len(payload["note"]) <= 4096
         or "\x00" in payload["note"]
+        or not isinstance(payload.get("expected_revision"), int)
+        or isinstance(payload.get("expected_revision"), bool)
+        or payload["expected_revision"] < 1
     ):
         raise RuntimeError("receipt promote intent fields are invalid")
     if payload.get("operation") not in {"claim", "heartbeat", "promote"}:
