@@ -2396,6 +2396,11 @@ def apply_owned_change(  # noqa: C901
     if kind == "heartbeat":
         if args.lease_minutes <= 0 or meta.get("status") != "in_progress":
             raise RuntimeError("heartbeat requires an active task and positive lease")
+        requested = getattr(args, "expected_revision", None)
+        if requested is not None and requested != meta["task_revision"]:
+            raise RuntimeError(
+                f"stale revision: expected {requested}, current {meta['task_revision']}"
+            )
         meta["claim_expires"] = (
             (dt.datetime.now(dt.UTC) + dt.timedelta(minutes=args.lease_minutes))
             .replace(microsecond=0)
@@ -3913,6 +3918,8 @@ def main() -> int:
         item.add_argument("task")
         item.add_argument("--owner", required=True)
         item.add_argument("--lease-minutes", type=int, default=120)
+        if name == "heartbeat":
+            item.add_argument("--expected-revision", type=int)
     item = commands.add_parser("release")
     item.add_argument("task")
     item.add_argument("--owner", required=True)

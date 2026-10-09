@@ -2032,6 +2032,48 @@ class HandoffTest(unittest.TestCase):
                     "update",
                 )
 
+    def test_heartbeat_optional_revision_fences_stale_worker(self) -> None:
+        path = self.make_task(
+            status="in_progress",
+            owner="worker-a",
+            claim_expires="2099-01-01T00:00:00+00:00",
+        )
+        initial = path.read_bytes()
+        with patch.object(CORE, "commit", return_value=True) as commit:
+            with self.assertRaisesRegex(RuntimeError, "stale revision"):
+                CORE.mutate(
+                    argparse.Namespace(
+                        task="AR-0001",
+                        owner="worker-a",
+                        lease_minutes=20,
+                        expected_revision=2,
+                    ),
+                    "heartbeat",
+                )
+            self.assertEqual(initial, path.read_bytes())
+            commit.assert_not_called()
+            CORE.mutate(
+                argparse.Namespace(
+                    task="AR-0001",
+                    owner="worker-a",
+                    lease_minutes=20,
+                    expected_revision=1,
+                ),
+                "heartbeat",
+            )
+            self.assertEqual(2, CORE.read_task(path)[0]["task_revision"])
+            with self.assertRaisesRegex(RuntimeError, "stale revision"):
+                CORE.mutate(
+                    argparse.Namespace(
+                        task="AR-0001",
+                        owner="worker-a",
+                        lease_minutes=20,
+                        expected_revision=1,
+                    ),
+                    "heartbeat",
+                )
+            self.assertEqual(2, CORE.read_task(path)[0]["task_revision"])
+
     def fake_scan(self) -> dict[str, object]:
         return {
             "remote_main": "a" * 40,
