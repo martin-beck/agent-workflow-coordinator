@@ -416,6 +416,9 @@ same-head speedup test. Neither the strict contract nor the all-command <=5%
 target is qualified. The socket-required environment flag is a benchmark
 route-attribution guard; ordinary fast clients retain same-key direct fallback
 when the resident service is absent or disconnects.
+At candidate `a764d1c`, the complete 1,814-test suite, formatting, Ruff, and
+Mypy passed, but exact whole-source branch coverage was 94.299%, below the
+unchanged 95.00% promotion gate.
 
 ## Further candidate architecture, not yet implemented
 
