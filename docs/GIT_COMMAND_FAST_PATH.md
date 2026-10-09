@@ -247,6 +247,21 @@ now exit nonzero if either the observed source state head or product inputs
 change. This keeps a successful probe exit from implying qualification on a
 moving source.
 
+On 2026-10-09, a repeat on the frozen 750-worktree fixture initially could not
+start because an active claim captured in the fixture had expired. The probe
+extends only parseable, already-expired active claim leases in its disposable
+state clone before the setup reconciliation commits the fixture; malformed
+claim expiries still reject the source fixture. It reports how many claims
+were stabilized and never changes the source fixture or live ASB repositories.
+With two fixture claims stabilized and Coordinator `712b36e`, 16/16 disjoint
+claims and the 15-rejected/one-good adversarial batch passed. The next
+four-each heartbeat/update/`run`/reconcile batch had **eight** lock timeouts
+(2 heartbeat, 3 update, 3 run), while all four reconciles succeeded. The
+largest observed exclusive holds were 3.752 s for `git_mutate` and 2.469 s
+for `git_reconcile`; post-batch static and live doctors passed. This repeat
+confirms a correctness-preserving but still severe accepted-worker liveness
+failure under the unchanged ten-second lock deadline.
+
 A subsequent single-task-snapshot mutation experiment was rejected after
 independent review: although it preserved lock-respecting writers, it could
 miss a concurrent out-of-band edit to another task that the existing

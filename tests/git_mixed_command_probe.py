@@ -39,6 +39,41 @@ from tools.session_records import build_session_record
 TASK_IDS = tuple(f"AR-{number:04d}" for number in range(9000, 9016))
 
 
+def stabilize_disposable_claims(state: Path) -> int:
+    """Keep a pinned fixture usable after its real-world claim leases expire.
+
+    Only the disposable clone is changed. The signed normalization commit is
+    made by the subsequent fixture setup reconcile before any measured batch,
+    so every worker sees the same authority state and the source stays untouched.
+    """
+    current_time = dt.datetime.now(dt.UTC)
+    deadline = (current_time + dt.timedelta(days=1)).replace(microsecond=0).isoformat()
+    rewrites: list[tuple[Path, str]] = []
+    for path in sorted((state / "tasks").glob("*.md")):
+        original = path.read_text()
+        front, metadata, body = original.split("---", 2)
+        if front.strip():
+            raise RuntimeError(f"unexpected task front matter: {path}")
+        item = json.loads(metadata)
+        if item.get("status") != "in_progress" or not item.get("claim_expires"):
+            continue
+        try:
+            expires = dt.datetime.fromisoformat(item["claim_expires"])
+        except (TypeError, ValueError) as error:
+            raise RuntimeError(f"invalid source claim expiry: {path}") from error
+        if expires.tzinfo is None or expires.utcoffset() is None:
+            raise RuntimeError(f"source claim expiry has no timezone: {path}")
+        if expires > current_time:
+            continue
+        item["claim_expires"] = deadline
+        rewrites.append(
+            (path, "---\n" + json.dumps(item, indent=2, sort_keys=True) + "\n---" + body)
+        )
+    for path, replacement in rewrites:
+        path.write_text(replacement)
+    return len(rewrites)
+
+
 def task_meta(state: Path, task_id: str) -> dict[str, Any]:
     path = state / "tasks" / f"{task_id}.md"
     return cast(dict[str, Any], json.loads(path.read_text().split("---", 2)[1]))
@@ -678,6 +713,7 @@ def main() -> None:
             runtime_source=runtime,
             state_commit=state_head,
         )
+        stabilized_claims = stabilize_disposable_claims(state)
         configure(state, source_product, str(binding["product_repository"]), env)
         add_fixture_tasks(state, env)
         print(
@@ -686,6 +722,7 @@ def main() -> None:
                     "source_state": state_head,
                     "candidate": git_head(runtime),
                     "fixture_tasks": len(TASK_IDS),
+                    "stabilized_claims": stabilized_claims,
                     "product_worktrees": worktree_listing(source_product).count("worktree "),
                 }
             ),
