@@ -26,7 +26,10 @@ from typing import Any, BinaryIO
 
 from git_scale_probe import prepare
 
+from tools.vendor import SOURCE_FILES
+
 SOURCE = Path(__file__).resolve().parents[1]
+OVERLAY_PATHS = frozenset(os.fsencode(destination) for _source, destination in SOURCE_FILES)
 ROUTES = {
     "doctor": ("doctor",),
     "doctor-live": ("doctor", "--live"),
@@ -45,13 +48,122 @@ def git_head(root: Path) -> str:
     ).stdout.strip()
 
 
-def git_tree(root: Path) -> str:
-    return subprocess.run(  # noqa: S603
-        ["/usr/bin/git", "-C", str(root), "rev-parse", "HEAD^{tree}"],
+def history_depth(root: Path) -> int:
+    return int(
+        subprocess.run(  # noqa: S603
+            ["/usr/bin/git", "-C", str(root), "rev-list", "--count", "HEAD"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+    )
+
+
+def history_extends(root: Path, old_head: str) -> bool:
+    result = subprocess.run(  # noqa: S603
+        ["/usr/bin/git", "-C", str(root), "merge-base", "--is-ancestor", old_head, "HEAD"],
+        check=False,
+    )
+    if result.returncode not in {0, 1}:
+        raise RuntimeError("unable to verify benchmark Git ancestry")
+    return result.returncode == 0
+
+
+def runtime_digest(root: Path, *, normalize_time: bool = True) -> bytes:
+    """Fingerprint ignored runtime authority, optionally normalizing observation time."""
+    runtime = root / ".runtime"
+    digest = hashlib.sha256()
+    if not runtime.exists():
+        return digest.digest()
+    for path in sorted(runtime.rglob("*")):
+        if not path.is_file() or path.name.endswith(".lock"):
+            continue
+        relative = path.relative_to(runtime)
+        data = path.read_bytes()
+        if normalize_time and relative == Path("last-reconcile.json"):
+            try:
+                record = json.loads(data)
+                if isinstance(record, dict) and "at" in record:
+                    record["at"] = "<observed-time>"
+                    data = json.dumps(record, sort_keys=True).encode()
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                pass
+        digest.update(os.fsencode(str(relative)) + b"\0" + data + b"\0")
+    return digest.digest()
+
+
+def overlay_digest(root: Path) -> str:
+    """Catch runtime-overlay mutation within one measured command."""
+    entries = subprocess.run(  # noqa: S603
+        ["/usr/bin/git", "-C", str(root), "ls-files", "--stage", "-z"],
         check=True,
         capture_output=True,
-        text=True,
-    ).stdout.strip()
+    ).stdout
+    digest = hashlib.sha256()
+    for entry in entries.split(b"\0"):
+        if not entry:
+            continue
+        path = entry.split(b"\t", 1)[1]
+        if path not in OVERLAY_PATHS:
+            continue
+        target = root / os.fsdecode(path)
+        digest.update(entry + b"\0")
+        if target.is_symlink():
+            digest.update(b"symlink\0" + os.fsencode(target.readlink()))
+        else:
+            digest.update(target.read_bytes() if target.is_file() else b"missing\0")
+    return digest.hexdigest()
+
+
+def non_head_refs_digest(root: Path) -> str:
+    """Detect branch/tag/remote ref effects other than the expected HEAD move."""
+    branch = subprocess.run(  # noqa: S603
+        ["/usr/bin/git", "-C", str(root), "symbolic-ref", "-q", "HEAD"],
+        check=False,
+        capture_output=True,
+    )
+    if branch.returncode not in {0, 1}:
+        raise RuntimeError("unable to identify the benchmark HEAD ref")
+    current = branch.stdout.strip() if branch.returncode == 0 else None
+    refs = subprocess.run(  # noqa: S603
+        ["/usr/bin/git", "-C", str(root), "show-ref"],
+        check=True,
+        capture_output=True,
+    ).stdout
+    digest = hashlib.sha256()
+    for line in refs.splitlines():
+        if line.rsplit(b" ", 1)[-1] != current:
+            digest.update(line + b"\n")
+    return digest.hexdigest()
+
+
+def domain_tree(root: Path) -> str:
+    """Compare committed, staged, dirty, and untracked domain state bytes."""
+    digest = hashlib.sha256()
+    for flags in (("--stage",), ("--others", "--exclude-standard")):
+        entries = subprocess.run(  # noqa: S603
+            ["/usr/bin/git", "-C", str(root), "ls-files", *flags, "-z"],
+            check=True,
+            capture_output=True,
+        ).stdout
+        for entry in entries.split(b"\0"):
+            if not entry:
+                continue
+            path = entry.split(b"\t", 1)[1] if flags == ("--stage",) else entry
+            if path in OVERLAY_PATHS:
+                continue
+            checkout = root / os.fsdecode(path)
+            digest.update(entry + b"\0")
+            if checkout.is_symlink():
+                digest.update(b"symlink\0" + os.fsencode(checkout.readlink()))
+            elif checkout.is_file():
+                with checkout.open("rb") as stream:
+                    while chunk := stream.read(65536):
+                        digest.update(chunk)
+            else:
+                digest.update(b"missing\0")
+    digest.update(runtime_digest(root))
+    return digest.hexdigest()
 
 
 def worktree_listing(root: Path) -> str:
@@ -63,7 +175,44 @@ def worktree_listing(root: Path) -> str:
     ).stdout
 
 
-def product_input_digest(root: Path) -> str:
+def dirty_checkout_digest(path: Path) -> bytes:
+    """Fingerprint dirty tracked/index/untracked bytes without counting HEAD."""
+    observed_env = dict(os.environ)
+    observed_env["GIT_OPTIONAL_LOCKS"] = "0"
+    observed = subprocess.run(  # noqa: S603
+        ["/usr/bin/git", "-C", str(path), "status", "--porcelain=v1", "-z"],
+        env=observed_env,
+        check=True,
+        capture_output=True,
+    ).stdout
+    checkout = hashlib.sha256(observed)
+    if observed:
+        for args in (("diff", "--binary", "HEAD"), ("diff", "--cached", "--binary", "HEAD")):
+            diff = subprocess.run(  # noqa: S603
+                ["/usr/bin/git", "-C", str(path), *args],
+                env=observed_env,
+                check=True,
+                capture_output=True,
+            ).stdout
+            checkout.update(diff)
+        untracked = subprocess.run(  # noqa: S603
+            ["/usr/bin/git", "-C", str(path), "ls-files", "--others", "--exclude-standard", "-z"],
+            env=observed_env,
+            check=True,
+            capture_output=True,
+        ).stdout
+        for name in untracked.split(b"\0"):
+            if not name:
+                continue
+            entry = path / os.fsdecode(name)
+            checkout.update(name)
+            checkout.update(
+                os.fsencode(entry.readlink()) if entry.is_symlink() else entry.read_bytes()
+            )
+    return checkout.digest()
+
+
+def product_input_digest(root: Path, *, include_runtime: bool = False) -> str:
     """Detect net changes to listed heads, refs, and dirty checkout bytes."""
     listing = worktree_listing(root)
     paths = [Path(line[9:]) for line in listing.splitlines() if line.startswith("worktree ")]
@@ -74,60 +223,12 @@ def product_input_digest(root: Path) -> str:
         capture_output=True,
     ).stdout
     digest.update(refs)
-    observed_env = dict(os.environ)
-    observed_env["GIT_OPTIONAL_LOCKS"] = "0"
-
-    def checkout_digest(path: Path) -> bytes:
-        observed = subprocess.run(  # noqa: S603
-            ["git", "-C", str(path), "status", "--porcelain=v1", "-z"],  # noqa: S607
-            env=observed_env,
-            check=True,
-            capture_output=True,
-        ).stdout
-        checkout = hashlib.sha256(observed)
-        if observed:
-            diff = subprocess.run(  # noqa: S603
-                ["/usr/bin/git", "-C", str(path), "diff", "--binary", "HEAD"],
-                env=observed_env,
-                check=True,
-                capture_output=True,
-            ).stdout
-            checkout.update(diff)
-            staged = subprocess.run(  # noqa: S603
-                ["/usr/bin/git", "-C", str(path), "diff", "--cached", "--binary", "HEAD"],
-                env=observed_env,
-                check=True,
-                capture_output=True,
-            ).stdout
-            checkout.update(staged)
-            untracked = subprocess.run(  # noqa: S603
-                [
-                    "/usr/bin/git",
-                    "-C",
-                    str(path),
-                    "ls-files",
-                    "--others",
-                    "--exclude-standard",
-                    "-z",
-                ],
-                env=observed_env,
-                check=True,
-                capture_output=True,
-            ).stdout
-            for name in untracked.split(b"\0"):
-                if not name:
-                    continue
-                entry = path / os.fsdecode(name)
-                checkout.update(name)
-                checkout.update(
-                    str(entry.readlink()).encode() if entry.is_symlink() else entry.read_bytes()
-                )
-        return checkout.digest()
-
     with concurrent.futures.ThreadPoolExecutor(max_workers=32) as pool:
-        for path, observed in zip(paths, pool.map(checkout_digest, paths), strict=True):
+        for path, observed in zip(paths, pool.map(dirty_checkout_digest, paths), strict=True):
             digest.update(str(path).encode())
             digest.update(observed)
+            if include_runtime:
+                digest.update(runtime_digest(path, normalize_time=False))
     return digest.hexdigest()
 
 
@@ -223,6 +324,8 @@ def measure(
 ) -> dict[str, object]:
     started = time.monotonic()
     expected_commit = git_head(state)
+    overlay_before = overlay_digest(state)
+    refs_before = non_head_refs_digest(state)
     before = resources()
     with contextlib.ExitStack() as files:
         running: list[tuple[subprocess.Popen[bytes], float, BinaryIO, BinaryIO]] = []
@@ -261,7 +364,11 @@ def measure(
         if route == "snapshot"
         else None,
         "stdout_bytes": [completed[process.pid][3] for process, _, _, _ in running],
-        "state_tree": git_tree(state),
+        "state_tree": domain_tree(state),
+        "overlay_unchanged": overlay_before == overlay_digest(state),
+        "non_head_refs_unchanged": refs_before == non_head_refs_digest(state),
+        "history_extends": history_extends(state, expected_commit),
+        "history_depth": history_depth(state),
         "current_sha256": hashlib.sha256((state / "CURRENT.md").read_bytes()).hexdigest(),
         "child_cpu_ms": {
             "user": round((after[0] - before[0]) * 1000, 3),
@@ -371,6 +478,13 @@ def run_samples(
                     baseline["outcomes"] == candidate["outcomes"] == {"ok": count}
                     and outputs_equal
                     and baseline["state_tree"] == candidate["state_tree"]
+                    and baseline["history_depth"] == candidate["history_depth"]
+                    and baseline["history_extends"] is True
+                    and candidate["history_extends"] is True
+                    and baseline["overlay_unchanged"] is True
+                    and candidate["overlay_unchanged"] is True
+                    and baseline["non_head_refs_unchanged"] is True
+                    and candidate["non_head_refs_unchanged"] is True
                     and baseline["current_sha256"] == candidate["current_sha256"]
                 )
                 equivalent = equivalent and pair_ok
@@ -389,6 +503,14 @@ def run_samples(
                             if route == "snapshot"
                             else None,
                             "state_trees_equal": baseline["state_tree"] == candidate["state_tree"],
+                            "history_depths_equal": baseline["history_depth"]
+                            == candidate["history_depth"],
+                            "histories_extend": baseline["history_extends"] is True
+                            and candidate["history_extends"] is True,
+                            "overlays_unchanged": baseline["overlay_unchanged"] is True
+                            and candidate["overlay_unchanged"] is True,
+                            "non_head_refs_unchanged": baseline["non_head_refs_unchanged"] is True
+                            and candidate["non_head_refs_unchanged"] is True,
                             "current_views_equal": baseline["current_sha256"]
                             == candidate["current_sha256"],
                             "pair_qualified": pair_ok,
@@ -424,6 +546,7 @@ def main() -> None:
     source_state = args.state.resolve()
     source_product = args.product.resolve()
     state_head = git_head(source_state)
+    state_digest = product_input_digest(source_state, include_runtime=True)
     product_head = git_head(source_product)
     candidate_head = git_head(SOURCE)
     product_binding: dict[str, Any] = json.loads(
@@ -441,6 +564,7 @@ def main() -> None:
             json.dumps(
                 {
                     "source_state": state_head,
+                    "source_state_input_digest": state_digest,
                     "source_product": product_head,
                     "baseline": baseline,
                     "candidate": candidate_head,
@@ -455,31 +579,58 @@ def main() -> None:
             ),
             flush=True,
         )
+        # Reconcile the pinned product observations once before cloning either
+        # runtime. Otherwise time-stamped observation refreshes make two valid
+        # implementations produce different fixture commits at setup time.
+        normalized_state, _normalized_product, normalized_env = prepare(
+            base,
+            source_state,
+            source_product,
+            "normalizer",
+            True,
+            runtime_source=candidate_runtime,
+            state_commit=state_head,
+        )
+        configure(
+            normalized_state,
+            source_product,
+            str(product_binding["product_repository"]),
+            normalized_env,
+        )
+        normalized_head = git_head(normalized_state)
+        print(json.dumps({"normalized_fixture_state": normalized_head}), flush=True)
         instances: dict[str, tuple[Path, dict[str, str]]] = {}
         for label, runtime in (("baseline", baseline_runtime), ("candidate", candidate_runtime)):
             state, _product, env = prepare(
                 base,
-                source_state,
+                normalized_state,
                 source_product,
                 label,
                 True,
                 runtime_source=runtime,
-                state_commit=state_head,
+                state_commit=normalized_head,
             )
             configure(state, source_product, str(product_binding["product_repository"]), env)
             instances[label] = state, env
-        fixture_trees = {label: git_tree(state) for label, (state, _) in instances.items()}
-        fixture_equal = len(set(fixture_trees.values())) == 1
+        fixture_trees = {label: domain_tree(state) for label, (state, _) in instances.items()}
+        fixture_depths = {label: history_depth(state) for label, (state, _) in instances.items()}
+        fixture_equal = (
+            len(set(fixture_trees.values())) == 1 and len(set(fixture_depths.values())) == 1
+        )
         print(json.dumps({"fixture_state_trees_equal": fixture_equal}))
         paired_equal = run_samples(
             instances, routes, counts, args.repetitions, args.timeout_seconds
         )
         source_state_changed = git_head(source_state) != state_head
+        source_state_inputs_changed = (
+            product_input_digest(source_state, include_runtime=True) != state_digest
+        )
         source_product_changed = product_input_digest(source_product) != product_digest
         print(
             json.dumps(
                 {
                     "source_state_head_changed": source_state_changed,
+                    "source_state_inputs_changed": source_state_inputs_changed,
                     "source_product_head_changed": git_head(source_product) != product_head,
                     "source_worktree_listing_changed": worktree_listing(source_product) != listing,
                     "source_product_inputs_changed": source_product_changed,
@@ -488,7 +639,13 @@ def main() -> None:
             ),
             flush=True,
         )
-        if not fixture_equal or not paired_equal or source_state_changed or source_product_changed:
+        if (
+            not fixture_equal
+            or not paired_equal
+            or source_state_changed
+            or source_state_inputs_changed
+            or source_product_changed
+        ):
             raise RuntimeError("benchmark qualification invalid: fixture drift or unequal outcomes")
 
 

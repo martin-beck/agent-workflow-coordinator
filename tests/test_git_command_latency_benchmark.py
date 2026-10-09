@@ -16,6 +16,11 @@ from git_command_latency_benchmark import (
     case_order,
     classify,
     digest_stream,
+    domain_tree,
+    history_depth,
+    history_extends,
+    non_head_refs_digest,
+    overlay_digest,
     percentile,
     product_input_digest,
     run_samples,
@@ -24,6 +29,115 @@ from git_command_latency_benchmark import (
 
 
 class GitCommandLatencyBenchmarkTests(unittest.TestCase):
+    def test_domain_tree_ignores_only_intentionally_different_vendor(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            subprocess.run(["git", "init", "-q", "-b", "main", str(root)], check=True)  # noqa: S603,S607
+            (root / "tools").mkdir()
+            (root / "tasks").mkdir()
+            tool = root / "tools" / "handoffctl.py"
+            task = root / "tasks" / "AR-0001.md"
+            policy = root / "task-spec-policy.json"
+            tool.write_text("old\n")
+            task.write_text("old\n")
+            policy.write_text("{}\n")
+            subprocess.run(["git", "-C", str(root), "add", "."], check=True)  # noqa: S603,S607
+            subprocess.run(  # noqa: S603
+                [
+                    "/usr/bin/git",
+                    "-C",
+                    str(root),
+                    "-c",
+                    "user.name=Fixture",
+                    "-c",
+                    "user.email=fixture@example.invalid",
+                    "commit",
+                    "-q",
+                    "-m",
+                    "fixture",
+                ],
+                check=True,
+            )
+            original = domain_tree(root)
+            original_overlay = overlay_digest(root)
+            tool.write_text("new\n")
+            self.assertEqual(original, domain_tree(root))
+            self.assertNotEqual(original_overlay, overlay_digest(root))
+            unexpected_tool = root / "tools" / "unexpected.py"
+            unexpected_tool.write_text("effect\n")
+            self.assertNotEqual(original, domain_tree(root))
+            unexpected_tool.unlink()
+            runtime = root / ".runtime"
+            runtime.mkdir()
+            (runtime / "roles.json").write_text("effect\n")
+            self.assertNotEqual(original, domain_tree(root))
+            (runtime / "roles.json").unlink()
+            task.write_text("dirty\n")
+            self.assertNotEqual(original, domain_tree(root))
+            task.write_text("old\n")
+            policy.write_text('{"changed":true}\n')
+            self.assertNotEqual(original, domain_tree(root))
+            policy.write_text("{}\n")
+            extra = root / "untracked.md"
+            extra.write_text("new\n")
+            self.assertNotEqual(original, domain_tree(root))
+            extra.unlink()
+            task.write_text("staged\n")
+            subprocess.run(["git", "-C", str(root), "add", "tasks/AR-0001.md"], check=True)  # noqa: S603,S607
+            task.write_text("old\n")
+            self.assertNotEqual(original, domain_tree(root))
+
+    def test_history_depth_detects_same_tree_extra_commit(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            subprocess.run(["git", "init", "-q", "-b", "main", str(root)], check=True)  # noqa: S603,S607
+            path = root / "README.md"
+            path.write_text("unchanged\n")
+            subprocess.run(["git", "-C", str(root), "add", "README.md"], check=True)  # noqa: S603,S607
+            identity = [
+                "/usr/bin/git",
+                "-C",
+                str(root),
+                "-c",
+                "user.name=Fixture",
+                "-c",
+                "user.email=fixture@example.invalid",
+            ]
+            subprocess.run([*identity, "commit", "-q", "-m", "initial"], check=True)  # noqa: S603
+            before_tree, before_depth = domain_tree(root), history_depth(root)
+            before_refs = non_head_refs_digest(root)
+            before_head = subprocess.run(  # noqa: S603
+                ["/usr/bin/git", "-C", str(root), "rev-parse", "HEAD"],
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+            subprocess.run(  # noqa: S603
+                [*identity, "commit", "-q", "--allow-empty", "-m", "extra"],
+                check=True,
+            )
+            self.assertEqual(before_tree, domain_tree(root))
+            self.assertEqual(before_depth + 1, history_depth(root))
+            self.assertTrue(history_extends(root, before_head))
+            self.assertEqual(before_refs, non_head_refs_digest(root))
+            subprocess.run(  # noqa: S603
+                ["/usr/bin/git", "-C", str(root), "tag", "unexpected-ref"],
+                check=True,
+            )
+            self.assertNotEqual(before_refs, non_head_refs_digest(root))
+            extra_head = subprocess.run(  # noqa: S603
+                ["/usr/bin/git", "-C", str(root), "rev-parse", "HEAD"],
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+            subprocess.run(  # noqa: S603
+                [*identity, "commit", "-q", "--amend", "--allow-empty", "-m", "rewritten"],
+                check=True,
+            )
+            self.assertEqual(before_depth + 1, history_depth(root))
+            self.assertFalse(history_extends(root, extra_head))
+
     def test_percentiles_use_bounded_nearest_rank(self) -> None:
         values = [9.0, 3.0, 1.0, 7.0, 5.0]
         self.assertEqual(5.0, percentile(values, 0.5))
@@ -126,6 +240,10 @@ class GitCommandLatencyBenchmarkTests(unittest.TestCase):
             "snapshot_body_sha256": None,
             "stdout_bytes": [4],
             "state_tree": "tree",
+            "history_depth": 3,
+            "history_extends": True,
+            "overlay_unchanged": True,
+            "non_head_refs_unchanged": True,
             "current_sha256": "view",
         }
         with (

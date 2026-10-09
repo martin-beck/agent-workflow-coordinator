@@ -23,12 +23,18 @@ from typing import Any, cast
 
 from git_command_latency_benchmark import (
     configure,
+    dirty_checkout_digest,
     git_head,
+    history_extends,
+    non_head_refs_digest,
     prepare_runtime,
     product_input_digest,
+    runtime_digest,
     worktree_listing,
 )
 from git_scale_probe import prepare
+
+from tools.session_records import build_session_record
 
 TASK_IDS = tuple(f"AR-{number:04d}" for number in range(9000, 9016))
 
@@ -375,8 +381,13 @@ def adversarial_probe(state: Path, env: dict[str, str], timeout: float) -> dict[
     """Require one valid durable transition amid rejected competing calls."""
     before = task_meta(state, TASK_IDS[0])
     task_path = state / "tasks" / f"{TASK_IDS[0]}.md"
+    session_path = state / "sessions" / f"{TASK_IDS[0]}.jsonl"
     before_text = task_path.read_text()
+    before_sessions = session_path.read_text().splitlines() if session_path.exists() else []
     head = git_head(state)
+    before_dirty = dirty_checkout_digest(state)
+    before_runtime = runtime_digest(state, normalize_time=False)
+    before_refs = non_head_refs_digest(state)
     marker = state.parent / "unauthorized-run-marker"
     result = batch(
         state,
@@ -394,6 +405,7 @@ def adversarial_probe(state: Path, env: dict[str, str], timeout: float) -> dict[
     )
     after = task_meta(state, TASK_IDS[0])
     after_text = task_path.read_text()
+    after_sessions = session_path.read_text().splitlines() if session_path.exists() else []
     commit_count = int(
         subprocess.run(  # noqa: S603
             ["git", "rev-list", "--count", f"{head}..HEAD"],  # noqa: S607
@@ -403,10 +415,37 @@ def adversarial_probe(state: Path, env: dict[str, str], timeout: float) -> dict[
             text=True,
         ).stdout.strip()
     )
+    after_dirty = dirty_checkout_digest(state)
+    after_runtime = runtime_digest(state, normalize_time=False)
+    after_refs = non_head_refs_digest(state)
+    changed_paths = subprocess.run(  # noqa: S603
+        ["/usr/bin/git", "-C", str(state), "diff", "--name-only", "-z", f"{head}..HEAD"],
+        check=True,
+        capture_output=True,
+    ).stdout.split(b"\0")
+    allowed_paths = {
+        b"tasks/AR-9000.md",
+        b"sessions/AR-9000.jsonl",
+        b"CURRENT.md",
+        b"STATUS.md",
+    }
+    result["only_expected_durable_paths_changed"] = all(
+        not path or path in allowed_paths or path.startswith(b"status/") for path in changed_paths
+    )
+    result["no_uncommitted_effects"] = before_dirty == after_dirty
+    result["runtime_unchanged"] = before_runtime == after_runtime
+    result["non_head_refs_unchanged"] = before_refs == after_refs
     checks = doctor(state, env)
     result["integrity"] = checks
     result["exactly_one_commit"] = commit_count == 1
+    result["starting_history_preserved"] = history_extends(state, head)
     result["task_revision_advanced_once"] = after["task_revision"] == before["task_revision"] + 1
+    result["one_expected_session_record"] = (
+        len(after_sessions) == len(before_sessions) + 1
+        and after_sessions[: len(before_sessions)] == before_sessions
+        and json.loads(after_sessions[-1])
+        == build_session_record(after, "update", str(after["updated_at"]))
+    )
     result["owner_preserved"] = after["owner"] == before["owner"] == "bench-0"
     result["good_update_recorded_once"] = (
         before_text.count("Adversarial liveness witness.") == 0
@@ -419,6 +458,12 @@ def adversarial_probe(state: Path, env: dict[str, str], timeout: float) -> dict[
         and bool(result["expected_errors_match"])
         and bool(result["good_update_recorded_once"])
         and bool(result["good_latency_under_10s"])
+        and bool(result["only_expected_durable_paths_changed"])
+        and bool(result["no_uncommitted_effects"])
+        and bool(result["runtime_unchanged"])
+        and bool(result["non_head_refs_unchanged"])
+        and bool(result["one_expected_session_record"])
+        and bool(result["starting_history_preserved"])
     ) and checks == {
         "doctor": 0,
         "doctor_live": 0,
@@ -586,6 +631,26 @@ def require_unchanged_sources(report: dict[str, bool]) -> None:
         raise RuntimeError("concurrency qualification invalid: source inputs changed")
 
 
+def checked_batch(
+    state: Path,
+    env: dict[str, str],
+    name: str,
+    commands: list[list[str]],
+    timeout: float,
+    expected_successes: int,
+) -> None:
+    outcome = batch(state, env, name, commands, timeout)
+    print(json.dumps(outcome), flush=True)
+    checks = doctor(state, env)
+    print(json.dumps({"after": name, "integrity": checks}), flush=True)
+    successes = sum(
+        cast(int, route["ok"])
+        for route in cast(dict[str, dict[str, object]], outcome["routes"]).values()
+    )
+    if successes != expected_successes or any(checks.values()):
+        raise RuntimeError(f"{name}: unexpected route outcome or failed integrity check")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--state", type=Path, required=True)
@@ -598,6 +663,7 @@ def main() -> None:
     source_state = args.state.resolve()
     source_product = args.product.resolve()
     state_head = git_head(source_state)
+    state_digest = product_input_digest(source_state, include_runtime=True)
     product_digest = product_input_digest(source_product)
     binding = json.loads((source_state / "coordinator.binding.json").read_text())
     with tempfile.TemporaryDirectory(prefix="awc-16x-mixed-") as directory:
@@ -656,8 +722,7 @@ def main() -> None:
             else initial_batches
         )
         for name, commands in batches:
-            print(json.dumps(batch(state, env, name, commands, args.timeout_seconds)), flush=True)
-            print(json.dumps({"after": name, "integrity": doctor(state, env)}), flush=True)
+            checked_batch(state, env, name, commands, args.timeout_seconds, 16)
         if not args.only_roles:
             adversarial = adversarial_probe(state, env, args.timeout_seconds)
             print(json.dumps(adversarial), flush=True)
@@ -668,6 +733,12 @@ def main() -> None:
                 and adversarial["owner_preserved"]
                 and adversarial["good_update_recorded_once"]
                 and adversarial["unauthorized_subprocess_suppressed"]
+                and adversarial["only_expected_durable_paths_changed"]
+                and adversarial["no_uncommitted_effects"]
+                and adversarial["runtime_unchanged"]
+                and adversarial["non_head_refs_unchanged"]
+                and adversarial["one_expected_session_record"]
+                and adversarial["starting_history_preserved"]
             ):
                 raise RuntimeError("adversarial concurrency integrity or liveness failure")
         if args.only_adversarial:
@@ -676,6 +747,10 @@ def main() -> None:
                     "source_product_inputs_changed": product_input_digest(source_product)
                     != product_digest,
                     "source_state_head_changed": git_head(source_state) != state_head,
+                    "source_state_inputs_changed": product_input_digest(
+                        source_state, include_runtime=True
+                    )
+                    != state_digest,
                 }
             )
             return
@@ -691,30 +766,48 @@ def main() -> None:
             )
         )
         for name, commands in mutation_batches:
-            print(json.dumps(batch(state, env, name, commands, args.timeout_seconds)), flush=True)
-            print(json.dumps({"after": name, "integrity": doctor(state, env)}), flush=True)
+            checked_batch(
+                state,
+                env,
+                name,
+                commands,
+                args.timeout_seconds,
+                4 if name == "rejected_and_readers" else 16,
+            )
         seed_active_roles(state, env)
-        print(json.dumps({"after": "role_seed", "integrity": doctor(state, env)}), flush=True)
-        print(
-            json.dumps(
-                batch(state, env, "role_assignments", role_assignments(state), args.timeout_seconds)
-            ),
-            flush=True,
-        )
-        print(
-            json.dumps({"after": "role_assignments", "integrity": doctor(state, env)}), flush=True
+        seed_checks = doctor(state, env)
+        print(json.dumps({"after": "role_seed", "integrity": seed_checks}), flush=True)
+        if any(seed_checks.values()):
+            raise RuntimeError("role_seed: failed integrity check")
+        checked_batch(
+            state,
+            env,
+            "role_assignments",
+            role_assignments(state),
+            args.timeout_seconds,
+            1,
         )
         for name, commands in (
             ("role_reads", role_reads(state)),
             ("role_removals", role_removals(state)),
         ):
-            print(json.dumps(batch(state, env, name, commands, args.timeout_seconds)), flush=True)
-            print(json.dumps({"after": name, "integrity": doctor(state, env)}), flush=True)
+            checked_batch(
+                state,
+                env,
+                name,
+                commands,
+                args.timeout_seconds,
+                1 if name == "role_removals" else 16,
+            )
         require_unchanged_sources(
             {
                 "source_product_inputs_changed": product_input_digest(source_product)
                 != product_digest,
                 "source_state_head_changed": git_head(source_state) != state_head,
+                "source_state_inputs_changed": product_input_digest(
+                    source_state, include_runtime=True
+                )
+                != state_digest,
             }
         )
 
