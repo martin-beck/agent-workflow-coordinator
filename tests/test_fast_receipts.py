@@ -1,0 +1,124 @@
+# Copyright (C) Huawei Technologies Co., Ltd. 2026. All rights reserved.
+# SPDX-License-Identifier: MIT
+"""Durable opt-in receipt intent tests; queued is never completed."""
+
+from __future__ import annotations
+
+import tempfile
+import unittest
+import uuid
+from concurrent.futures import ProcessPoolExecutor
+from pathlib import Path
+
+from tools.fast_receipts import ReceiptConflictError, ReceiptStore
+
+
+def _independent_enqueue(arguments: tuple[str, str, int]) -> tuple[str, str]:
+    path, project_id, worker = arguments
+    store = ReceiptStore(Path(path), project_id)
+    try:
+        receipt = store.enqueue_heartbeat(
+            key=f"worker-{worker}:heartbeat",
+            task=f"AR-{worker:04d}",
+            owner=f"worker-{worker}",
+            expected_revision=1,
+            lease_minutes=20,
+        )
+        return str(receipt["receipt_id"]), str(receipt["phase"])
+    finally:
+        store.close()
+
+
+class FastReceiptTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.path = Path(self.directory.name) / "private" / "receipts.sqlite3"
+        self.project_id = str(uuid.uuid4())
+
+    def store(self) -> ReceiptStore:
+        result = ReceiptStore(self.path, self.project_id)
+        self.addCleanup(result.close)
+        return result
+
+    def submit(self, store: ReceiptStore, **changes: object) -> dict[str, object]:
+        fields: dict[str, object] = {
+            "key": "worker-a:heartbeat:1",
+            "task": "AR-0120",
+            "owner": "worker-a",
+            "expected_revision": 1,
+            "lease_minutes": 20,
+        }
+        fields.update(changes)
+        return store.enqueue_heartbeat(**fields)  # type: ignore[arg-type]
+
+    def test_retry_returns_same_durable_queued_receipt_after_reopen(self) -> None:
+        first_store = self.store()
+        first = self.submit(first_store)
+        self.assertEqual("queued-local", first["phase"])
+        self.assertEqual("heartbeat", first["operation"])
+        first_store.close()
+        reopened = self.store()
+        second = self.submit(reopened)
+        self.assertEqual(first["receipt_id"], second["receipt_id"])
+        self.assertEqual(first, reopened.read(str(first["receipt_id"])))
+
+    def test_same_key_different_input_rejects_without_new_intent(self) -> None:
+        store = self.store()
+        first = self.submit(store)
+        with self.assertRaises(ReceiptConflictError):
+            self.submit(store, lease_minutes=21)
+        with self.assertRaises(ReceiptConflictError):
+            self.submit(store, expected_revision=2)
+        self.assertEqual(first, store.read(str(first["receipt_id"])))
+        count = store.connection.execute("SELECT count(*) FROM intents").fetchone()[0]
+        self.assertEqual(1, count)
+
+    def test_invalid_intent_never_creates_row(self) -> None:
+        store = self.store()
+        for change in (
+            {"key": "../escape"},
+            {"task": "../foreign"},
+            {"owner": "worker with spaces"},
+            {"expected_revision": 0},
+            {"lease_minutes": 0},
+            {"lease_minutes": 1441},
+        ):
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                self.submit(store, **change)
+        self.assertEqual(0, store.connection.execute("SELECT count(*) FROM intents").fetchone()[0])
+
+    def test_foreign_project_cannot_read_receipt(self) -> None:
+        store = self.store()
+        receipt = self.submit(store)
+        foreign = ReceiptStore(self.path, str(uuid.uuid4()))
+        self.addCleanup(foreign.close)
+        self.assertIsNone(foreign.read(str(receipt["receipt_id"])))
+
+    def test_symlinked_database_is_rejected(self) -> None:
+        self.path.parent.mkdir(mode=0o700)
+        target = self.path.parent / "target"
+        target.write_text("not a database")
+        self.path.symlink_to(target)
+        with self.assertRaisesRegex(RuntimeError, "symlink"):
+            ReceiptStore(self.path, self.project_id)
+
+    def test_nonprivate_parent_is_rejected(self) -> None:
+        self.path.parent.mkdir(mode=0o777)
+        self.path.parent.chmod(0o755)
+        with self.assertRaisesRegex(RuntimeError, "not private"):
+            ReceiptStore(self.path, self.project_id)
+
+    def test_sixteen_independent_submitters_preserve_all_intents(self) -> None:
+        store = self.store()
+        arguments = [(str(self.path), self.project_id, worker) for worker in range(16)]
+        with ProcessPoolExecutor(max_workers=16) as executor:
+            results = list(executor.map(_independent_enqueue, arguments))
+        self.assertEqual(16, len({receipt_id for receipt_id, _ in results}))
+        self.assertTrue(all(phase == "queued-local" for _, phase in results))
+        count = store.connection.execute("SELECT count(*) FROM intents").fetchone()[0]
+        self.assertEqual(16, count)
+
+
+if __name__ == "__main__":
+    unittest.main()
