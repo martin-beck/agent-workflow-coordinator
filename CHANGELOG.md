@@ -1,6 +1,9 @@
 # Changelog
 
-## Unreleased
+## 0.4.0 - 2026-10-09
+
+- Add an owner- and revision-bound `accept` command to record validated task-spec
+  acceptance metadata before `release --status done`. Existing done admission remains fail closed.
 
 ## 0.3.59 - 2026-10-09
 
