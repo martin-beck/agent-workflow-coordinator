@@ -232,6 +232,12 @@ class ReceiptStore:
         os.close(self._database_fd)
         os.close(self._parent_fd)
 
+    def __enter__(self) -> ReceiptStore:
+        return self
+
+    def __exit__(self, _kind: object, _value: object, _traceback: object) -> None:
+        self.close()
+
     @contextmanager
     def _transaction(self) -> Iterator[None]:
         self._assert_path()

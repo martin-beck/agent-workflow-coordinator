@@ -23,6 +23,7 @@ from unittest.mock import patch
 
 from fixture_ids import project_uuid
 
+from tools.fast_receipt_cli import dispatch_fast
 from tools.fast_receipt_worker import process_one, publish_pending, verify_local_commit
 from tools.fast_receipts import ReceiptStore
 
@@ -2169,17 +2170,27 @@ class HandoffTest(unittest.TestCase):
         run_git(["git", "init", "--bare", "-q", "--initial-branch=main", str(remote)])
         run_git(["git", "-C", str(self.root), "remote", "add", "origin", str(remote)])
         run_git(["git", "-C", str(self.root), "push", "origin", "HEAD:refs/heads/main"])
+        with (
+            patch.object(CORE, "assert_project_binding"),
+            patch("builtins.print") as printed_receipt,
+        ):
+            dispatch_fast(
+                CORE,
+                argparse.Namespace(
+                    fast_action="heartbeat",
+                    key="worker-a:heartbeat:1",
+                    task="AR-0001",
+                    owner="worker-a",
+                    expected_revision=1,
+                    lease_minutes=20,
+                ),
+            )
+        queued = json.loads(printed_receipt.call_args.args[0])
+        self.assertEqual("queued-local", queued["phase"])
         store = ReceiptStore(
             CORE.coordinator_lock_path().parent / "fast-receipts.sqlite3", project_uuid("1")
         )
         self.addCleanup(store.close)
-        queued = store.enqueue_heartbeat(
-            key="worker-a:heartbeat:1",
-            task="AR-0001",
-            owner="worker-a",
-            expected_revision=1,
-            lease_minutes=20,
-        )
         with patch.object(CORE, "assert_project_binding"):
             result = process_one(CORE, store)
         assert result is not None

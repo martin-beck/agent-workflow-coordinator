@@ -415,6 +415,16 @@ exec "$@"
         )
         self.assertEqual(0, help_result.returncode, help_result.stderr)
         self.assertIn("unblock", help_result.stdout)
+        fast_help = subprocess.run(  # noqa: S603
+            [sys.executable, "-S", str(self.target / "tools/handoffctl.py"), "fast", "--help"],
+            cwd=self.target,
+            check=False,
+            capture_output=True,
+            text=True,
+            env={"PATH": os.environ["PATH"], "PYTHONPATH": str(self.target)},
+        )
+        self.assertEqual(0, fast_help.returncode, fast_help.stderr)
+        self.assertIn("heartbeat,receipt,worker", fast_help.stdout)
         embedded_guide = (self.target / "docs/agent-workflow-coordinator.md").read_text()
         self.assertIn("tools/handoffctl unblock", embedded_guide)
 

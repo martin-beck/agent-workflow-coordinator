@@ -3820,6 +3820,10 @@ def dispatch_read_only_command(args: argparse.Namespace) -> None:
 
 def dispatch_bound_command(args: argparse.Namespace) -> int:  # noqa: C901
     """Dispatch a command only after the permanent project binding has passed."""
+    if args.cmd == "fast":
+        from tools.fast_receipt_cli import dispatch_fast
+
+        return dispatch_fast(sys.modules[__name__], args)
     if args.cmd == "reconcile":
         reconcile(do_commit=args.commit, push=args.push)
     elif args.cmd == "roles":
@@ -3910,6 +3914,18 @@ def main() -> int:
     item.add_argument("task")
     item.add_argument("--owner", required=True)
     item.add_argument("--expected-revision", type=int, required=True)
+    item = commands.add_parser("fast")
+    fast_actions = item.add_subparsers(dest="fast_action", required=True)
+    fast_heartbeat = fast_actions.add_parser("heartbeat")
+    fast_heartbeat.add_argument("task")
+    fast_heartbeat.add_argument("--owner", required=True)
+    fast_heartbeat.add_argument("--expected-revision", type=int, required=True)
+    fast_heartbeat.add_argument("--lease-minutes", type=int, default=120)
+    fast_heartbeat.add_argument("--key", required=True)
+    fast_receipt = fast_actions.add_parser("receipt")
+    fast_receipt.add_argument("receipt_id")
+    fast_worker = fast_actions.add_parser("worker")
+    fast_worker.add_argument("--limit", type=int, default=16)
     item = commands.add_parser("directive")
     directive_commands = item.add_subparsers(dest="directive_action", required=True)
     directive = directive_commands.add_parser("create")
