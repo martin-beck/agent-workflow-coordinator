@@ -64,9 +64,7 @@ class GitMixedCommandProbeTests(unittest.TestCase):
                 )
             self.assertEqual(
                 [],
-                heartbeat_effect_errors(
-                    state, before, bodies, now, now + dt.timedelta(seconds=1)
-                ),
+                heartbeat_effect_errors(state, before, bodies, now, now + dt.timedelta(seconds=1)),
             )
             target = tasks / f"{TASK_IDS[0]}.md"
             original = target.read_text()
@@ -122,9 +120,7 @@ class GitMixedCommandProbeTests(unittest.TestCase):
             completed: dict[str, dict[str, object]] = {}
             with sqlite3.connect(database) as connection:
                 connection.execute("CREATE TABLE receipt_binding(singleton INT, project_id TEXT)")
-                connection.execute(
-                    "INSERT INTO receipt_binding VALUES (1, ?)", (project_id,)
-                )
+                connection.execute("INSERT INTO receipt_binding VALUES (1, ?)", (project_id,))
                 connection.execute(
                     "CREATE TABLE intents(receipt_id TEXT, project_id TEXT, "
                     "idempotency_key TEXT, operation TEXT, task_id TEXT, "
@@ -158,10 +154,19 @@ class GitMixedCommandProbeTests(unittest.TestCase):
                     connection.execute(
                         "INSERT INTO intents VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                         (
-                            receipt_id, project_id, f"bench-{index}:heartbeat:2",
-                            "heartbeat", task_id, 2, canonical,
+                            receipt_id,
+                            project_id,
+                            f"bench-{index}:heartbeat:2",
+                            "heartbeat",
+                            task_id,
+                            2,
+                            canonical,
                             hashlib.sha256(canonical.encode()).hexdigest(),
-                            "completed-local", 3, None, None, commit_oid,
+                            "completed-local",
+                            3,
+                            None,
+                            None,
+                            commit_oid,
                         ),
                     )
             with mock.patch(
@@ -172,8 +177,19 @@ class GitMixedCommandProbeTests(unittest.TestCase):
                     connection.execute(
                         "INSERT INTO intents VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                         (
-                            "extra", project_id, "extra", "heartbeat", TASK_IDS[0],
-                            2, "{}", "bad", "queued-local", None, None, None, None,
+                            "extra",
+                            project_id,
+                            "extra",
+                            "heartbeat",
+                            TASK_IDS[0],
+                            2,
+                            "{}",
+                            "bad",
+                            "queued-local",
+                            None,
+                            None,
+                            None,
+                            None,
                         ),
                     )
                 self.assertTrue(

@@ -179,7 +179,13 @@ def _require_request(request: Any) -> dict[str, Any]:
         return request
     if action == "heartbeat":
         if set(request) != {
-            "protocol", "action", "task", "owner", "expected_revision", "lease_minutes", "key"
+            "protocol",
+            "action",
+            "task",
+            "owner",
+            "expected_revision",
+            "lease_minutes",
+            "key",
         }:
             raise RuntimeError("invalid fast heartbeat request")
         if (
@@ -266,6 +272,7 @@ def socket_service(core: Any) -> Iterator[None]:  # noqa: C901
         stop = threading.Event()
         slots = threading.BoundedSemaphore(64)
         with ThreadPoolExecutor(max_workers=32) as pool:
+
             def accept_loop() -> None:
                 while not stop.is_set():
                     try:

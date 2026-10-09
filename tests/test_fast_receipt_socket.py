@@ -52,9 +52,17 @@ class FastReceiptSocketTests(unittest.TestCase):
         self.path = self.private / "fast-receipts.sock"
         self.core = FakeBoundCore(self.private, str(uuid.uuid4()))
         self.argv = [
-            "fast", "heartbeat", "AR-0120", "--owner", "worker-a",
-            "--expected-revision", "2", "--lease-minutes", "20",
-            "--key", "worker-a:heartbeat:2",
+            "fast",
+            "heartbeat",
+            "AR-0120",
+            "--owner",
+            "worker-a",
+            "--expected-revision",
+            "2",
+            "--lease-minutes",
+            "20",
+            "--key",
+            "worker-a:heartbeat:2",
         ]
 
     def test_canonical_request_and_malformed_args_fall_back_to_parser(self) -> None:
@@ -96,8 +104,9 @@ class FastReceiptSocketTests(unittest.TestCase):
         self.assertTrue(self.path.is_symlink())
 
     def test_bound_service_returns_only_durable_queued_and_read_receipts(self) -> None:
-        with socket_service(self.core), patch(
-            "tools.fast_receipt_socket._socket_path", return_value=self.path
+        with (
+            socket_service(self.core),
+            patch("tools.fast_receipt_socket._socket_path", return_value=self.path),
         ):
             output = io.StringIO()
             with contextlib.redirect_stdout(output):
@@ -128,8 +137,9 @@ class FastReceiptSocketTests(unittest.TestCase):
 
     def test_foreign_caller_rejects_before_queue_effect(self) -> None:
         self.core.reject_caller = True
-        with socket_service(self.core), patch(
-            "tools.fast_receipt_socket._socket_path", return_value=self.path
+        with (
+            socket_service(self.core),
+            patch("tools.fast_receipt_socket._socket_path", return_value=self.path),
         ):
             error = io.StringIO()
             with contextlib.redirect_stderr(error):

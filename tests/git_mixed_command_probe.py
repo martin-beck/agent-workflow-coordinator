@@ -130,12 +130,14 @@ def heartbeat_effect_errors(  # noqa: C901
             errors.append(f"{task_id}: owner or status changed")
         if after.get("task_revision") != original["task_revision"] + 1:
             errors.append(f"{task_id}: revision did not advance once")
+
         def unchanged(item: dict[str, Any]) -> dict[str, Any]:
             return {
                 key: value
                 for key, value in item.items()
                 if key not in {"task_revision", "updated_at", "claim_expires"}
             }
+
         if unchanged(after) != unchanged(original):
             errors.append(f"{task_id}: unrelated metadata changed")
         try:
@@ -150,8 +152,10 @@ def heartbeat_effect_errors(  # noqa: C901
             <= finished_at + dt.timedelta(minutes=20, seconds=2)
         ):
             errors.append(f"{task_id}: lease does not match requested 20 minutes")
-        if not started_at - dt.timedelta(seconds=2) <= updated <= finished_at + dt.timedelta(
-            seconds=2
+        if (
+            not started_at - dt.timedelta(seconds=2)
+            <= updated
+            <= finished_at + dt.timedelta(seconds=2)
         ):
             errors.append(f"{task_id}: updated_at is outside the operation window")
         if abs((expiry - updated - dt.timedelta(minutes=20)).total_seconds()) > 1:
@@ -208,9 +212,7 @@ def coordinator_other_digest(state: Path) -> bytes:
     return digest.digest()
 
 
-def receipt_queue_errors(
-    state: Path, completed: dict[str, dict[str, object]]
-) -> list[str]:
+def receipt_queue_errors(state: Path, completed: dict[str, dict[str, object]]) -> list[str]:
     """Reject extra intents and bind every durable row to one requested heartbeat."""
     path = coordinator_private_root(state) / "fast-receipts.sqlite3"
     if not path.is_file() or path.is_symlink():
@@ -1437,8 +1439,14 @@ def main() -> None:  # noqa: C901
                 "strict_heartbeat",
                 [
                     [
-                        "heartbeat", task_id, "--owner", f"bench-{index}",
-                        "--expected-revision", "2", "--lease-minutes", "20",
+                        "heartbeat",
+                        task_id,
+                        "--owner",
+                        f"bench-{index}",
+                        "--expected-revision",
+                        "2",
+                        "--lease-minutes",
+                        "20",
                     ]
                     for index, task_id in enumerate(TASK_IDS)
                 ],
