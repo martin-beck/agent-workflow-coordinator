@@ -146,6 +146,33 @@ equal verified snapshot body hashes but different raw commit-bearing hashes.
 This is not an excuse to ignore any other output or
 side-effect difference.
 
+A second independent review confirmed the earlier three benchmark/adversarial
+repairs but found three narrower evidence gaps. The adversarial `run` requests
+now wrap a command that would write a marker in the disposable fixture and
+require its absence; liveness additionally requires the good worker to finish
+within 10 seconds. On pinned state
+`654f3195f0fe7e9a367561783960629fd451ace3`, the stronger 16-way test
+passed: all 15 expected rejection classes, one good update in 0.899 seconds,
+one commit and revision advance, no unauthorized subprocess marker, green
+static/live doctors, and unchanged source state/product fingerprints. The
+snapshot harness now verifies the printed first-line commit against the
+fixture's exact HEAD before comparing bodies, and the product fingerprint
+also hashes staged index diffs. Those final repairs still require exact-head
+independent review and a post-repair benchmark run.
+
+The first post-repair snapshot rerun was **invalid**, not a performance result:
+the ASB source state head, product worktree listing, and product input
+fingerprint moved while it ran; the candidate snapshot correctly failed
+closed with a stale/changed observation. The harness now returns a failing
+exit status for unequal outcomes or detected source/fixture drift instead of
+leaving an invalid JSON result looking like a successful qualification.
+A repeat on a newer 747-worktree ASB observation did produce equal successful
+snapshot bodies and state trees, but the source product fingerprint and state
+head changed during that run. The harness exited nonzero as intended; its
+13.483/1.423-second timings remain diagnostic, not a qualified pair. A
+frozen, representative product fixture or quiet source interval is needed for
+post-repair performance qualification.
+
 This matrix covers a meaningful subset, **not all commands**. `checkpoint`,
 `gate`, `promote`, `pause`/`resume`, `recover-expired`, `unblock`, Git
 `migrate`/`upgrade`/`rollback`, `init`, and replica-push/failure paths still

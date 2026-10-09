@@ -293,7 +293,7 @@ def claimed_mutations(state: Path) -> list[list[str]]:
     return commands
 
 
-def adversarial_commands(revision: int) -> list[list[str]]:
+def adversarial_commands(revision: int, marker: Path) -> list[list[str]]:
     """Fifteen rejected authority attempts race one valid owner update."""
     task = TASK_IDS[0]
     bad_owner = "malicious-benchmark-owner"
@@ -328,7 +328,13 @@ def adversarial_commands(revision: int) -> list[list[str]]:
         ]
         for _ in range(2)
     )
-    commands.extend(["run", "--owner", bad_owner, task, "--", "/usr/bin/true"] for _ in range(2))
+    unauthorized_effect = (
+        f"from pathlib import Path; Path({str(marker)!r}).write_text('unauthorized')"
+    )
+    commands.extend(
+        ["run", "--owner", bad_owner, task, "--", sys.executable, "-c", unauthorized_effect]
+        for _ in range(2)
+    )
     commands.extend(
         [
             "gate",
@@ -371,11 +377,12 @@ def adversarial_probe(state: Path, env: dict[str, str], timeout: float) -> dict[
     task_path = state / "tasks" / f"{TASK_IDS[0]}.md"
     before_text = task_path.read_text()
     head = git_head(state)
+    marker = state.parent / "unauthorized-run-marker"
     result = batch(
         state,
         env,
         "adversarial_one_good",
-        adversarial_commands(int(before["task_revision"])),
+        adversarial_commands(int(before["task_revision"]), marker),
         timeout,
         expected_success={15},
         expected_errors={
@@ -405,10 +412,13 @@ def adversarial_probe(state: Path, env: dict[str, str], timeout: float) -> dict[
         before_text.count("Adversarial liveness witness.") == 0
         and after_text.count("Adversarial liveness witness.") == 1
     )
+    result["unauthorized_subprocess_suppressed"] = not marker.exists()
+    result["good_latency_under_10s"] = cast(float, result["good_latency_ms"]) < 10_000
     result["good_worker_live"] = (
         bool(result["expected_outcomes_match"])
         and bool(result["expected_errors_match"])
         and bool(result["good_update_recorded_once"])
+        and bool(result["good_latency_under_10s"])
     ) and checks == {
         "doctor": 0,
         "doctor_live": 0,
@@ -651,6 +661,7 @@ def main() -> None:
                 and adversarial["task_revision_advanced_once"]
                 and adversarial["owner_preserved"]
                 and adversarial["good_update_recorded_once"]
+                and adversarial["unauthorized_subprocess_suppressed"]
             ):
                 raise RuntimeError("adversarial concurrency integrity or liveness failure")
         if args.only_adversarial:

@@ -93,6 +93,13 @@ def product_input_digest(root: Path) -> str:
                 capture_output=True,
             ).stdout
             checkout.update(diff)
+            staged = subprocess.run(  # noqa: S603
+                ["/usr/bin/git", "-C", str(path), "diff", "--cached", "--binary", "HEAD"],
+                env=observed_env,
+                check=True,
+                capture_output=True,
+            ).stdout
+            checkout.update(staged)
             untracked = subprocess.run(  # noqa: S603
                 [
                     "/usr/bin/git",
@@ -159,12 +166,14 @@ def digest_stream(stream: BinaryIO) -> tuple[str, int]:
     return digest.hexdigest(), length
 
 
-def snapshot_body_digest(stream: BinaryIO) -> str:
+def snapshot_body_digest(stream: BinaryIO, expected_commit: str) -> str:
     """Compare snapshot bodies while preserving raw hashes of fixture commit IDs."""
     stream.seek(0)
     first = stream.readline(128)
-    if re.fullmatch(rb"STATE_COMMIT=[0-9a-f]{40}\n", first) is None:
-        raise ValueError("Git snapshot omitted its exact state commit")
+    if re.fullmatch(rb"STATE_COMMIT=[0-9a-f]{40}\n", first) is None or first != (
+        f"STATE_COMMIT={expected_commit}\n".encode()
+    ):
+        raise ValueError("Git snapshot did not print its exact fixture commit")
     digest = hashlib.sha256()
     while chunk := stream.read(65536):
         digest.update(chunk)
@@ -176,6 +185,7 @@ def wait_for_processes(
     route: str,
     started: float,
     timeout: float,
+    expected_commit: str,
 ) -> dict[int, tuple[float, str, str, int, str]]:
     completed: dict[int, tuple[float, str, str, int, str]] = {}
     while len(completed) != len(running):
@@ -193,7 +203,7 @@ def wait_for_processes(
                 diagnostic = stderr.read(1_000_000)
                 output_hash, output_bytes = digest_stream(stdout)
                 body_hash = (
-                    snapshot_body_digest(stdout)
+                    snapshot_body_digest(stdout, expected_commit)
                     if route == "snapshot" and process.returncode == 0
                     else output_hash
                 )
@@ -212,6 +222,7 @@ def measure(
     state: Path, env: dict[str, str], route: str, workers: int, timeout: float
 ) -> dict[str, object]:
     started = time.monotonic()
+    expected_commit = git_head(state)
     before = resources()
     with contextlib.ExitStack() as files:
         running: list[tuple[subprocess.Popen[bytes], float, BinaryIO, BinaryIO]] = []
@@ -227,7 +238,7 @@ def measure(
                 stderr=stderr,
             )
             running.append((process, time.monotonic(), stdout, stderr))
-        completed = wait_for_processes(running, route, started, timeout)
+        completed = wait_for_processes(running, route, started, timeout, expected_commit)
     elapsed = time.monotonic() - started
     after = resources()
     latencies = [(completed[process.pid][0] - launch) * 1000 for process, launch, _, _ in running]
@@ -332,7 +343,8 @@ def run_samples(
     counts: tuple[int, ...],
     repetitions: int,
     timeout: float,
-) -> None:
+) -> bool:
+    equivalent = True
     for route in routes:
         for count in counts:
             for repetition in range(repetitions):
@@ -350,6 +362,18 @@ def run_samples(
                     )
                 baseline = paired["baseline"]
                 candidate = paired["candidate"]
+                outputs_equal = (
+                    baseline["snapshot_body_sha256"] == candidate["snapshot_body_sha256"]
+                    if route == "snapshot"
+                    else baseline["stdout_sha256"] == candidate["stdout_sha256"]
+                )
+                pair_ok = (
+                    baseline["outcomes"] == candidate["outcomes"] == {"ok": count}
+                    and outputs_equal
+                    and baseline["state_tree"] == candidate["state_tree"]
+                    and baseline["current_sha256"] == candidate["current_sha256"]
+                )
+                equivalent = equivalent and pair_ok
                 print(
                     json.dumps(
                         {
@@ -367,11 +391,13 @@ def run_samples(
                             "state_trees_equal": baseline["state_tree"] == candidate["state_tree"],
                             "current_views_equal": baseline["current_sha256"]
                             == candidate["current_sha256"],
+                            "pair_qualified": pair_ok,
                         },
                         sort_keys=True,
                     ),
                     flush=True,
                 )
+    return equivalent
 
 
 def main() -> None:
@@ -443,21 +469,27 @@ def main() -> None:
             configure(state, source_product, str(product_binding["product_repository"]), env)
             instances[label] = state, env
         fixture_trees = {label: git_tree(state) for label, (state, _) in instances.items()}
-        print(json.dumps({"fixture_state_trees_equal": len(set(fixture_trees.values())) == 1}))
-        run_samples(instances, routes, counts, args.repetitions, args.timeout_seconds)
+        fixture_equal = len(set(fixture_trees.values())) == 1
+        print(json.dumps({"fixture_state_trees_equal": fixture_equal}))
+        paired_equal = run_samples(
+            instances, routes, counts, args.repetitions, args.timeout_seconds
+        )
+        source_state_changed = git_head(source_state) != state_head
+        source_product_changed = product_input_digest(source_product) != product_digest
         print(
             json.dumps(
                 {
-                    "source_state_head_changed": git_head(source_state) != state_head,
+                    "source_state_head_changed": source_state_changed,
                     "source_product_head_changed": git_head(source_product) != product_head,
                     "source_worktree_listing_changed": worktree_listing(source_product) != listing,
-                    "source_product_inputs_changed": product_input_digest(source_product)
-                    != product_digest,
+                    "source_product_inputs_changed": source_product_changed,
                 },
                 sort_keys=True,
             ),
             flush=True,
         )
+        if not fixture_equal or not paired_equal or source_state_changed or source_product_changed:
+            raise RuntimeError("benchmark qualification invalid: fixture drift or unequal outcomes")
 
 
 if __name__ == "__main__":

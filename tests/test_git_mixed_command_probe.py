@@ -4,6 +4,7 @@
 """Safety checks for 16-lane Git-backed mixed-route classification."""
 
 import unittest
+from pathlib import Path
 
 from git_mixed_command_probe import adversarial_commands, error_class, route_name
 
@@ -28,13 +29,14 @@ class GitMixedCommandProbeTests(unittest.TestCase):
         self.assertEqual("usage_error", error_class(b"usage: handoffctl"))
 
     def test_adversarial_batch_has_one_legitimate_worker(self) -> None:
-        commands = adversarial_commands(4)
+        commands = adversarial_commands(4, Path("disposable-unauthorized-marker"))
         self.assertEqual(16, len(commands))
         self.assertEqual(
             ["update", "AR-9000", "--owner", "bench-0", "--expected-revision", "4"],
             commands[-1][:6],
         )
         self.assertEqual(15, sum(command != commands[-1] for command in commands))
+        self.assertEqual(2, sum("write_text" in " ".join(command) for command in commands))
 
 
 if __name__ == "__main__":
