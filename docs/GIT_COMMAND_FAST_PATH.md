@@ -351,18 +351,21 @@ transition and a verified signed Git commit), then `published-remote`
 exposes the exact phase and failure classification; neither a queued intent
 nor an uncertain push is reported as completed.
 
-The current prototype implements these phases only for typed Git
-`heartbeat` intents. It binds a private WAL queue to one project and an
+The current prototype implements these phases for typed Git `heartbeat`,
+`promote`, and revision-fenced `claim` intents. It binds a private WAL queue to one project and an
 idempotency key and typed-input digest; same-key different-input retries
 reject. A single service lease fences execution and restart recovery. The
 internal worker verifies the signed, DCO-matching, marked task commit before
 recording local completion, and records remote publication only after
-observing a ref containing that commit. A real disposable signed-Git and bare
-remote test covers the local-to-remote path. The strict heartbeat CLI retains
-its old owner-only form and accepts an optional exact-revision fence.
+observing a ref containing that commit. Real disposable signed-Git fixtures
+cover heartbeat, promote, and claim local receipts; heartbeat alone currently
+has a local-to-remote fixture. The strict heartbeat CLI retains its old
+owner-only form and accepts an optional exact-revision fence.
 
-The preliminary user-facing route is
-`handoffctl fast heartbeat TASK --owner OWNER --expected-revision N --key KEY`.
+The preliminary user-facing routes are
+`handoffctl fast heartbeat TASK --owner OWNER --expected-revision N --key KEY`,
+`handoffctl fast promote TASK --expected-revision N --note NOTE --key KEY`, and
+`handoffctl fast claim TASK --owner OWNER --expected-revision N --key KEY`.
 It returns a durable `queued-local` receipt and does not claim a heartbeat
 has occurred. `handoffctl fast receipt RECEIPT_ID` reads its current phase;
 `handoffctl fast worker --limit N` performs one explicitly invoked batch,
@@ -375,7 +378,8 @@ hold the local executor's service lock. A bounded subprocess timeout records
 continues and retries at its bounded polling interval without asserting remote
 success. These are manually started processes;
 there is no service supervisor, wake-up mechanism, or broad per-command
-latency qualification yet. The worker handles no command other than heartbeat.
+latency qualification yet. The worker handles no command other than
+heartbeat, promote, and claim.
 Arbitrary
 `run` payloads cannot be retried after ambiguous execution without risking
 double effects; they require a distinct design. This prototype is not 5%
