@@ -5,9 +5,11 @@
 
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from git_mixed_command_probe import (
     adversarial_commands,
+    checked_batch,
     error_class,
     require_unchanged_sources,
     route_name,
@@ -48,6 +50,28 @@ class GitMixedCommandProbeTests(unittest.TestCase):
             require_unchanged_sources(
                 {"source_product_inputs_changed": True, "source_state_head_changed": False}
             )
+
+    def test_mixed_batch_fails_on_lost_worker_or_bad_doctor(self) -> None:
+        with (
+            mock.patch(
+                "git_mixed_command_probe.batch", return_value={"routes": {"claim": {"ok": 15}}}
+            ),
+            mock.patch(
+                "git_mixed_command_probe.doctor", return_value={"doctor": 0, "doctor_live": 0}
+            ),
+            self.assertRaisesRegex(RuntimeError, "unexpected route outcome"),
+        ):
+            checked_batch(Path("disposable-state"), {}, "claims", [], 30, 16)
+        with (
+            mock.patch(
+                "git_mixed_command_probe.batch", return_value={"routes": {"claim": {"ok": 16}}}
+            ),
+            mock.patch(
+                "git_mixed_command_probe.doctor", return_value={"doctor": 0, "doctor_live": 1}
+            ),
+            self.assertRaisesRegex(RuntimeError, "failed integrity check"),
+        ):
+            checked_batch(Path("disposable-state"), {}, "claims", [], 30, 16)
 
 
 if __name__ == "__main__":

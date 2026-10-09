@@ -586,6 +586,26 @@ def require_unchanged_sources(report: dict[str, bool]) -> None:
         raise RuntimeError("concurrency qualification invalid: source inputs changed")
 
 
+def checked_batch(
+    state: Path,
+    env: dict[str, str],
+    name: str,
+    commands: list[list[str]],
+    timeout: float,
+    expected_successes: int,
+) -> None:
+    outcome = batch(state, env, name, commands, timeout)
+    print(json.dumps(outcome), flush=True)
+    checks = doctor(state, env)
+    print(json.dumps({"after": name, "integrity": checks}), flush=True)
+    successes = sum(
+        cast(int, route["ok"])
+        for route in cast(dict[str, dict[str, object]], outcome["routes"]).values()
+    )
+    if successes != expected_successes or any(checks.values()):
+        raise RuntimeError(f"{name}: unexpected route outcome or failed integrity check")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--state", type=Path, required=True)
@@ -656,8 +676,7 @@ def main() -> None:
             else initial_batches
         )
         for name, commands in batches:
-            print(json.dumps(batch(state, env, name, commands, args.timeout_seconds)), flush=True)
-            print(json.dumps({"after": name, "integrity": doctor(state, env)}), flush=True)
+            checked_batch(state, env, name, commands, args.timeout_seconds, 16)
         if not args.only_roles:
             adversarial = adversarial_probe(state, env, args.timeout_seconds)
             print(json.dumps(adversarial), flush=True)
@@ -691,25 +710,39 @@ def main() -> None:
             )
         )
         for name, commands in mutation_batches:
-            print(json.dumps(batch(state, env, name, commands, args.timeout_seconds)), flush=True)
-            print(json.dumps({"after": name, "integrity": doctor(state, env)}), flush=True)
+            checked_batch(
+                state,
+                env,
+                name,
+                commands,
+                args.timeout_seconds,
+                4 if name == "rejected_and_readers" else 16,
+            )
         seed_active_roles(state, env)
-        print(json.dumps({"after": "role_seed", "integrity": doctor(state, env)}), flush=True)
-        print(
-            json.dumps(
-                batch(state, env, "role_assignments", role_assignments(state), args.timeout_seconds)
-            ),
-            flush=True,
-        )
-        print(
-            json.dumps({"after": "role_assignments", "integrity": doctor(state, env)}), flush=True
+        seed_checks = doctor(state, env)
+        print(json.dumps({"after": "role_seed", "integrity": seed_checks}), flush=True)
+        if any(seed_checks.values()):
+            raise RuntimeError("role_seed: failed integrity check")
+        checked_batch(
+            state,
+            env,
+            "role_assignments",
+            role_assignments(state),
+            args.timeout_seconds,
+            1,
         )
         for name, commands in (
             ("role_reads", role_reads(state)),
             ("role_removals", role_removals(state)),
         ):
-            print(json.dumps(batch(state, env, name, commands, args.timeout_seconds)), flush=True)
-            print(json.dumps({"after": name, "integrity": doctor(state, env)}), flush=True)
+            checked_batch(
+                state,
+                env,
+                name,
+                commands,
+                args.timeout_seconds,
+                1 if name == "role_removals" else 16,
+            )
         require_unchanged_sources(
             {
                 "source_product_inputs_changed": product_input_digest(source_product)

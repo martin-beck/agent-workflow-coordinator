@@ -179,6 +179,16 @@ now exit nonzero if either the observed source state head or product inputs
 change. This keeps a successful probe exit from implying qualification on a
 moving source.
 
+A subsequent single-task-snapshot mutation experiment was rejected after
+independent review: although it preserved lock-respecting writers, it could
+miss a concurrent out-of-band edit to another task that the existing
+post-write full scan would catch. It also did not resolve 16-way contention:
+one diagnostic ASB run still had two mutation lock timeouts, and the source
+product moved while the run was in progress. The experimental runtime change
+was reverted; the full post-write task validation remains. The 16-way probe
+now also fails on any unexpected route-success count or failed post-batch
+static/live doctor instead of merely printing those failures.
+
 This matrix covers a meaningful subset, **not all commands**. `checkpoint`,
 `gate`, `promote`, `pause`/`resume`, `recover-expired`, `unblock`, Git
 `migrate`/`upgrade`/`rollback`, `init`, and replica-push/failure paths still
