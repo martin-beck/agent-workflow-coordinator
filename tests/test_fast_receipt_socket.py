@@ -150,6 +150,36 @@ class FastReceiptSocketTests(unittest.TestCase):
         invalid = list(self.argv)
         invalid[8] = "not-a-lease"
         self.assertIsNone(_fast_request(invalid))
+        self.assertIsNone(
+            _fast_request(
+                [
+                    "fast",
+                    "promote",
+                    "AR-0120",
+                    "--expected-revision",
+                    "not-a-revision",
+                    "--note",
+                    "Open",
+                    "--key",
+                    "worker-a:promote:2",
+                ]
+            )
+        )
+        self.assertIsNone(
+            _fast_request(
+                [
+                    "fast",
+                    "promote",
+                    "-AR-0120",
+                    "--expected-revision",
+                    "2",
+                    "--note",
+                    "Open",
+                    "--key",
+                    "worker-a:promote:2",
+                ]
+            )
+        )
 
     def test_bounded_line_and_protocol_reject_malformed_messages(self) -> None:
         reader, writer = socket.socketpair()
@@ -166,6 +196,17 @@ class FastReceiptSocketTests(unittest.TestCase):
             _require_request({"protocol": 1, "action": "receipt", "receipt_id": "a", "extra": 1})
         with self.assertRaisesRegex(RuntimeError, "heartbeat request"):
             _require_request({"protocol": 1, "action": "heartbeat", "task": "AR-0120"})
+        with self.assertRaisesRegex(RuntimeError, "promote request fields"):
+            _require_request(
+                {
+                    "protocol": 1,
+                    "action": "promote",
+                    "task": "AR-0120",
+                    "expected_revision": True,
+                    "note": "Open",
+                    "key": "worker-a:promote:2",
+                }
+            )
 
     def test_unsafe_socket_symlink_is_not_followed(self) -> None:
         target = self.private / "target"
@@ -213,6 +254,29 @@ class FastReceiptSocketTests(unittest.TestCase):
                 self._intent_count(),
             )
         self.assertFalse(self.path.exists())
+
+    def test_bound_service_queues_typed_promote_receipt(self) -> None:
+        argv = [
+            "fast",
+            "promote",
+            "AR-0120",
+            "--expected-revision",
+            "2",
+            "--note",
+            "Dependencies verified.",
+            "--key",
+            "worker-a:promote:2",
+        ]
+        with (
+            socket_service(self.core),
+            patch("tools.fast_receipt_socket._socket_path", return_value=self.path),
+            contextlib.redirect_stdout(io.StringIO()) as output,
+        ):
+            self.assertEqual(0, try_socket_fast(argv))
+            queued = json.loads(output.getvalue())
+            self.assertEqual("promote", queued["operation"])
+            self.assertEqual("queued-local", queued["phase"])
+            self.assertEqual(1, self._intent_count())
 
     def _intent_count(self) -> int:
         import sqlite3
