@@ -400,6 +400,23 @@ the CI command's integer rounding reports 95%, whereas literal >=95.00%
 remains unqualified. No all-command PR or release is warranted from this
 evidence.
 
+A later bound Unix-socket prototype keeps one SQLite receipt writer open while
+peer identity and project binding are checked for each request. The ASB probe
+now measures resident-service readiness separately and sets
+`HANDOFFCTL_FAST_REQUIRE_SOCKET=1` on every timed enqueue and receipt lookup,
+so a direct-path fallback cannot be misattributed to the socket. On exact
+candidate `bd615e91462c12c9264f703af9d55c563b0d2d90` and the same frozen
+ASB source fixture, one 16-worker run recorded 377.8 ms service readiness,
+143.2 ms enqueue p50, 170.5 ms maximum, and 7.638 s until all 16 local
+commits completed. All 16 signed/DCO commit and exact-receipt checks passed,
+static and live doctors passed, and the source inputs remained unchanged. The
+queue-acknowledgement p50 is about 7.0% of the earlier strict 2032.0 ms p50,
+but those are different completion boundaries and the samples are not a paired
+same-head speedup test. Neither the strict contract nor the all-command <=5%
+target is qualified. The socket-required environment flag is a benchmark
+route-attribution guard; ordinary fast clients retain same-key direct fallback
+when the resident service is absent or disconnects.
+
 ## Further candidate architecture, not yet implemented
 
 Keep the CLI as the mandatory project-bound route. A repository-common local
