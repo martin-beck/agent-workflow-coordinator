@@ -633,7 +633,10 @@ exec "$@"
         sys.path.insert(0, str(self.target / "tools"))
         try:
             runtime = cast(Any, importlib.util.module_from_spec(runtime_spec))
-            runtime_spec.loader.exec_module(runtime)
+            # The privacy test scans the vendored tree itself. Importing the
+            # large runtime must not create a pyc inside that clean fixture.
+            with patch.object(sys, "dont_write_bytecode", True):
+                runtime_spec.loader.exec_module(runtime)
             runtime.ROOT = self.target
             self.assertEqual([], runtime.privacy_errors())
             leaked = self.target / "leaked-fixture.txt"
