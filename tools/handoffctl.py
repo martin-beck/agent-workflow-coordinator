@@ -1272,9 +1272,9 @@ def valid_claim_process(value: object) -> bool:
         and type(value.get("start_time")) is int
         and int(value["start_time"]) >= 0
         and isinstance(value.get("boot_digest"), str)
-        and re.fullmatch(r"sha256:[0-9a-f]{64}", value["boot_digest"])
+        and bool(re.fullmatch(r"sha256:[0-9a-f]{64}", value["boot_digest"]))
         and isinstance(value.get("pid_namespace"), str)
-        and re.fullmatch(r"[0-9]+:[0-9]+", value["pid_namespace"])
+        and bool(re.fullmatch(r"[0-9]+:[0-9]+", value["pid_namespace"]))
     )
 
 
