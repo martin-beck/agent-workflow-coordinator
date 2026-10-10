@@ -329,13 +329,23 @@ def transition_allowed(meta: Mapping[str, Any], operation: str) -> None:
     incomplete = (
         isinstance(gate, dict) and "completed" in gate and gate.get("completed") != list(sequence)
     )
+    presenting = (
+        isinstance(gate, dict)
+        and isinstance(gate.get("human_session"), dict)
+        and gate["human_session"].get("status") == "presenting"
+    )
     if (
         isinstance(gate, dict)
         and gate.get("required") is True
-        and (gate.get("open_stage") or gate.get("reconciliation_required", False) or incomplete)
+        and (
+            gate.get("open_stage")
+            or gate.get("reconciliation_required", False)
+            or incomplete
+            or presenting
+        )
         and operation in {"promote", "claim", "run", "release"}
     ):
-        reason = gate.get("open_stage") or "reconciliation"
+        reason = gate.get("open_stage") or ("presenting" if presenting else "reconciliation")
         raise GateError(f"interaction gate unresolved: {reason}")
 
 

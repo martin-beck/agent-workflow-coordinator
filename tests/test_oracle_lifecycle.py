@@ -272,6 +272,32 @@ class OracleLifecycleTests(unittest.TestCase):
         with self.assertRaisesRegex(GateError, "unresolved"):
             transition_allowed(meta, "run")
 
+    def test_persisted_presenting_session_blocks_autonomous_work(self) -> None:
+        session = {
+            "schema_version": "1.0",
+            "session_id": "AWTUI-SESSION-1",
+            "request_ref": "AWG-SESSION-1",
+            "activation": "user-decision",
+            "status": "presenting",
+            "task_revision": 1,
+            "tui_contract_version": "1.0",
+            "opened_at": "2026-10-10T00:00:00+00:00",
+        }
+        meta = {
+            "id": "AR-0022",
+            "oracle_gate": {
+                "required": True,
+                "open_stage": None,
+                "completed": [item.value for item in GateStage],
+                "events": [event(1, GateStage.INTAKE, "open", "unresolved").as_record()],
+                "human_session": session,
+            },
+        }
+        self.assertFalse(gate_errors(meta["oracle_gate"]))
+        for operation in ("claim", "run", "release"):
+            with self.subTest(operation=operation), self.assertRaisesRegex(GateError, "presenting"):
+                transition_allowed(meta, operation)
+
     def test_legacy_completed_gate_metadata_remains_compatible(self) -> None:
         legacy = {
             "id": "AR-0022",
