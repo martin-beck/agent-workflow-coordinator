@@ -1362,6 +1362,8 @@ def process_start_time(pid: int) -> int | None:
     try:
         stat_fields = (proc / "stat").read_text(encoding="utf-8").rsplit(")", 1)[1].split()
         return int(stat_fields[19])
+    except FileNotFoundError:
+        return None
     except (OSError, IndexError, ValueError) as error:
         raise RuntimeError("cannot independently read worker process identity") from error
 

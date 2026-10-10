@@ -3905,6 +3905,13 @@ class HandoffTest(unittest.TestCase):
             CORE.read_task(path)[0]["claim_process"],
         )
 
+    def test_claim_process_disappearing_during_stat_read_is_absent(self) -> None:
+        with (
+            patch("pathlib.Path.exists", return_value=True),
+            patch("pathlib.Path.read_text", side_effect=FileNotFoundError),
+        ):
+            self.assertIsNone(CORE.process_start_time(12345))
+
     def test_recover_expired_rejects_future_session_action(self) -> None:
         path = self.make_task(
             status="in_progress",
