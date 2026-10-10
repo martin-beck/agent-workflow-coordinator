@@ -204,7 +204,7 @@ WaitTimeout(p) ==
     /\ pc' = [pc EXCEPT ![p] = "done"]
     /\ result' = [result EXCEPT ![p] = "lock_timeout"]
     /\ UNCHANGED
-        <<status, owner, revision, initialRevision, projectionRevision,
+        <<status, owner, revision, initialRevision, projectionRevision, specBound, initialSpecBound,
           dependencyReady, leaseExpired, pauseProvenance, operation, target, actor, expected, lockOwner,
           successCount>>
 
