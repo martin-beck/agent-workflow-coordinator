@@ -3812,43 +3812,6 @@ class HandoffTest(unittest.TestCase):
         self.assertEqual("", recovered["owner"])
         self.assertEqual("Keep the authoritative current step.", recovered["next_action"])
 
-    def test_recover_expired_does_not_restore_stale_session_action(self) -> None:
-        boot_digest, pid_namespace = CORE.worker_execution_scope()
-        path = self.make_task(
-            status="in_progress",
-            owner="worker-a",
-            claim_expires="2000-01-01T00:00:00+00:00",
-            next_action="Keep the current claim action.",
-            claim_process={
-                "pid": 99999999,
-                "start_time": 0,
-                "boot_digest": boot_digest,
-                "pid_namespace": pid_namespace,
-            },
-        )
-        stale, _ = CORE.read_task(path)
-        stale["next_action"] = "Do not restore this old action."
-        CORE.append_session_record(
-            CORE.ROOT,
-            CORE.build_session_record(stale, "update", "2026-09-24T12:00:00+00:00"),
-        )
-        stale["task_revision"] = 2
-        stale["next_action"] = "Keep the current claim action."
-        _, body = CORE.read_task(path)
-        CORE.write_task(path, stale, body)
-        self.refresh_views()
-        with patch.object(CORE, "commit", return_value=True):
-            CORE.mutate(
-                argparse.Namespace(
-                    task="AR-0001",
-                    expected_revision=2,
-                    note="No live process remains.",
-                ),
-                "recover-expired",
-            )
-        recovered, _ = CORE.read_task(path)
-        self.assertEqual("Keep the current claim action.", recovered["next_action"])
-
     def test_recover_expired_requires_claim_identity_without_current_session(self) -> None:
         self.make_task(
             status="in_progress",

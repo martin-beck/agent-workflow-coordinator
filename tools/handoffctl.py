@@ -1397,7 +1397,11 @@ def worker_execution_scope() -> tuple[str, str]:
     except OSError as error:
         raise RuntimeError("cannot independently read worker execution scope") from error
     pid_namespace = f"{namespace.st_dev}:{namespace.st_ino}"
-    if not re.fullmatch(r"[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}", boot_id):
+    try:
+        valid_boot_id = str(uuid.UUID(boot_id)) == boot_id
+    except ValueError:
+        valid_boot_id = False
+    if not valid_boot_id:
         raise RuntimeError("worker execution scope has invalid boot identity")
     return f"sha256:{hashlib.sha256(boot_id.encode()).hexdigest()}", pid_namespace
 

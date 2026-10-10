@@ -23,6 +23,41 @@ class HandoffRecoveryTest(unittest.TestCase):
     make_task = BASE.HandoffTest.make_task
     refresh_views = BASE.HandoffTest.refresh_views
 
+    def test_recover_expired_does_not_restore_stale_session_action(self) -> None:
+        boot_digest, pid_namespace = BASE.CORE.worker_execution_scope()
+        path = self.make_task(
+            status="in_progress",
+            owner="worker-a",
+            claim_expires="2000-01-01T00:00:00+00:00",
+            next_action="Keep the current claim action.",
+            claim_process={
+                "pid": 99999999,
+                "start_time": 0,
+                "boot_digest": boot_digest,
+                "pid_namespace": pid_namespace,
+            },
+        )
+        stale, _ = BASE.CORE.read_task(path)
+        stale["next_action"] = "Do not restore this old action."
+        BASE.CORE.append_session_record(
+            BASE.CORE.ROOT,
+            BASE.CORE.build_session_record(stale, "update", "2026-09-24T12:00:00+00:00"),
+        )
+        stale["task_revision"] = 2
+        stale["next_action"] = "Keep the current claim action."
+        _, body = BASE.CORE.read_task(path)
+        BASE.CORE.write_task(path, stale, body)
+        self.refresh_views()
+        with patch.object(BASE.CORE, "commit", return_value=True):
+            BASE.CORE.mutate(
+                BASE.argparse.Namespace(
+                    task="AR-0001", expected_revision=2, note="No live process remains."
+                ),
+                "recover-expired",
+            )
+        recovered, _ = BASE.CORE.read_task(path)
+        self.assertEqual("Keep the current claim action.", recovered["next_action"])
+
     def test_claim_process_disappearing_during_stat_read_is_absent(self) -> None:
         with (
             patch("pathlib.Path.exists", return_value=True),
