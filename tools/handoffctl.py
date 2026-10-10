@@ -1262,6 +1262,18 @@ def field_errors(path: Path, meta: Meta) -> list[str]:
     return errors
 
 
+def valid_claim_process(value: object) -> bool:
+    """Recognize the closed optional claim-time process identity shape."""
+    return (
+        isinstance(value, dict)
+        and set(value) == {"pid", "start_time"}
+        and type(value.get("pid")) is int
+        and int(value["pid"]) > 0
+        and type(value.get("start_time")) is int
+        and int(value["start_time"]) >= 0
+    )
+
+
 def value_errors(path: Path, meta: Meta) -> list[str]:
     errors: list[str] = []
     task_id = meta.get("id", "")
@@ -1281,14 +1293,7 @@ def value_errors(path: Path, meta: Meta) -> list[str]:
     )
     errors.extend(f"{task_id}: {error}" for error in gate_errors(meta.get("oracle_gate")))
     claim_process = meta.get("claim_process")
-    if claim_process is not None and (
-        not isinstance(claim_process, dict)
-        or set(claim_process) != {"pid", "start_time"}
-        or type(claim_process.get("pid")) is not int
-        or int(claim_process["pid"]) <= 0
-        or type(claim_process.get("start_time")) is not int
-        or int(claim_process["start_time"]) < 0
-    ):
+    if claim_process is not None and not valid_claim_process(claim_process):
         errors.append(f"{task_id}: invalid claim_process")
     return errors
 
