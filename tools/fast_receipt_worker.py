@@ -43,6 +43,7 @@ _REJECTABLE = (
     "has active claim metadata",
     "owner already holds",
     "role admission denied",
+    "claim worker identity is not a live matching process",
 )
 _HEARTBEAT_FIELDS = frozenset(("task_revision", "updated_at", "claim_expires"))
 _CLAIM_FIELDS = frozenset(
