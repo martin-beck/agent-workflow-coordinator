@@ -119,7 +119,12 @@ def human_session_errors(value: object) -> list[str]:  # noqa: C901
         return ["oracle_gate.human_session.session_id is invalid"]
     if not isinstance(value["request_ref"], str) or not REQUEST_REF.fullmatch(value["request_ref"]):
         return ["oracle_gate.human_session.request_ref is invalid"]
-    if value["activation"] not in SESSION_ACTIVATIONS or value["status"] not in SESSION_STATUSES:
+    if (
+        not isinstance(value["activation"], str)
+        or not isinstance(value["status"], str)
+        or value["activation"] not in SESSION_ACTIVATIONS
+        or value["status"] not in SESSION_STATUSES
+    ):
         return ["oracle_gate.human_session activation or status is invalid"]
     if not isinstance(value["task_revision"], int) or value["task_revision"] < 1:
         return ["oracle_gate.human_session.task_revision is invalid"]

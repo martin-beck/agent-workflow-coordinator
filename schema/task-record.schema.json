@@ -56,7 +56,17 @@
         "tui_contract_version": {"const": "1.0"},
         "opened_at": {"type": "string", "format": "date-time"},
         "closed_at": {"type": "string", "format": "date-time"}
-      }
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"status": {"const": "presenting"}}},
+          "then": {"not": {"required": ["closed_at"]}}
+        },
+        {
+          "if": {"properties": {"status": {"enum": ["clarification_requested", "resolved"]}}},
+          "then": {"required": ["closed_at"]}
+        }
+      ]
     }
   }
 }
