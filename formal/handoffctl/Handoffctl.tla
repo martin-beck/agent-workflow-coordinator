@@ -31,7 +31,7 @@ ReleaseOperations ==
     {"release_planned", "release_open", "release_blocked", "release_done"}
 
 Operations ==
-    {"promote", "resume", "unblock", "pause", "claim", "heartbeat", "update", "accept", "recover_expired"}
+    {"promote", "resume", "unblock", "pause", "claim", "heartbeat", "update", "accept", "bind-spec", "recover_expired"}
         \cup ReleaseOperations
 
 Phases == {"waiting", "holding", "releasing", "done"}
@@ -52,6 +52,8 @@ VARIABLES
     revision,
     initialRevision,
     projectionRevision,
+    specBound,
+    initialSpecBound,
     leaseExpired,
     pauseProvenance,
     dependencyReady,
@@ -69,7 +71,7 @@ ChildrenOpen(t) ==
         status[child] # "done" /\ status[child] # "cancelled" /\ status[child] # "superseded"
 
 vars ==
-    <<status, owner, revision, initialRevision, projectionRevision,
+    <<status, owner, revision, initialRevision, projectionRevision, specBound, initialSpecBound,
       dependencyReady, leaseExpired, pauseProvenance, pc, operation, target, actor, expected,
       lockOwner, result, successCount>>
 
@@ -89,6 +91,8 @@ Init ==
     /\ revision = [t \in Tasks |-> 0]
     /\ initialRevision = revision
     /\ projectionRevision = revision
+    /\ specBound \in [Tasks -> BOOLEAN]
+    /\ initialSpecBound = specBound
     /\ leaseExpired \in [Tasks -> BOOLEAN]
     /\ pauseProvenance \in [Tasks -> PauseProvenances]
     /\ \A t \in Tasks: pauseProvenance[t] # "absent" => status[t] = "blocked"
@@ -138,6 +142,12 @@ EnabledOperation(p) ==
             /\ status[t] = "in_progress"
             /\ owner[t] = actor[p]
             /\ expected[p] = revision[t]
+      [] operation[p] = "bind-spec" ->
+            /\ status[t] = "in_progress"
+            /\ owner[t] = actor[p]
+            /\ ~leaseExpired[t]
+            /\ ~specBound[t]
+            /\ expected[p] = revision[t]
       [] operation[p] = "recover_expired" ->
             /\ status[t] = "in_progress"
             /\ owner[t] # NoActor
@@ -153,7 +163,7 @@ StatusAfter(p) ==
       [] operation[p] = "pause" -> "blocked"
       [] operation[p] = "claim" -> "in_progress"
       [] operation[p] = "recover_expired" -> "open"
-      [] operation[p] \in {"heartbeat", "update", "accept"} -> status[target[p]]
+      [] operation[p] \in {"heartbeat", "update", "accept", "bind-spec"} -> status[target[p]]
       [] operation[p] = "release_planned" -> "planned"
       [] operation[p] = "release_open" -> "open"
       [] operation[p] = "release_blocked" -> "blocked"
@@ -171,6 +181,9 @@ ExpiryAfter(p) ==
     THEN FALSE
     ELSE leaseExpired[target[p]]
 
+SpecBoundAfter(p) ==
+    IF operation[p] = "bind-spec" THEN TRUE ELSE specBound[target[p]]
+
 PauseProvenanceAfter(p) ==
     IF operation[p] = "pause" THEN "unique_valid" ELSE "absent"
 
@@ -181,7 +194,7 @@ Acquire(p) ==
     /\ lockOwner' = p
     /\ pc' = [pc EXCEPT ![p] = "holding"]
     /\ UNCHANGED
-        <<status, owner, revision, initialRevision, projectionRevision,
+        <<status, owner, revision, initialRevision, projectionRevision, specBound, initialSpecBound,
           dependencyReady, leaseExpired, pauseProvenance, operation, target, actor, expected, result,
           successCount>>
 
@@ -205,6 +218,7 @@ ExecuteSuccess(p) ==
     /\ EnabledOperation(p)
     /\ status' = [status EXCEPT ![t] = StatusAfter(p)]
     /\ owner' = [owner EXCEPT ![t] = OwnerAfter(p)]
+    /\ specBound' = [specBound EXCEPT ![t] = SpecBoundAfter(p)]
     /\ leaseExpired' = [leaseExpired EXCEPT ![t] = ExpiryAfter(p)]
     /\ pauseProvenance' = [pauseProvenance EXCEPT ![t] = PauseProvenanceAfter(p)]
     /\ revision' = [revision EXCEPT ![t] = @ + 1]
@@ -213,7 +227,7 @@ ExecuteSuccess(p) ==
     /\ result' = [result EXCEPT ![p] = "accepted"]
     /\ pc' = [pc EXCEPT ![p] = "releasing"]
     /\ UNCHANGED
-        <<initialRevision, dependencyReady, operation, target, actor, expected,
+        <<initialRevision, initialSpecBound, dependencyReady, operation, target, actor, expected,
           lockOwner>>
 
 ExecuteReject(p) ==
@@ -223,7 +237,7 @@ ExecuteReject(p) ==
     /\ result' = [result EXCEPT ![p] = "rejected"]
     /\ pc' = [pc EXCEPT ![p] = "releasing"]
     /\ UNCHANGED
-        <<status, owner, revision, initialRevision, projectionRevision,
+        <<status, owner, revision, initialRevision, projectionRevision, specBound, initialSpecBound,
           dependencyReady, leaseExpired, pauseProvenance, operation, target, actor, expected, lockOwner,
           successCount>>
 
@@ -237,7 +251,7 @@ ExecuteRollback(p) ==
     /\ result' = [result EXCEPT ![p] = "rolled_back"]
     /\ pc' = [pc EXCEPT ![p] = "releasing"]
     /\ UNCHANGED
-        <<status, owner, revision, initialRevision, projectionRevision,
+        <<status, owner, revision, initialRevision, projectionRevision, specBound, initialSpecBound,
           dependencyReady, leaseExpired, pauseProvenance, operation, target, actor, expected, lockOwner,
           successCount>>
 
@@ -250,7 +264,7 @@ Release(p) ==
     /\ lockOwner' = NoProcess
     /\ pc' = [pc EXCEPT ![p] = "done"]
     /\ UNCHANGED
-        <<status, owner, revision, initialRevision, projectionRevision,
+        <<status, owner, revision, initialRevision, projectionRevision, specBound, initialSpecBound,
           dependencyReady, leaseExpired, pauseProvenance, operation, target, actor, expected, result,
           successCount>>
 
@@ -277,6 +291,8 @@ TypeOK ==
     /\ revision \in [Tasks -> Nat]
     /\ initialRevision \in [Tasks -> Nat]
     /\ projectionRevision \in [Tasks -> Nat]
+    /\ specBound \in [Tasks -> BOOLEAN]
+    /\ initialSpecBound \in [Tasks -> BOOLEAN]
     /\ dependencyReady \in [Tasks -> BOOLEAN]
     /\ leaseExpired \in [Tasks -> BOOLEAN]
     /\ pauseProvenance \in [Tasks -> PauseProvenances]
@@ -314,6 +330,13 @@ RevisionAccounting ==
 
 ProjectionAtomicity ==
     projectionRevision = revision
+
+SpecBindingIsMonotonic ==
+    \A t \in Tasks: initialSpecBound[t] => specBound[t]
+
+AcceptedSpecBindIsBound ==
+    \A p \in Processes:
+        result[p] = "accepted" /\ operation[p] = "bind-spec" => specBound[target[p]]
 
 EventualCompletion ==
     <>(\A p \in Processes: pc[p] = "done")

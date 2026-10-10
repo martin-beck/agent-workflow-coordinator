@@ -30,6 +30,16 @@ The correspondence inventory is exercised by `tests/test_task_spec.py`,
 policy identity races, failed Git mutation restoration, and interrupted
 Git-to-SQLite migration before authority selection changes.
 
+## Legacy task-spec binding
+
+`bind-spec` is modelled as an owner and exact-revision-fenced active-task
+transition.  It is admitted only when the lease is live and the task is still
+unbound; an accepted transition makes `specBound` true, while stale, expired,
+foreign-owner, or already-bound requests take `ExecuteReject(p)` and stutter.
+`SpecBindingIsMonotonic` and `AcceptedSpecBindIsBound` make the one-way
+binding property explicit.  This is bounded-model guidance and hostile test
+correspondence, not a proof that the Python implementation refines the model.
+
 The executable checker binds this vocabulary to the authoritative predicates:
 `NoReplacementBeforeBackup` to `ProjectionAtomicity`, `AmbiguousIsWriteClosed`
 to `LockSafety`, and `ReconcileRequiresFence` to `RevisionAccounting`. It also

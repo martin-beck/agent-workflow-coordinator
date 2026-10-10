@@ -224,6 +224,7 @@ LIFECYCLE_MUTATION_COMMANDS = (
     "claim",
     "heartbeat",
     "accept",
+    "bind-spec",
     "release",
     "promote",
     "pause",
@@ -2525,6 +2526,33 @@ def apply_accept(args: argparse.Namespace, meta: Meta, policy: EvidencePolicy | 
     return str(args.note)
 
 
+def apply_bind_spec(args: argparse.Namespace, meta: Meta, policy: EvidencePolicy | None) -> str:
+    """Bind one validated immutable task spec to a previously unbound active task."""
+    if meta.get("owner") != args.owner:
+        raise RuntimeError(f"{args.task} is owned by {meta.get('owner') or 'nobody'}")
+    require_role_admission(str(args.owner))
+    if meta.get("status") != "in_progress":
+        raise RuntimeError("bind-spec requires an active task")
+    try:
+        if parse_claim_expiry(meta.get("claim_expires")) <= dt.datetime.now(dt.UTC):
+            raise RuntimeError("bind-spec requires an unexpired owner lease")
+    except ValueError as error:
+        raise RuntimeError("bind-spec requires an unexpired owner lease") from error
+    if args.expected_revision != meta["task_revision"]:
+        raise RuntimeError(
+            f"stale revision: expected {args.expected_revision}, current {meta['task_revision']}"
+        )
+    if any(name in meta for name in ("spec_ref", "spec_revision", "spec_acceptance")):
+        raise RuntimeError("bind-spec requires an unbound task spec")
+    candidate = {**meta, "spec_ref": args.spec_ref, "spec_revision": args.spec_revision}
+    errors = task_spec_errors(ROOT, candidate, policy)
+    if errors:
+        raise RuntimeError("bind-spec task spec is invalid: " + "; ".join(errors))
+    meta["spec_ref"] = args.spec_ref
+    meta["spec_revision"] = args.spec_revision
+    return f"Bound task spec {args.spec_ref} revision {args.spec_revision}."
+
+
 def apply_owned_change(  # noqa: C901
     args: argparse.Namespace,
     kind: str,
@@ -2714,8 +2742,9 @@ def apply_transition(
     record_transition = {"checkpoint": apply_checkpoint, "rollback": apply_rollback}.get(kind)
     if record_transition is not None:
         return record_transition(args, meta)
-    if kind == "accept":
-        return apply_accept(args, meta, policy)
+    spec_transition = {"accept": apply_accept, "bind-spec": apply_bind_spec}.get(kind)
+    if spec_transition is not None:
+        return spec_transition(args, meta, policy)
     return apply_owned_change(args, kind, meta, tasks, policy)
 
 
@@ -4235,6 +4264,12 @@ def main() -> int:
     item.add_argument("--evidence-ref", required=True)
     item.add_argument("--evidence-digest", required=True)
     item.add_argument("--note", required=True)
+    item = commands.add_parser("bind-spec")
+    item.add_argument("task")
+    item.add_argument("--owner", required=True)
+    item.add_argument("--expected-revision", type=int, required=True)
+    item.add_argument("--spec-ref", required=True)
+    item.add_argument("--spec-revision", type=int, required=True)
     item = commands.add_parser("promote")
     item.add_argument("task")
     item.add_argument("--expected-revision", type=int, required=True)
