@@ -19,6 +19,15 @@
     "role": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$"},
     "team": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$"},
     "claim_expires": {"type": "string"},
+    "claim_process": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["pid", "start_time"],
+      "properties": {
+        "pid": {"type": "integer", "minimum": 1},
+        "start_time": {"type": "integer", "minimum": 0}
+      }
+    },
     "worktree_key": {"type": "string"},
     "branch": {"type": "string"},
     "checkpoint_commit": {"type": "string"},
