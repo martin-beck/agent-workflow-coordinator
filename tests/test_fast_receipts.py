@@ -229,6 +229,35 @@ class FastReceiptTests(unittest.TestCase):
                 lease_minutes=20,
             )
 
+    def test_claim_identity_is_canonical_and_requires_a_complete_pair(self) -> None:
+        store = self.store()
+        identity = store.enqueue_claim(
+            key="worker-a:claim:identity",
+            task="AR-0120",
+            owner="worker-a",
+            expected_revision=1,
+            lease_minutes=20,
+            worker_pid=123,
+            worker_start_time=456,
+        )
+        self.assertEqual(
+            {"worker_pid": 123, "worker_start_time": 456},
+            {
+                key: value
+                for key, value in json.loads(str(identity["payload_json"])).items()
+                if key.startswith("worker_")
+            },
+        )
+        with self.assertRaises(ValueError):
+            store.enqueue_claim(
+                key="worker-a:claim:incomplete",
+                task="AR-0120",
+                owner="worker-a",
+                expected_revision=1,
+                lease_minutes=20,
+                worker_pid=123,
+            )
+
     def test_promote_rejects_invalid_note_and_revision_without_row(self) -> None:
         store = self.store()
         for values in (

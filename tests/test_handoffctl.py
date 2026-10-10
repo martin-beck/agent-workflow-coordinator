@@ -3784,7 +3784,60 @@ class HandoffTest(unittest.TestCase):
         ):
             CORE.mutate(args, "recover-expired")
 
-    def test_recover_expired_rejects_missing_session(self) -> None:
+    def test_recover_expired_preserves_current_action_without_session(self) -> None:
+        path = self.make_task(
+            status="in_progress",
+            owner="worker-a",
+            claim_expires="2000-01-01T00:00:00+00:00",
+            next_action="Keep the authoritative current step.",
+            claim_process={"pid": 99999999, "start_time": 0},
+        )
+        with patch.object(CORE, "commit", return_value=True):
+            CORE.mutate(
+                argparse.Namespace(
+                    task="AR-0001",
+                    expected_revision=1,
+                    note="No live process remains.",
+                ),
+                "recover-expired",
+            )
+        recovered, _ = CORE.read_task(path)
+        self.assertEqual("open", recovered["status"])
+        self.assertEqual("", recovered["owner"])
+        self.assertEqual("Keep the authoritative current step.", recovered["next_action"])
+
+    def test_recover_expired_does_not_restore_stale_session_action(self) -> None:
+        path = self.make_task(
+            status="in_progress",
+            owner="worker-a",
+            claim_expires="2000-01-01T00:00:00+00:00",
+            next_action="Keep the current claim action.",
+            claim_process={"pid": 99999999, "start_time": 0},
+        )
+        stale, _ = CORE.read_task(path)
+        stale["next_action"] = "Do not restore this old action."
+        CORE.append_session_record(
+            CORE.ROOT,
+            CORE.build_session_record(stale, "update", "2026-09-24T12:00:00+00:00"),
+        )
+        stale["task_revision"] = 2
+        stale["next_action"] = "Keep the current claim action."
+        _, body = CORE.read_task(path)
+        CORE.write_task(path, stale, body)
+        self.refresh_views()
+        with patch.object(CORE, "commit", return_value=True):
+            CORE.mutate(
+                argparse.Namespace(
+                    task="AR-0001",
+                    expected_revision=2,
+                    note="No live process remains.",
+                ),
+                "recover-expired",
+            )
+        recovered, _ = CORE.read_task(path)
+        self.assertEqual("Keep the current claim action.", recovered["next_action"])
+
+    def test_recover_expired_requires_claim_identity_without_current_session(self) -> None:
         self.make_task(
             status="in_progress",
             owner="worker-a",
@@ -3792,7 +3845,81 @@ class HandoffTest(unittest.TestCase):
         )
         with (
             patch.object(CORE, "commit", return_value=True),
-            self.assertRaisesRegex(RuntimeError, "no session snapshot"),
+            self.assertRaisesRegex(RuntimeError, "requires a claim-time worker identity"),
+        ):
+            CORE.mutate(
+                argparse.Namespace(
+                    task="AR-0001",
+                    expected_revision=1,
+                    note="No live process remains.",
+                ),
+                "recover-expired",
+            )
+
+    def test_recover_expired_rejects_live_claimed_worker(self) -> None:
+        self.make_task(
+            status="in_progress",
+            owner="worker-a",
+            claim_expires="2000-01-01T00:00:00+00:00",
+        )
+        start_time = int(
+            (Path("/proc") / str(os.getpid()) / "stat").read_text().rsplit(")", 1)[1].split()[19]
+        )
+        path = CORE.locate("AR-0001")[0]
+        meta, body = CORE.read_task(path)
+        meta["claim_process"] = {"pid": os.getpid(), "start_time": start_time}
+        CORE.write_task(path, meta, body)
+        self.refresh_views()
+        with (
+            patch.object(CORE, "commit", return_value=True),
+            self.assertRaisesRegex(RuntimeError, "former worker process is still alive"),
+        ):
+            CORE.mutate(
+                argparse.Namespace(
+                    task="AR-0001",
+                    expected_revision=1,
+                    note="No live process remains.",
+                ),
+                "recover-expired",
+            )
+        self.assertEqual("in_progress", CORE.read_task(CORE.locate("AR-0001")[0])[0]["status"])
+
+    def test_claim_records_verified_worker_identity(self) -> None:
+        path = self.make_task()
+        start_time = int(
+            (Path("/proc") / str(os.getpid()) / "stat").read_text().rsplit(")", 1)[1].split()[19]
+        )
+        with patch.object(CORE, "commit", return_value=True):
+            CORE.mutate(
+                argparse.Namespace(
+                    task="AR-0001",
+                    owner="worker-a",
+                    lease_minutes=10,
+                    worker_pid=os.getpid(),
+                    worker_start_time=start_time,
+                ),
+                "claim",
+            )
+        self.assertEqual(
+            {"pid": os.getpid(), "start_time": start_time},
+            CORE.read_task(path)[0]["claim_process"],
+        )
+
+    def test_recover_expired_rejects_future_session_action(self) -> None:
+        path = self.make_task(
+            status="in_progress",
+            owner="worker-a",
+            claim_expires="2000-01-01T00:00:00+00:00",
+        )
+        future, _ = CORE.read_task(path)
+        future["task_revision"] = 2
+        CORE.append_session_record(
+            CORE.ROOT,
+            CORE.build_session_record(future, "update", "2026-09-24T12:00:00+00:00"),
+        )
+        with (
+            patch.object(CORE, "commit", return_value=True),
+            self.assertRaisesRegex(RuntimeError, "session snapshot revision is newer"),
         ):
             CORE.mutate(
                 argparse.Namespace(
@@ -3800,6 +3927,7 @@ class HandoffTest(unittest.TestCase):
                 ),
                 "recover-expired",
             )
+        self.assertEqual("in_progress", CORE.read_task(path)[0]["status"])
 
     def test_run_preflight_and_durable_journal_precede_reconcile(self) -> None:
         self.make_task(

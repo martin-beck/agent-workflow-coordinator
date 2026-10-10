@@ -15,7 +15,9 @@
 - `unblock`: exact-revision `blocked -> open` for an unowned task released on an external
   condition. It preserves `next_action` and rejects a current-revision pause snapshot.
 - `recover-expired`: exact-revision recovery of an in-progress task only after its UTC lease
-  deadline has passed and its latest bounded session snapshot validates.
+  deadline has passed. It requires a verified claim-time worker identity to be absent when
+  no exact-current session exists, preserves the authoritative `next_action` in that case,
+  restores it only from an exact-current validated snapshot, and rejects a future snapshot.
 - `run`: execute a bounded command outside the lock, then record its classified result.
 - `gate`: record a revision-bound gate event. Generic task gates use the ordered `role`, `spec`,
   and `decision` stages; legacy interaction gates remain compatible.

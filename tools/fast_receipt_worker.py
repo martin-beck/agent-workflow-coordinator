@@ -43,9 +43,12 @@ _REJECTABLE = (
     "has active claim metadata",
     "owner already holds",
     "role admission denied",
+    "claim worker identity is not a live matching process",
 )
 _HEARTBEAT_FIELDS = frozenset(("task_revision", "updated_at", "claim_expires"))
-_CLAIM_FIELDS = frozenset(("task_revision", "updated_at", "claim_expires", "owner", "status"))
+_CLAIM_FIELDS = frozenset(
+    ("task_revision", "updated_at", "claim_expires", "owner", "status", "claim_process")
+)
 _PROMOTE_FIELDS = frozenset(("task_revision", "updated_at", "status"))
 _UPDATE_FIELDS = frozenset(
     ("task_revision", "updated_at", "status", "priority", "summary", "next_action")
@@ -255,6 +258,11 @@ def _verify_claim_delta(
     before, before_body, after, after_body = _task_change(core, oid, str(intent["task_id"]))
     expected_before = int(intent["expected_revision"])
     owner = payload.get("owner")
+    identity = (
+        {"pid": payload["worker_pid"], "start_time": payload["worker_start_time"]}
+        if "worker_pid" in payload
+        else None
+    )
     if (
         before.get("id") != intent["task_id"]
         or before.get("status") != "open"
@@ -265,6 +273,7 @@ def _verify_claim_delta(
         or after.get("status") != "in_progress"
         or after.get("owner") != owner
         or after.get("task_revision") != expected_before + 1
+        or after.get("claim_process") != identity
     ):
         raise RuntimeError("receipt commit task state does not match claim intent")
     before_stable = {key: value for key, value in before.items() if key not in _CLAIM_FIELDS}
@@ -442,7 +451,7 @@ def _validated_intent(intent: dict[str, Any]) -> dict[str, Any]:
         or payload.get("expected_revision") != intent["expected_revision"]
     ):
         raise RuntimeError("receipt intent does not match canonical typed fields")
-    if payload.get("operation") in {"heartbeat", "claim"} and (
+    if payload.get("operation") == "heartbeat" and (
         set(payload)
         != {"expected_revision", "lease_minutes", "operation", "owner", "project_id", "task"}
         or not isinstance(payload.get("owner"), str)
@@ -454,6 +463,39 @@ def _validated_intent(intent: dict[str, Any]) -> dict[str, Any]:
         or payload["expected_revision"] < 1
     ):
         raise RuntimeError(f"receipt {payload.get('operation')} intent fields are invalid")
+    if payload.get("operation") == "claim" and (
+        set(payload)
+        not in (
+            {"expected_revision", "lease_minutes", "operation", "owner", "project_id", "task"},
+            {
+                "expected_revision",
+                "lease_minutes",
+                "operation",
+                "owner",
+                "project_id",
+                "task",
+                "worker_pid",
+                "worker_start_time",
+            },
+        )
+        or not isinstance(payload.get("owner"), str)
+        or not isinstance(payload.get("lease_minutes"), int)
+        or isinstance(payload.get("lease_minutes"), bool)
+        or not 1 <= payload["lease_minutes"] <= 1440
+        or not isinstance(payload.get("expected_revision"), int)
+        or isinstance(payload.get("expected_revision"), bool)
+        or payload["expected_revision"] < 1
+        or (
+            "worker_pid" in payload
+            and (
+                type(payload["worker_pid"]) is not int
+                or payload["worker_pid"] <= 0
+                or type(payload["worker_start_time"]) is not int
+                or payload["worker_start_time"] < 0
+            )
+        )
+    ):
+        raise RuntimeError("receipt claim intent fields are invalid")
     if payload.get("operation") == "promote" and (
         set(payload) != {"expected_revision", "note", "operation", "project_id", "task"}
         or not isinstance(payload.get("note"), str)
@@ -503,6 +545,8 @@ def process_one(core: Any, store: ReceiptStore) -> dict[str, Any] | None:
                 lease_minutes=payload["lease_minutes"],
                 expected_revision=intent["expected_revision"],
                 _receipt_id=receipt_id,
+                worker_pid=payload.get("worker_pid"),
+                worker_start_time=payload.get("worker_start_time"),
             )
         elif operation == "promote":
             args = argparse.Namespace(

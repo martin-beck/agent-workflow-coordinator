@@ -162,6 +162,30 @@ class FastReceiptSocketTests(unittest.TestCase):
             ),
         )
 
+    def test_claim_identity_is_forwarded_only_as_a_complete_pair(self) -> None:
+        argv = [
+            "fast",
+            "claim",
+            "AR-0120",
+            "--owner",
+            "worker-a",
+            "--expected-revision",
+            "2",
+            "--worker-pid",
+            "123",
+            "--worker-start-time",
+            "456",
+            "--key",
+            "worker-a:claim:2",
+        ]
+        request = _fast_request(argv)
+        self.assertIsNotNone(request)
+        assert request is not None
+        self.assertEqual(123, request["worker_pid"])
+        self.assertEqual(456, request["worker_start_time"])
+        self.assertEqual(request, _require_request(request))
+        self.assertIsNone(_fast_request(argv[:-4] + argv[-2:]))
+
     def test_git_common_directory_resolves_main_and_linked_worktree(self) -> None:
         root = Path(self.directory.name)
         marker = root / ".git"

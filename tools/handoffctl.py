@@ -252,6 +252,7 @@ FIELDS = set(REQ) | {
     "role",
     "team",
     "claim_expires",
+    "claim_process",
     "worktree_key",
     "branch",
     "checkpoint_commit",
@@ -1261,6 +1262,18 @@ def field_errors(path: Path, meta: Meta) -> list[str]:
     return errors
 
 
+def valid_claim_process(value: object) -> bool:
+    """Recognize the closed optional claim-time process identity shape."""
+    return (
+        isinstance(value, dict)
+        and set(value) == {"pid", "start_time"}
+        and type(value.get("pid")) is int
+        and int(value["pid"]) > 0
+        and type(value.get("start_time")) is int
+        and int(value["start_time"]) >= 0
+    )
+
+
 def value_errors(path: Path, meta: Meta) -> list[str]:
     errors: list[str] = []
     task_id = meta.get("id", "")
@@ -1279,6 +1292,9 @@ def value_errors(path: Path, meta: Meta) -> list[str]:
         if not isinstance(meta.get(name), str) or not meta.get(name)
     )
     errors.extend(f"{task_id}: {error}" for error in gate_errors(meta.get("oracle_gate")))
+    claim_process = meta.get("claim_process")
+    if claim_process is not None and not valid_claim_process(claim_process):
+        errors.append(f"{task_id}: invalid claim_process")
     return errors
 
 
@@ -1341,6 +1357,54 @@ def parse_claim_expiry(expiry: object) -> dt.datetime:
     if parsed.tzinfo is None:
         raise ValueError("claim expiry lacks timezone")
     return parsed.astimezone(dt.UTC)
+
+
+def process_start_time(pid: int) -> int | None:
+    """Return a Linux process start time, or ``None`` after it has exited."""
+    proc = Path("/proc") / str(pid)
+    try:
+        stat_fields = (proc / "stat").read_text(encoding="utf-8").rsplit(")", 1)[1].split()
+        return int(stat_fields[19])
+    except FileNotFoundError:
+        return None
+    except (OSError, IndexError, ValueError) as error:
+        raise RuntimeError("cannot independently read worker process identity") from error
+
+
+def claimed_process_identity(args: argparse.Namespace) -> Meta | None:
+    """Validate an optional live worker identity at the exact claim transition."""
+    pid = getattr(args, "worker_pid", None)
+    start_time = getattr(args, "worker_start_time", None)
+    if pid is None and start_time is None:
+        return None
+    if type(pid) is not int or pid <= 0 or type(start_time) is not int or start_time < 0:
+        raise RuntimeError(
+            "claim worker identity requires positive --worker-pid and --worker-start-time"
+        )
+    if process_start_time(pid) != start_time:
+        raise RuntimeError("claim worker identity is not a live matching process")
+    return {"pid": pid, "start_time": start_time}
+
+
+def require_claimed_worker_absent(meta: Meta) -> None:
+    """Require a claim-time identity and independently confirm it no longer runs."""
+    identity = meta.get("claim_process")
+    if not isinstance(identity, dict) or set(identity) != {"pid", "start_time"}:
+        raise RuntimeError("snapshot-less recovery requires a claim-time worker identity")
+    pid = identity.get("pid")
+    start_time = identity.get("start_time")
+    if type(pid) is not int or pid <= 0 or type(start_time) is not int or start_time < 0:
+        raise RuntimeError("snapshot-less recovery has invalid claim-time worker identity")
+    if process_start_time(pid) == start_time:
+        raise RuntimeError("former worker process is still alive")
+
+
+def attach_claim_process(args: argparse.Namespace, meta: Meta) -> None:
+    """Replace optional claim-time process identity after strict live validation."""
+    meta.pop("claim_process", None)
+    process_identity = claimed_process_identity(args)
+    if process_identity is not None:
+        meta["claim_process"] = process_identity
 
 
 def active_expiry_errors(task_id: str, expiry: object) -> list[str]:
@@ -2171,6 +2235,7 @@ def apply_claim(args: argparse.Namespace, meta: Meta, tasks: list[Task]) -> str:
         raise RuntimeError(f"owner already holds {held[0]}")
     meta["owner"] = args.owner
     meta["status"] = "in_progress"
+    attach_claim_process(args, meta)
     meta["claim_expires"] = (
         (dt.datetime.now(dt.UTC) + dt.timedelta(minutes=args.lease_minutes))
         .replace(microsecond=0)
@@ -2267,6 +2332,7 @@ def apply_pause(args: argparse.Namespace, meta: Meta) -> str:
     meta["status"] = "blocked"
     meta["owner"] = ""
     meta["claim_expires"] = ""
+    meta.pop("claim_process", None)
     return str(args.note)
 
 
@@ -2336,7 +2402,7 @@ def apply_unblock(args: argparse.Namespace, meta: Meta, _tasks: list[Task]) -> s
 
 
 def apply_recover_expired(args: argparse.Namespace, meta: Meta, _tasks: list[Task]) -> str:
-    """Reopen an expired claim after restoring its latest bounded session."""
+    """Reopen an expired claim, restoring only its exact current session snapshot."""
     if args.expected_revision != meta["task_revision"]:
         raise RuntimeError(
             f"stale revision: expected {args.expected_revision}, current {meta['task_revision']}"
@@ -2352,17 +2418,27 @@ def apply_recover_expired(args: argparse.Namespace, meta: Meta, _tasks: list[Tas
     if not args.note.strip():
         raise RuntimeError("expired-claim recovery note must not be empty")
     records = storage_backend().load_session_records(args.task)
-    if not records:
-        raise RuntimeError(f"no session snapshot for {args.task}")
-    session = records[-1]
-    validate_session_record(session)
-    if session["task_revision"] > meta["task_revision"]:
-        raise RuntimeError("session snapshot revision is newer than the task")
+    for session in records:
+        validate_session_record(session)
+        if session["task_revision"] > meta["task_revision"]:
+            raise RuntimeError("session snapshot revision is newer than the task")
     previous_owner = str(meta["owner"])
-    meta["next_action"] = str(session["next_action"])
+    current_session = next(
+        (
+            session
+            for session in reversed(records)
+            if session["task_revision"] == meta["task_revision"]
+        ),
+        None,
+    )
+    if current_session is not None:
+        meta["next_action"] = str(current_session["next_action"])
+    else:
+        require_claimed_worker_absent(meta)
     meta["status"] = "open"
     meta["owner"] = ""
     meta["claim_expires"] = ""
+    meta.pop("claim_process", None)
     return f"Recovered expired claim formerly owned by {previous_owner}. {args.note}"
 
 
@@ -2433,6 +2509,7 @@ def apply_owned_change(  # noqa: C901
         meta["status"] = args.status
         meta["owner"] = ""
         meta["claim_expires"] = ""
+        meta.pop("claim_process", None)
         return str(args.note)
     if args.expected_revision is not None and args.expected_revision != meta["task_revision"]:
         expected = args.expected_revision
@@ -2493,6 +2570,7 @@ def apply_rollback(args: argparse.Namespace, meta: Meta) -> str:
     meta["status"] = "open" if state.get("status") == "in_progress" else state.get("status")
     meta["owner"] = ""
     meta["claim_expires"] = ""
+    meta.pop("claim_process", None)
     meta["checkpoint_commit"] = str(checkpoint["source_commit"])
     return (
         f"Restored checkpoint {checkpoint['name']} from source commit "
@@ -4029,6 +4107,8 @@ def main() -> int:
     fast_claim.add_argument("--owner", required=True)
     fast_claim.add_argument("--expected-revision", type=int, required=True)
     fast_claim.add_argument("--lease-minutes", type=int, default=120)
+    fast_claim.add_argument("--worker-pid", type=int)
+    fast_claim.add_argument("--worker-start-time", type=int)
     fast_claim.add_argument("--key", required=True)
     fast_promote = fast_actions.add_parser("promote")
     fast_promote.add_argument("task")
@@ -4090,6 +4170,9 @@ def main() -> int:
         item.add_argument("task")
         item.add_argument("--owner", required=True)
         item.add_argument("--lease-minutes", type=int, default=120)
+        if name == "claim":
+            item.add_argument("--worker-pid", type=int)
+            item.add_argument("--worker-start-time", type=int)
         if name == "heartbeat":
             item.add_argument("--expected-revision", type=int)
     item = commands.add_parser("release")

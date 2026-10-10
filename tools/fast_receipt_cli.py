@@ -54,6 +54,8 @@ def dispatch_fast(core: Any, args: Namespace) -> int:  # noqa: C901 - explicit r
                 owner=args.owner,
                 expected_revision=args.expected_revision,
                 lease_minutes=args.lease_minutes,
+                worker_pid=getattr(args, "worker_pid", None),
+                worker_start_time=getattr(args, "worker_start_time", None),
             )
             print(json.dumps(public_receipt(receipt), sort_keys=True))
             return 0

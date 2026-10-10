@@ -122,6 +122,10 @@ tools/handoffctl reconcile --commit --push
 tools/handoffctl doctor --live
 ```
 
+For snapshotless expired-claim recovery, a worker supplies its live Linux PID and
+start-time (`--worker-pid`, `--worker-start-time`) when claiming; Coordinator verifies and
+persists that identity, then only recovers after the same identity is absent.
+
 `accept` records an owner-asserted, revision-bound acceptance of the task's referenced
 spec. It validates the spec reference, evidence class, reference and digest format;
 it does not independently prove the evidence contents or substitute for review.
