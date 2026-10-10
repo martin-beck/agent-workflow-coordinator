@@ -835,11 +835,14 @@ exec "$@"
 
     def test_snapshot_revalidates_installed_target(self) -> None:
         manifest = {"schema_version": 1, "upstream": {}, "files": {}}
+        destination = self.target / "LICENSE"
+        destination.write_text("existing-target\n", encoding="utf-8")
         with (
             patch.object(VENDOR, "verify", side_effect=[None, RuntimeError("post-install")]),
             self.assertRaisesRegex(RuntimeError, "post-install"),
         ):
             VENDOR.install_snapshot(ROOT, self.target, manifest)
+        self.assertEqual("existing-target\n", destination.read_text())
 
     def test_verify_rejects_every_identity_and_manifest_boundary(self) -> None:
         commit = "d" * 40
