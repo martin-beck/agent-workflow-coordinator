@@ -2544,7 +2544,7 @@ def apply_gate(args: argparse.Namespace, meta: Meta) -> str:
     """Record one typed interaction event as the task's next revision."""
     try:
         try:
-            stage = GateStage(str(args.stage))
+            stage: GateStage | StageGate = GateStage(str(args.stage))
         except ValueError as error:
             try:
                 stage = StageGate(str(args.stage))
