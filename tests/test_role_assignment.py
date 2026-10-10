@@ -12,6 +12,7 @@ import unittest
 from pathlib import Path
 from typing import Any
 
+from tools import role_assignment
 from tools.role_assignment import (
     RoleAssignmentError,
     assignment_errors,
@@ -109,6 +110,44 @@ class RoleAssignmentTests(unittest.TestCase):
                 check_registry(bad)
             with self.assertRaises(RoleAssignmentError):
                 check_assignment(assignment, root / "missing.json")
+
+    def test_dependency_free_validator_rejects_schema_boundaries(self) -> None:
+        """The vendored assignment validator has no hidden package dependency."""
+        self.assertTrue(role_assignment._assignment_role_errors(None))
+        self.assertTrue(role_assignment._assignment_role_errors([{}]))
+        self.assertTrue(
+            role_assignment._assignment_role_errors([{"role_id": "x", "expires_at": "not-a-date"}])
+        )
+        for invalid_timestamp in ("2099-01-01 00:00:00+00:00", "2099-01-01T00:00:00+00:00:01"):
+            with self.subTest(invalid_timestamp=invalid_timestamp):
+                self.assertTrue(
+                    role_assignment._assignment_role_errors(
+                        [{"role_id": "implementer", "expires_at": invalid_timestamp}]
+                    )
+                )
+        self.assertTrue(role_assignment._evidence_errors(None))
+        self.assertTrue(role_assignment._evidence_errors([{}]))
+        self.assertTrue(
+            role_assignment._evidence_errors(
+                [{"kind": "invalid", "ref": "bad ref", "digest": "bad"}]
+            )
+        )
+        self.assertTrue(
+            role_assignment._evidence_errors(
+                [{"kind": [], "ref": "AR-0001", "digest": "sha256:" + "a" * 64}]
+            )
+        )
+        assignment = load_fixture("role-assignment.json")
+        assignment["schema_version"] = True
+        self.assertTrue(assignment_errors(assignment, self.registry))
+        assignment = load_fixture("role-assignment.json")
+        assignment["roles"][0]["expires_at"] = "2099-01-01t00:00:00z"
+        self.assertEqual([], assignment_errors(assignment, self.registry))
+        assignment = load_fixture("role-assignment.json")
+        assignment.update(schema_version=2, assignment_id="x", owner_id="x")
+        assignment["roles"] = []
+        assignment["authorization_evidence"] = []
+        self.assertTrue(assignment_errors(assignment, self.registry))
 
 
 if __name__ == "__main__":

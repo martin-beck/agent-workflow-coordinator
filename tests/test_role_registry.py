@@ -11,6 +11,7 @@ import unittest
 from pathlib import Path
 from typing import Any
 
+from tools import role_registry
 from tools.role_registry import (
     RoleRegistryError,
     _load_json,
@@ -61,7 +62,15 @@ class RoleRegistryTests(unittest.TestCase):
 
     def test_semantic_conflicts_and_file_checker_fail_closed(self) -> None:
         registry = load_fixture("role-registry.json")
+        registry["schema_version"] = True
+        self.assertTrue(role_registry.registry_errors(registry))
+        registry = load_fixture("role-registry.json")
         role = registry["roles"][0]
+        role["schema_version"] = True
+        self.assertTrue(role_registry._role_errors(role))
+        role["schema_version"] = 1
+        role["worktree_policy"]["path_patterns"] = ["line-one\nline-two"]
+        self.assertEqual([], role_registry._role_errors(role))
         role["capabilities"].append(dict(role["capabilities"][0]))
         role["forbidden_actions"].append("source.read")
         role["tool_policy"]["allow"].append("authority.commit")
@@ -80,6 +89,44 @@ class RoleRegistryTests(unittest.TestCase):
             check_registry(path)
             with self.assertRaises(RoleRegistryError):
                 _load_json(Path(directory) / "missing.json")
+
+    def test_dependency_free_validator_rejects_schema_boundaries(self) -> None:
+        """The runtime validator covers every schema shape without site packages."""
+        self.assertTrue(role_registry._exact_object(None, {"field"}, "item"))
+        self.assertTrue(role_registry._exact_object({}, {"field"}, "item"))
+        self.assertTrue(role_registry._exact_object({"field": 1, "extra": 2}, {"field"}, "item"))
+        self.assertTrue(role_registry._string(1, "field", role_registry.ROLE_ID, 3, 64))
+        self.assertTrue(role_registry._string("x", "field", role_registry.ROLE_ID, 3, 64))
+        self.assertTrue(role_registry._string("INVALID", "field", role_registry.ROLE_ID, 3, 64))
+        self.assertTrue(
+            role_registry._unique_strings(
+                ["same", "same"], "items", minimum=0, pattern=role_registry.ACTION
+            )
+        )
+        self.assertTrue(
+            role_registry._unique_strings([], "items", minimum=1, pattern=role_registry.ACTION)
+        )
+        self.assertTrue(
+            role_registry._unique_strings([1], "items", minimum=0, pattern=role_registry.ACTION)
+        )
+
+        registry = load_fixture("role-registry.json")
+        role = registry["roles"][0]
+        capability = role["capabilities"][0]
+        capability.update(capability_id="x", description="", actions=[], scope="invalid")
+        self.assertTrue(role_registry._capability_errors(capability))
+        capability["scope"] = []
+        self.assertTrue(role_registry._capability_errors(capability))
+        role.update(schema_version=2, role_id="x", title="", summary="", capabilities=[1])
+        role["forbidden_actions"] = ["same", "same"]
+        role["tool_policy"] = {"allow": [1]}
+        role["worktree_policy"] = {"mode": "invalid", "path_patterns": []}
+        role["awq_profile_refs"] = ["bad ref"]
+        self.assertTrue(role_registry._role_errors(role))
+
+        registry.update(schema_version=2, registry_id="x", roles=[1], default_role="x")
+        registry["default_awq_profile_refs"] = []
+        self.assertTrue(role_registry.registry_errors(registry))
 
 
 if __name__ == "__main__":
