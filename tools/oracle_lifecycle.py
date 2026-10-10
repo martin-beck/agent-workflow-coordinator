@@ -126,7 +126,11 @@ def human_session_errors(value: object) -> list[str]:  # noqa: C901
         or value["status"] not in SESSION_STATUSES
     ):
         return ["oracle_gate.human_session activation or status is invalid"]
-    if not isinstance(value["task_revision"], int) or value["task_revision"] < 1:
+    if (
+        isinstance(value["task_revision"], bool)
+        or not isinstance(value["task_revision"], int)
+        or value["task_revision"] < 1
+    ):
         return ["oracle_gate.human_session.task_revision is invalid"]
     try:
         _timestamp(value["opened_at"], "oracle_gate.human_session.opened_at")

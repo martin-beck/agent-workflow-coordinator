@@ -138,6 +138,7 @@ class OracleLifecycleTests(unittest.TestCase):
             {**base, "status": "bad"},
             {**base, "status": {}},
             {**base, "task_revision": 0},
+            {**base, "task_revision": True},
             {**base, "opened_at": "not-a-time"},
             {**base, "opened_at": 1},
             {**base, "closed_at": "2026-10-10T00:00:01+00:00"},
