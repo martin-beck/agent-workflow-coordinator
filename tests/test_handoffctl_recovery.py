@@ -29,3 +29,10 @@ class HandoffRecoveryTest(unittest.TestCase):
             patch("pathlib.Path.read_text", side_effect=FileNotFoundError),
         ):
             self.assertIsNone(BASE.CORE.process_start_time(12345))
+
+    def test_claim_process_inspection_failure_is_write_closed(self) -> None:
+        with (
+            patch("pathlib.Path.read_text", side_effect=PermissionError),
+            self.assertRaisesRegex(RuntimeError, "cannot independently read"),
+        ):
+            BASE.CORE.process_start_time(12345)

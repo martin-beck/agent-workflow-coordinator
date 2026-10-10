@@ -1362,8 +1362,6 @@ def parse_claim_expiry(expiry: object) -> dt.datetime:
 def process_start_time(pid: int) -> int | None:
     """Return a Linux process start time, or ``None`` after it has exited."""
     proc = Path("/proc") / str(pid)
-    if not proc.exists():
-        return None
     try:
         stat_fields = (proc / "stat").read_text(encoding="utf-8").rsplit(")", 1)[1].split()
         return int(stat_fields[19])
