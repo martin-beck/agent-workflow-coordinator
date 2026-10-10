@@ -2546,7 +2546,10 @@ def apply_gate(args: argparse.Namespace, meta: Meta) -> str:
         try:
             stage = GateStage(str(args.stage))
         except ValueError as error:
-            raise GateError("unknown interaction gate stage") from error
+            try:
+                stage = StageGate(str(args.stage))
+            except ValueError:
+                raise GateError("unknown interaction gate stage") from error
         recorded_at = now()
         event = InteractionEvent(
             task_id=str(meta["id"]),

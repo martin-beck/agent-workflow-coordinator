@@ -108,7 +108,7 @@ class OracleLifecycleTests(unittest.TestCase):
                 "required": True,
                 "open_stage": None,
                 "completed": [],
-                "events": [],
+                "events": [event(2, GateStage.INTAKE, "open", "unresolved").as_record()],
                 "human_session": session,
             },
         }
@@ -171,6 +171,25 @@ class OracleLifecycleTests(unittest.TestCase):
                 event(1, GateStage.INTAKE, "open", "unresolved"),
                 {**session, "session_id": "bad"},
             )
+
+    def test_persisted_human_session_requires_its_opening_event(self) -> None:
+        gate = {
+            "required": True,
+            "open_stage": "intake",
+            "completed": [],
+            "events": [event(1, GateStage.INTAKE, "open", "unresolved").as_record()],
+            "human_session": {
+                "schema_version": "1.0",
+                "session_id": "AWTUI-SESSION-1",
+                "request_ref": "AWG-SESSION-1",
+                "activation": "user-decision",
+                "status": "presenting",
+                "task_revision": 2,
+                "tui_contract_version": "1.0",
+                "opened_at": "2026-10-10T00:00:00+00:00",
+            },
+        }
+        self.assertEqual(["oracle_gate.human_session lacks its opening event"], gate_errors(gate))
 
     def test_generic_gate_unknown_stage_and_invalid_sequence_fail_closed(self) -> None:
         valid = stage_event(1, StageGate.ROLE, "open", "accepted").as_record()

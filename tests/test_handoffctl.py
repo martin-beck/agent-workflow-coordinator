@@ -4572,6 +4572,21 @@ class HandoffTest(unittest.TestCase):
         args.request_ref = None
         with self.assertRaisesRegex(RuntimeError, "requires --session-id"):
             CORE.apply_gate(args, {"id": "AR-0022", "task_revision": 1})
+        args.request_ref = "AWG-SESSION-1"
+        args.stage = "decision"
+        generic: dict[str, Any] = {
+            "id": "AR-0022",
+            "task_revision": 1,
+            "oracle_gate": {
+                "required": True,
+                "open_stage": None,
+                "completed": ["role", "spec"],
+                "events": [],
+                "stage_sequence": ["role", "spec", "decision"],
+            },
+        }
+        self.assertIn("Recorded open", CORE.apply_gate(args, generic))
+        self.assertEqual("decision", generic["oracle_gate"]["open_stage"])
 
     def test_oracle_gate_blocks_claim_and_promote(self) -> None:
         gate = {"required": True, "open_stage": "intake"}

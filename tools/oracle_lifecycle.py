@@ -305,6 +305,12 @@ def gate_errors(value: object) -> list[str]:  # noqa: C901
             InteractionEvent.from_record(item)
         except (GateError, KeyError, TypeError, ValueError) as error:
             return [f"oracle_gate event invalid: {error}"]
+    session = value.get("human_session")
+    if session is not None and not any(
+        item["action"] == "open" and item["task_revision"] == session["task_revision"]
+        for item in events
+    ):
+        return ["oracle_gate.human_session lacks its opening event"]
     return []
 
 
