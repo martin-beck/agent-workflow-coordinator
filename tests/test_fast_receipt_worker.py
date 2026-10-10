@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import tempfile
 import unittest
@@ -85,6 +86,21 @@ class FakeCore:
 
     def project_settings(self) -> dict[str, bool]:
         return {"status_view": self.status_view}
+
+    @staticmethod
+    def scoped_claim_process(value: object) -> bool:
+        return (
+            isinstance(value, dict)
+            and set(value) == {"pid", "start_time", "boot_digest", "pid_namespace"}
+            and isinstance(value.get("pid"), int)
+            and value["pid"] > 0
+            and isinstance(value.get("start_time"), int)
+            and value["start_time"] >= 0
+            and isinstance(value.get("boot_digest"), str)
+            and bool(re.fullmatch(r"sha256:[0-9a-f]{64}", value["boot_digest"]))
+            and isinstance(value.get("pid_namespace"), str)
+            and bool(re.fullmatch(r"[0-9]+:[0-9]+", value["pid_namespace"]))
+        )
 
 
 class PublicationCore(FakeCore):
@@ -589,6 +605,51 @@ class FastReceiptWorkerTests(unittest.TestCase):
             self.assertEqual(
                 2, worker._verify_claim_delta(core, claim_intent, claim_payload, "a" * 40)
             )
+        scoped_payload = {
+            **claim_payload,
+            "worker_pid": 123,
+            "worker_start_time": 456,
+        }
+        scoped_after = {
+            **claim_after,
+            "claim_process": {
+                "pid": 123,
+                "start_time": 456,
+                "boot_digest": "sha256:" + "a" * 64,
+                "pid_namespace": "1:2",
+            },
+        }
+        with patch.object(
+            worker,
+            "_task_change",
+            return_value=(claim_before, "before\n", scoped_after, "expected heartbeat body\n"),
+        ):
+            self.assertEqual(
+                2, worker._verify_claim_delta(core, claim_intent, scoped_payload, "a" * 40)
+            )
+        malformed_scope = {
+            **claim_after,
+            "claim_process": {
+                "pid": 123,
+                "start_time": 456,
+                "boot_digest": "not-a-digest",
+                "pid_namespace": "1:2",
+            },
+        }
+        with (
+            patch.object(
+                worker,
+                "_task_change",
+                return_value=(
+                    claim_before,
+                    "before\n",
+                    malformed_scope,
+                    "expected heartbeat body\n",
+                ),
+            ),
+            self.assertRaisesRegex(RuntimeError, "does not match"),
+        ):
+            worker._verify_claim_delta(core, claim_intent, scoped_payload, "a" * 40)
         for field, value, message in (
             ("priority", "P0", "non-claim"),
             ("updated_at", "2026-10-09T10:00:00", "naive"),
