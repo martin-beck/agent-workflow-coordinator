@@ -15,6 +15,7 @@ from tools.oracle_lifecycle import (
     StageGate,
     apply_event,
     gate_errors,
+    human_session_errors,
     transition_allowed,
 )
 from tools.oracle_lifecycle_model import State, check_bounded_model, step
@@ -51,7 +52,7 @@ def stage_event(
 
 
 class OracleLifecycleTests(unittest.TestCase):
-    def test_generic_role_spec_decision_gates_are_ordered_and_authorizing(self) -> None:
+    def test_generic_role_spec_decision_gates_are_ordered_without_authorized_flag(self) -> None:
         meta: dict[str, Any] = {"id": "AR-0022", "task_revision": 1}
         for stage in StageGate:
             revision = meta["task_revision"]
@@ -60,7 +61,116 @@ class OracleLifecycleTests(unittest.TestCase):
             apply_event(meta, stage_event(meta["task_revision"], stage, "resolve", "accepted"))
             meta["task_revision"] += 1
         self.assertEqual([item.value for item in StageGate], meta["oracle_gate"]["completed"])
-        self.assertTrue(meta["oracle_gate"]["authorized"])
+        self.assertNotIn("authorized", meta["oracle_gate"])
+        transition_allowed(meta, "release")
+
+    def test_human_session_is_revision_bound_and_resolves_with_the_gate(self) -> None:
+        meta: dict[str, Any] = {"id": "AR-0022", "task_revision": 4}
+        session = {
+            "schema_version": "1.0",
+            "session_id": "AWTUI-SESSION-1",
+            "request_ref": "AWG-SESSION-1",
+            "activation": "user-proposal-review",
+            "status": "presenting",
+            "task_revision": 4,
+            "tui_contract_version": "1.0",
+            "opened_at": "2026-10-10T00:00:00+00:00",
+        }
+        apply_event(meta, event(4, GateStage.INTAKE, "open", "unresolved"), session)
+        self.assertEqual("presenting", meta["oracle_gate"]["human_session"]["status"])
+        meta["task_revision"] = 5
+        apply_event(meta, event(5, GateStage.INTAKE, "resolve", "accepted"))
+        result = meta["oracle_gate"]["human_session"]
+        self.assertEqual("resolved", result["status"])
+        self.assertIn("closed_at", result)
+
+    def test_human_session_rejects_partial_stale_and_duplicate_presentations(self) -> None:
+        meta: dict[str, Any] = {"id": "AR-0022", "task_revision": 1}
+        session = {
+            "schema_version": "1.0",
+            "session_id": "AWTUI-SESSION-1",
+            "request_ref": "AWG-SESSION-1",
+            "activation": "user-decision",
+            "status": "presenting",
+            "task_revision": 2,
+            "tui_contract_version": "1.0",
+            "opened_at": "2026-10-10T00:00:00+00:00",
+        }
+        with self.assertRaisesRegex(GateError, "task_revision"):
+            apply_event(meta, event(1, GateStage.INTAKE, "open", "unresolved"), session)
+        self.assertNotIn("oracle_gate", meta)
+        session["task_revision"] = 1
+        apply_event(meta, event(1, GateStage.INTAKE, "open", "unresolved"), session)
+        duplicate: dict[str, Any] = {
+            "id": "AR-0022",
+            "task_revision": 2,
+            "oracle_gate": {
+                "required": True,
+                "open_stage": None,
+                "completed": [],
+                "events": [],
+                "human_session": session,
+            },
+        }
+        session["task_revision"] = 2
+        with self.assertRaisesRegex(GateError, "already presenting"):
+            apply_event(duplicate, event(2, GateStage.INTAKE, "open", "unresolved"), session)
+
+    def test_human_session_validator_rejects_each_public_contract_violation(self) -> None:
+        base = {
+            "schema_version": "1.0",
+            "session_id": "AWTUI-SESSION-1",
+            "request_ref": "AWG-SESSION-1",
+            "activation": "user-decision",
+            "status": "presenting",
+            "task_revision": 1,
+            "tui_contract_version": "1.0",
+            "opened_at": "2026-10-10T00:00:00+00:00",
+        }
+        cases: list[object] = [
+            [],
+            {key: value for key, value in base.items() if key != "opened_at"},
+            {**base, "schema_version": "2.0"},
+            {**base, "session_id": "bad"},
+            {**base, "request_ref": "bad"},
+            {**base, "activation": "bad"},
+            {**base, "activation": []},
+            {**base, "status": "bad"},
+            {**base, "status": {}},
+            {**base, "task_revision": 0},
+            {**base, "opened_at": "not-a-time"},
+            {**base, "opened_at": 1},
+            {**base, "closed_at": "2026-10-10T00:00:01+00:00"},
+            {**base, "status": "resolved"},
+            {**base, "status": "resolved", "closed_at": "not-a-time"},
+        ]
+        for value in cases:
+            with self.subTest(value=value):
+                self.assertTrue(human_session_errors(value))
+
+    def test_human_session_metadata_cannot_be_attached_to_non_open_or_invalid_gate(self) -> None:
+        session = {
+            "schema_version": "1.0",
+            "session_id": "AWTUI-SESSION-1",
+            "request_ref": "AWG-SESSION-1",
+            "activation": "user-decision",
+            "status": "presenting",
+            "task_revision": 1,
+            "tui_contract_version": "1.0",
+            "opened_at": "2026-10-10T00:00:00+00:00",
+        }
+        with self.assertRaisesRegex(GateError, "only when opening"):
+            apply_event(
+                {"id": "AR-0022", "task_revision": 1},
+                event(1, GateStage.INTAKE, "resolve", "accepted"),
+                session,
+            )
+        with self.assertRaisesRegex(GateError, "invalid"):
+            apply_event(
+                {"id": "AR-0022", "task_revision": 1},
+                event(1, GateStage.INTAKE, "open", "unresolved"),
+                {**session, "session_id": "bad"},
+            )
 
     def test_generic_gate_unknown_stage_and_invalid_sequence_fail_closed(self) -> None:
         valid = stage_event(1, StageGate.ROLE, "open", "accepted").as_record()
@@ -234,6 +344,28 @@ class OracleLifecycleTests(unittest.TestCase):
         for value in cases:
             with self.subTest(value=value):
                 self.assertTrue(gate_errors(value))
+        self.assertTrue(
+            gate_errors(
+                {
+                    "required": True,
+                    "open_stage": None,
+                    "completed": [],
+                    "events": [],
+                    "authorized": "bad",
+                }
+            )
+        )
+        self.assertTrue(
+            gate_errors(
+                {
+                    "required": True,
+                    "open_stage": None,
+                    "completed": [],
+                    "events": [],
+                    "reconciliation_required": "bad",
+                }
+            )
+        )
         meta: dict[str, Any] = {
             "id": "AR-0022",
             "task_revision": 1,
@@ -342,7 +474,7 @@ class OracleLifecycleTests(unittest.TestCase):
         meta["task_revision"] += 1
         apply_event(meta, event(3, GateStage.INTAKE, "reopen", "contradiction"))
         self.assertEqual([], meta["oracle_gate"]["completed"])
-        self.assertFalse(meta["oracle_gate"]["authorized"])
+        self.assertNotIn("authorized", meta["oracle_gate"])
         with self.assertRaisesRegex(GateError, "unresolved"):
             transition_allowed(meta, "release")
 

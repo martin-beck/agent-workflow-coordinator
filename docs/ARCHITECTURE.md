@@ -27,6 +27,14 @@ specifications. Existing interaction-gate records retain the legacy
 `intake` -> `discussion` -> `formal_spec_review` -> `reconciliation` sequence; stage parsing and
 revision checks fail closed for unknown or skipped stages.
 
+An optional `oracle_gate.human_session` is the current public-safe handoff to a human TUI.  It
+binds an `AWTUI-*` session and `AWG-*` request reference to the revision on which the gate was
+opened, its bounded activation reason, and the TUI contract version.  The record is task metadata,
+so Git task records and SQLite task JSON store, migrate, recover, render, and validate the same
+bytes.  It is not an additional authorization switch: an open, incomplete, or reconciliation-held
+gate blocks lifecycle work; the deprecated `authorized` field is ignored on read and removed by
+the next gate mutation.
+
 The opt-in Git backend retains the original model: task JSON front matter and Markdown bodies are
 authority, and the repository-common lock serializes linked worktrees through one inode. A tracked
 `coordinator.backend.json` permanently selects the backend. Its absence has one compatibility
