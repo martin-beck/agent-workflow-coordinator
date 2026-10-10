@@ -36,3 +36,24 @@ class HandoffRecoveryTest(unittest.TestCase):
             self.assertRaisesRegex(RuntimeError, "cannot independently read"),
         ):
             BASE.CORE.process_start_time(12345)
+
+    def test_snapshotless_recovery_rejects_other_execution_scope(self) -> None:
+        self.make_task(
+            status="in_progress",
+            owner="worker-a",
+            claim_expires="2000-01-01T00:00:00+00:00",
+            claim_process={
+                "pid": 99999999,
+                "start_time": 0,
+                "boot_digest": "sha256:" + "0" * 64,
+                "pid_namespace": "1:1",
+            },
+        )
+        with (
+            patch.object(BASE.CORE, "commit", return_value=True),
+            self.assertRaisesRegex(RuntimeError, "cannot verify the claim execution scope"),
+        ):
+            BASE.CORE.mutate(
+                BASE.argparse.Namespace(task="AR-0001", expected_revision=1, note="Recover."),
+                "recover-expired",
+            )

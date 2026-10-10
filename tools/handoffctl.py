@@ -1266,11 +1266,15 @@ def valid_claim_process(value: object) -> bool:
     """Recognize the closed optional claim-time process identity shape."""
     return (
         isinstance(value, dict)
-        and set(value) == {"pid", "start_time"}
+        and set(value) == {"pid", "start_time", "boot_digest", "pid_namespace"}
         and type(value.get("pid")) is int
         and int(value["pid"]) > 0
         and type(value.get("start_time")) is int
         and int(value["start_time"]) >= 0
+        and isinstance(value.get("boot_digest"), str)
+        and re.fullmatch(r"sha256:[0-9a-f]{64}", value["boot_digest"])
+        and isinstance(value.get("pid_namespace"), str)
+        and re.fullmatch(r"[0-9]+:[0-9]+", value["pid_namespace"])
     )
 
 
@@ -1371,6 +1375,19 @@ def process_start_time(pid: int) -> int | None:
         raise RuntimeError("cannot independently read worker process identity") from error
 
 
+def worker_execution_scope() -> tuple[str, str]:
+    """Return the local boot and PID-namespace identities for recovery fencing."""
+    try:
+        boot_id = (Path("/proc/sys/kernel/random/boot_id").read_text(encoding="utf-8")).strip()
+        namespace = Path("/proc/self/ns/pid").stat()
+    except OSError as error:
+        raise RuntimeError("cannot independently read worker execution scope") from error
+    pid_namespace = f"{namespace.st_dev}:{namespace.st_ino}"
+    if not re.fullmatch(r"[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}", boot_id):
+        raise RuntimeError("worker execution scope has invalid boot identity")
+    return f"sha256:{hashlib.sha256(boot_id.encode()).hexdigest()}", pid_namespace
+
+
 def claimed_process_identity(args: argparse.Namespace) -> Meta | None:
     """Validate an optional live worker identity at the exact claim transition."""
     pid = getattr(args, "worker_pid", None)
@@ -1383,18 +1400,26 @@ def claimed_process_identity(args: argparse.Namespace) -> Meta | None:
         )
     if process_start_time(pid) != start_time:
         raise RuntimeError("claim worker identity is not a live matching process")
-    return {"pid": pid, "start_time": start_time}
+    boot_digest, pid_namespace = worker_execution_scope()
+    return {
+        "pid": pid,
+        "start_time": start_time,
+        "boot_digest": boot_digest,
+        "pid_namespace": pid_namespace,
+    }
 
 
 def require_claimed_worker_absent(meta: Meta) -> None:
     """Require a claim-time identity and independently confirm it no longer runs."""
     identity = meta.get("claim_process")
-    if not isinstance(identity, dict) or set(identity) != {"pid", "start_time"}:
+    if not valid_claim_process(identity):
         raise RuntimeError("snapshot-less recovery requires a claim-time worker identity")
-    pid = identity.get("pid")
-    start_time = identity.get("start_time")
-    if type(pid) is not int or pid <= 0 or type(start_time) is not int or start_time < 0:
-        raise RuntimeError("snapshot-less recovery has invalid claim-time worker identity")
+    identity = cast(Meta, identity)
+    boot_digest, pid_namespace = worker_execution_scope()
+    if identity["boot_digest"] != boot_digest or identity["pid_namespace"] != pid_namespace:
+        raise RuntimeError("snapshot-less recovery cannot verify the claim execution scope")
+    pid = identity["pid"]
+    start_time = identity["start_time"]
     if process_start_time(pid) == start_time:
         raise RuntimeError("former worker process is still alive")
 

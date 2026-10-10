@@ -3785,12 +3785,18 @@ class HandoffTest(unittest.TestCase):
             CORE.mutate(args, "recover-expired")
 
     def test_recover_expired_preserves_current_action_without_session(self) -> None:
+        boot_digest, pid_namespace = CORE.worker_execution_scope()
         path = self.make_task(
             status="in_progress",
             owner="worker-a",
             claim_expires="2000-01-01T00:00:00+00:00",
             next_action="Keep the authoritative current step.",
-            claim_process={"pid": 99999999, "start_time": 0},
+            claim_process={
+                "pid": 99999999,
+                "start_time": 0,
+                "boot_digest": boot_digest,
+                "pid_namespace": pid_namespace,
+            },
         )
         with patch.object(CORE, "commit", return_value=True):
             CORE.mutate(
@@ -3807,12 +3813,18 @@ class HandoffTest(unittest.TestCase):
         self.assertEqual("Keep the authoritative current step.", recovered["next_action"])
 
     def test_recover_expired_does_not_restore_stale_session_action(self) -> None:
+        boot_digest, pid_namespace = CORE.worker_execution_scope()
         path = self.make_task(
             status="in_progress",
             owner="worker-a",
             claim_expires="2000-01-01T00:00:00+00:00",
             next_action="Keep the current claim action.",
-            claim_process={"pid": 99999999, "start_time": 0},
+            claim_process={
+                "pid": 99999999,
+                "start_time": 0,
+                "boot_digest": boot_digest,
+                "pid_namespace": pid_namespace,
+            },
         )
         stale, _ = CORE.read_task(path)
         stale["next_action"] = "Do not restore this old action."
@@ -3867,7 +3879,13 @@ class HandoffTest(unittest.TestCase):
         )
         path = CORE.locate("AR-0001")[0]
         meta, body = CORE.read_task(path)
-        meta["claim_process"] = {"pid": os.getpid(), "start_time": start_time}
+        boot_digest, pid_namespace = CORE.worker_execution_scope()
+        meta["claim_process"] = {
+            "pid": os.getpid(),
+            "start_time": start_time,
+            "boot_digest": boot_digest,
+            "pid_namespace": pid_namespace,
+        }
         CORE.write_task(path, meta, body)
         self.refresh_views()
         with (
@@ -3900,9 +3918,12 @@ class HandoffTest(unittest.TestCase):
                 ),
                 "claim",
             )
+        claim_process = CORE.read_task(path)[0]["claim_process"]
+        self.assertEqual(os.getpid(), claim_process["pid"])
+        self.assertEqual(start_time, claim_process["start_time"])
         self.assertEqual(
-            {"pid": os.getpid(), "start_time": start_time},
-            CORE.read_task(path)[0]["claim_process"],
+            dict(zip(("boot_digest", "pid_namespace"), CORE.worker_execution_scope(), strict=True)),
+            {key: claim_process[key] for key in ("boot_digest", "pid_namespace")},
         )
 
     def test_recover_expired_rejects_future_session_action(self) -> None:

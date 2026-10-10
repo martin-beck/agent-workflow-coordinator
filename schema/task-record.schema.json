@@ -22,10 +22,12 @@
     "claim_process": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["pid", "start_time"],
+      "required": ["pid", "start_time", "boot_digest", "pid_namespace"],
       "properties": {
         "pid": {"type": "integer", "minimum": 1},
-        "start_time": {"type": "integer", "minimum": 0}
+        "start_time": {"type": "integer", "minimum": 0},
+        "boot_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+        "pid_namespace": {"type": "string", "pattern": "^[0-9]+:[0-9]+$"}
       }
     },
     "worktree_key": {"type": "string"},
