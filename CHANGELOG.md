@@ -1,12 +1,19 @@
 # Changelog
 
-## 0.5.0 - Unreleased
+## 0.5.0 - 2026-10-11
 
 - Fence snapshotless expired-claim recovery to the original boot and PID
   namespace using a privacy-safe boot digest. Older two-field claim identities
   remain valid for ordinary lifecycle operations but cannot authorize
   snapshotless recovery; use a v0.5.0 vendor before writing scope-bound
   identities.
+- Add the exact-revision `handoffctl bind-worktree` transition for claimed
+  legacy tasks with empty branch/worktree metadata. It validates Git branch
+  identity without accepting expanded shorthand, validates the bounded
+  worktree key, rejects active identity conflicts, and preserves atomic Git
+  and SQLite lifecycle semantics.
+- Extend the lifecycle model and hostile tests for unbound, bound, stale,
+  expired, conflicting, and replayed worktree-binding states.
 
 ## 0.4.1 - 2026-10-09
 
