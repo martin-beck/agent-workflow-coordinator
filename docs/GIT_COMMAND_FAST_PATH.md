@@ -366,6 +366,9 @@ The preliminary user-facing routes are
 `handoffctl fast heartbeat TASK --owner OWNER --expected-revision N --key KEY`,
 `handoffctl fast promote TASK --expected-revision N --note NOTE --key KEY`, and
 `handoffctl fast claim TASK --owner OWNER --expected-revision N --key KEY`.
+For snapshotless recovery, a fast claim may additionally supply the verified
+pair `--worker-pid PID --worker-start-time START_TIME`; it is carried in the
+typed intent and committed as the durable claim-time identity.
 It returns a durable `queued-local` receipt and does not claim a heartbeat
 has occurred. `handoffctl fast receipt RECEIPT_ID` reads its current phase;
 `handoffctl fast worker --limit N` performs one explicitly invoked batch,

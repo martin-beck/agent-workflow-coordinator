@@ -4103,6 +4103,8 @@ def main() -> int:
     fast_claim.add_argument("--owner", required=True)
     fast_claim.add_argument("--expected-revision", type=int, required=True)
     fast_claim.add_argument("--lease-minutes", type=int, default=120)
+    fast_claim.add_argument("--worker-pid", type=int)
+    fast_claim.add_argument("--worker-start-time", type=int)
     fast_claim.add_argument("--key", required=True)
     fast_promote = fast_actions.add_parser("promote")
     fast_promote.add_argument("task")

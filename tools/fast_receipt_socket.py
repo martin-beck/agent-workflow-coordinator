@@ -203,7 +203,14 @@ def _fast_request(argv: list[str]) -> dict[str, Any] | None:  # noqa: C901 - str
         return None
     options: dict[str, str] = {}
     for name, value in zip(argv[3::2], argv[4::2], strict=True):
-        if name not in {"--owner", "--expected-revision", "--lease-minutes", "--key"}:
+        if name not in {
+            "--owner",
+            "--expected-revision",
+            "--lease-minutes",
+            "--worker-pid",
+            "--worker-start-time",
+            "--key",
+        }:
             return None
         if name in options:
             return None
@@ -213,9 +220,15 @@ def _fast_request(argv: list[str]) -> dict[str, Any] | None:  # noqa: C901 - str
     try:
         revision = int(options["--expected-revision"])
         lease = int(options.get("--lease-minutes", "120"))
+        worker_pid = int(options["--worker-pid"]) if "--worker-pid" in options else None
+        worker_start_time = (
+            int(options["--worker-start-time"]) if "--worker-start-time" in options else None
+        )
     except ValueError:
         return None
-    return {
+    if (worker_pid is None) != (worker_start_time is None):
+        return None
+    request = {
         "protocol": 1,
         "action": argv[1],
         "task": argv[2],
@@ -224,6 +237,10 @@ def _fast_request(argv: list[str]) -> dict[str, Any] | None:  # noqa: C901 - str
         "lease_minutes": lease,
         "key": options["--key"],
     }
+    if worker_pid is not None:
+        request["worker_pid"] = worker_pid
+        request["worker_start_time"] = worker_start_time
+    return request
 
 
 def _read_line(peer: socket.socket, limit: int) -> bytes:
@@ -315,7 +332,7 @@ def _require_request(request: Any) -> dict[str, Any]:  # noqa: C901 - strict wir
         except ValueError as error:
             raise RuntimeError("invalid fast observation request") from error
         return request
-    if action in {"heartbeat", "claim"}:
+    if action == "heartbeat":
         if set(request) != {
             "protocol",
             "action",
@@ -334,6 +351,29 @@ def _require_request(request: Any) -> dict[str, Any]:  # noqa: C901 - strict wir
             or not all(isinstance(request[field], str) for field in ("task", "owner", "key"))
         ):
             raise RuntimeError(f"invalid fast {action} request fields")
+        return request
+    if action == "claim":
+        base = {"protocol", "action", "task", "owner", "expected_revision", "lease_minutes", "key"}
+        identity = {"worker_pid", "worker_start_time"}
+        if set(request) not in (base, base | identity):
+            raise RuntimeError("invalid fast claim request")
+        if (
+            not isinstance(request["expected_revision"], int)
+            or isinstance(request["expected_revision"], bool)
+            or not isinstance(request["lease_minutes"], int)
+            or isinstance(request["lease_minutes"], bool)
+            or not all(isinstance(request[field], str) for field in ("task", "owner", "key"))
+            or (
+                "worker_pid" in request
+                and (
+                    type(request["worker_pid"]) is not int
+                    or request["worker_pid"] <= 0
+                    or type(request["worker_start_time"]) is not int
+                    or request["worker_start_time"] < 0
+                )
+            )
+        ):
+            raise RuntimeError("invalid fast claim request fields")
         return request
     if action == "promote":
         if set(request) != {"protocol", "action", "task", "expected_revision", "note", "key"}:
@@ -463,6 +503,8 @@ def socket_service(core: Any) -> Iterator[None]:  # noqa: C901
                                 owner=request["owner"],
                                 expected_revision=request["expected_revision"],
                                 lease_minutes=request["lease_minutes"],
+                                worker_pid=request.get("worker_pid"),
+                                worker_start_time=request.get("worker_start_time"),
                             )
                         elif request["action"] == "promote":
                             result = store.enqueue_promote(

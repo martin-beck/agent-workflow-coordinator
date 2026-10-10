@@ -351,6 +351,8 @@ class ReceiptStore:
         owner: str,
         expected_revision: int,
         lease_minutes: int,
+        worker_pid: int | None = None,
+        worker_start_time: int | None = None,
     ) -> dict[str, Any]:
         """Fsync a revision-fenced claim intent; authority admission stays strict."""
         if not _TOKEN.fullmatch(key) or not _TOKEN.fullmatch(task):
@@ -359,6 +361,16 @@ class ReceiptStore:
             raise ValueError("invalid owner")
         if expected_revision < 1 or not 1 <= lease_minutes <= 1440:
             raise ValueError("invalid revision or lease")
+        if (worker_pid is None) != (worker_start_time is None) or (
+            worker_pid is not None
+            and (
+                type(worker_pid) is not int
+                or worker_pid <= 0
+                or type(worker_start_time) is not int
+                or worker_start_time < 0
+            )
+        ):
+            raise ValueError("invalid claim worker identity")
         payload = {
             "expected_revision": expected_revision,
             "lease_minutes": lease_minutes,
@@ -367,6 +379,9 @@ class ReceiptStore:
             "project_id": self.project_id,
             "task": task,
         }
+        if worker_pid is not None:
+            payload["worker_pid"] = worker_pid
+            payload["worker_start_time"] = worker_start_time
         return self._enqueue(
             key=key, task=task, expected_revision=expected_revision, payload=payload
         )
