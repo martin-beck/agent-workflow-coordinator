@@ -33,6 +33,20 @@ stages, skipped stages, duplicate stages, stale revisions, and malformed stage s
 closed. The legacy `intake`, `discussion`, `formal_spec_review`, and `reconciliation` sequence is
 retained for existing `oracle_gate` records and is not silently converted.
 
+When a gate is being presented through the human TUI, open it with all four session fields:
+
+```sh
+tools/handoffctl gate AR-0001 --expected-revision 7 --stage decision --action open \
+  --disposition unresolved --before plan/before=sha256:... --after plan/after=sha256:... \
+  --public-ref oracle/session-1 --session-id AWTUI-SESSION-1 --request-ref AWG-SESSION-1 \
+  --activation user-decision --tui-contract-version 1.0
+```
+
+Partial metadata, an unsupported version, a stale bound revision, or a second currently presenting
+session is rejected. Resolving the gate marks the session `resolved` for an accepted disposition or
+`clarification_requested` otherwise. The session stores public references and timestamps only; it
+does not copy a prompt, decision payload, or private TUI state.
+
 ## Backend selection
 
 `init` defaults to SQLite WAL. `init --backend git` selects the original Git/Markdown authority.

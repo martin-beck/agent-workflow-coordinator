@@ -28,7 +28,12 @@
     "observed_head": {"type": "string"},
     "observed_dirty": {"type": "boolean"},
     "superseded_by": {"$ref": "#/$defs/taskId"},
-    "oracle_gate": {"type": "object"},
+    "oracle_gate": {
+      "type": "object",
+      "properties": {
+        "human_session": {"$ref": "#/$defs/humanSession"}
+      }
+    },
     "spec_ref": {"type": "string"},
     "spec_revision": {"type": "integer", "minimum": 1},
     "spec_acceptance": {},
@@ -36,6 +41,22 @@
     "children": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/taskId"}}
   },
   "$defs": {
-    "taskId": {"type": "string", "pattern": "^AR-[0-9]{4}$"}
+    "taskId": {"type": "string", "pattern": "^AR-[0-9]{4}$"},
+    "humanSession": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "session_id", "request_ref", "activation", "status", "task_revision", "tui_contract_version", "opened_at"],
+      "properties": {
+        "schema_version": {"const": "1.0"},
+        "session_id": {"type": "string", "pattern": "^AWTUI-[A-Z0-9-]{1,127}$"},
+        "request_ref": {"type": "string", "pattern": "^AWG-[A-Z0-9-]{1,127}$"},
+        "activation": {"enum": ["user-decision", "user-detail-request", "user-proposal-review", "agent-uncertainty", "policy-required-approval"]},
+        "status": {"enum": ["presenting", "clarification_requested", "resolved"]},
+        "task_revision": {"type": "integer", "minimum": 1},
+        "tui_contract_version": {"const": "1.0"},
+        "opened_at": {"type": "string", "format": "date-time"},
+        "closed_at": {"type": "string", "format": "date-time"}
+      }
+    }
   }
 }

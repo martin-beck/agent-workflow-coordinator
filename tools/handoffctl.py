@@ -2513,6 +2513,33 @@ def _artifact_values(values: list[str], label: str) -> tuple[ArtifactRef, ...]:
     return tuple(result)
 
 
+def _human_session_values(args: argparse.Namespace, recorded_at: str) -> Meta | None:
+    """Build one complete public-safe TUI session record or reject partial input."""
+    session_id = getattr(args, "session_id", None)
+    request_ref = getattr(args, "request_ref", None)
+    activation = getattr(args, "activation", None)
+    version = getattr(args, "tui_contract_version", None)
+    if not any((session_id, request_ref, activation, version)):
+        return None
+    if getattr(args, "action", None) != "open":
+        raise RuntimeError("human session metadata is valid only when opening a gate")
+    if not all((session_id, request_ref, activation, version)):
+        raise RuntimeError(
+            "human session metadata requires --session-id, --request-ref, --activation, "
+            "and --tui-contract-version"
+        )
+    return {
+        "schema_version": "1.0",
+        "session_id": session_id,
+        "request_ref": request_ref,
+        "activation": activation,
+        "status": "presenting",
+        "task_revision": int(args.expected_revision),
+        "tui_contract_version": version,
+        "opened_at": recorded_at,
+    }
+
+
 def apply_gate(args: argparse.Namespace, meta: Meta) -> str:
     """Record one typed interaction event as the task's next revision."""
     try:
@@ -2520,6 +2547,7 @@ def apply_gate(args: argparse.Namespace, meta: Meta) -> str:
             stage = GateStage(str(args.stage))
         except ValueError as error:
             raise GateError("unknown interaction gate stage") from error
+        recorded_at = now()
         event = InteractionEvent(
             task_id=str(meta["id"]),
             task_revision=int(args.expected_revision),
@@ -2529,9 +2557,9 @@ def apply_gate(args: argparse.Namespace, meta: Meta) -> str:
             before=_artifact_values(args.before, "--before"),
             after=_artifact_values(args.after, "--after"),
             public_ref=str(args.public_ref),
-            recorded_at=now(),
+            recorded_at=recorded_at,
         )
-        return apply_event(meta, event)
+        return apply_event(meta, event, _human_session_values(args, recorded_at))
     except (GateError, ValueError) as error:
         raise RuntimeError(str(error)) from error
 
@@ -4122,6 +4150,19 @@ def main() -> int:
     item.add_argument("--before", action="append", default=[], required=True)
     item.add_argument("--after", action="append", default=[], required=True)
     item.add_argument("--public-ref", required=True)
+    item.add_argument("--session-id")
+    item.add_argument("--request-ref")
+    item.add_argument(
+        "--activation",
+        choices=(
+            "user-decision",
+            "user-detail-request",
+            "user-proposal-review",
+            "agent-uncertainty",
+            "policy-required-approval",
+        ),
+    )
+    item.add_argument("--tui-contract-version")
     item = commands.add_parser("run")
     item.add_argument("task")
     item.add_argument("--owner", required=True)

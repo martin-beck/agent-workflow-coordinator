@@ -4551,6 +4551,28 @@ class HandoffTest(unittest.TestCase):
         self.assertEqual("released", CORE.apply_owned_change(release_args, "release", released))
         self.assertEqual("done", released["status"])
 
+    def test_gate_dispatch_records_complete_human_session_only(self) -> None:
+        digest = "sha256:" + "a" * 64
+        args = argparse.Namespace(
+            expected_revision=1,
+            stage="intake",
+            action="open",
+            disposition="unresolved",
+            before=[f"plan/before={digest}"],
+            after=[f"plan/after={'sha256:' + 'b' * 64}"],
+            public_ref="oracle/session-1",
+            session_id="AWTUI-SESSION-1",
+            request_ref="AWG-SESSION-1",
+            activation="user-decision",
+            tui_contract_version="1.0",
+        )
+        meta: dict[str, Any] = {"id": "AR-0022", "task_revision": 1}
+        self.assertIn("Recorded open", CORE.apply_gate(args, meta))
+        self.assertEqual("presenting", meta["oracle_gate"]["human_session"]["status"])
+        args.request_ref = None
+        with self.assertRaisesRegex(RuntimeError, "requires --session-id"):
+            CORE.apply_gate(args, {"id": "AR-0022", "task_revision": 1})
+
     def test_oracle_gate_blocks_claim_and_promote(self) -> None:
         gate = {"required": True, "open_stage": "intake"}
         claim_args = argparse.Namespace(task="AR-0022", owner="worker", lease_minutes=10)

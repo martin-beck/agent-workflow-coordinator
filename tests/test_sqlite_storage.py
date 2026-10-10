@@ -963,6 +963,35 @@ class SQLiteStorageTest(unittest.TestCase):
         self.assertEqual("pass", final["spec_acceptance"]["status"])
         self.assertIn("updated", (self.tasks / "AR-0001-test.md").read_text())
 
+    def test_sqlite_gate_persists_and_exports_human_session_metadata(self) -> None:
+        self.configure_core(backend="sqlite")
+        task_path, task_meta, task_body = task("AR-0001")
+        backend = self.create([(task_path, task_meta, task_body)])
+        CORE.export_sqlite_projections()
+        gate = argparse.Namespace(
+            task="AR-0001",
+            expected_revision=1,
+            stage="intake",
+            action="open",
+            disposition="unresolved",
+            before=["plan/before=sha256:" + "a" * 64],
+            after=["plan/after=sha256:" + "b" * 64],
+            public_ref="oracle/session-1",
+            session_id="AWTUI-SESSION-1",
+            request_ref="AWG-SESSION-1",
+            activation="user-decision",
+            tui_contract_version="1.0",
+        )
+        with patch.object(CORE, "push_replica"):
+            CORE.mutate(gate, "gate")
+        stored = backend.load_tasks()[0][1]["oracle_gate"]["human_session"]
+        self.assertEqual(
+            ("AWTUI-SESSION-1", 1, "presenting"),
+            (stored["session_id"], stored["task_revision"], stored["status"]),
+        )
+        exported = json.loads((self.tasks / "AR-0001-test.md").read_text().split("---", 2)[1])
+        self.assertEqual(stored, exported["oracle_gate"]["human_session"])
+
     def test_sqlite_release_blocked_unblock_and_claim_is_session_free(self) -> None:
         self.configure_core(backend="sqlite")
         task_path, task_meta, task_body = task("AR-0001", status="in_progress")
