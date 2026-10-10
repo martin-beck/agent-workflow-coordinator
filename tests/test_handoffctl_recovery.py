@@ -57,3 +57,22 @@ class HandoffRecoveryTest(unittest.TestCase):
                 BASE.argparse.Namespace(task="AR-0001", expected_revision=1, note="Recover."),
                 "recover-expired",
             )
+
+    def test_legacy_claim_identity_remains_valid_but_cannot_recover_snapshotless(self) -> None:
+        self.make_task(
+            status="in_progress",
+            owner="worker-a",
+            claim_expires="2000-01-01T00:00:00+00:00",
+            claim_process={"pid": 99999999, "start_time": 0},
+        )
+        self.assertFalse(any("invalid claim_process" in error for error in BASE.CORE.validate()))
+        with (
+            patch.object(BASE.CORE, "commit", return_value=True),
+            self.assertRaisesRegex(
+                RuntimeError, "requires a scope-bound claim-time worker identity"
+            ),
+        ):
+            BASE.CORE.mutate(
+                BASE.argparse.Namespace(task="AR-0001", expected_revision=1, note="Recover."),
+                "recover-expired",
+            )

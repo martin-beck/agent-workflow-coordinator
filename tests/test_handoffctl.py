@@ -3857,7 +3857,9 @@ class HandoffTest(unittest.TestCase):
         )
         with (
             patch.object(CORE, "commit", return_value=True),
-            self.assertRaisesRegex(RuntimeError, "requires a claim-time worker identity"),
+            self.assertRaisesRegex(
+                RuntimeError, "requires a scope-bound claim-time worker identity"
+            ),
         ):
             CORE.mutate(
                 argparse.Namespace(

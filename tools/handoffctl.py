@@ -1263,18 +1263,32 @@ def field_errors(path: Path, meta: Meta) -> list[str]:
 
 
 def valid_claim_process(value: object) -> bool:
-    """Recognize the closed optional claim-time process identity shape."""
+    """Recognize a legacy or scope-bound optional claim-time process identity."""
+    if not isinstance(value, dict) or set(value) not in (
+        {"pid", "start_time"},
+        {"pid", "start_time", "boot_digest", "pid_namespace"},
+    ):
+        return False
+    if type(value.get("pid")) is not int or int(value["pid"]) <= 0:
+        return False
+    if type(value.get("start_time")) is not int or int(value["start_time"]) < 0:
+        return False
+    if set(value) == {"pid", "start_time"}:
+        return True
     return (
-        isinstance(value, dict)
-        and set(value) == {"pid", "start_time", "boot_digest", "pid_namespace"}
-        and type(value.get("pid")) is int
-        and int(value["pid"]) > 0
-        and type(value.get("start_time")) is int
-        and int(value["start_time"]) >= 0
-        and isinstance(value.get("boot_digest"), str)
+        isinstance(value.get("boot_digest"), str)
         and bool(re.fullmatch(r"sha256:[0-9a-f]{64}", value["boot_digest"]))
         and isinstance(value.get("pid_namespace"), str)
         and bool(re.fullmatch(r"[0-9]+:[0-9]+", value["pid_namespace"]))
+    )
+
+
+def scoped_claim_process(value: object) -> bool:
+    """Require the scope fields needed to safely inspect a former worker."""
+    return (
+        isinstance(value, dict)
+        and set(value) == {"pid", "start_time", "boot_digest", "pid_namespace"}
+        and valid_claim_process(value)
     )
 
 
@@ -1412,8 +1426,10 @@ def claimed_process_identity(args: argparse.Namespace) -> Meta | None:
 def require_claimed_worker_absent(meta: Meta) -> None:
     """Require a claim-time identity and independently confirm it no longer runs."""
     identity = meta.get("claim_process")
-    if not valid_claim_process(identity):
-        raise RuntimeError("snapshot-less recovery requires a claim-time worker identity")
+    if not scoped_claim_process(identity):
+        raise RuntimeError(
+            "snapshot-less recovery requires a scope-bound claim-time worker identity"
+        )
     identity = cast(Meta, identity)
     boot_digest, pid_namespace = worker_execution_scope()
     if identity["boot_digest"] != boot_digest or identity["pid_namespace"] != pid_namespace:
