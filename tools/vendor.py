@@ -388,8 +388,9 @@ def install_snapshot(
         payload = json.dumps(manifest, indent=2, sort_keys=True).encode() + b"\n"
         atomic_bytes(staged / LOCK_NAME, payload)
         destinations = [destination for _, destination in SOURCE_FILES]
-        verify(staged)
+        verify(staged, emit=False)
         install_staged_snapshot(staged, target, [*destinations, LOCK_NAME])
+    verify(target)
 
 
 def sync(source: Path, target: Path, version: str, commit: str) -> None:
@@ -489,7 +490,7 @@ def verify_formal_lifecycle_alignment(target: Path) -> None:
         raise RuntimeError("formal lifecycle operation drift")
 
 
-def verify(target: Path) -> None:
+def verify(target: Path, *, emit: bool = True) -> None:
     """Fail unless every pinned downstream artifact matches its recorded digest."""
     manifest = load_lock(target)
     upstream = validated_upstream_identity(manifest)
@@ -509,7 +510,8 @@ def verify(target: Path) -> None:
         raise RuntimeError("runtime version differs from vendor lock")
     if "formal/handoffctl/Handoffctl.tla" in expected:
         verify_formal_lifecycle_alignment(target)
-    print(f"OK: agent-workflow-coordinator {upstream['version']} at {upstream['commit']}")
+    if emit:
+        print(f"OK: agent-workflow-coordinator {upstream['version']} at {upstream['commit']}")
 
 
 def main() -> int:
