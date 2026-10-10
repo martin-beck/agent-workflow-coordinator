@@ -84,6 +84,26 @@ class OracleLifecycleTests(unittest.TestCase):
         self.assertEqual("resolved", result["status"])
         self.assertIn("closed_at", result)
 
+    def test_human_session_can_resolve_after_clarification(self) -> None:
+        meta: dict[str, Any] = {"id": "AR-0022", "task_revision": 1}
+        session = {
+            "schema_version": "1.0",
+            "session_id": "AWTUI-SESSION-1",
+            "request_ref": "AWG-SESSION-1",
+            "activation": "user-decision",
+            "status": "presenting",
+            "task_revision": 1,
+            "tui_contract_version": "1.0",
+            "opened_at": "2026-10-10T00:00:00+00:00",
+        }
+        apply_event(meta, event(1, GateStage.INTAKE, "open", "unresolved"), session)
+        meta["task_revision"] = 2
+        apply_event(meta, event(2, GateStage.INTAKE, "resolve", "unresolved"))
+        self.assertEqual("clarification_requested", meta["oracle_gate"]["human_session"]["status"])
+        meta["task_revision"] = 3
+        apply_event(meta, event(3, GateStage.INTAKE, "resolve", "accepted"))
+        self.assertEqual("resolved", meta["oracle_gate"]["human_session"]["status"])
+
     def test_human_session_rejects_partial_stale_and_duplicate_presentations(self) -> None:
         meta: dict[str, Any] = {"id": "AR-0022", "task_revision": 1}
         session = {

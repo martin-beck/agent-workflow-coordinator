@@ -421,7 +421,7 @@ def apply_event(  # noqa: C901
         current["human_session"] = human_session
     elif event.action == "resolve" and isinstance(current.get("human_session"), dict):
         session = current["human_session"]
-        if session.get("status") == "presenting":
+        if session.get("status") in {"presenting", "clarification_requested"}:
             session["status"] = (
                 "resolved" if event.disposition == "accepted" else "clarification_requested"
             )

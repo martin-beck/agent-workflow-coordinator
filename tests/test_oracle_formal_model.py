@@ -22,6 +22,8 @@ def test_oracle_model_checks_completion_prefix_and_reachable_outcomes() -> None:
     assert "INVARIANTS TypeOK NoSkippedGate RevisionMonotonic CompletedPrefix" in CONFIG
     assert "ResolveAccepted(p)" in MODEL
     assert "ResolveUnresolved(p)" in MODEL
+    assert 'sessionStatus\' = (IF sessionRequested[p] THEN "presenting" ELSE "none")' in MODEL
+    assert 'sessionStatus\' = (IF sessionStatus = "presenting" THEN "resolved" ELSE "none")' in MODEL
     assert 'operation\' = [operation EXCEPT ![p] = "resolve"]' in MODEL
     assert "operation' = [operation EXCEPT ![p] =" in MODEL
     assert 'disposition\' = [disposition EXCEPT ![p] = "accepted"]' in MODEL
