@@ -2559,7 +2559,8 @@ def valid_binding_branch(value: object) -> bool:
     if not isinstance(value, str) or len(value) > 128 or value == "DETACHED":
         return False
     try:
-        return run(["git", "check-ref-format", "--branch", value], check=False).returncode == 0
+        result = run(["git", "check-ref-format", "--branch", value], check=False)
+        return result.returncode == 0 and result.stdout.strip() == value
     except SubprocessTimeoutError:
         return False
 

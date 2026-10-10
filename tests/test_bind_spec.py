@@ -223,6 +223,7 @@ class BindSpecTests(unittest.TestCase):
                 ({"branch": "feature//x"}, "branch is invalid"),
                 ({"branch": "feature.lock"}, "branch is invalid"),
                 ({"branch": "feature/.tmp"}, "branch is invalid"),
+                ({"branch": "@{-1}"}, "branch is invalid"),
                 ({"worktree_key": "../escape"}, "worktree key is invalid"),
             ):
                 with (
