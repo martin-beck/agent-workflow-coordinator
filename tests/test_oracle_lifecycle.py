@@ -362,6 +362,7 @@ class OracleLifecycleTests(unittest.TestCase):
         for field, value in (
             ("task_id", "bad"),
             ("task_revision", 0),
+            ("task_revision", True),
             ("action", "bad"),
             ("disposition", "bad"),
             ("public_ref", "../secret"),

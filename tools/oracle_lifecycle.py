@@ -208,6 +208,9 @@ class InteractionEvent:
         }
         if set(value) != required:
             raise GateError("interaction event fields are incomplete or unknown")
+        revision = value["task_revision"]
+        if isinstance(revision, bool) or not isinstance(revision, int):
+            raise GateError("interaction event task_revision is invalid")
 
         def refs(name: str) -> tuple[ArtifactRef, ...]:
             raw = value[name]
@@ -227,7 +230,7 @@ class InteractionEvent:
             raise GateError("unknown interaction gate stage") from error
         return cls(
             task_id=str(value["task_id"]),
-            task_revision=int(value["task_revision"]),
+            task_revision=revision,
             stage=stage,
             action=str(value["action"]),
             disposition=str(value["disposition"]),
