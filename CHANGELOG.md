@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.5.0 - Unreleased
+
+- Fence snapshotless expired-claim recovery to the original boot and PID
+  namespace using a privacy-safe boot digest. Older two-field claim identities
+  remain valid for ordinary lifecycle operations but cannot authorize
+  snapshotless recovery; use a v0.5.0 vendor before writing scope-bound
+  identities.
+
 ## 0.4.1 - 2026-10-09
 
 - Add the opt-in `handoffctl fast observe --max-age-seconds N` bounded-age

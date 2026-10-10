@@ -258,10 +258,14 @@ def _verify_claim_delta(
     before, before_body, after, after_body = _task_change(core, oid, str(intent["task_id"]))
     expected_before = int(intent["expected_revision"])
     owner = payload.get("owner")
-    identity = (
-        {"pid": payload["worker_pid"], "start_time": payload["worker_start_time"]}
-        if "worker_pid" in payload
-        else None
+    identity = after.get("claim_process")
+    identity_matches = (
+        identity is None
+        if "worker_pid" not in payload
+        else isinstance(identity, dict)
+        and identity.get("pid") == payload["worker_pid"]
+        and identity.get("start_time") == payload["worker_start_time"]
+        and set(identity) == {"pid", "start_time", "boot_digest", "pid_namespace"}
     )
     if (
         before.get("id") != intent["task_id"]
@@ -273,7 +277,7 @@ def _verify_claim_delta(
         or after.get("status") != "in_progress"
         or after.get("owner") != owner
         or after.get("task_revision") != expected_before + 1
-        or after.get("claim_process") != identity
+        or not identity_matches
     ):
         raise RuntimeError("receipt commit task state does not match claim intent")
     before_stable = {key: value for key, value in before.items() if key not in _CLAIM_FIELDS}
