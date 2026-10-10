@@ -1394,6 +1394,14 @@ def require_claimed_worker_absent(meta: Meta) -> None:
         raise RuntimeError("former worker process is still alive")
 
 
+def attach_claim_process(args: argparse.Namespace, meta: Meta) -> None:
+    """Replace optional claim-time process identity after strict live validation."""
+    meta.pop("claim_process", None)
+    process_identity = claimed_process_identity(args)
+    if process_identity is not None:
+        meta["claim_process"] = process_identity
+
+
 def active_expiry_errors(task_id: str, expiry: object) -> list[str]:
     if not expiry:
         return [f"{task_id}: active without claim"]
@@ -2222,10 +2230,7 @@ def apply_claim(args: argparse.Namespace, meta: Meta, tasks: list[Task]) -> str:
         raise RuntimeError(f"owner already holds {held[0]}")
     meta["owner"] = args.owner
     meta["status"] = "in_progress"
-    meta.pop("claim_process", None)
-    process_identity = claimed_process_identity(args)
-    if process_identity is not None:
-        meta["claim_process"] = process_identity
+    attach_claim_process(args, meta)
     meta["claim_expires"] = (
         (dt.datetime.now(dt.UTC) + dt.timedelta(minutes=args.lease_minutes))
         .replace(microsecond=0)
