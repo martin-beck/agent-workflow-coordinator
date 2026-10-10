@@ -433,6 +433,56 @@ class SQLiteStorageTest(unittest.TestCase):
         self.assertEqual(2, connection.execute("SELECT count(*) FROM events").fetchone()[0])
         connection.close()
 
+    def test_bind_worktree_uses_the_same_live_owner_and_identity_fence(self) -> None:
+        active = task("AR-0001", status="in_progress")
+        active[1].update(owner="worker-a", claim_expires="2099-01-01T00:00:00+00:00")
+        conflict = task("AR-0002", status="in_progress")
+        conflict[1].update(
+            owner="worker-b",
+            claim_expires="2099-01-01T00:00:00+00:00",
+            branch="repair/existing",
+            worktree_key="existing-worker",
+        )
+        candidate = task("AR-0003", status="in_progress")
+        candidate[1].update(owner="worker-c", claim_expires="2099-01-01T00:00:00+00:00")
+        backend = self.create([active, conflict, candidate])
+        self.configure_core(backend="sqlite")
+        CORE.RUNTIME.mkdir(exist_ok=True)
+        CORE.CONFIG.write_text(
+            json.dumps(
+                {
+                    "projects_root": str(self.root.parent),
+                    "product_worktree": "product",
+                    "github_repository": "owner/product",
+                    "push_enabled": False,
+                }
+            )
+        )
+        args = argparse.Namespace(
+            task="AR-0001",
+            owner="worker-a",
+            expected_revision=1,
+            branch="repair/ar-0001",
+            worktree_key="worker-one",
+        )
+        CORE.mutate(args, "bind-worktree")
+        bound = next(item[1] for item in backend.load_tasks() if item[1]["id"] == "AR-0001")
+        self.assertEqual(
+            ("repair/ar-0001", "worker-one", 2),
+            (bound["branch"], bound["worktree_key"], bound["task_revision"]),
+        )
+        with self.assertRaisesRegex(RuntimeError, "identity conflicts with an active task"):
+            CORE.mutate(
+                argparse.Namespace(
+                    task="AR-0003",
+                    owner="worker-c",
+                    expected_revision=1,
+                    branch="repair/existing",
+                    worktree_key="candidate-worker",
+                ),
+                "bind-worktree",
+            )
+
     def test_every_write_route_enters_fence_before_sqlite_mutation(self) -> None:
         ordinary = self.create()
 

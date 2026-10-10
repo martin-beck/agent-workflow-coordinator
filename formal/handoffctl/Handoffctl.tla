@@ -31,12 +31,16 @@ ReleaseOperations ==
     {"release_planned", "release_open", "release_blocked", "release_done"}
 
 Operations ==
-    {"promote", "resume", "unblock", "pause", "claim", "heartbeat", "update", "accept", "bind-spec", "recover_expired"}
+    {"promote", "resume", "unblock", "pause", "claim", "heartbeat", "update", "accept", "bind-spec", "bind-worktree", "recover_expired"}
         \cup ReleaseOperations
 
 Phases == {"waiting", "holding", "releasing", "done"}
 Results == {"pending", "accepted", "rejected", "rolled_back", "lock_timeout"}
 PauseProvenances == {"absent", "unique_valid", "unique_incoherent", "duplicate"}
+BranchNames == {"branch-1"}
+WorktreeKeys == {"worktree-1"}
+NoBranch == "no-branch"
+NoWorktreeKey == "no-worktree-key"
 
 ParentMap == [t \in Tasks |-> IF t = "t1" THEN NoTask ELSE "t1"]
 ChildrenMap == [t \in Tasks |-> IF t = "t1" THEN {"t2"} ELSE {}]
@@ -54,6 +58,10 @@ VARIABLES
     projectionRevision,
     specBound,
     initialSpecBound,
+    worktreeBound,
+    initialWorktreeBound,
+    boundBranch,
+    boundWorktreeKey,
     leaseExpired,
     pauseProvenance,
     dependencyReady,
@@ -71,8 +79,8 @@ ChildrenOpen(t) ==
         status[child] # "done" /\ status[child] # "cancelled" /\ status[child] # "superseded"
 
 vars ==
-    <<status, owner, revision, initialRevision, projectionRevision, specBound, initialSpecBound,
-      dependencyReady, leaseExpired, pauseProvenance, pc, operation, target, actor, expected,
+    <<status, owner, revision, initialRevision, projectionRevision, specBound, initialSpecBound, worktreeBound, initialWorktreeBound,
+      boundBranch, boundWorktreeKey, dependencyReady, leaseExpired, pauseProvenance, pc, operation, target, actor, expected,
       lockOwner, result, successCount>>
 
 OwnershipIsCoherent(s, o) ==
@@ -82,6 +90,14 @@ OwnershipIsCoherent(s, o) ==
 OwnerIsUnique(o) ==
     \A a \in Actors:
         Cardinality({t \in Tasks: o[t] = a}) <= 1
+
+ActiveWorktreeIdentitiesAreUnique(s, branches, keys) ==
+    \A t \in Tasks:
+        s[t] = "in_progress" =>
+            /\ branches[t] # NoBranch =>
+                Cardinality({u \in Tasks: s[u] = "in_progress" /\ branches[u] = branches[t]}) = 1
+            /\ keys[t] # NoWorktreeKey =>
+                Cardinality({u \in Tasks: s[u] = "in_progress" /\ keys[u] = keys[t]}) = 1
 
 Init ==
     /\ status \in [Tasks -> Statuses]
@@ -93,6 +109,13 @@ Init ==
     /\ projectionRevision = revision
     /\ specBound \in [Tasks -> BOOLEAN]
     /\ initialSpecBound = specBound
+    /\ worktreeBound = [t \in Tasks |-> FALSE]
+    /\ initialWorktreeBound = worktreeBound
+    /\ boundBranch = [t \in Tasks |-> NoBranch]
+    /\ boundWorktreeKey = [t \in Tasks |-> NoWorktreeKey]
+    /\ \A t \in Tasks: worktreeBound[t] <=>
+        (boundBranch[t] # NoBranch /\ boundWorktreeKey[t] # NoWorktreeKey)
+    /\ ActiveWorktreeIdentitiesAreUnique(status, boundBranch, boundWorktreeKey)
     /\ leaseExpired \in [Tasks -> BOOLEAN]
     /\ pauseProvenance \in [Tasks -> PauseProvenances]
     /\ \A t \in Tasks: pauseProvenance[t] # "absent" => status[t] = "blocked"
@@ -109,6 +132,15 @@ Init ==
 NoOtherActiveTask(p) ==
     \A t \in (Tasks \ {target[p]}):
         owner[t] # actor[p]
+
+RequestedBranch(p) == "branch-1"
+RequestedWorktreeKey(p) == "worktree-1"
+
+NoOtherActiveWorktreeIdentity(p) ==
+    \A t \in (Tasks \ {target[p]}):
+        status[t] # "in_progress" \/
+            /\ boundBranch[t] # RequestedBranch(p)
+            /\ boundWorktreeKey[t] # RequestedWorktreeKey(p)
 
 EnabledOperation(p) ==
     LET t == target[p] IN
@@ -148,6 +180,13 @@ EnabledOperation(p) ==
             /\ ~leaseExpired[t]
             /\ ~specBound[t]
             /\ expected[p] = revision[t]
+      [] operation[p] = "bind-worktree" ->
+            /\ status[t] = "in_progress"
+            /\ owner[t] = actor[p]
+            /\ ~leaseExpired[t]
+            /\ ~worktreeBound[t]
+            /\ NoOtherActiveWorktreeIdentity(p)
+            /\ expected[p] = revision[t]
       [] operation[p] = "recover_expired" ->
             /\ status[t] = "in_progress"
             /\ owner[t] # NoActor
@@ -163,7 +202,7 @@ StatusAfter(p) ==
       [] operation[p] = "pause" -> "blocked"
       [] operation[p] = "claim" -> "in_progress"
       [] operation[p] = "recover_expired" -> "open"
-      [] operation[p] \in {"heartbeat", "update", "accept", "bind-spec"} -> status[target[p]]
+      [] operation[p] \in {"heartbeat", "update", "accept", "bind-spec", "bind-worktree"} -> status[target[p]]
       [] operation[p] = "release_planned" -> "planned"
       [] operation[p] = "release_open" -> "open"
       [] operation[p] = "release_blocked" -> "blocked"
@@ -184,6 +223,15 @@ ExpiryAfter(p) ==
 SpecBoundAfter(p) ==
     IF operation[p] = "bind-spec" THEN TRUE ELSE specBound[target[p]]
 
+WorktreeBoundAfter(p) ==
+    IF operation[p] = "bind-worktree" THEN TRUE ELSE worktreeBound[target[p]]
+
+BoundBranchAfter(p) ==
+    IF operation[p] = "bind-worktree" THEN RequestedBranch(p) ELSE boundBranch[target[p]]
+
+BoundWorktreeKeyAfter(p) ==
+    IF operation[p] = "bind-worktree" THEN RequestedWorktreeKey(p) ELSE boundWorktreeKey[target[p]]
+
 PauseProvenanceAfter(p) ==
     IF operation[p] = "pause" THEN "unique_valid" ELSE "absent"
 
@@ -194,8 +242,8 @@ Acquire(p) ==
     /\ lockOwner' = p
     /\ pc' = [pc EXCEPT ![p] = "holding"]
     /\ UNCHANGED
-        <<status, owner, revision, initialRevision, projectionRevision, specBound, initialSpecBound,
-          dependencyReady, leaseExpired, pauseProvenance, operation, target, actor, expected, result,
+        <<status, owner, revision, initialRevision, projectionRevision, specBound, initialSpecBound, worktreeBound, initialWorktreeBound,
+          boundBranch, boundWorktreeKey, dependencyReady, leaseExpired, pauseProvenance, operation, target, actor, expected, result,
           successCount>>
 
 WaitTimeout(p) ==
@@ -204,8 +252,8 @@ WaitTimeout(p) ==
     /\ pc' = [pc EXCEPT ![p] = "done"]
     /\ result' = [result EXCEPT ![p] = "lock_timeout"]
     /\ UNCHANGED
-        <<status, owner, revision, initialRevision, projectionRevision, specBound, initialSpecBound,
-          dependencyReady, leaseExpired, pauseProvenance, operation, target, actor, expected, lockOwner,
+        <<status, owner, revision, initialRevision, projectionRevision, specBound, initialSpecBound, worktreeBound, initialWorktreeBound,
+          boundBranch, boundWorktreeKey, dependencyReady, leaseExpired, pauseProvenance, operation, target, actor, expected, lockOwner,
           successCount>>
 
 Wait(p) ==
@@ -219,6 +267,9 @@ ExecuteSuccess(p) ==
     /\ status' = [status EXCEPT ![t] = StatusAfter(p)]
     /\ owner' = [owner EXCEPT ![t] = OwnerAfter(p)]
     /\ specBound' = [specBound EXCEPT ![t] = SpecBoundAfter(p)]
+    /\ worktreeBound' = [worktreeBound EXCEPT ![t] = WorktreeBoundAfter(p)]
+    /\ boundBranch' = [boundBranch EXCEPT ![t] = BoundBranchAfter(p)]
+    /\ boundWorktreeKey' = [boundWorktreeKey EXCEPT ![t] = BoundWorktreeKeyAfter(p)]
     /\ leaseExpired' = [leaseExpired EXCEPT ![t] = ExpiryAfter(p)]
     /\ pauseProvenance' = [pauseProvenance EXCEPT ![t] = PauseProvenanceAfter(p)]
     /\ revision' = [revision EXCEPT ![t] = @ + 1]
@@ -227,7 +278,7 @@ ExecuteSuccess(p) ==
     /\ result' = [result EXCEPT ![p] = "accepted"]
     /\ pc' = [pc EXCEPT ![p] = "releasing"]
     /\ UNCHANGED
-        <<initialRevision, initialSpecBound, dependencyReady, operation, target, actor, expected,
+        <<initialRevision, initialSpecBound, initialWorktreeBound, dependencyReady, operation, target, actor, expected,
           lockOwner>>
 
 ExecuteReject(p) ==
@@ -237,8 +288,8 @@ ExecuteReject(p) ==
     /\ result' = [result EXCEPT ![p] = "rejected"]
     /\ pc' = [pc EXCEPT ![p] = "releasing"]
     /\ UNCHANGED
-        <<status, owner, revision, initialRevision, projectionRevision, specBound, initialSpecBound,
-          dependencyReady, leaseExpired, pauseProvenance, operation, target, actor, expected, lockOwner,
+        <<status, owner, revision, initialRevision, projectionRevision, specBound, initialSpecBound, worktreeBound, initialWorktreeBound,
+          boundBranch, boundWorktreeKey, dependencyReady, leaseExpired, pauseProvenance, operation, target, actor, expected, lockOwner,
           successCount>>
 
 (*
@@ -251,8 +302,8 @@ ExecuteRollback(p) ==
     /\ result' = [result EXCEPT ![p] = "rolled_back"]
     /\ pc' = [pc EXCEPT ![p] = "releasing"]
     /\ UNCHANGED
-        <<status, owner, revision, initialRevision, projectionRevision, specBound, initialSpecBound,
-          dependencyReady, leaseExpired, pauseProvenance, operation, target, actor, expected, lockOwner,
+        <<status, owner, revision, initialRevision, projectionRevision, specBound, initialSpecBound, worktreeBound, initialWorktreeBound,
+          boundBranch, boundWorktreeKey, dependencyReady, leaseExpired, pauseProvenance, operation, target, actor, expected, lockOwner,
           successCount>>
 
 Execute(p) ==
@@ -264,8 +315,8 @@ Release(p) ==
     /\ lockOwner' = NoProcess
     /\ pc' = [pc EXCEPT ![p] = "done"]
     /\ UNCHANGED
-        <<status, owner, revision, initialRevision, projectionRevision, specBound, initialSpecBound,
-          dependencyReady, leaseExpired, pauseProvenance, operation, target, actor, expected, result,
+        <<status, owner, revision, initialRevision, projectionRevision, specBound, initialSpecBound, worktreeBound, initialWorktreeBound,
+          boundBranch, boundWorktreeKey, dependencyReady, leaseExpired, pauseProvenance, operation, target, actor, expected, result,
           successCount>>
 
 Quiescent ==
@@ -293,6 +344,10 @@ TypeOK ==
     /\ projectionRevision \in [Tasks -> Nat]
     /\ specBound \in [Tasks -> BOOLEAN]
     /\ initialSpecBound \in [Tasks -> BOOLEAN]
+    /\ worktreeBound \in [Tasks -> BOOLEAN]
+    /\ initialWorktreeBound \in [Tasks -> BOOLEAN]
+    /\ boundBranch \in [Tasks -> (BranchNames \cup {NoBranch})]
+    /\ boundWorktreeKey \in [Tasks -> (WorktreeKeys \cup {NoWorktreeKey})]
     /\ dependencyReady \in [Tasks -> BOOLEAN]
     /\ leaseExpired \in [Tasks -> BOOLEAN]
     /\ pauseProvenance \in [Tasks -> PauseProvenances]
@@ -313,6 +368,9 @@ BlockedProvenance ==
 
 UniqueActiveOwner ==
     OwnerIsUnique(owner)
+
+UniqueActiveWorktreeIdentity ==
+    ActiveWorktreeIdentitiesAreUnique(status, boundBranch, boundWorktreeKey)
 
 LockSafety ==
     /\ Cardinality(
@@ -337,6 +395,13 @@ SpecBindingIsMonotonic ==
 AcceptedSpecBindIsBound ==
     \A p \in Processes:
         result[p] = "accepted" /\ operation[p] = "bind-spec" => specBound[target[p]]
+
+WorktreeBindingIsMonotonic ==
+    \A t \in Tasks: initialWorktreeBound[t] => worktreeBound[t]
+
+AcceptedWorktreeBindIsBound ==
+    \A p \in Processes:
+        result[p] = "accepted" /\ operation[p] = "bind-worktree" => worktreeBound[target[p]]
 
 EventualCompletion ==
     <>(\A p \in Processes: pc[p] = "done")

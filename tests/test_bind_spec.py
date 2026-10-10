@@ -77,6 +77,18 @@ class BindSpecTests(unittest.TestCase):
             ),
             encoding="utf-8",
         )
+        core.RUNTIME.mkdir()
+        core.CONFIG.write_text(
+            json.dumps(
+                {
+                    "projects_root": str(self.root.parent),
+                    "product_worktree": "product",
+                    "github_repository": "owner/product",
+                    "push_enabled": False,
+                }
+            ),
+            encoding="utf-8",
+        )
 
     def tearDown(self) -> None:
         for name, value in self.originals.items():
@@ -187,4 +199,48 @@ class BindSpecTests(unittest.TestCase):
                 argparse.Namespace(**{**vars(args), "expected_revision": 2}),
                 bound,
                 self.runtime.DEFAULT_EVIDENCE_POLICY,
+            )
+
+    def test_bind_worktree_fences_legacy_active_identity(self) -> None:
+        self.make_task()
+        args = argparse.Namespace(
+            task="AR-0001",
+            owner="worker-a",
+            expected_revision=1,
+            branch="repair/ar-0001",
+            worktree_key="worker-one",
+        )
+        with (
+            patch.object(core, "sync_replica_before_write"),
+            patch.object(core, "commit", return_value=True),
+            patch.object(core, "push_replica"),
+        ):
+            for replacement, message in (
+                ({"owner": "other"}, "owned by worker-a"),
+                ({"expected_revision": 2}, "stale revision"),
+                ({"branch": "DETACHED"}, "branch is invalid"),
+                ({"worktree_key": "../escape"}, "worktree key is invalid"),
+            ):
+                with (
+                    self.subTest(replacement=replacement),
+                    self.assertRaisesRegex(RuntimeError, message),
+                ):
+                    core.mutate(
+                        argparse.Namespace(**{**vars(args), **replacement}), "bind-worktree"
+                    )
+                current = core.locate("AR-0001")[1]
+                self.assertEqual("", current["branch"])
+                self.assertEqual("", current["worktree_key"])
+            expired = {**core.locate("AR-0001")[1], "claim_expires": "2000-01-01T00:00:00+00:00"}
+            with self.assertRaisesRegex(RuntimeError, "unexpired owner lease"):
+                core.apply_bind_worktree(args, expired, core.all_tasks())
+            core.mutate(args, "bind-worktree")
+        bound = core.locate("AR-0001")[1]
+        self.assertEqual("repair/ar-0001", bound["branch"])
+        self.assertEqual("worker-one", bound["worktree_key"])
+        with self.assertRaisesRegex(RuntimeError, "empty legacy worktree metadata"):
+            core.apply_bind_worktree(
+                argparse.Namespace(**{**vars(args), "expected_revision": 2}),
+                bound,
+                core.all_tasks(),
             )
