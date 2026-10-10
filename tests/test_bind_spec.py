@@ -219,6 +219,10 @@ class BindSpecTests(unittest.TestCase):
                 ({"owner": "other"}, "owned by worker-a"),
                 ({"expected_revision": 2}, "stale revision"),
                 ({"branch": "DETACHED"}, "branch is invalid"),
+                ({"branch": "HEAD"}, "branch is invalid"),
+                ({"branch": "feature//x"}, "branch is invalid"),
+                ({"branch": "feature.lock"}, "branch is invalid"),
+                ({"branch": "feature/.tmp"}, "branch is invalid"),
                 ({"worktree_key": "../escape"}, "worktree key is invalid"),
             ):
                 with (

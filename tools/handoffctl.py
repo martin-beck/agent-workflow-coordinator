@@ -2555,14 +2555,13 @@ def apply_bind_spec(args: argparse.Namespace, meta: Meta, policy: EvidencePolicy
 
 
 def valid_binding_branch(value: object) -> bool:
-    """Accept one bounded, non-detached Git branch identity."""
-    return (
-        isinstance(value, str)
-        and value != "DETACHED"
-        and bool(re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,127}", value))
-        and ".." not in value
-        and not value.endswith(("/", "."))
-    )
+    """Accept one bounded, non-detached branch accepted by Git itself."""
+    if not isinstance(value, str) or len(value) > 128 or value == "DETACHED":
+        return False
+    try:
+        return run(["git", "check-ref-format", "--branch", value], check=False).returncode == 0
+    except SubprocessTimeoutError:
+        return False
 
 
 def valid_binding_worktree(value: object) -> bool:
