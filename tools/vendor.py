@@ -522,7 +522,7 @@ def verify_formal_lifecycle_alignment(target: Path) -> None:
     )
     if len(blocks) < 2:
         raise RuntimeError("formal lifecycle operation inventory is missing or malformed")
-    modeled = set(re.findall(r'"([a-z_]+)"', "\n".join(blocks[:2])))
+    modeled = set(re.findall(r'"([a-z_-]+)"', "\n".join(blocks[:2])))
     model_operations = {
         (
             "release"
