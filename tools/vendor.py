@@ -11,6 +11,7 @@ import os
 import re
 import subprocess
 import tempfile
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -341,7 +342,12 @@ def build_development_lock(source: Path, commit: str) -> dict[str, Any]:
     return development_snapshot(source, commit)[0]
 
 
-def install_staged_snapshot(staged: Path, target: Path, destinations: list[str]) -> None:
+def install_staged_snapshot(
+    staged: Path,
+    target: Path,
+    destinations: list[str],
+    verify_installed: Callable[[], None] | None = None,
+) -> None:
     """Install one fully staged vendor set and roll back failed rename sequences."""
     backup_root = staged / ".backup"
     installed: list[tuple[Path, Path, bool]] = []
@@ -359,6 +365,8 @@ def install_staged_snapshot(staged: Path, target: Path, destinations: list[str])
                 destination.replace(backup)
             installed.append((destination, backup, existed))
             source.replace(destination)
+        if verify_installed is not None:
+            verify_installed()
     except Exception:
         for destination, backup, existed in reversed(installed):
             destination.unlink(missing_ok=True)
@@ -388,8 +396,13 @@ def install_snapshot(
         payload = json.dumps(manifest, indent=2, sort_keys=True).encode() + b"\n"
         atomic_bytes(staged / LOCK_NAME, payload)
         destinations = [destination for _, destination in SOURCE_FILES]
-        verify(staged)
-        install_staged_snapshot(staged, target, [*destinations, LOCK_NAME])
+        verify(staged, emit=False)
+        install_staged_snapshot(
+            staged,
+            target,
+            [*destinations, LOCK_NAME],
+            lambda: verify(target),
+        )
 
 
 def sync(source: Path, target: Path, version: str, commit: str) -> None:
@@ -489,7 +502,7 @@ def verify_formal_lifecycle_alignment(target: Path) -> None:
         raise RuntimeError("formal lifecycle operation drift")
 
 
-def verify(target: Path) -> None:
+def verify(target: Path, *, emit: bool = True) -> None:
     """Fail unless every pinned downstream artifact matches its recorded digest."""
     manifest = load_lock(target)
     upstream = validated_upstream_identity(manifest)
@@ -509,7 +522,8 @@ def verify(target: Path) -> None:
         raise RuntimeError("runtime version differs from vendor lock")
     if "formal/handoffctl/Handoffctl.tla" in expected:
         verify_formal_lifecycle_alignment(target)
-    print(f"OK: agent-workflow-coordinator {upstream['version']} at {upstream['commit']}")
+    if emit:
+        print(f"OK: agent-workflow-coordinator {upstream['version']} at {upstream['commit']}")
 
 
 def main() -> int:
