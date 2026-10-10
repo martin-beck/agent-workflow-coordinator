@@ -1359,12 +1359,11 @@ def process_start_time(pid: int) -> int | None:
     proc = Path("/proc") / str(pid)
     if not proc.exists():
         return None
-    if proc.exists():
-        try:
-            stat_fields = (proc / "stat").read_text(encoding="utf-8").rsplit(")", 1)[1].split()
-            return int(stat_fields[19])
-        except (OSError, IndexError, ValueError) as error:
-            raise RuntimeError("cannot independently read worker process identity") from error
+    try:
+        stat_fields = (proc / "stat").read_text(encoding="utf-8").rsplit(")", 1)[1].split()
+        return int(stat_fields[19])
+    except (OSError, IndexError, ValueError) as error:
+        raise RuntimeError("cannot independently read worker process identity") from error
 
 
 def claimed_process_identity(args: argparse.Namespace) -> Meta | None:
@@ -1374,7 +1373,9 @@ def claimed_process_identity(args: argparse.Namespace) -> Meta | None:
     if pid is None and start_time is None:
         return None
     if type(pid) is not int or pid <= 0 or type(start_time) is not int or start_time < 0:
-        raise RuntimeError("claim worker identity requires positive --worker-pid and --worker-start-time")
+        raise RuntimeError(
+            "claim worker identity requires positive --worker-pid and --worker-start-time"
+        )
     if process_start_time(pid) != start_time:
         raise RuntimeError("claim worker identity is not a live matching process")
     return {"pid": pid, "start_time": start_time}
@@ -1391,13 +1392,6 @@ def require_claimed_worker_absent(meta: Meta) -> None:
         raise RuntimeError("snapshot-less recovery has invalid claim-time worker identity")
     if process_start_time(pid) == start_time:
         raise RuntimeError("former worker process is still alive")
-
-
-def validate_recovery_evidence(path: object, meta: Meta) -> None:
-    """Verify the receipt fields and independently recheck former-worker absence."""
-    evidence = read_recovery_evidence(path)
-    validate_recovery_evidence_fields(evidence, meta)
-    validate_worker_absence(evidence)
 
 
 def active_expiry_errors(task_id: str, expiry: object) -> list[str]:

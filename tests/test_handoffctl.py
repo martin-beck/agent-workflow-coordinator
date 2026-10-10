@@ -3882,9 +3882,7 @@ class HandoffTest(unittest.TestCase):
                 ),
                 "recover-expired",
             )
-        self.assertEqual(
-            "in_progress", CORE.read_task(CORE.locate("AR-0001")[0])[0]["status"]
-        )
+        self.assertEqual("in_progress", CORE.read_task(CORE.locate("AR-0001")[0])[0]["status"])
 
     def test_claim_records_verified_worker_identity(self) -> None:
         path = self.make_task()
