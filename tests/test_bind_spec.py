@@ -236,6 +236,14 @@ class BindSpecTests(unittest.TestCase):
                 current = core.locate("AR-0001")[1]
                 self.assertEqual("", current["branch"])
                 self.assertEqual("", current["worktree_key"])
+            with patch.object(
+                core,
+                "run",
+                return_value=subprocess.CompletedProcess(
+                    ["git", "check-ref-format", "--branch", "@{-1}"], 0, "repair/previous\n", ""
+                ),
+            ):
+                self.assertFalse(core.valid_binding_branch("@{-1}"))
             expired = {**core.locate("AR-0001")[1], "claim_expires": "2000-01-01T00:00:00+00:00"}
             with self.assertRaisesRegex(RuntimeError, "unexpired owner lease"):
                 core.apply_bind_worktree(args, expired, core.all_tasks())
