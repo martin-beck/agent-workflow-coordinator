@@ -225,6 +225,7 @@ LIFECYCLE_MUTATION_COMMANDS = (
     "heartbeat",
     "accept",
     "bind-spec",
+    "bind-worktree",
     "release",
     "promote",
     "pause",
@@ -2553,6 +2554,82 @@ def apply_bind_spec(args: argparse.Namespace, meta: Meta, policy: EvidencePolicy
     return f"Bound task spec {args.spec_ref} revision {args.spec_revision}."
 
 
+def valid_binding_branch(value: object) -> bool:
+    """Accept one bounded, non-detached branch accepted by Git itself."""
+    if not isinstance(value, str) or len(value) > 128 or value == "DETACHED":
+        return False
+    try:
+        result = run(["git", "check-ref-format", "--branch", value], check=False)
+        return result.returncode == 0 and result.stdout.strip() == value
+    except SubprocessTimeoutError:
+        return False
+
+
+def valid_binding_worktree(value: object) -> bool:
+    """Accept one bounded worktree basename below the configured projects root."""
+    if not isinstance(value, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", value):
+        return False
+    if value in {".", "..", str(config().get("product_worktree", ""))}:
+        return False
+    try:
+        return inside(
+            Path(str(config()["projects_root"])).resolve() / value,
+            Path(str(config()["projects_root"])).resolve(),
+        )
+    except (KeyError, RuntimeError):
+        return False
+
+
+def binding_identity_conflicts(args: argparse.Namespace, meta: Meta, tasks: list[Task]) -> bool:
+    """Report whether another active task already owns either requested identity."""
+    return any(
+        other.get("id") != meta.get("id")
+        and other.get("status") == "in_progress"
+        and (other.get("branch") == args.branch or other.get("worktree_key") == args.worktree_key)
+        for _, other, _ in tasks
+    )
+
+
+def require_active_binding_owner(args: argparse.Namespace, meta: Meta) -> None:
+    """Require the exact live owner and revision before binding an identity."""
+    if meta.get("owner") != args.owner:
+        raise RuntimeError(f"{args.task} is owned by {meta.get('owner') or 'nobody'}")
+    require_role_admission(str(args.owner))
+    if meta.get("status") != "in_progress":
+        raise RuntimeError("bind-worktree requires an active task")
+    try:
+        if parse_claim_expiry(meta.get("claim_expires")) <= dt.datetime.now(dt.UTC):
+            raise RuntimeError("bind-worktree requires an unexpired owner lease")
+    except ValueError as error:
+        raise RuntimeError("bind-worktree requires an unexpired owner lease") from error
+    if args.expected_revision != meta["task_revision"]:
+        raise RuntimeError(
+            f"stale revision: expected {args.expected_revision}, current {meta['task_revision']}"
+        )
+
+
+def require_bind_worktree_admission(
+    args: argparse.Namespace, meta: Meta, tasks: list[Task]
+) -> None:
+    """Reject every non-legacy or conflicting worktree-binding request."""
+    require_active_binding_owner(args, meta)
+    if meta.get("branch") or meta.get("worktree_key"):
+        raise RuntimeError("bind-worktree requires empty legacy worktree metadata")
+    if not valid_binding_branch(args.branch):
+        raise RuntimeError("bind-worktree branch is invalid")
+    if not valid_binding_worktree(args.worktree_key):
+        raise RuntimeError("bind-worktree worktree key is invalid")
+    if binding_identity_conflicts(args, meta, tasks):
+        raise RuntimeError("bind-worktree identity conflicts with an active task")
+
+
+def apply_bind_worktree(args: argparse.Namespace, meta: Meta, tasks: list[Task]) -> str:
+    """Bind one legacy active task to its sole validated product-worktree identity."""
+    require_bind_worktree_admission(args, meta, tasks)
+    meta.update(branch=args.branch, worktree_key=args.worktree_key)
+    return f"Bound worktree {args.worktree_key} on branch {args.branch}."
+
+
 def apply_owned_change(  # noqa: C901
     args: argparse.Namespace,
     kind: str,
@@ -2742,9 +2819,13 @@ def apply_transition(
     record_transition = {"checkpoint": apply_checkpoint, "rollback": apply_rollback}.get(kind)
     if record_transition is not None:
         return record_transition(args, meta)
-    spec_transition = {"accept": apply_accept, "bind-spec": apply_bind_spec}.get(kind)
-    if spec_transition is not None:
-        return spec_transition(args, meta, policy)
+    transition = {
+        "accept": lambda: apply_accept(args, meta, policy),
+        "bind-spec": lambda: apply_bind_spec(args, meta, policy),
+        "bind-worktree": lambda: apply_bind_worktree(args, meta, tasks),
+    }.get(kind)
+    if transition is not None:
+        return transition()
     return apply_owned_change(args, kind, meta, tasks, policy)
 
 
@@ -4270,6 +4351,12 @@ def main() -> int:
     item.add_argument("--expected-revision", type=int, required=True)
     item.add_argument("--spec-ref", required=True)
     item.add_argument("--spec-revision", type=int, required=True)
+    item = commands.add_parser("bind-worktree")
+    item.add_argument("task")
+    item.add_argument("--owner", required=True)
+    item.add_argument("--expected-revision", type=int, required=True)
+    item.add_argument("--branch", required=True)
+    item.add_argument("--worktree-key", required=True)
     item = commands.add_parser("promote")
     item.add_argument("task")
     item.add_argument("--expected-revision", type=int, required=True)

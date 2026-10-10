@@ -77,6 +77,18 @@ class BindSpecTests(unittest.TestCase):
             ),
             encoding="utf-8",
         )
+        core.RUNTIME.mkdir()
+        core.CONFIG.write_text(
+            json.dumps(
+                {
+                    "projects_root": str(self.root.parent),
+                    "product_worktree": "product",
+                    "github_repository": "owner/product",
+                    "push_enabled": False,
+                }
+            ),
+            encoding="utf-8",
+        )
 
     def tearDown(self) -> None:
         for name, value in self.originals.items():
@@ -188,3 +200,104 @@ class BindSpecTests(unittest.TestCase):
                 bound,
                 self.runtime.DEFAULT_EVIDENCE_POLICY,
             )
+
+    def test_bind_worktree_fences_legacy_active_identity(self) -> None:
+        self.make_task()
+        args = argparse.Namespace(
+            task="AR-0001",
+            owner="worker-a",
+            expected_revision=1,
+            branch="repair/ar-0001",
+            worktree_key="worker-one",
+        )
+        with (
+            patch.object(core, "sync_replica_before_write"),
+            patch.object(core, "commit", return_value=True),
+            patch.object(core, "push_replica"),
+        ):
+            for replacement, message in (
+                ({"owner": "other"}, "owned by worker-a"),
+                ({"expected_revision": 2}, "stale revision"),
+                ({"branch": "DETACHED"}, "branch is invalid"),
+                ({"branch": "HEAD"}, "branch is invalid"),
+                ({"branch": "feature//x"}, "branch is invalid"),
+                ({"branch": "feature.lock"}, "branch is invalid"),
+                ({"branch": "feature/.tmp"}, "branch is invalid"),
+                ({"branch": "@{-1}"}, "branch is invalid"),
+                ({"worktree_key": "../escape"}, "worktree key is invalid"),
+            ):
+                with (
+                    self.subTest(replacement=replacement),
+                    self.assertRaisesRegex(RuntimeError, message),
+                ):
+                    core.mutate(
+                        argparse.Namespace(**{**vars(args), **replacement}), "bind-worktree"
+                    )
+                current = core.locate("AR-0001")[1]
+                self.assertEqual("", current["branch"])
+                self.assertEqual("", current["worktree_key"])
+            with patch.object(
+                core,
+                "run",
+                return_value=subprocess.CompletedProcess(
+                    ["git", "check-ref-format", "--branch", "@{-1}"], 0, "repair/previous\n", ""
+                ),
+            ):
+                self.assertFalse(core.valid_binding_branch("@{-1}"))
+            expired = {**core.locate("AR-0001")[1], "claim_expires": "2000-01-01T00:00:00+00:00"}
+            with self.assertRaisesRegex(RuntimeError, "unexpired owner lease"):
+                core.apply_bind_worktree(args, expired, core.all_tasks())
+            core.mutate(args, "bind-worktree")
+        bound = core.locate("AR-0001")[1]
+        self.assertEqual("repair/ar-0001", bound["branch"])
+        self.assertEqual("worker-one", bound["worktree_key"])
+        with self.assertRaisesRegex(RuntimeError, "empty legacy worktree metadata"):
+            core.apply_bind_worktree(
+                argparse.Namespace(**{**vars(args), "expected_revision": 2}),
+                bound,
+                core.all_tasks(),
+            )
+
+    def test_bind_worktree_validation_fails_closed_and_rejects_conflicts(self) -> None:
+        self.make_task()
+        args = argparse.Namespace(
+            task="AR-0001",
+            owner="worker-a",
+            expected_revision=1,
+            branch="repair/ar-0001",
+            worktree_key="worker-one",
+        )
+        self.assertFalse(core.valid_binding_branch(None))
+        self.assertFalse(core.valid_binding_branch("x" * 129))
+        self.assertFalse(core.valid_binding_branch("DETACHED"))
+        with patch.object(
+            core,
+            "run",
+            return_value=subprocess.CompletedProcess(
+                ["git", "check-ref-format", "--branch", "bad"], 1, "", "invalid"
+            ),
+        ):
+            self.assertFalse(core.valid_binding_branch("bad"))
+        with patch.object(core, "run", side_effect=core.SubprocessTimeoutError("timeout")):
+            self.assertFalse(core.valid_binding_branch("repair/ar-0001"))
+        self.assertTrue(core.valid_binding_worktree("worker-one"))
+        self.assertFalse(core.valid_binding_worktree(None))
+        self.assertFalse(core.valid_binding_worktree("product"))
+        meta = core.locate("AR-0001")[1]
+        conflict = {
+            **meta,
+            "id": "AR-0002",
+            "branch": args.branch,
+            "worktree_key": "other-worker",
+        }
+        self.assertTrue(
+            core.binding_identity_conflicts(args, meta, [(self.root, conflict, "# Test")])
+        )
+        with self.assertRaisesRegex(RuntimeError, "identity conflicts"):
+            core.require_bind_worktree_admission(args, meta, [(self.root, conflict, "# Test")])
+        inactive = {**meta, "status": "ready"}
+        with self.assertRaisesRegex(RuntimeError, "requires an active task"):
+            core.require_active_binding_owner(args, inactive)
+        malformed_expiry = {**meta, "claim_expires": "not-a-date"}
+        with self.assertRaisesRegex(RuntimeError, "unexpired owner lease"):
+            core.require_active_binding_owner(args, malformed_expiry)
