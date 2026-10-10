@@ -83,6 +83,7 @@ SOURCE_FILES: tuple[tuple[str, str], ...] = (
     ("tools/tlc_runner.py", "tools/tlc_runner.py"),
     ("tools/vendor.py", "tools/handoffctl_vendor.py"),
     ("tests/test_handoffctl.py", "tests/test_handoffctl.py"),
+    ("tests/test_handoffctl_recovery.py", "tests/test_handoffctl_recovery.py"),
     ("tests/test_fast_receipts.py", "tests/test_fast_receipts.py"),
     ("tests/test_fast_observation.py", "tests/test_fast_observation.py"),
     ("tests/test_fast_receipt_worker.py", "tests/test_fast_receipt_worker.py"),

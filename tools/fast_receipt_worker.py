@@ -265,7 +265,7 @@ def _verify_claim_delta(
         else isinstance(identity, dict)
         and identity.get("pid") == payload["worker_pid"]
         and identity.get("start_time") == payload["worker_start_time"]
-        and set(identity) == {"pid", "start_time", "boot_digest", "pid_namespace"}
+        and core.scoped_claim_process(identity)
     )
     if (
         before.get("id") != intent["task_id"]
