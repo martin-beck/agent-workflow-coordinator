@@ -173,6 +173,15 @@ rollback, concurrent mutation/reconciliation, revision fencing, ownership and
 generated-view behavior. The model and tests must both pass before a
 `handoffctl` change is accepted.
 
+## Human TUI handoff
+
+An interaction gate may retain one current `human_session` record while a decision is presented
+through a human TUI. The record binds its public session/request references and activation reason to
+the gate-opening revision. The `OracleInteractionGates` model checks that a presented session is
+revision-bound and cannot admit autonomous claim, run, or release work; resolution changes the
+session to a terminal public status. This is bounded best-effort design guidance, not a proof of
+the Python, TUI, or external decision system.
+
 ## CI scope
 
 `.github/workflows/verify.yml` runs these models for coordinator changes. Downstream integrations

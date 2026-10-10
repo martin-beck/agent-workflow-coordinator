@@ -37,7 +37,6 @@ class BoardMetricsTests(unittest.TestCase):
                     "stage_sequence": ["role", "spec", "decision"],
                     "open_stage": "decision",
                     "completed": ["role", "spec"],
-                    "authorized": False,
                     "reconciliation_required": False,
                 },
                 spec_acceptance={"status": "pass", "evidence_ref": "AR-0001/tests"},
@@ -54,7 +53,7 @@ class BoardMetricsTests(unittest.TestCase):
         self.assertNotIn("private body", encode(result))
         self.assertEqual(result, json.loads(encode(result)))
 
-    def test_unrequired_or_fully_authorized_gate_is_not_a_failure(self) -> None:
+    def test_unrequired_or_fully_completed_gate_is_not_a_failure(self) -> None:
         tasks = [
             task("AR-0001"),
             task(
@@ -64,7 +63,6 @@ class BoardMetricsTests(unittest.TestCase):
                     "stage_sequence": ["role", "spec", "decision"],
                     "open_stage": None,
                     "completed": ["role", "spec", "decision"],
-                    "authorized": True,
                     "reconciliation_required": False,
                 },
             ),
@@ -93,20 +91,18 @@ class BoardMetricsTests(unittest.TestCase):
                     "oracle_gate": {
                         "required": True,
                         "open_stage": None,
-                        "authorized": False,
                         "completed": [],
                     }
                 }
             ),
         )
         self.assertEqual(
-            "authorization",
+            None,
             _gate_failure(
                 {
                     "oracle_gate": {
                         "required": True,
                         "open_stage": None,
-                        "authorized": False,
                         "completed": [
                             "intake",
                             "discussion",
