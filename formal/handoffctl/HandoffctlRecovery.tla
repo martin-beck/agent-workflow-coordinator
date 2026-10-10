@@ -75,8 +75,8 @@ RecoveryEnabled(p) ==
 RecoveryAdmitted(p) ==
     /\ RecoveryEnabled(p)
     /\ sessionKind[target[p]] # "future"
-    /\ sessionKind[target[p]] = "current" \/
-       (claimIdentity[target[p]] /\ workerAbsent[target[p]])
+    /\ (sessionKind[target[p]] = "current" \/
+        (claimIdentity[target[p]] /\ workerAbsent[target[p]]))
 
 Acquire(p) ==
     /\ pc[p] = "waiting"
