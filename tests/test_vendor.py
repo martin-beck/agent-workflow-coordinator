@@ -3,6 +3,7 @@
 
 """Tests for deterministic offline coordinator vendoring."""
 
+import ast
 import importlib.util
 import json
 import os
@@ -53,6 +54,25 @@ def upgrade_contract(backend: str) -> dict[str, Any]:
             "to": release(CURRENT_VERSION, "b"),
         }
     )
+
+
+def direct_local_tool_imports(source: str) -> set[str]:
+    """Return direct, vendorable first-party tool modules imported by source."""
+    tree = ast.parse((ROOT / source).read_text(encoding="utf-8"), source)
+    imported: set[str] = set()
+    for node in ast.walk(tree):
+        modules: list[str] = []
+        if isinstance(node, ast.Import):
+            modules = [name.name for name in node.names]
+        elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+            modules = [node.module]
+        for module in modules:
+            if not module.startswith("tools."):
+                continue
+            candidate = f"{module.replace('.', '/')}.py"
+            if (ROOT / candidate).is_file():
+                imported.add(candidate)
+    return imported
 
 
 class VendorTest(unittest.TestCase):
@@ -333,6 +353,31 @@ exec "$@"
             }.issubset(sources)
         )
 
+    def test_snapshot_contains_all_direct_local_tool_imports(self) -> None:
+        """Every vendored runtime module has its static local imports present."""
+        sources = {source for source, _ in VENDOR.SOURCE_FILES}
+        missing = {
+            source: sorted(direct_local_tool_imports(source) - sources)
+            for source in sources
+            if source.startswith("tools/") and source.endswith(".py")
+        }
+        self.assertEqual({}, {source: paths for source, paths in missing.items() if paths})
+
+    def test_snapshot_contains_roles_runtime_and_contract(self) -> None:
+        """Role commands remain usable after an isolated vendor sync."""
+        sources = {source for source, _ in VENDOR.SOURCE_FILES}
+        self.assertTrue(
+            {
+                "tools/role_assignment.py",
+                "tools/role_registry.py",
+                "tools/roles.py",
+                "schema/role.schema.json",
+                "schema/role-registry.schema.json",
+                "schema/role-assignment.schema.json",
+                "examples/roles/role-registry.json",
+            }.issubset(sources)
+        )
+
     def test_synced_runtime_passes_full_initialized_state_validation(self) -> None:
         product = Path(self.temporary.name) / "product"
         product.mkdir()
@@ -392,6 +437,16 @@ exec "$@"
             initialization_command, cwd=self.target, check=False, capture_output=True, text=True
         )
         self.assertEqual(initialized.returncode, 0, initialized.stderr)
+        roles = subprocess.run(  # noqa: S603 - exact locally-synced vendor executable under test
+            [sys.executable, "-S", str(self.target / "tools/handoffctl.py"), "roles", "list"],
+            cwd=self.target,
+            check=False,
+            capture_output=True,
+            text=True,
+            env={"PATH": os.environ["PATH"], "PYTHONPATH": str(self.target)},
+        )
+        self.assertEqual(0, roles.returncode, roles.stdout + roles.stderr)
+        self.assertEqual({"revision": 0, "assignments": []}, json.loads(roles.stdout))
         runtime = self.target / ".runtime"
         runtime.mkdir()
         (runtime / "config.json").write_text(
