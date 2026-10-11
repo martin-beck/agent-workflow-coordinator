@@ -1496,6 +1496,16 @@ def require_claimed_worker_absent(meta: Meta) -> None:
         raise RuntimeError("former worker process is still alive")
 
 
+def legacy_recovery_admitted(args: argparse.Namespace, meta: Meta) -> bool:
+    """Admit an explicitly acknowledged recovery of a pre-identity legacy claim."""
+    if not getattr(args, "allow_legacy_without_identity", False):
+        return False
+    if "claim_process" in meta:
+        return False
+    expiry = parse_claim_expiry(meta.get("claim_expires"))
+    return not expiry > dt.datetime.now(dt.UTC)
+
+
 def attach_claim_process(args: argparse.Namespace, meta: Meta) -> None:
     """Replace optional claim-time process identity after strict live validation."""
     meta.pop("claim_process", None)
@@ -2498,6 +2508,17 @@ def apply_unblock(args: argparse.Namespace, meta: Meta, _tasks: list[Task]) -> s
     return str(args.note)
 
 
+def current_recovery_session(records: list[Meta], revision: int) -> Meta | None:
+    """Validate recovery snapshots and return only the exact-current record."""
+    for session in records:
+        validate_session_record(session)
+        if session["task_revision"] > revision:
+            raise RuntimeError("session snapshot revision is newer than the task")
+    return next(
+        (session for session in reversed(records) if session["task_revision"] == revision), None
+    )
+
+
 def apply_recover_expired(args: argparse.Namespace, meta: Meta, _tasks: list[Task]) -> str:
     """Reopen an expired claim, restoring only its exact current session snapshot."""
     if args.expected_revision != meta["task_revision"]:
@@ -2515,28 +2536,20 @@ def apply_recover_expired(args: argparse.Namespace, meta: Meta, _tasks: list[Tas
     if not args.note.strip():
         raise RuntimeError("expired-claim recovery note must not be empty")
     records = storage_backend().load_session_records(args.task)
-    for session in records:
-        validate_session_record(session)
-        if session["task_revision"] > meta["task_revision"]:
-            raise RuntimeError("session snapshot revision is newer than the task")
     previous_owner = str(meta["owner"])
-    current_session = next(
-        (
-            session
-            for session in reversed(records)
-            if session["task_revision"] == meta["task_revision"]
-        ),
-        None,
-    )
+    recovery_note = str(args.note)
+    current_session = current_recovery_session(records, int(meta["task_revision"]))
     if current_session is not None:
         meta["next_action"] = str(current_session["next_action"])
+    elif legacy_recovery_admitted(args, meta):
+        recovery_note = "LEGACY_NO_IDENTITY_RECOVERY: " + recovery_note
     else:
         require_claimed_worker_absent(meta)
     meta["status"] = "open"
     meta["owner"] = ""
     meta["claim_expires"] = ""
     meta.pop("claim_process", None)
-    return f"Recovered expired claim formerly owned by {previous_owner}. {args.note}"
+    return f"Recovered expired claim formerly owned by {previous_owner}. {recovery_note}"
 
 
 def require_promotion_preflight(kind: str) -> None:
@@ -4457,6 +4470,7 @@ def main() -> int:
     item = commands.add_parser("recover-expired")
     item.add_argument("task")
     item.add_argument("--expected-revision", type=int, required=True)
+    item.add_argument("--allow-legacy-without-identity", action="store_true")
     item.add_argument("--note", required=True)
     item = commands.add_parser("update")
     item.add_argument("task")
