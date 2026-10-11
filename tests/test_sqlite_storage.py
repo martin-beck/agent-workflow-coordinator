@@ -471,6 +471,22 @@ class SQLiteStorageTest(unittest.TestCase):
             ("repair/ar-0001", "worker-one", 2),
             (bound["branch"], bound["worktree_key"], bound["task_revision"]),
         )
+        connection = sqlite3.connect(self.database)
+        events_before = connection.execute("SELECT count(*) FROM events").fetchone()[0]
+        connection.close()
+        self.assertEqual(
+            "Worktree worker-one on branch repair/ar-0001 is already bound.",
+            CORE.mutate(
+                argparse.Namespace(**{**vars(args), "expected_revision": 2}), "bind-worktree"
+            ),
+        )
+        replayed = next(item[1] for item in backend.load_tasks() if item[1]["id"] == "AR-0001")
+        self.assertEqual(2, replayed["task_revision"])
+        connection = sqlite3.connect(self.database)
+        self.assertEqual(
+            events_before, connection.execute("SELECT count(*) FROM events").fetchone()[0]
+        )
+        connection.close()
         with self.assertRaisesRegex(RuntimeError, "identity conflicts with an active task"):
             CORE.mutate(
                 argparse.Namespace(

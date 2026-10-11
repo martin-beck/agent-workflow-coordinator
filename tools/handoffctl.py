@@ -234,6 +234,12 @@ LIFECYCLE_MUTATION_COMMANDS = (
     "recover-expired",
     "update",
 )
+
+
+class IdempotentMutationError(RuntimeError):
+    """Signal an admitted replay that must not create another state revision."""
+
+
 # CURRENT.md is the compact actionable queue; terminal history remains in the
 # full STATUS.md projection and authoritative task records.
 CURRENT_STATUSES = ("in_progress", "open", "blocked", "planned", "future")
@@ -2611,20 +2617,31 @@ def require_active_binding_owner(args: argparse.Namespace, meta: Meta) -> None:
 def require_bind_worktree_admission(
     args: argparse.Namespace, meta: Meta, tasks: list[Task]
 ) -> None:
-    """Reject every non-legacy or conflicting worktree-binding request."""
+    """Admit a first binding or an exact no-op replay, rejecting every other request."""
     require_active_binding_owner(args, meta)
-    if meta.get("branch") or meta.get("worktree_key"):
-        raise RuntimeError("bind-worktree requires empty legacy worktree metadata")
     if not valid_binding_branch(args.branch):
         raise RuntimeError("bind-worktree branch is invalid")
     if not valid_binding_worktree(args.worktree_key):
         raise RuntimeError("bind-worktree worktree key is invalid")
     if binding_identity_conflicts(args, meta, tasks):
         raise RuntimeError("bind-worktree identity conflicts with an active task")
+    branch = meta.get("branch", "")
+    worktree_key = meta.get("worktree_key", "")
+    if branch or worktree_key:
+        if (
+            branch == args.branch
+            and worktree_key == args.worktree_key
+            and valid_binding_branch(branch)
+            and valid_binding_worktree(worktree_key)
+        ):
+            raise IdempotentMutationError(
+                f"Worktree {args.worktree_key} on branch {args.branch} is already bound."
+            )
+        raise RuntimeError("bind-worktree requires empty legacy worktree metadata")
 
 
 def apply_bind_worktree(args: argparse.Namespace, meta: Meta, tasks: list[Task]) -> str:
-    """Bind one legacy active task to its sole validated product-worktree identity."""
+    """Bind one legacy task, or report an exact retry without mutating it."""
     require_bind_worktree_admission(args, meta, tasks)
     meta.update(branch=args.branch, worktree_key=args.worktree_key)
     return f"Bound worktree {args.worktree_key} on branch {args.branch}."
@@ -3020,13 +3037,15 @@ def commit_persisted_mutation(
     return committed
 
 
-def mutate(args: argparse.Namespace, kind: str, policy: EvidencePolicy | None = None) -> None:
+def mutate(args: argparse.Namespace, kind: str, policy: EvidencePolicy | None = None) -> str | None:
     receipt_id = fast_receipt_id(args, kind)
     if backend_selection()["backend"] == "sqlite":
         if receipt_id is not None:
             raise RuntimeError("fast receipts require Git authority")
-        mutate_sqlite(args, kind, policy)
-        return
+        try:
+            return mutate_sqlite(args, kind, policy)
+        except IdempotentMutationError as replay:
+            return str(replay)
     with locked(phase="git_mutate"):
         if backend_selection()["backend"] != "git":
             raise RuntimeError("BACKEND_CHANGED: retry using the selected backend")
@@ -3041,7 +3060,10 @@ def mutate(args: argparse.Namespace, kind: str, policy: EvidencePolicy | None = 
                 for target in generated_paths()
             }
         )
-        note = apply_transition(args, kind, meta, all_tasks(), selected_policy)
+        try:
+            note = apply_transition(args, kind, meta, all_tasks(), selected_policy)
+        except IdempotentMutationError as replay:
+            return str(replay)
         meta["task_revision"] += 1
         meta["updated_at"] = now()
         session_record = git_session_record(args, kind, meta, before)
@@ -3077,6 +3099,7 @@ def mutate(args: argparse.Namespace, kind: str, policy: EvidencePolicy | None = 
             session_record,
             checkpoint_record,
         )
+    return None
 
 
 def _transition_note(body: str, note: str, at: str) -> str:
@@ -3099,7 +3122,7 @@ def _transition_note(body: str, note: str, at: str) -> str:
 
 def mutate_sqlite(
     args: argparse.Namespace, kind: str, policy: EvidencePolicy | None = None
-) -> None:
+) -> str | None:
     """Linearize a lifecycle mutation at SQLite's committed CAS update."""
     selected_policy = policy_snapshot(policy)
     backend = mutating_sqlite_backend()
@@ -3161,6 +3184,7 @@ def mutate_sqlite(
         raise StorageCommittedError(
             f"SQLITE_COMMITTED_EXPORT_FAILED: task={args.task}; revision={expected + 1}; {error}"
         ) from error
+    return None
 
 
 def cmd_render_status(*, check: bool) -> None:
@@ -4150,6 +4174,13 @@ def dispatch_fast_command(args: argparse.Namespace) -> int:
     return dispatch_fast(sys.modules[__name__], args)
 
 
+def dispatch_lifecycle_mutation(args: argparse.Namespace) -> None:
+    """Run one lifecycle mutation and report an admitted no-op replay."""
+    note = mutate(args, args.cmd)
+    if note is not None:
+        print(note)
+
+
 def dispatch_bound_standard_command(args: argparse.Namespace) -> int:  # noqa: C901
     """Dispatch every non-fast command after permanent project binding."""
     if args.cmd == "reconcile":
@@ -4170,7 +4201,7 @@ def dispatch_bound_standard_command(args: argparse.Namespace) -> int:  # noqa: C
         *LIFECYCLE_MUTATION_COMMANDS,
         "gate",
     ):
-        mutate(args, args.cmd)
+        dispatch_lifecycle_mutation(args)
     elif args.cmd == "run":
         if args.command and args.command[0] == "--":
             args.command = args.command[1:]
