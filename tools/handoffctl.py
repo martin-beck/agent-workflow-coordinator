@@ -287,6 +287,7 @@ def task_label(meta: Meta) -> str:
     """Return the compatibility-safe human label for one task."""
     return f"{meta['id']} — {meta.get('short_title') or meta['title']}"
 
+
 COORDINATOR_VERSION = "0.5.2"
 DEFAULT_PROJECT_SETTINGS: Meta = {
     "schema_version": 1,
