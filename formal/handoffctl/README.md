@@ -217,8 +217,9 @@ one-process `HandoffctlPR.cfg`, while the separate lock and recovery models
 retain independent-process races. This exact-head PR tier is not the complete
 two-process lifecycle cross-product and cannot produce full release evidence.
 `verify.sh --tier full-exhaustive` runs all nine full configurations on the
-scheduled weekly or manually dispatched gate. A release claim requires its
-fresh exact-head full attestation; neither smaller tier substitutes for it.
+scheduled weekly gate or an explicit `full-exhaustive` manual-dispatch choice
+on `main`. A release claim requires its fresh exact-head full attestation;
+neither smaller tier substitutes for it.
 
 Each model is executed through `tools/tlc_runner.py`, never directly through
 TLC. The runner uses finite workers (`2`), a `4096m` heap for cgroup-contained
