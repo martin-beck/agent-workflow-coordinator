@@ -38,7 +38,8 @@ and does not depend on a package registry, network fetch, submodule, or upstream
 - Wrapped commands require runtime configuration before execution and fsync a privacy-safe result
   journal before task recording or live reconciliation.
 - Keep UUID privacy checks active except in required identity and contract files.
-- Clean behind replicas fast-forward before writes; true divergence remains fail-closed.
+- Clean behind replicas fast-forward before writes; true divergence remains fail-closed for the
+  individual operation and reports repair-required exit status 76, never a task blocker.
 - A durable local commit is retained if later replication fails.
 - Initialization permanently binds an installation to one state repository and one product
   repository. Calls from another project fail before normal coordinator work.

@@ -3314,6 +3314,21 @@ class HandoffTest(unittest.TestCase):
         blocked = json.loads(CORE.REPLICA_BLOCKED.read_text())
         self.assertEqual("REPLICA_BEHIND_DIRTY", blocked["code"])
 
+    def test_cli_failure_contract_distinguishes_retry_from_replica_repair(self) -> None:
+        cases = (
+            (CORE.LockTimeoutError("LOCK_TIMEOUT"), 75, "RETRYABLE: LOCK_TIMEOUT"),
+            (
+                CORE.ReplicaDivergedError("REPLICA_DIVERGED"),
+                76,
+                "REPAIR_REQUIRED: REPLICA_DIVERGED",
+            ),
+            (RuntimeError("invalid transition"), 1, "ERROR: invalid transition"),
+        )
+        for error, status, message in cases:
+            with patch.object(CORE, "main", side_effect=error), patch("builtins.print") as output:
+                self.assertEqual(status, CORE.main_entrypoint())
+            self.assertEqual(message, output.call_args.args[0])
+
     def test_repository_common_lock_is_shared_across_worktrees(self) -> None:
         with TemporaryDirectory() as temporary:
             base = Path(temporary)

@@ -111,6 +111,28 @@ ConditionPathExists=!/absolute/state-checkout/.runtime/replica-blocked.json
 ```
 
 A successful manual `reconcile --commit --push` clears the marker. `doctor` reports it as an error.
+
+### Autonomous-progress policy
+
+`LOCK_TIMEOUT` is a transient coordinator-contention condition, never a task
+blocker. `handoffctl` reports it as `RETRYABLE:` and exits with status 75; a
+worker must retain its task claim, apply bounded backoff, and retry the same
+exact-revision operation.
+
+`REPLICA_BEHIND`, `REPLICA_BEHIND_DIRTY`, and `REPLICA_DIVERGED` are likewise
+never task blockers, but they are not blind-retry conditions. `handoffctl`
+reports them as `REPAIR_REQUIRED:` and exits with status 76. The worker must
+preserve the claim and any local commit, reconcile from the exact local and
+remote heads (or use a fresh replica after preserving the local receipt), then
+resume the operation. It must not use `release --status blocked` for either
+outcome.
+
+Only a stable, task-specific external dependency may move a task to `blocked`:
+the worker must first retry transient coordinator failures, record the exact
+dependency and observation, and preserve a concrete next action. A moving
+`main` ref is an optimistic-concurrency signal, not such a dependency. The
+exact remote-head check remains mandatory when publishing a protected ref or
+release; it does not authorize pausing unrelated development work.
 ## Binding failures
 
 - Profile mismatch: profile and binding UUIDs differ.

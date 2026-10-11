@@ -579,7 +579,11 @@ def assert_project_binding(caller_cwd: Path | None = None) -> None:
         raise RuntimeError("handoffctl must be called from its bound state or product project")
 
 
-class LockTimeoutError(RuntimeError):
+class RetryableCoordinatorError(RuntimeError):
+    """A coordinator contention or replica condition that must not block work."""
+
+
+class LockTimeoutError(RetryableCoordinatorError):
     """The coordinator lock could not be acquired within its bounded deadline."""
 
 
@@ -654,8 +658,12 @@ class SubprocessTimeoutError(RuntimeError):
     """A Git/GitHub or coordinator command exceeded its bounded deadline."""
 
 
-class ReplicaDivergedError(RuntimeError):
-    """The state replica cannot be advanced without reconciling Git history."""
+class RepairRequiredCoordinatorError(RuntimeError):
+    """Local durable state needs reconciliation before its operation can continue."""
+
+
+class ReplicaDivergedError(RepairRequiredCoordinatorError):
+    """The state replica needs explicit reconciliation before a retry."""
 
 
 class ExternalObservationError(RuntimeError):
@@ -4463,9 +4471,28 @@ def main() -> int:
     return dispatch_bound_command(args)
 
 
-if __name__ == "__main__":
+def main_entrypoint() -> int:
+    """Run the CLI with a machine-readable transient-failure boundary.
+
+    A remote main movement or bounded local lock wait says nothing about
+    whether the task itself is blocked.  Callers receive the conventional
+    temporary-failure exit status so they can retry without changing task
+    status or releasing the live claim.  A divergent or dirty replica instead
+    needs reconciliation of potentially durable local state; it is explicitly
+    repair-required rather than a retry loop or task-level blocker.
+    """
     try:
-        raise SystemExit(main())
+        return main()
+    except RetryableCoordinatorError as error:
+        print(f"RETRYABLE: {error}", file=sys.stderr)
+        return 75
+    except RepairRequiredCoordinatorError as error:
+        print(f"REPAIR_REQUIRED: {error}", file=sys.stderr)
+        return 76
     except Exception as error:
         print(f"ERROR: {error}", file=sys.stderr)
-        raise SystemExit(1) from error
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main_entrypoint())
