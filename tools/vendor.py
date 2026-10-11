@@ -193,6 +193,18 @@ SOURCE_FILES: tuple[tuple[str, str], ...] = (
         "formal/handoffctl/HandoffctlReceipts.tla",
         "formal/handoffctl/HandoffctlReceipts.tla",
     ),
+    (
+        "formal/handoffctl/HandoffctlPublication.cfg",
+        "formal/handoffctl/HandoffctlPublication.cfg",
+    ),
+    (
+        "formal/handoffctl/HandoffctlPublicationFast.cfg",
+        "formal/handoffctl/HandoffctlPublicationFast.cfg",
+    ),
+    (
+        "formal/handoffctl/HandoffctlPublication.tla",
+        "formal/handoffctl/HandoffctlPublication.tla",
+    ),
     ("formal/handoffctl/HandoffctlStorage.cfg", "formal/handoffctl/HandoffctlStorage.cfg"),
     ("formal/handoffctl/HandoffctlStorage.tla", "formal/handoffctl/HandoffctlStorage.tla"),
     (

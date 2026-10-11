@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.5.2 - 2026-10-11
+
+- Add durable, candidate-bound protected-main publication jobs to the opt-in
+  fast-receipt publisher. Jobs fence duplicate candidate admission, bind an
+  expected remote base, require an explicit Git push lease and an exact remote
+  candidate observation before success, and preserve ambiguous outcomes for
+  re-observation rather than blindly retrying.
+- Add bounded publication-model guidance and focused migration, lease,
+  recovery, and publisher regression coverage.
+
 ## 0.5.1 - 2026-10-11
 
 - Make an exact, still-authorized `handoffctl bind-worktree` retry an
