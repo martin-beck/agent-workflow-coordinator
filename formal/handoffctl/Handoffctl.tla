@@ -184,9 +184,11 @@ EnabledOperation(p) ==
             /\ status[t] = "in_progress"
             /\ owner[t] = actor[p]
             /\ ~leaseExpired[t]
-            /\ ~worktreeBound[t]
             /\ NoOtherActiveWorktreeIdentity(p)
             /\ expected[p] = revision[t]
+            /\ (~worktreeBound[t]
+                \/ (RequestedBranch(p) = boundBranch[t]
+                    /\ RequestedWorktreeKey(p) = boundWorktreeKey[t]))
       [] operation[p] = "recover_expired" ->
             /\ status[t] = "in_progress"
             /\ owner[t] # NoActor
@@ -232,6 +234,12 @@ BoundBranchAfter(p) ==
 BoundWorktreeKeyAfter(p) ==
     IF operation[p] = "bind-worktree" THEN RequestedWorktreeKey(p) ELSE boundWorktreeKey[target[p]]
 
+IdempotentWorktreeReplay(p) ==
+    /\ operation[p] = "bind-worktree"
+    /\ worktreeBound[target[p]]
+    /\ RequestedBranch(p) = boundBranch[target[p]]
+    /\ RequestedWorktreeKey(p) = boundWorktreeKey[target[p]]
+
 PauseProvenanceAfter(p) ==
     IF operation[p] = "pause" THEN "unique_valid" ELSE "absent"
 
@@ -272,9 +280,9 @@ ExecuteSuccess(p) ==
     /\ boundWorktreeKey' = [boundWorktreeKey EXCEPT ![t] = BoundWorktreeKeyAfter(p)]
     /\ leaseExpired' = [leaseExpired EXCEPT ![t] = ExpiryAfter(p)]
     /\ pauseProvenance' = [pauseProvenance EXCEPT ![t] = PauseProvenanceAfter(p)]
-    /\ revision' = [revision EXCEPT ![t] = @ + 1]
-    /\ projectionRevision' = [projectionRevision EXCEPT ![t] = @ + 1]
-    /\ successCount' = [successCount EXCEPT ![t] = @ + 1]
+    /\ revision' = [revision EXCEPT ![t] = IF IdempotentWorktreeReplay(p) THEN @ ELSE @ + 1]
+    /\ projectionRevision' = [projectionRevision EXCEPT ![t] = IF IdempotentWorktreeReplay(p) THEN @ ELSE @ + 1]
+    /\ successCount' = [successCount EXCEPT ![t] = IF IdempotentWorktreeReplay(p) THEN @ ELSE @ + 1]
     /\ result' = [result EXCEPT ![p] = "accepted"]
     /\ pc' = [pc EXCEPT ![p] = "releasing"]
     /\ UNCHANGED

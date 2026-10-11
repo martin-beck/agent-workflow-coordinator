@@ -251,9 +251,26 @@ class BindSpecTests(unittest.TestCase):
         bound = core.locate("AR-0001")[1]
         self.assertEqual("repair/ar-0001", bound["branch"])
         self.assertEqual("worker-one", bound["worktree_key"])
+        revision = bound["task_revision"]
+        body = core.locate("AR-0001")[2]
+        with (
+            patch.object(core, "sync_replica_before_write"),
+            patch.object(core, "commit", return_value=True) as commit,
+            patch.object(core, "push_replica"),
+        ):
+            core.mutate(
+                argparse.Namespace(**{**vars(args), "expected_revision": revision}),
+                "bind-worktree",
+            )
+        replayed = core.locate("AR-0001")
+        self.assertEqual(revision, replayed[1]["task_revision"])
+        self.assertEqual(body, replayed[2])
+        commit.assert_not_called()
         with self.assertRaisesRegex(RuntimeError, "empty legacy worktree metadata"):
             core.apply_bind_worktree(
-                argparse.Namespace(**{**vars(args), "expected_revision": 2}),
+                argparse.Namespace(
+                    **{**vars(args), "expected_revision": revision, "worktree_key": "other-worker"}
+                ),
                 bound,
                 core.all_tasks(),
             )
