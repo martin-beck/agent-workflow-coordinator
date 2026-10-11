@@ -172,6 +172,14 @@ def build_command(
         "--property=KillMode=control-group",
         "--property=RuntimeMaxSec=" + str(timeout),
         "--",
+        sys.executable,
+        str(Path(__file__).resolve()),
+        "--verify-effective-cgroup",
+        "--memory-max",
+        memory_max,
+        "--swap-max",
+        swap_max,
+        "--",
         *java,
     ]
 
@@ -182,6 +190,78 @@ def _memory_bytes(value: str) -> int:
     if suffix not in units:
         raise AdmissionError("memory limit must use an M or G suffix")
     return _positive_int(value[:-1], "memory limit") * units[suffix]
+
+
+def _cgroup_v2_directory(proc_root: Path = Path("/proc")) -> tuple[Path, Path]:
+    relative = next(
+        (
+            line.split("::", 1)[1]
+            for line in (proc_root / "self/cgroup").read_text().splitlines()
+            if line.startswith("0::")
+        ),
+        None,
+    )
+    mountinfo = (proc_root / "self/mountinfo").read_text().splitlines()
+    mount = next(
+        (Path(line.split(" - ", 1)[0].split()[4]) for line in mountinfo if " - cgroup2 " in line),
+        None,
+    )
+    if not relative or mount is None:
+        raise AdmissionError("cgroup-v2 membership is unavailable")
+    directory = mount / relative.lstrip("/")
+    if not directory.is_dir() or not mount.is_dir():
+        raise AdmissionError("effective cgroup path is unavailable")
+    return directory, mount
+
+
+def _cgroup_limit(path: Path) -> int | None:
+    try:
+        value = path.read_text(encoding="utf-8").strip()
+    except OSError as error:
+        raise AdmissionError(f"required cgroup control is unavailable: {path.name}") from error
+    if value == "max":
+        return None
+    return _positive_int(value, path.name)
+
+
+def verify_effective_cgroup(
+    *, memory_max: str, swap_max: str, proc_root: Path = Path("/proc")
+) -> None:
+    """Verify bounds in this process's own cgroup before execing TLC."""
+    directory, mount = _cgroup_v2_directory(proc_root)
+    requested = (
+        ("memory.max", _memory_bytes(memory_max), True),
+        ("memory.high", _memory_bytes(memory_max), False),
+        ("memory.swap.max", _memory_bytes(swap_max), True),
+    )
+    for name, expected, exact_leaf in requested:
+        current = directory
+        while True:
+            actual = _cgroup_limit(current / name)
+            if current == directory and exact_leaf and actual != expected:
+                raise AdmissionError(f"leaf {name} does not match requested bound")
+            if actual is not None and actual < expected:
+                raise AdmissionError(f"effective {name} is below requested bound")
+            if current == mount:
+                break
+            current = current.parent
+
+
+def verify_effective_cgroup_main(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--memory-max", required=True)
+    parser.add_argument("--swap-max", required=True)
+    parser.add_argument("command", nargs=argparse.REMAINDER)
+    args = parser.parse_args(argv)
+    command = args.command[1:] if args.command[:1] == ["--"] else args.command
+    if not command:
+        parser.error("a TLC command is required after --")
+    try:
+        verify_effective_cgroup(memory_max=args.memory_max, swap_max=args.swap_max)
+        os.execvp(command[0], command)  # noqa: S606
+    except (AdmissionError, OSError) as error:
+        print(f"TLC admission failed closed: {error}", file=sys.stderr)
+        return 2
 
 
 def run(args: argparse.Namespace) -> int:
@@ -277,4 +357,6 @@ def parser() -> argparse.ArgumentParser:
 
 
 if __name__ == "__main__":
+    if len(sys.argv) > 1 and sys.argv[1] == "--verify-effective-cgroup":
+        raise SystemExit(verify_effective_cgroup_main(sys.argv[2:]))
     raise SystemExit(run(parser().parse_args()))

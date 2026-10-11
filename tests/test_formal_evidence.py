@@ -1040,10 +1040,10 @@ class FormalEvidenceTests(unittest.TestCase):
         )
         self.assertIn(
             "timeout-minutes: ${{ (github.event_name == 'schedule' || "
-            "inputs.tier == 'full-exhaustive') && 360 || 30 }}",
+            "inputs.tier == 'full-exhaustive') && 1440 || 30 }}",
             formal,
         )
-        self.assertIn("continue-on-error: ${{ github.event_name == 'schedule' }}", formal)
+        self.assertNotIn("continue-on-error:", formal)
         self.assertIn("schedule:", formal)
         self.assertIn("if: github.ref == 'refs/heads/main'", formal)
         self.assertIn("runs-on: [self-hosted, Linux, X64, agent-workflow-coordinator-ci]", formal)
@@ -1064,9 +1064,9 @@ class FormalEvidenceTests(unittest.TestCase):
             "(github.event_name == 'schedule' || inputs.tier == 'full-exhaustive')"
         )
         for resource_setting, full_value, fast_value in (
-            ("TLC_HEAP", "4096m", "2048m"),
-            ("TLC_MEMORY_MAX", "6G", "3G"),
-            ("TLC_SWAP_MAX", "6G", "3G"),
+            ("TLC_HEAP", "48g", "2048m"),
+            ("TLC_MEMORY_MAX", "64G", "3G"),
+            ("TLC_SWAP_MAX", "64G", "3G"),
         ):
             resource_expression = (
                 f"{resource_setting}: ${{{{ {full_tier_condition} && "
@@ -1076,14 +1076,14 @@ class FormalEvidenceTests(unittest.TestCase):
                 resource_expression,
                 formal_step,
             )
-        self.assertIn("MemoryMax=6G", formal)
-        self.assertIn("MemorySwapMax=6G", formal)
+        self.assertIn("cancel-in-progress: false", formal)
+        self.assertNotIn("queue:", formal)
+        self.assertIn("'full-exhaustive' || 'pr-fast'", formal)
+        self.assertIn("effective limits from inside its", formal)
+        self.assertIn("command -v systemd-run", formal)
         self.assertIn("MemTotal", formal)
         self.assertIn("/proc/self/cgroup", formal)
         self.assertIn("/proc/self/mountinfo", formal)
-        self.assertIn('cgroup_dir="${cgroup_mount%/}${cgroup_relative:-/}"', formal)
-        self.assertIn('"${cgroup_dir}/memory.max"', formal)
-        self.assertIn('"${cgroup_dir}/memory.swap.max"', formal)
         self.assertNotIn("needs.scope.outputs.release_sensitive", formal_step)
         timeout_expression = formal[
             formal.index("TLC_TIMEOUT_SECONDS:") : formal.index(
