@@ -34,7 +34,7 @@ jobs:
             exit 1
           fi
           if [[ -n "$TRANSITION_PATH" ]]; then
-            case "$TRANSITION_PATH" in /*|*..*) exit 1;; esac
+            case "$TRANSITION_PATH" in *$'\n'*|*$'\r'*|/*|*..*) exit 1;; esac
             TRANSITION="$GITHUB_WORKSPACE/$TRANSITION_PATH"
             TRANSITION_WORKSPACE="$GITHUB_WORKSPACE"
             TRANSITION_MODE=path
