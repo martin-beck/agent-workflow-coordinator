@@ -179,6 +179,25 @@ class TLCAdmissionTests(unittest.TestCase):
             with self.assertRaisesRegex(AdmissionError, "leaf memory.max"):
                 verify_effective_cgroup(memory_max="3G", swap_max="3G", proc_root=root)
 
+    def test_effective_cgroup_skips_an_undelegated_ancestor_control(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            mount = root / "cgroup"
+            leaf = mount / "delegated" / "unit"
+            leaf.mkdir(parents=True)
+            (root / "self").mkdir()
+            (root / "self/cgroup").write_text("0::/delegated/unit\n")
+            (root / "self/mountinfo").write_text(f"1 0 0:1 / {mount} rw - cgroup2 cgroup rw\n")
+            for directory in (mount, leaf):
+                for name in ("memory.max", "memory.high", "memory.swap.max"):
+                    (directory / name).write_text("max\n")
+            for name in ("memory.max", "memory.swap.max"):
+                (leaf / name).write_text("3221225472\n")
+            verify_effective_cgroup(memory_max="3G", swap_max="3G", proc_root=root)
+            (mount / "memory.max").write_text("1\n")
+            with self.assertRaisesRegex(AdmissionError, "effective memory.max"):
+                verify_effective_cgroup(memory_max="3G", swap_max="3G", proc_root=root)
+
     def test_effective_cgroup_resolves_a_non_root_cgroup_mount(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
