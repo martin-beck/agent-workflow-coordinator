@@ -4,7 +4,11 @@ name: Release upgrade contract
     inputs:
       transition:
         description: Repository-relative JSON transition input
-        required: true
+        required: false
+        type: string
+      transition_json:
+        description: Optional bounded JSON transition input for an exact untagged candidate
+        required: false
         type: string
 permissions:
   contents: read
@@ -20,27 +24,49 @@ jobs:
       - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d
         with:
           version: "0.12.8"
-      - name: Generate and validate release contract
+      - name: Materialize bounded transition input
         env:
-          TRANSITION: ${{ inputs.transition }}
+          TRANSITION_PATH: ${{ inputs.transition }}
+          TRANSITION_JSON: ${{ inputs.transition_json }}
+        run: |
+          if [[ -n "$TRANSITION_PATH" && -n "$TRANSITION_JSON" ]]; then
+            echo "select exactly one transition input" >&2
+            exit 1
+          fi
+          if [[ -n "$TRANSITION_PATH" ]]; then
+            case "$TRANSITION_PATH" in /*|*..*) exit 1;; esac
+            TRANSITION="$GITHUB_WORKSPACE/$TRANSITION_PATH"
+            TRANSITION_WORKSPACE="$GITHUB_WORKSPACE"
+          elif [[ -n "$TRANSITION_JSON" ]]; then
+            transition_dir="$RUNNER_TEMP/release-transition-input"
+            install -d -m 700 "$transition_dir"
+            TRANSITION="$transition_dir/transition.json"
+            umask 077
+            printf '%s' "$TRANSITION_JSON" > "$TRANSITION"
+            chmod 600 "$TRANSITION"
+            TRANSITION_WORKSPACE="$transition_dir"
+          else
+            echo "a transition path or JSON input is required" >&2
+            exit 1
+          fi
+          printf 'TRANSITION=%s\n' "$TRANSITION" >> "$GITHUB_ENV"
+          printf 'TRANSITION_WORKSPACE=%s\n' "$TRANSITION_WORKSPACE" >> "$GITHUB_ENV"
+      - name: Generate and validate release contract
         run: |
           test -n "$TRANSITION"
-          case "$TRANSITION" in /*|*..*) exit 1;; esac
           uv run python -m tools.verify_release_identity "$TRANSITION" \
-            --repository "$GITHUB_WORKSPACE" --workspace "$GITHUB_WORKSPACE" --candidate
+            --repository "$GITHUB_WORKSPACE" --workspace "$TRANSITION_WORKSPACE" --candidate
           uv run python -m tools.verify_release_contract "$TRANSITION" "$RUNNER_TEMP/release-contract.json"
           uv run python -m tools.generate_upgrade_runbook \
             "$RUNNER_TEMP/release-contract.json" "$RUNNER_TEMP/release-runbooks"
           uv run python -m tools.verify_upgrade_runbook \
             "$RUNNER_TEMP/release-contract.json" "$RUNNER_TEMP/release-runbooks"
       - name: Revalidate from a fresh clone
-        env:
-          TRANSITION: ${{ inputs.transition }}
         run: |
           git clone --no-local --no-hardlinks "$GITHUB_WORKSPACE" "$RUNNER_TEMP/release-clone"
           uv run --directory "$RUNNER_TEMP/release-clone" python -m tools.verify_release_identity \
             "$TRANSITION" --repository "$RUNNER_TEMP/release-clone" \
-            --workspace "$RUNNER_TEMP/release-clone" --candidate
+            --workspace "$TRANSITION_WORKSPACE" --candidate
           uv run --directory "$RUNNER_TEMP/release-clone" python -m tools.verify_release_contract \
             "$TRANSITION" "$RUNNER_TEMP/release-clone/release-contract.json"
           uv run --directory "$RUNNER_TEMP/release-clone" python -m tools.generate_upgrade_runbook \
@@ -53,8 +79,6 @@ jobs:
           cmp -- "$RUNNER_TEMP/release-runbooks/agent.md" \
             "$RUNNER_TEMP/release-clone/release-runbooks/agent.md"
       - name: Prepare release tag command (non-publishing)
-        env:
-          TRANSITION: ${{ inputs.transition }}
         run: |
           python - <<'PY'
           import json, os, shlex
