@@ -28,7 +28,9 @@ def test_tag_command_is_after_release_contract_validation() -> None:
     )
 
 
-def test_release_workflow_accepts_one_bounded_transient_transition_without_dirtying_source() -> None:
+def test_release_workflow_accepts_one_bounded_transient_transition_without_dirtying_source() -> (
+    None
+):
     assert "transition_json:" in WORKFLOW
     assert 'if [[ -n "$TRANSITION_PATH" && -n "$TRANSITION_JSON" ]]; then' in WORKFLOW
     assert "*$'\\n'*|*$'\\r'*|/*|*..*" in WORKFLOW
