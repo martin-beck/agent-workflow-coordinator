@@ -98,7 +98,7 @@ else
     # `operation` is immutable. These p1 operation slices partition the
     # original two-process aggregate model exactly; p2 retains its full domain.
     mapfile -t local_operations < <(
-        cd "${SPEC_DIR}" && python3 -c 'from slices import OPERATIONS; print(*OPERATIONS, sep="\\n")'
+        cd "${SPEC_DIR}" && python3 -c 'from slices import OPERATIONS; print(*OPERATIONS, sep="\n")'
     )
     for operation_name in "${local_operations[@]}"; do
         slice="${TEMP_DIR}/HandoffctlSlice-${operation_name}.cfg"
