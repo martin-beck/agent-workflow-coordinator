@@ -892,9 +892,21 @@ class FormalEvidenceTests(unittest.TestCase):
 
         self.assertEqual(models - {"Handoffctl"}, invoked)
         operations = {
-            "promote", "resume", "unblock", "pause", "claim", "heartbeat", "update", "accept",
-            "bind-spec", "bind-worktree", "recover_expired", "release_planned", "release_open",
-            "release_blocked", "release_done",
+            "promote",
+            "resume",
+            "unblock",
+            "pause",
+            "claim",
+            "heartbeat",
+            "update",
+            "accept",
+            "bind-spec",
+            "bind-worktree",
+            "recover_expired",
+            "release_planned",
+            "release_open",
+            "release_blocked",
+            "release_done",
         }
         slices = {
             model.removeprefix("HandoffctlSlice-")
