@@ -621,16 +621,35 @@ class HandoffTest(unittest.TestCase):
             CORE.require_active_owner("AR-0001", "worker")
 
     def test_atomic_task_round_trip_and_render(self) -> None:
-        path = self.make_task()
+        path = self.make_task(short_title="Test navigation label")
         meta, body = CORE.read_task(path)
         self.assertEqual("AR-0001", meta["id"])
         self.assertEqual("# Test\n", body)
         current = CORE.render_current(CORE.all_tasks())
         self.assertIn("## Open", current)
-        self.assertIn("[AR-0001]", current)
+        self.assertIn("[AR-0001 — Test navigation label]", current)
         status = CORE.render_status_view(CORE.all_tasks())
         self.assertIn("flowchart LR", status)
         self.assertIn("**1 ARs tracked**", status)
+
+    def test_short_title_is_optional_but_strict_when_present(self) -> None:
+        path = self.make_task(short_title="One two three four")
+        self.assertEqual([], CORE.basic_task_errors(path, CORE.read_task(path)[0]))
+        meta, body = CORE.read_task(path)
+        meta["short_title"] = "one two three four five"
+        CORE.write_task(path, meta, body)
+        self.assertIn("short_title exceeds four words", "\n".join(CORE.validate()))
+        meta["short_title"] = "bad\nlabel"
+        CORE.write_task(path, meta, body)
+        self.assertIn("invalid short_title", "\n".join(CORE.validate()))
+
+    def test_short_title_is_escaped_in_current_view(self) -> None:
+        self.make_task(short_title="Bad ](https://example.invalid)")
+
+        current = CORE.render_current(CORE.all_tasks())
+
+        self.assertIn("Bad \\]\\(https://example.invalid\\)", current)
+        self.assertNotIn("[AR-0001 — Bad ](https://example.invalid)]", current)
 
     def test_current_projection_is_actionable_and_keeps_terminal_history_out(self) -> None:
         self.make_task("AR-0001", status="open", priority="P0")
@@ -644,9 +663,9 @@ class HandoffTest(unittest.TestCase):
         current = CORE.render_current(CORE.all_tasks())
 
         for task_id in ("AR-0001", "AR-0002", "AR-0003", "AR-0004", "AR-0005"):
-            self.assertIn(f"[{task_id}]", current)
+            self.assertIn(task_id, current)
         for task_id in ("AR-0006", "AR-0007", "AR-0008"):
-            self.assertNotIn(f"[{task_id}]", current)
+            self.assertNotIn(task_id, current)
         for label in ("Done", "Cancelled", "Superseded"):
             self.assertNotIn(f"## {label}", current)
 
