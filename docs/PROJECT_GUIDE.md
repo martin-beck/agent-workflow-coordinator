@@ -184,6 +184,19 @@ tools/handoffctl unblock AR-0002 --expected-revision REVISION \
   --note "External blocker and exact revision independently verified"
 ```
 
+Pre-identity task records have no durable worker identity to inspect. They remain fail closed by
+default, but an operator can use the one-time compatibility route only after confirming the record
+has no `claim_process` field and its lease has expired:
+
+```sh
+tools/handoffctl recover-expired AR-0001 --expected-revision REVISION \
+  --allow-legacy-without-identity \
+  --note "Legacy worker identity was never recorded; recovery is explicitly acknowledged"
+```
+
+The resulting task history is prefixed `LEGACY_NO_IDENTITY_RECOVERY`; it is an audit marker, not
+evidence that the former worker was observed absent.
+
 A future or malformed deadline and a stale revision are rejected before mutation.
 
 Dependencies normally require status `done`. A task with status `superseded` can satisfy a

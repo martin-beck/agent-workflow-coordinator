@@ -23,6 +23,27 @@ class HandoffRecoveryTest(unittest.TestCase):
     make_task = BASE.HandoffTest.make_task
     refresh_views = BASE.HandoffTest.refresh_views
 
+    def test_recover_expired_allows_explicit_legacy_compatibility_recovery(self) -> None:
+        path = self.make_task(
+            status="in_progress",
+            owner="legacy-worker",
+            claim_expires="2000-01-01T00:00:00+00:00",
+        )
+        with patch.object(BASE.CORE, "commit", return_value=True):
+            BASE.CORE.mutate(
+                BASE.argparse.Namespace(
+                    task="AR-0001",
+                    expected_revision=1,
+                    allow_legacy_without_identity=True,
+                    note="Confirmed the legacy owner cannot be identified.",
+                ),
+                "recover-expired",
+            )
+        recovered, body = BASE.CORE.read_task(path)
+        self.assertEqual("open", recovered["status"])
+        self.assertEqual("", recovered["owner"])
+        self.assertIn("LEGACY_NO_IDENTITY_RECOVERY", body)
+
     def test_recover_expired_does_not_restore_stale_session_action(self) -> None:
         boot_digest, pid_namespace = BASE.CORE.worker_execution_scope()
         path = self.make_task(
