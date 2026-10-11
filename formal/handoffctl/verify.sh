@@ -112,7 +112,8 @@ else
         slice_module="$(cd "${SPEC_DIR}" && python3 -c 'import sys; from slices import module_name; print(module_name(sys.argv[1]))' "${operation_name}")"
         slice="${SLICE_DIR}/${slice_module}"
         python3 "${SPEC_DIR}/slices.py" --base-source "${SPEC_DIR}/Handoffctl.tla" --operation "${operation_name}" --output-source "${slice}.tla"
-        run_model "HandoffctlSlice-${operation_name}" "${slice}" "${SPEC_DIR}/Handoffctl.cfg"
+        cp -- "${SPEC_DIR}/Handoffctl.cfg" "${slice}.cfg"
+        run_model "HandoffctlSlice-${operation_name}" "${slice}" "${slice}.cfg"
     done
     run_model HandoffctlRecovery
 fi

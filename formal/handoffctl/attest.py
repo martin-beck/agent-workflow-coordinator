@@ -62,6 +62,7 @@ MODEL_CONFIG = {
     "OracleInteractionGates": "../oracle/OracleInteractionGates",
     "HandoffctlPublicationFast": "HandoffctlPublicationFast",
 }
+MODEL_CONFIG.update(dict.fromkeys(OPERATION_SLICES, "Handoffctl"))
 
 
 def effective_bound(name: str, default: str, boundary: str) -> str:

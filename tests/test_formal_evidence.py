@@ -950,6 +950,8 @@ class FormalEvidenceTests(unittest.TestCase):
             self.assertIn(f"MODULE {module_name(operation)}", rendered)
         self.assertIn('Processes = {"p1", "p2"}', base)
         self.assertIn("operation \\in [Processes -> Operations]", source)
+        verify = (FORMAL_ROOT / "verify.sh").read_text(encoding="utf-8")
+        self.assertIn('cp -- "${SPEC_DIR}/Handoffctl.cfg" "${slice}.cfg"', verify)
 
     def test_formal_tiers_require_explicit_non_ambiguous_selection(self) -> None:
         verify = (FORMAL_ROOT / "verify.sh").read_text(encoding="utf-8")
