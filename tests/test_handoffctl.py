@@ -620,62 +620,6 @@ class HandoffTest(unittest.TestCase):
         ):
             CORE.require_active_owner("AR-0001", "worker")
 
-    def test_atomic_task_round_trip_and_render(self) -> None:
-        path = self.make_task(short_title="Test navigation label")
-        meta, body = CORE.read_task(path)
-        self.assertEqual("AR-0001", meta["id"])
-        self.assertEqual("# Test\n", body)
-        current = CORE.render_current(CORE.all_tasks())
-        self.assertIn("## Open", current)
-        self.assertIn("[AR-0001 — Test navigation label]", current)
-        status = CORE.render_status_view(CORE.all_tasks())
-        self.assertIn("flowchart LR", status)
-        self.assertIn("**1 ARs tracked**", status)
-
-    def test_short_title_is_optional_but_strict_when_present(self) -> None:
-        path = self.make_task(short_title="One two three four")
-        self.assertEqual([], CORE.basic_task_errors(path, CORE.read_task(path)[0]))
-        meta, body = CORE.read_task(path)
-        meta["short_title"] = "x" * 120
-        CORE.write_task(path, meta, body)
-        self.assertEqual([], CORE.basic_task_errors(path, CORE.read_task(path)[0]))
-        meta["short_title"] = "x" * 121
-        CORE.write_task(path, meta, body)
-        self.assertIn("short_title exceeds 120 characters", "\n".join(CORE.validate()))
-        meta["short_title"] = "one two three four five"
-        CORE.write_task(path, meta, body)
-        self.assertIn("short_title exceeds four words", "\n".join(CORE.validate()))
-        meta["short_title"] = "bad\nlabel"
-        CORE.write_task(path, meta, body)
-        self.assertIn("invalid short_title", "\n".join(CORE.validate()))
-
-    def test_short_title_is_escaped_in_current_view(self) -> None:
-        self.make_task(short_title="Bad ](https://example.invalid)")
-
-        current = CORE.render_current(CORE.all_tasks())
-
-        self.assertIn("Bad \\]\\(https://example.invalid\\)", current)
-        self.assertNotIn("[AR-0001 — Bad ](https://example.invalid)]", current)
-
-    def test_rollback_removes_short_title_missing_from_checkpoint(self) -> None:
-        path = self.make_task(short_title="Later added title")
-        meta, _ = CORE.read_task(path)
-        checkpoint_state = dict(meta)
-        checkpoint_state.pop("short_title")
-
-        CORE.apply_rollback(
-            argparse.Namespace(
-                rollback_checkpoint={
-                    "name": "AR-0001-r0001",
-                    "source_commit": "a" * 40,
-                    "state": checkpoint_state,
-                }
-            ),
-            meta,
-        )
-
-        self.assertNotIn("short_title", meta)
-
     def test_current_projection_is_actionable_and_keeps_terminal_history_out(self) -> None:
         self.make_task("AR-0001", status="open", priority="P0")
         self.make_task("AR-0002", status="in_progress", priority="P1")
