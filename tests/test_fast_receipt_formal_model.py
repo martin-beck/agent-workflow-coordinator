@@ -41,6 +41,11 @@ def test_publication_model_requires_candidate_observation_and_recovery_fencing()
     assert "ExpirePublisherLease" in model
     assert "ObserveRemoteAdvanced" in model
     assert "ObserveRecovery" in model
+    assert "CrashPublisher" in model
+    assert "RestartPublisher" in model
+    assert "PublisherEventuallyStable" in model
+    assert "ProgressAfterPublisherStabilizes" in model
+    assert "WF_vars(RestartPublisher)" in model
     assert "PublishedOnlyAfterObservation" in model
     assert "RecoveryRetryRequiresFreshBaseObservation" in model
     assert "run_model HandoffctlPublicationFast HandoffctlPublication" in verifier
@@ -48,4 +53,5 @@ def test_publication_model_requires_candidate_observation_and_recovery_fencing()
     assert '"HandoffctlPublicationFast"' in tiers
     assert '"HandoffctlPublication"' in tiers
     assert "PROPERTIES" not in fast
-    assert "AdmittedJobTerminates" in full
+    assert "AdmittedJobTerminates" not in full
+    assert "ProgressAfterPublisherStabilizes" in full
