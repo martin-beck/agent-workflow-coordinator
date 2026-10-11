@@ -14,7 +14,7 @@ dependency condition, failure choice, and process interleaving in the scope
 declared by Handoffctl.cfg.
 *)
 
-CONSTANTS Processes, Tasks, Actors, NoProcess, NoActor, NoTask, MaxRevision, SliceOperation
+CONSTANTS Processes, Tasks, Actors, NoProcess, NoActor, NoTask, MaxRevision, SliceOperation, SliceProcess
 
 ASSUME /\ Processes # {}
        /\ Tasks # {}
@@ -36,7 +36,7 @@ Operations ==
 
 AllowedOperations ==
     IF SliceOperation = "all" THEN [p \in Processes |-> Operations]
-    ELSE [p \in Processes |-> IF p = p1 THEN {SliceOperation} ELSE Operations]
+    ELSE [p \in Processes |-> IF p = SliceProcess THEN {SliceOperation} ELSE Operations]
 
 (*
 The operation domain is a configuration constant rather than a fixed global

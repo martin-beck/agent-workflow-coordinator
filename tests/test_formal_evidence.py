@@ -945,8 +945,9 @@ class FormalEvidenceTests(unittest.TestCase):
         for operation in operations:
             rendered = render(base, operation)
             self.assertIn(f'SliceOperation = "{operation}"', rendered)
+        self.assertIn("SliceProcess = p1", base)
         model = (FORMAL_ROOT / "Handoffctl.tla").read_text(encoding="utf-8")
-        self.assertIn("IF p = p1 THEN {SliceOperation} ELSE Operations", model)
+        self.assertIn("IF p = SliceProcess THEN {SliceOperation} ELSE Operations", model)
 
     def test_formal_tiers_require_explicit_non_ambiguous_selection(self) -> None:
         verify = (FORMAL_ROOT / "verify.sh").read_text(encoding="utf-8")
