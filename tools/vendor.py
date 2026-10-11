@@ -213,6 +213,7 @@ SOURCE_FILES: tuple[tuple[str, str], ...] = (
     ),
     ("formal/handoffctl/README.md", "formal/handoffctl/README.md"),
     ("formal/handoffctl/attest.py", "formal/handoffctl/attest.py"),
+    ("formal/handoffctl/slices.py", "formal/handoffctl/slices.py"),
     ("formal/handoffctl/verify.sh", "formal/handoffctl/verify.sh"),
     ("formal/oracle/OracleInteractionGates.cfg", "formal/oracle/OracleInteractionGates.cfg"),
     ("formal/oracle/OracleInteractionGates.tla", "formal/oracle/OracleInteractionGates.tla"),

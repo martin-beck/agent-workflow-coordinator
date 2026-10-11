@@ -880,16 +880,47 @@ class FormalEvidenceTests(unittest.TestCase):
     def test_evidence_bounds_and_runner_match_tracked_models(self) -> None:
         tier_manifest = json.loads((ROOT / "formal" / "tier-evidence.json").read_text())
         full_models = tier_manifest["profiles"]["full-exhaustive"]["models"]
-        configs = [FORMAL_ROOT / f"{model}.cfg" for model in full_models]
+        configs = [
+            FORMAL_ROOT / f"{model}.cfg"
+            for model in full_models
+            if not model.startswith("HandoffctlSlice-")
+        ]
         models = {config.stem for config in FORMAL_ROOT.glob("*.cfg")}
         models.add("OracleInteractionGates")
         runner = (FORMAL_ROOT / "verify.sh").read_text(encoding="utf-8")
         invoked = set(re.findall(r"^\s*run_model\s+(\w+)(?:\s+\w+)?\s*$", runner, re.MULTILINE))
 
-        self.assertEqual(models, invoked)
+        self.assertEqual(models - {"Handoffctl"}, invoked)
+        operations = {
+            "promote",
+            "resume",
+            "unblock",
+            "pause",
+            "claim",
+            "heartbeat",
+            "update",
+            "accept",
+            "bind-spec",
+            "bind-worktree",
+            "recover_expired",
+            "release_planned",
+            "release_open",
+            "release_blocked",
+            "release_done",
+        }
+        slices = {
+            model.removeprefix("HandoffctlSlice-")
+            for model in full_models
+            if model.startswith("HandoffctlSlice-")
+        }
+        self.assertEqual(operations, slices)
         bounds = load_evidence()["bounds"]
         model_bounds = configured_bounds(configs)
-        self.assertEqual(model_bounds, {name: bounds[name] for name in model_bounds})
+        for name, value in model_bounds.items():
+            if name != "model_count":
+                self.assertEqual(value, bounds[name])
+        self.assertEqual(8, model_bounds["model_count"])
+        self.assertEqual(15, len(slices))
         for name in (
             "tlc_workers",
             "jvm_heap_mb",
@@ -903,6 +934,18 @@ class FormalEvidenceTests(unittest.TestCase):
         ):
             self.assertIsInstance(bounds[name], int)
             self.assertGreater(bounds[name], 0)
+
+    def test_full_operation_slices_render_and_partition_the_base_domain(self) -> None:
+        slices = runpy.run_path(str(FORMAL_ROOT / "slices.py"))
+        operations = slices["OPERATIONS"]
+        render = slices["render"]
+        base = (FORMAL_ROOT / "Handoffctl.cfg").read_text(encoding="utf-8")
+        self.assertEqual(15, len(operations))
+        self.assertEqual(len(operations), len(set(operations)))
+        for operation in operations:
+            rendered = render(base, operation)
+            self.assertIn(f'IF p = p1 THEN {{"{operation}"}}', rendered)
+            self.assertIn('ELSE {"promote", "resume", "unblock"', rendered)
 
     def test_formal_tiers_require_explicit_non_ambiguous_selection(self) -> None:
         verify = (FORMAL_ROOT / "verify.sh").read_text(encoding="utf-8")
@@ -942,7 +985,7 @@ class FormalEvidenceTests(unittest.TestCase):
             manifest["profiles"]["portable-smoke"]["models"],
             manifest["profiles"]["full-exhaustive"]["models"],
         )
-        self.assertEqual(9, len(manifest["profiles"]["full-exhaustive"]["models"]))
+        self.assertEqual(23, len(manifest["profiles"]["full-exhaustive"]["models"]))
         self.assertEqual(9, len(manifest["profiles"]["pr-publication"]["models"]))
         pr_config = (FORMAL_ROOT / "HandoffctlPR.cfg").read_text()
         self.assertIn("Processes = {p1}", pr_config)

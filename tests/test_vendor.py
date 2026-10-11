@@ -191,6 +191,7 @@ class VendorTest(unittest.TestCase):
             "formal/handoffctl/HandoffctlStorage.cfg",
             "formal/handoffctl/HandoffctlStorage.tla",
             "formal/handoffctl/attest.py",
+            "formal/handoffctl/slices.py",
             "formal/handoffctl/verify.sh",
             "formal/oracle/OracleInteractionGates.cfg",
             "formal/oracle/OracleInteractionGates.tla",
