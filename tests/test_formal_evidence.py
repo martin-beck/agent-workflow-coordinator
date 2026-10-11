@@ -944,8 +944,7 @@ class FormalEvidenceTests(unittest.TestCase):
         self.assertEqual(len(operations), len(set(operations)))
         for operation in operations:
             rendered = render(base, operation)
-            self.assertIn(f'IF p = p1 THEN {{"{operation}"}}', rendered)
-            self.assertIn('ELSE {"promote", "resume", "unblock"', rendered)
+            self.assertIn(f'SliceOperation = "{operation}"', rendered)
 
     def test_formal_tiers_require_explicit_non_ambiguous_selection(self) -> None:
         verify = (FORMAL_ROOT / "verify.sh").read_text(encoding="utf-8")

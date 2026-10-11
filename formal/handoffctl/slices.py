@@ -18,16 +18,12 @@ OPERATIONS = (
 def render(base: str, operation: str) -> str:
     if operation not in OPERATIONS:
         raise ValueError(f"unknown operation slice: {operation}")
-    all_operations = ", ".join(f'"{item}"' for item in OPERATIONS)
-    replacement = (
-        "    AllowedOperations = [p \\in {p1, p2} |-> IF p = p1 THEN "
-        + '{"' + operation + '"} ELSE {' + all_operations + "}]"
-    )
+    replacement = f'    SliceOperation = "{operation}"'
     result, count = re.subn(
-        r"^    AllowedOperations = .*$", lambda _match: replacement, base, flags=re.MULTILINE
+        r"^    SliceOperation = .*$", lambda _match: replacement, base, flags=re.MULTILINE
     )
     if count != 1:
-        raise ValueError("base configuration must contain exactly one AllowedOperations assignment")
+        raise ValueError("base configuration must contain exactly one SliceOperation assignment")
     return result
 
 

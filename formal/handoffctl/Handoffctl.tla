@@ -14,7 +14,7 @@ dependency condition, failure choice, and process interleaving in the scope
 declared by Handoffctl.cfg.
 *)
 
-CONSTANTS Processes, Tasks, Actors, NoProcess, NoActor, NoTask, MaxRevision, AllowedOperations
+CONSTANTS Processes, Tasks, Actors, NoProcess, NoActor, NoTask, MaxRevision, SliceOperation
 
 ASSUME /\ Processes # {}
        /\ Tasks # {}
@@ -33,6 +33,10 @@ ReleaseOperations ==
 Operations ==
     {"promote", "resume", "unblock", "pause", "claim", "heartbeat", "update", "accept", "bind-spec", "bind-worktree", "recover_expired"}
         \cup ReleaseOperations
+
+AllowedOperations ==
+    IF SliceOperation = "all" THEN [p \in Processes |-> Operations]
+    ELSE [p \in Processes |-> IF p = "p1" THEN {SliceOperation} ELSE Operations]
 
 (*
 The operation domain is a configuration constant rather than a fixed global
@@ -127,8 +131,6 @@ Init ==
     /\ \A t \in Tasks: pauseProvenance[t] # "absent" => status[t] = "blocked"
     /\ dependencyReady \in [Tasks -> BOOLEAN]
     /\ pc = [p \in Processes |-> "waiting"]
-    /\ AllowedOperations \in [Processes -> SUBSET Operations]
-    /\ \A p \in Processes: AllowedOperations[p] # {}
     /\ operation \in [p \in Processes |-> AllowedOperations[p]]
     /\ target \in [Processes -> Tasks]
     /\ actor \in [Processes -> Actors]
