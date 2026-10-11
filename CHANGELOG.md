@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.1 - 2026-10-11
+
+- Make an exact, still-authorized `handoffctl bind-worktree` retry an
+  idempotent no-op in both Git and SQLite backends. The retry records no new
+  lifecycle mutation, projection update, or Git commit; conflicting,
+  incomplete, stale, expired, or otherwise unauthorized bindings still reject.
+
 ## 0.5.0 - 2026-10-11
 
 - Fence snapshotless expired-claim recovery to the original boot and PID
