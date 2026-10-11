@@ -15,7 +15,7 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from slices import OPERATIONS, render
+from slices import OPERATIONS, render_source
 
 OPERATION_SLICES = {f"HandoffctlSlice-{operation}" for operation in OPERATIONS}
 
@@ -58,12 +58,10 @@ MODEL_SOURCE = {
     "HandoffctlPublicationFast": "HandoffctlPublication",
     "OracleInteractionGates": "../oracle/OracleInteractionGates",
 }
-MODEL_SOURCE.update(dict.fromkeys(OPERATION_SLICES, "Handoffctl"))
 MODEL_CONFIG = {
     "OracleInteractionGates": "../oracle/OracleInteractionGates",
     "HandoffctlPublicationFast": "HandoffctlPublicationFast",
 }
-MODEL_CONFIG.update(dict.fromkeys(OPERATION_SLICES, "Handoffctl"))
 
 
 def effective_bound(name: str, default: str, boundary: str) -> str:
@@ -170,18 +168,19 @@ def main() -> int:
     ):
         parser.error(f"{args.tier} attestation has an unexpected model set")
     root = Path(__file__).resolve().parents[2]
-    base_config = root / "formal" / "handoffctl" / "Handoffctl.cfg"
+    base_source = root / "formal" / "handoffctl" / "Handoffctl.tla"
     configs = {
-        model: hashlib.sha256(
-            render(base_config.read_text(encoding="utf-8"), model.removeprefix("HandoffctlSlice-"))
-            .encode()
-        ).hexdigest()
-        if model in OPERATION_SLICES
-        else digest(root / "formal" / "handoffctl" / f"{MODEL_CONFIG.get(model, model)}.cfg")
+        model: digest(root / "formal" / "handoffctl" / f"{MODEL_CONFIG.get(model, model)}.cfg")
         for model in args.models
     }
     models = {
-        model: digest(root / "formal" / "handoffctl" / f"{MODEL_SOURCE.get(model, model)}.tla")
+        model: hashlib.sha256(
+            render_source(
+                base_source.read_text(encoding="utf-8"), model.removeprefix("HandoffctlSlice-")
+            ).encode()
+        ).hexdigest()
+        if model in OPERATION_SLICES
+        else digest(root / "formal" / "handoffctl" / f"{MODEL_SOURCE.get(model, model)}.tla")
         for model in args.models
     }
     inputs = {

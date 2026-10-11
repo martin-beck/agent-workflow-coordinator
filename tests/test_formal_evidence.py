@@ -938,16 +938,18 @@ class FormalEvidenceTests(unittest.TestCase):
     def test_full_operation_slices_render_and_partition_the_base_domain(self) -> None:
         slices = runpy.run_path(str(FORMAL_ROOT / "slices.py"))
         operations = slices["OPERATIONS"]
-        render = slices["render"]
+        render_source = slices["render_source"]
+        module_name = slices["module_name"]
         base = (FORMAL_ROOT / "Handoffctl.cfg").read_text(encoding="utf-8")
+        source = (FORMAL_ROOT / "Handoffctl.tla").read_text(encoding="utf-8")
         self.assertEqual(15, len(operations))
         self.assertEqual(len(operations), len(set(operations)))
         for operation in operations:
-            rendered = render(base, operation)
-            self.assertIn(f'SliceOperation = "{operation}"', rendered)
-        self.assertIn("SliceProcess = p1", base)
-        model = (FORMAL_ROOT / "Handoffctl.tla").read_text(encoding="utf-8")
-        self.assertIn("IF p = SliceProcess THEN {SliceOperation} ELSE Operations", model)
+            rendered = render_source(source, operation)
+            self.assertIn(f'operation["p1"] \\in {{"{operation}"}}', rendered)
+            self.assertIn(f"MODULE {module_name(operation)}", rendered)
+        self.assertIn('Processes = {"p1", "p2"}', base)
+        self.assertIn("operation \\in [Processes -> Operations]", source)
 
     def test_formal_tiers_require_explicit_non_ambiguous_selection(self) -> None:
         verify = (FORMAL_ROOT / "verify.sh").read_text(encoding="utf-8")
@@ -990,7 +992,7 @@ class FormalEvidenceTests(unittest.TestCase):
         self.assertEqual(23, len(manifest["profiles"]["full-exhaustive"]["models"]))
         self.assertEqual(9, len(manifest["profiles"]["pr-publication"]["models"]))
         pr_config = (FORMAL_ROOT / "HandoffctlPR.cfg").read_text()
-        self.assertIn("Processes = {p1}", pr_config)
+        self.assertIn('Processes = {"p1"}', pr_config)
         self.assertIn("EventualCompletion", pr_config)
         attest = (ROOT / "formal" / "handoffctl" / "attest.py").read_text(encoding="utf-8")
         self.assertIn("state_counts", attest)
