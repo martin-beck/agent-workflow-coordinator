@@ -36,10 +36,24 @@
         "HandoffctlReceipts",
         "HandoffctlPublication",
         "HandoffctlObservation",
-        "Handoffctl",
+        "HandoffctlSlice-promote",
+        "HandoffctlSlice-resume",
+        "HandoffctlSlice-unblock",
+        "HandoffctlSlice-pause",
+        "HandoffctlSlice-claim",
+        "HandoffctlSlice-heartbeat",
+        "HandoffctlSlice-update",
+        "HandoffctlSlice-accept",
+        "HandoffctlSlice-bind-spec",
+        "HandoffctlSlice-bind-worktree",
+        "HandoffctlSlice-recover_expired",
+        "HandoffctlSlice-release_planned",
+        "HandoffctlSlice-release_open",
+        "HandoffctlSlice-release_blocked",
+        "HandoffctlSlice-release_done",
         "HandoffctlRecovery"
       ],
-      "claims": "all tracked models, configurations, invariants, and liveness properties"
+      "claims": "all tracked models, configurations, invariants, and liveness properties; the two-process lifecycle aggregate is the exhaustive union of disjoint immutable-operation slices"
     }
   },
   "required_full_inputs": [

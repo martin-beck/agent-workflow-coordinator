@@ -42,7 +42,7 @@ printf '%s  %s\n' "${TLA_SHA256}" "${JAR}" | sha256sum --check --strict
 run_model() {
     local model="$1"
     local source="${2:-${model}}"
-    local config="${SPEC_DIR}/${model}.cfg"
+    local config="${3:-${SPEC_DIR}/${model}.cfg}"
     # The fast tier has its own reduced configuration over the binding spec.
     if [[ "${model}" == "HandoffctlFast" ]]; then
         source=HandoffctlBinding
@@ -95,8 +95,17 @@ else
     run_model HandoffctlReceipts
     run_model HandoffctlPublication
     run_model HandoffctlObservation
-    run_model Handoffctl
+    # `operation` is immutable. These p1 operation slices partition the
+    # original two-process aggregate model exactly; p2 retains its full domain.
+    mapfile -t local_operations < <(
+        cd "${SPEC_DIR}" && python3 -c 'from slices import OPERATIONS; print(*OPERATIONS, sep="\\n")'
+    )
+    for operation_name in "${local_operations[@]}"; do
+        slice="${TEMP_DIR}/HandoffctlSlice-${operation_name}.cfg"
+        python3 "${SPEC_DIR}/slices.py" --base "${SPEC_DIR}/Handoffctl.cfg" --operation "${operation_name}" --output "${slice}"
+        run_model "HandoffctlSlice-${operation_name}" Handoffctl "${slice}"
+    done
     run_model HandoffctlRecovery
 fi
 python3 "${SPEC_DIR}/attest.py" --tier "${TIER}" --output "${ATTESTATION}" --jar "${JAR}" --manifest "${MANIFEST}" --execution-classification "${EXECUTION_CLASSIFICATION}" \
-    --models $(if [[ "${TIER}" == "portable-smoke" ]]; then echo HandoffctlBinding; elif [[ "${TIER}" == "pr-fast" ]]; then echo HandoffctlFast HandoffctlReceiptsFast HandoffctlPublicationFast HandoffctlObservation OracleInteractionGates; elif [[ "${TIER}" == "pr-publication" ]]; then echo HandoffctlBinding HandoffctlLocks HandoffctlRun HandoffctlStorage HandoffctlReceipts HandoffctlPublication HandoffctlObservation HandoffctlPR HandoffctlRecovery; else echo HandoffctlBinding HandoffctlLocks HandoffctlRun HandoffctlStorage HandoffctlReceipts HandoffctlPublication HandoffctlObservation Handoffctl HandoffctlRecovery; fi)
+    --models $(if [[ "${TIER}" == "portable-smoke" ]]; then echo HandoffctlBinding; elif [[ "${TIER}" == "pr-fast" ]]; then echo HandoffctlFast HandoffctlReceiptsFast HandoffctlPublicationFast HandoffctlObservation OracleInteractionGates; elif [[ "${TIER}" == "pr-publication" ]]; then echo HandoffctlBinding HandoffctlLocks HandoffctlRun HandoffctlStorage HandoffctlReceipts HandoffctlPublication HandoffctlObservation HandoffctlPR HandoffctlRecovery; else printf 'HandoffctlBinding HandoffctlLocks HandoffctlRun HandoffctlStorage HandoffctlReceipts HandoffctlPublication HandoffctlObservation '; (cd "${SPEC_DIR}" && python3 -c 'from slices import OPERATIONS; print(*(f"HandoffctlSlice-{operation}" for operation in OPERATIONS))'); echo HandoffctlRecovery; fi)

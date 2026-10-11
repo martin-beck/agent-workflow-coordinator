@@ -10,8 +10,14 @@ import json
 import os
 import re
 import subprocess
+import sys
 import time
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from slices import OPERATIONS, render
+
+OPERATION_SLICES = {f"HandoffctlSlice-{operation}" for operation in OPERATIONS}
 
 EXPECTED_MODELS = {
     "portable-smoke": {"HandoffctlBinding"},
@@ -41,7 +47,7 @@ EXPECTED_MODELS = {
         "HandoffctlReceipts",
         "HandoffctlPublication",
         "HandoffctlObservation",
-        "Handoffctl",
+        *OPERATION_SLICES,
         "HandoffctlRecovery",
     },
 }
@@ -52,10 +58,12 @@ MODEL_SOURCE = {
     "HandoffctlPublicationFast": "HandoffctlPublication",
     "OracleInteractionGates": "../oracle/OracleInteractionGates",
 }
+MODEL_SOURCE.update(dict.fromkeys(OPERATION_SLICES, "Handoffctl"))
 MODEL_CONFIG = {
     "OracleInteractionGates": "../oracle/OracleInteractionGates",
     "HandoffctlPublicationFast": "HandoffctlPublicationFast",
 }
+MODEL_CONFIG.update(dict.fromkeys(OPERATION_SLICES, "Handoffctl"))
 
 
 def effective_bound(name: str, default: str, boundary: str) -> str:
@@ -162,8 +170,14 @@ def main() -> int:
     ):
         parser.error(f"{args.tier} attestation has an unexpected model set")
     root = Path(__file__).resolve().parents[2]
+    base_config = root / "formal" / "handoffctl" / "Handoffctl.cfg"
     configs = {
-        model: digest(root / "formal" / "handoffctl" / f"{MODEL_CONFIG.get(model, model)}.cfg")
+        model: hashlib.sha256(
+            render(base_config.read_text(encoding="utf-8"), model.removeprefix("HandoffctlSlice-"))
+            .encode()
+        ).hexdigest()
+        if model in OPERATION_SLICES
+        else digest(root / "formal" / "handoffctl" / f"{MODEL_CONFIG.get(model, model)}.cfg")
         for model in args.models
     }
     models = {
@@ -176,6 +190,7 @@ def main() -> int:
             "formal/handoffctl/verify.sh",
             "tools/tlc_runner.py",
             "formal/handoffctl/attest.py",
+            "formal/handoffctl/slices.py",
             "formal/evidence.json",
             "formal/tier-evidence.json",
         )
