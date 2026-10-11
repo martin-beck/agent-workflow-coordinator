@@ -21,9 +21,9 @@ Phases == {"empty", "queued", "publishing", "awaiting_observation",
 Terminal == {"published", "rejected"}
 
 VARIABLES requests, outcome, jobDigest, expectedBase, phase, publisher,
-          remote, lastObserved, recoveryObserved, ambiguityAvailable
+          remote, lastObserved, recoveryObserved, ambiguityAvailable, publisherUp
 vars == <<requests, outcome, jobDigest, expectedBase, phase, publisher,
-          remote, lastObserved, recoveryObserved, ambiguityAvailable>>
+          remote, lastObserved, recoveryObserved, ambiguityAvailable, publisherUp>>
 
 Init ==
     /\ requests = [k \in Keys |-> NoDigest]
@@ -36,6 +36,7 @@ Init ==
     /\ lastObserved = NoHead
     /\ recoveryObserved = FALSE
     /\ ambiguityAvailable = TRUE
+    /\ publisherUp = TRUE
 
 Admit(k, d) ==
     /\ k \in Keys /\ d \in Digests
@@ -47,43 +48,43 @@ Admit(k, d) ==
                /\ expectedBase' = Base
                /\ phase' = "queued"
                /\ UNCHANGED <<publisher, remote, lastObserved, recoveryObserved,
-                               ambiguityAvailable>>
+                               ambiguityAvailable, publisherUp>>
           ELSE IF jobDigest = d
                THEN /\ outcome' = [outcome EXCEPT ![k] = "reused"]
                     /\ UNCHANGED <<jobDigest, expectedBase, phase, publisher,
                                      remote, lastObserved, recoveryObserved,
-                                     ambiguityAvailable>>
+                                     ambiguityAvailable, publisherUp>>
                ELSE /\ outcome' = [outcome EXCEPT ![k] = "rejected"]
                     /\ UNCHANGED <<jobDigest, expectedBase, phase, publisher,
                                      remote, lastObserved, recoveryObserved,
-                                     ambiguityAvailable>>
+                                     ambiguityAvailable, publisherUp>>
 
 Claim(k) ==
     /\ k \in Keys
-    /\ phase = "queued" /\ publisher = NoOwner
+    /\ publisherUp /\ phase = "queued" /\ publisher = NoOwner
     /\ publisher' = k
     /\ phase' = "publishing"
     /\ recoveryObserved' = FALSE
     /\ UNCHANGED <<requests, outcome, jobDigest, expectedBase, remote, lastObserved,
-                    ambiguityAvailable>>
+                    ambiguityAvailable, publisherUp>>
 
 PublishCAS ==
-    /\ phase = "publishing" /\ publisher \in Keys
+    /\ publisherUp /\ phase = "publishing" /\ publisher \in Keys
     /\ remote = expectedBase
     /\ remote' = Candidate
     /\ phase' = "awaiting_observation"
     /\ publisher' = NoOwner
     /\ lastObserved' = NoHead
     /\ UNCHANGED <<requests, outcome, jobDigest, expectedBase, recoveryObserved,
-                    ambiguityAvailable>>
+                    ambiguityAvailable, publisherUp>>
 
 RejectStaleBase ==
-    /\ phase = "publishing" /\ publisher \in Keys
+    /\ publisherUp /\ phase = "publishing" /\ publisher \in Keys
     /\ remote # expectedBase
     /\ phase' = "rejected"
     /\ publisher' = NoOwner
     /\ UNCHANGED <<requests, outcome, jobDigest, expectedBase, remote,
-                    lastObserved, recoveryObserved, ambiguityAvailable>>
+                    lastObserved, recoveryObserved, ambiguityAvailable, publisherUp>>
 
 ObservePush ==
     /\ phase = "awaiting_observation"
@@ -91,7 +92,7 @@ ObservePush ==
     /\ lastObserved' = remote
     /\ phase' = "published"
     /\ UNCHANGED <<requests, outcome, jobDigest, expectedBase, publisher,
-                    remote, recoveryObserved, ambiguityAvailable>>
+                    remote, recoveryObserved, ambiguityAvailable, publisherUp>>
 
 ObserveRemoteAdvanced ==
     /\ phase = "awaiting_observation"
@@ -99,20 +100,20 @@ ObserveRemoteAdvanced ==
     /\ lastObserved' = remote
     /\ phase' = "rejected"
     /\ UNCHANGED <<requests, outcome, jobDigest, expectedBase, publisher,
-                    remote, recoveryObserved, ambiguityAvailable>>
+                    remote, recoveryObserved, ambiguityAvailable, publisherUp>>
 
 PushAmbiguousBeforeEffect ==
-    /\ phase = "publishing" /\ publisher \in Keys
+    /\ publisherUp /\ phase = "publishing" /\ publisher \in Keys
     /\ ambiguityAvailable
     /\ phase' = "ambiguous"
     /\ publisher' = NoOwner
     /\ lastObserved' = NoHead
     /\ recoveryObserved' = FALSE
     /\ ambiguityAvailable' = FALSE
-    /\ UNCHANGED <<requests, outcome, jobDigest, expectedBase, remote>>
+    /\ UNCHANGED <<requests, outcome, jobDigest, expectedBase, remote, publisherUp>>
 
 PushAmbiguousAfterEffect ==
-    /\ phase = "publishing" /\ publisher \in Keys
+    /\ publisherUp /\ phase = "publishing" /\ publisher \in Keys
     /\ ambiguityAvailable
     /\ remote = expectedBase
     /\ remote' = Candidate
@@ -121,16 +122,28 @@ PushAmbiguousAfterEffect ==
     /\ lastObserved' = NoHead
     /\ recoveryObserved' = FALSE
     /\ ambiguityAvailable' = FALSE
-    /\ UNCHANGED <<requests, outcome, jobDigest, expectedBase>>
+    /\ UNCHANGED <<requests, outcome, jobDigest, expectedBase, publisherUp>>
 
 ExpirePublisherLease ==
-    /\ phase = "publishing" /\ publisher \in Keys
+    /\ ~publisherUp /\ phase = "publishing" /\ publisher \in Keys
     /\ phase' = "ambiguous"
     /\ publisher' = NoOwner
     /\ lastObserved' = NoHead
     /\ recoveryObserved' = FALSE
     /\ UNCHANGED <<requests, outcome, jobDigest, expectedBase, remote,
-                    ambiguityAvailable>>
+                    ambiguityAvailable, publisherUp>>
+
+CrashPublisher ==
+    /\ publisherUp
+    /\ publisherUp' = FALSE
+    /\ UNCHANGED <<requests, outcome, jobDigest, expectedBase, phase, publisher,
+                    remote, lastObserved, recoveryObserved, ambiguityAvailable>>
+
+RestartPublisher ==
+    /\ ~publisherUp
+    /\ publisherUp' = TRUE
+    /\ UNCHANGED <<requests, outcome, jobDigest, expectedBase, phase, publisher,
+                    remote, lastObserved, recoveryObserved, ambiguityAvailable>>
 
 ObserveRecovery ==
     /\ phase = "ambiguous" /\ publisher = NoOwner
@@ -142,14 +155,14 @@ ObserveRecovery ==
                THEN phase' = "queued"
                ELSE phase' = "rejected"
     /\ UNCHANGED <<requests, outcome, jobDigest, expectedBase, publisher, remote,
-                    ambiguityAvailable>>
+                    ambiguityAvailable, publisherUp>>
 
 AdvanceRemote ==
     /\ jobDigest # NoDigest
     /\ remote = Base
     /\ remote' = Foreign
     /\ UNCHANGED <<requests, outcome, jobDigest, expectedBase, phase,
-                    publisher, lastObserved, recoveryObserved, ambiguityAvailable>>
+                    publisher, lastObserved, recoveryObserved, ambiguityAvailable, publisherUp>>
 
 AdvanceRemoteAfterCandidate ==
     /\ jobDigest # NoDigest
@@ -157,7 +170,7 @@ AdvanceRemoteAfterCandidate ==
     /\ remote = Candidate
     /\ remote' = Descendant
     /\ UNCHANGED <<requests, outcome, jobDigest, expectedBase, phase,
-                    publisher, lastObserved, recoveryObserved, ambiguityAvailable>>
+                    publisher, lastObserved, recoveryObserved, ambiguityAvailable, publisherUp>>
 
 TerminalStutter ==
     /\ phase \in Terminal
@@ -168,7 +181,7 @@ Next ==
     \/ (\E k \in Keys: Claim(k))
     \/ PublishCAS \/ RejectStaleBase \/ ObservePush \/ ObserveRemoteAdvanced
     \/ PushAmbiguousBeforeEffect \/ PushAmbiguousAfterEffect
-    \/ ExpirePublisherLease \/ ObserveRecovery \/ AdvanceRemote
+    \/ CrashPublisher \/ RestartPublisher \/ ExpirePublisherLease \/ ObserveRecovery \/ AdvanceRemote
     \/ AdvanceRemoteAfterCandidate \/ TerminalStutter
 
 Fairness ==
@@ -179,6 +192,7 @@ Fairness ==
     /\ WF_vars(ObserveRemoteAdvanced)
     /\ WF_vars(ExpirePublisherLease)
     /\ WF_vars(ObserveRecovery)
+    /\ WF_vars(RestartPublisher)
 
 Spec == Init /\ [][Next]_vars /\ Fairness
 
@@ -193,6 +207,7 @@ TypeOK ==
     /\ lastObserved \in {NoHead, Base, Candidate, Descendant, Foreign}
     /\ recoveryObserved \in BOOLEAN
     /\ ambiguityAvailable \in BOOLEAN
+    /\ publisherUp \in BOOLEAN
 
 OneDurableJob ==
     phase = "empty" <=> jobDigest = NoDigest
@@ -220,5 +235,11 @@ NoUnobservedAmbiguousSuccess ==
 
 AdmittedJobTerminates ==
     (jobDigest # NoDigest) ~> (phase \in Terminal)
+
+PublisherEventuallyStable ==
+    <>([]publisherUp)
+
+ProgressAfterPublisherStabilizes ==
+    PublisherEventuallyStable => AdmittedJobTerminates
 
 =============================================================================

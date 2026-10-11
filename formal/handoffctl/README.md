@@ -135,8 +135,10 @@ descriptor-change rejection, one publisher lease, expected-base compare-and-swap
 before success, and observation-based recovery from ambiguous pushes. It is a one-candidate
 abstraction: database-wide liveness across historical jobs is established by executable sweep tests,
 not claimed as a refinement result. The fast PR tier checks its
-safety invariants; publication and full tiers also check eventual terminal resolution under weak
-fairness, with at most one ambiguous push and one competing remote advance in the finite model.
+safety invariants; publication and full tiers also check eventual terminal resolution after the
+publisher eventually remains available. Repeated publisher crashes remain a nonterminal
+environmental condition, rather than an unsound completion guarantee. The finite model includes
+at most one ambiguous push and one competing remote advance.
 Git ancestry and transport are abstracted as finite head values; this is not
 implementation-correspondence evidence.
 
