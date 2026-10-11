@@ -179,6 +179,24 @@ class TLCAdmissionTests(unittest.TestCase):
             with self.assertRaisesRegex(AdmissionError, "leaf memory.max"):
                 verify_effective_cgroup(memory_max="3G", swap_max="3G", proc_root=root)
 
+    def test_effective_cgroup_resolves_a_non_root_cgroup_mount(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            mount = root / "cgroup"
+            leaf = mount / "unit"
+            leaf.mkdir(parents=True)
+            (root / "self").mkdir()
+            (root / "self/cgroup").write_text("0::/user.slice/user-985.slice/unit\n")
+            (root / "self/mountinfo").write_text(
+                f"1 0 0:1 /user.slice/user-985.slice {mount} rw - cgroup2 cgroup rw\n"
+            )
+            for directory in (mount, leaf):
+                for name in ("memory.max", "memory.high", "memory.swap.max"):
+                    (directory / name).write_text("max\n")
+            for name in ("memory.max", "memory.swap.max"):
+                (leaf / name).write_text("3221225472\n")
+            verify_effective_cgroup(memory_max="3G", swap_max="3G", proc_root=root)
+
     def test_effective_cgroup_wrapper_strips_separator_before_exec(self) -> None:
         with (
             patch.object(_runner, "verify_effective_cgroup") as verify,

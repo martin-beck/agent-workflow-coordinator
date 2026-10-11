@@ -201,14 +201,23 @@ def _cgroup_v2_directory(proc_root: Path = Path("/proc")) -> tuple[Path, Path]:
         ),
         None,
     )
-    mountinfo = (proc_root / "self/mountinfo").read_text().splitlines()
-    mount = next(
-        (Path(line.split(" - ", 1)[0].split()[4]) for line in mountinfo if " - cgroup2 " in line),
+    cgroup_mount = next(
+        (
+            (Path(fields[3]), Path(fields[4]))
+            for line in (proc_root / "self/mountinfo").read_text().splitlines()
+            if " - cgroup2 " in line
+            for fields in [line.split(" - ", 1)[0].split()]
+            if len(fields) >= 5
+        ),
         None,
     )
-    if not relative or mount is None:
+    if not relative or cgroup_mount is None:
         raise AdmissionError("cgroup-v2 membership is unavailable")
-    directory = mount / relative.lstrip("/")
+    mount_root, mount = cgroup_mount
+    try:
+        directory = mount / Path(relative).relative_to(mount_root)
+    except ValueError as error:
+        raise AdmissionError("cgroup membership is outside its cgroup-v2 mount") from error
     if not directory.is_dir() or not mount.is_dir():
         raise AdmissionError("effective cgroup path is unavailable")
     return directory, mount
