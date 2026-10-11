@@ -234,7 +234,11 @@ memory/swap cgroup limits for full-exhaustive runs, a `2g` heap and `3G`/`3G`
 limits for ordinary same-repository PR publication, and a `512m` heap for hosted
 smoke. It retains CPU quota (`200%`), process limit (`64`), a 1200-second ordinary
 PR or 6000-second full-exhaustive per-model deadline, and a fail-closed 64 GiB
-host/parent-cgroup prerequisite for full evidence. A canonical host-wide admission lock prevents
+host/parent-cgroup prerequisite for full evidence. Before every required TLC
+execution, the runner reads `memory.max`, `memory.high`, and
+`memory.swap.max` from inside the transient unit and all of its ancestors; the
+leaf limits must exactly match the requested bounds and no ancestor may be
+lower. A canonical host-wide admission lock prevents
 multiple formal jobs from competing for memory while leaving coordinator worker
 processes and leases untouched. A durable per-job queue record survives caller
 death for stale-job recovery; completed, failed, and canceled outcomes retain

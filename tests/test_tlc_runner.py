@@ -21,6 +21,8 @@ _runner_spec.loader.exec_module(_runner)
 AdmissionError = _runner.AdmissionError
 _prune_stale = _runner._prune_stale
 build_command = _runner.build_command
+verify_effective_cgroup = _runner.verify_effective_cgroup
+verify_effective_cgroup_main = _runner.verify_effective_cgroup_main
 run = _runner.run
 parser = _runner.parser
 positive_int = _runner._positive_int
@@ -133,6 +135,61 @@ class TLCAdmissionTests(unittest.TestCase):
                 metadir=Path("states"),
             )
         self.assertEqual(command[0], "/usr/bin/systemd-run")
+
+    def test_required_command_verifies_then_execs_inside_the_child_unit(self) -> None:
+        with patch("tools.tlc_runner.shutil.which", return_value="/usr/bin/systemd-run"):
+            command = build_command(
+                jar=Path("tla.jar"),
+                model=Path("Model.tla"),
+                config=Path("Model.cfg"),
+                metadir=Path("states"),
+                memory_max="64G",
+                swap_max="64G",
+            )
+        self.assertEqual(command[0], "/usr/bin/systemd-run")
+        self.assertIn("--property=MemoryMax=64G", command)
+        self.assertIn("--property=MemorySwapMax=64G", command)
+        marker = command.index("--verify-effective-cgroup")
+        self.assertEqual("--memory-max", command[marker + 1])
+        self.assertEqual("64G", command[marker + 2])
+        self.assertEqual("--swap-max", command[marker + 3])
+        self.assertEqual("64G", command[marker + 4])
+        self.assertIn("java", command[marker + 6 :])
+
+    def test_effective_cgroup_rejects_lower_ancestor_and_wrong_leaf(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            mount = root / "cgroup"
+            leaf = mount / "worker" / "unit"
+            leaf.mkdir(parents=True)
+            (root / "self").mkdir()
+            (root / "self/cgroup").write_text("0::/worker/unit\n")
+            (root / "self/mountinfo").write_text(f"1 0 0:1 / {mount} rw - cgroup2 cgroup rw\n")
+            for directory in (mount, mount / "worker", leaf):
+                for name in ("memory.max", "memory.high", "memory.swap.max"):
+                    (directory / name).write_text("max\n")
+            for name, value in (("memory.max", "3221225472"), ("memory.swap.max", "3221225472")):
+                (leaf / name).write_text(value + "\n")
+            verify_effective_cgroup(memory_max="3G", swap_max="3G", proc_root=root)
+            (mount / "worker" / "memory.high").write_text("1\n")
+            with self.assertRaisesRegex(AdmissionError, "effective memory.high"):
+                verify_effective_cgroup(memory_max="3G", swap_max="3G", proc_root=root)
+            (mount / "worker" / "memory.high").write_text("max\n")
+            (leaf / "memory.max").write_text("1\n")
+            with self.assertRaisesRegex(AdmissionError, "leaf memory.max"):
+                verify_effective_cgroup(memory_max="3G", swap_max="3G", proc_root=root)
+
+    def test_effective_cgroup_wrapper_strips_separator_before_exec(self) -> None:
+        with (
+            patch.object(_runner, "verify_effective_cgroup") as verify,
+            patch.object(_runner.os, "execvp", side_effect=OSError("fixture")) as execute,
+        ):
+            result = verify_effective_cgroup_main(
+                ["--memory-max", "3G", "--swap-max", "3G", "--", "java", "-version"]
+            )
+        self.assertEqual(2, result)
+        verify.assert_called_once_with(memory_max="3G", swap_max="3G")
+        execute.assert_called_once_with("java", ["java", "-version"])
 
     def test_large_required_profile_has_cgroup_headroom(self) -> None:
         with patch("tools.tlc_runner.shutil.which", return_value="/usr/bin/systemd-run"):

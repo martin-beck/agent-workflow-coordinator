@@ -251,6 +251,16 @@ exit 2
 """,
             "sha256sum": "#!/bin/sh\nexit 0\n",
             "java": "#!/bin/sh\nexit 0\n",
+            # This vendoring fixture validates verifier and attestation wiring,
+            # not kernel cgroup enforcement.  Its systemd-run shim cannot
+            # create a real transient cgroup, so short-circuit the runner
+            # while retaining the real Python attester invocation.
+            "python3": """#!/bin/sh
+case "$1" in
+  */tools/tlc_runner.py) exit 0 ;;
+esac
+exec /usr/bin/python3 "$@"
+""",
             "systemd-run": """#!/bin/sh
 while [ "$#" -gt 0 ] && [ "$1" != "--" ]; do shift; done
 [ "$#" -gt 0 ] && shift

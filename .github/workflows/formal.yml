@@ -20,15 +20,18 @@ permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
-  cancel-in-progress: true
+  # Full qualification is bound to its triggering immutable SHA and remains
+  # useful evidence even when main advances.  Do not cancel it merely because
+  # autonomous development merged another change; release admission still
+  # requires a fresh exact-main attestation.
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ (github.event_name == 'schedule' || inputs.tier == 'full-exhaustive') && 'full-exhaustive' || 'pr-fast' }}
+  cancel-in-progress: false
 
 jobs:
   formal-trusted:
     if: github.ref == 'refs/heads/main'
     runs-on: [self-hosted, Linux, X64, agent-workflow-coordinator-ci]
     timeout-minutes: ${{ (github.event_name == 'schedule' || inputs.tier == 'full-exhaustive') && 1440 || 30 }}
-    continue-on-error: ${{ github.event_name == 'schedule' }}
     env:
       TLC_TIER: ${{ github.event_name == 'schedule' && 'full-exhaustive' || inputs.tier || 'pr-fast' }}
     steps:
@@ -46,7 +49,7 @@ jobs:
           enable-cache: true
           cache-dependency-glob: uv.lock
       - run: uv sync --locked --only-group quality
-      - name: Establish existing runner user bus and cgroup prerequisite
+      - name: Establish existing runner user bus and capacity prerequisite
         shell: bash
         run: |
           runner_uid=$(id -u)
@@ -58,10 +61,8 @@ jobs:
           test "$(stat -fc %T /sys/fs/cgroup)" = cgroup2fs
           if [[ "${TLC_TIER}" == "full-exhaustive" ]]; then
             required_bytes=$((64 * 1024 * 1024 * 1024))
-            formal_memory_max=64G
           else
             required_bytes=$((6 * 1024 * 1024 * 1024))
-            formal_memory_max=6G
           fi
           host_bytes=$(awk '/^MemTotal:/ {print $2 * 1024}' /proc/meminfo)
           test "${host_bytes}" -ge "${required_bytes}"
@@ -76,9 +77,9 @@ jobs:
           if [[ "${parent_memory}" != max ]]; then test "${parent_memory}" -ge "${required_bytes}"; fi
           parent_swap=$(cat "${cgroup_dir}/memory.swap.max")
           if [[ "${parent_swap}" != max ]]; then test "${parent_swap}" -ge "${required_bytes}"; fi
-          XDG_RUNTIME_DIR="${runtime_dir}" DBUS_SESSION_BUS_ADDRESS="${bus_address}" \
-            systemd-run --user --wait --pipe --quiet --service-type=exec \
-              --property=MemoryMax="${formal_memory_max}" --property=MemorySwapMax="${formal_memory_max}" --property=TasksMax=64 true
+          # tools/tlc_runner.py verifies the effective limits from inside its
+          # own transient unit immediately before every TLC process starts.
+          command -v systemd-run
       - name: Run required formal tier
         env:
           TLC_CGROUP_MODE: required

@@ -1043,7 +1043,7 @@ class FormalEvidenceTests(unittest.TestCase):
             "inputs.tier == 'full-exhaustive') && 1440 || 30 }}",
             formal,
         )
-        self.assertIn("continue-on-error: ${{ github.event_name == 'schedule' }}", formal)
+        self.assertNotIn("continue-on-error:", formal)
         self.assertIn("schedule:", formal)
         self.assertIn("if: github.ref == 'refs/heads/main'", formal)
         self.assertIn("runs-on: [self-hosted, Linux, X64, agent-workflow-coordinator-ci]", formal)
@@ -1076,15 +1076,14 @@ class FormalEvidenceTests(unittest.TestCase):
                 resource_expression,
                 formal_step,
             )
-        self.assertIn('formal_memory_max=64G', formal)
-        self.assertIn('MemoryMax="${formal_memory_max}"', formal)
-        self.assertIn('MemorySwapMax="${formal_memory_max}"', formal)
+        self.assertIn("cancel-in-progress: false", formal)
+        self.assertNotIn("queue:", formal)
+        self.assertIn("'full-exhaustive' || 'pr-fast'", formal)
+        self.assertIn("effective limits from inside its", formal)
+        self.assertIn("command -v systemd-run", formal)
         self.assertIn("MemTotal", formal)
         self.assertIn("/proc/self/cgroup", formal)
         self.assertIn("/proc/self/mountinfo", formal)
-        self.assertIn('cgroup_dir="${cgroup_mount%/}${cgroup_relative:-/}"', formal)
-        self.assertIn('"${cgroup_dir}/memory.max"', formal)
-        self.assertIn('"${cgroup_dir}/memory.swap.max"', formal)
         self.assertNotIn("needs.scope.outputs.release_sensitive", formal_step)
         timeout_expression = formal[
             formal.index("TLC_TIMEOUT_SECONDS:") : formal.index(
