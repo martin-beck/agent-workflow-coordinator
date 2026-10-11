@@ -18,6 +18,7 @@ EXPECTED_MODELS = {
     "pr-fast": {
         "HandoffctlFast",
         "HandoffctlReceiptsFast",
+        "HandoffctlPublicationFast",
         "HandoffctlObservation",
         "OracleInteractionGates",
     },
@@ -27,6 +28,7 @@ EXPECTED_MODELS = {
         "HandoffctlRun",
         "HandoffctlStorage",
         "HandoffctlReceipts",
+        "HandoffctlPublication",
         "HandoffctlObservation",
         "HandoffctlPR",
         "HandoffctlRecovery",
@@ -37,6 +39,7 @@ EXPECTED_MODELS = {
         "HandoffctlRun",
         "HandoffctlStorage",
         "HandoffctlReceipts",
+        "HandoffctlPublication",
         "HandoffctlObservation",
         "Handoffctl",
         "HandoffctlRecovery",
@@ -46,9 +49,13 @@ MODEL_SOURCE = {
     "HandoffctlPR": "Handoffctl",
     "HandoffctlFast": "HandoffctlBinding",
     "HandoffctlReceiptsFast": "HandoffctlReceipts",
+    "HandoffctlPublicationFast": "HandoffctlPublication",
     "OracleInteractionGates": "../oracle/OracleInteractionGates",
 }
-MODEL_CONFIG = {"OracleInteractionGates": "../oracle/OracleInteractionGates"}
+MODEL_CONFIG = {
+    "OracleInteractionGates": "../oracle/OracleInteractionGates",
+    "HandoffctlPublicationFast": "HandoffctlPublicationFast",
+}
 
 
 def effective_bound(name: str, default: str, boundary: str) -> str:

@@ -130,6 +130,16 @@ implementation correspondence. Its liveness property is conditional on both
 services eventually remaining available; repeated crashes are therefore an
 explicitly nonterminal environmental condition, not a false completion claim.
 
+`HandoffctlPublication.tla` checks candidate-bound protected-main publication: idempotent admission,
+descriptor-change rejection, one publisher lease, expected-base compare-and-swap, remote observation
+before success, and observation-based recovery from ambiguous pushes. It is a one-candidate
+abstraction: database-wide liveness across historical jobs is established by executable sweep tests,
+not claimed as a refinement result. The fast PR tier checks its
+safety invariants; publication and full tiers also check eventual terminal resolution under weak
+fairness, with at most one ambiguous push and one competing remote advance in the finite model.
+Git ancestry and transport are abstracted as finite head values; this is not
+implementation-correspondence evidence.
+
 HandoffctlObservation.tla checks the bounded opt-in `cached-observation-v1`
 contract: cache hits require the exact current input generation, one refresh
 serves concurrent waiters, an input change rejects the in-flight generation,
@@ -201,12 +211,12 @@ the JAR or modify coordinator state.
 
 Formal tiers are explicit: `verify.sh --tier portable-smoke` runs one model
 and is non-exhaustive; it cannot produce publication or full evidence.
-`verify.sh --tier pr-publication` checks every invariant family. Six models
+`verify.sh --tier pr-publication` checks every invariant family. Seven models
 use their full configurations; the general lifecycle model uses the
 one-process `HandoffctlPR.cfg`, while the separate lock and recovery models
 retain independent-process races. This exact-head PR tier is not the complete
 two-process lifecycle cross-product and cannot produce full release evidence.
-`verify.sh --tier full-exhaustive` runs all eight full configurations on the
+`verify.sh --tier full-exhaustive` runs all nine full configurations on the
 scheduled weekly or manually dispatched gate. A release claim requires its
 fresh exact-head full attestation; neither smaller tier substitutes for it.
 

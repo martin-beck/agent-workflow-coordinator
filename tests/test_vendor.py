@@ -277,6 +277,7 @@ exec "$@"
                 "HandoffctlRun",
                 "HandoffctlStorage",
                 "HandoffctlReceipts",
+                "HandoffctlPublication",
                 "HandoffctlObservation",
                 "HandoffctlPR",
                 "HandoffctlRecovery",

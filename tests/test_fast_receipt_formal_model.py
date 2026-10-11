@@ -28,3 +28,24 @@ def test_receipt_model_is_a_fast_safety_and_full_liveness_gate() -> None:
     assert '"HandoffctlReceipts"' in tiers
     assert "PROPERTIES" not in fast
     assert "ProgressAfterServicesStabilize" in full
+
+
+def test_publication_model_requires_candidate_observation_and_recovery_fencing() -> None:
+    model = (FORMAL / "HandoffctlPublication.tla").read_text(encoding="utf-8")
+    verifier = (FORMAL / "verify.sh").read_text(encoding="utf-8")
+    tiers = (ROOT / "formal" / "tier-evidence.json").read_text(encoding="utf-8")
+    fast = (FORMAL / "HandoffctlPublicationFast.cfg").read_text(encoding="utf-8")
+    full = (FORMAL / "HandoffctlPublication.cfg").read_text(encoding="utf-8")
+    assert "PublishCAS" in model
+    assert "PushAmbiguousAfterEffect" in model
+    assert "ExpirePublisherLease" in model
+    assert "ObserveRemoteAdvanced" in model
+    assert "ObserveRecovery" in model
+    assert "PublishedOnlyAfterObservation" in model
+    assert "RecoveryRetryRequiresFreshBaseObservation" in model
+    assert "run_model HandoffctlPublicationFast HandoffctlPublication" in verifier
+    assert "run_model HandoffctlPublication" in verifier
+    assert '"HandoffctlPublicationFast"' in tiers
+    assert '"HandoffctlPublication"' in tiers
+    assert "PROPERTIES" not in fast
+    assert "AdmittedJobTerminates" in full

@@ -204,6 +204,24 @@ worktree inventories also make each external scan expensive even though they no
 longer block unrelated authority mutations; coalescing those scans needs an
 explicit freshness policy and strict `doctor --live` bypass.
 
+## Candidate-bound fast publication
+
+The opt-in fast-receipt publisher now admits its captured local `main` head to
+a durable WAL job before issuing a protected-main push.  The job binds one
+candidate OID and the exact remote head observed as its expected base; duplicate
+keys or candidates reuse that record rather than creating another publisher.
+The publisher holds a separate publication lock, uses Git's explicit
+`--force-with-lease` expectation, and records job completion only after a
+fresh observation is the exact candidate OID. A timeout becomes `ambiguous` and
+must be re-observed before retry; an unchanged expected base may requeue it,
+while a changed remote head is terminally rejected. A remote descendant may
+still establish an individual receipt's remote ancestry, but it is also a
+terminal `REMOTE_ADVANCED` outcome for the exact-OID publication job: SQLite
+does not prove Git ancestry, so it never upgrades that job to publication
+success. This moves neither the standard
+Git lifecycle publisher nor its remote operations out of the authority lock
+yet: that broader migration requires the same job boundary for every command.
+
 `HANDOFFCTL_LOCK_TRACE` is an opt-in path for a private local JSONL file. Each
 line contains only a fixed phase label, shared/exclusive mode, duration,
 timeout flag, and monotonic timestamp. Do not check trace files into a state
