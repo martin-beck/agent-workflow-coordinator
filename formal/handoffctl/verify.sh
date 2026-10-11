@@ -44,6 +44,7 @@ run_model() {
     local model="$1"
     local source="${2:-${model}}"
     local config="${3:-${SPEC_DIR}/${model}.cfg}"
+    local model_path
     # The fast tier has its own reduced configuration over the binding spec.
     if [[ "${model}" == "HandoffctlFast" ]]; then
         source=HandoffctlBinding
@@ -56,9 +57,14 @@ run_model() {
         source=../oracle/OracleInteractionGates
         config="${SPEC_DIR}/../oracle/OracleInteractionGates.cfg"
     fi
+    if [[ "${source}" == /* ]]; then
+        model_path="${source}.tla"
+    else
+        model_path="${SPEC_DIR}/${source}.tla"
+    fi
     python3 "${SPEC_DIR}/../../tools/tlc_runner.py" \
         --jar "${JAR}" \
-        --model "${SPEC_DIR}/${source}.tla" \
+        --model "${model_path}" \
         --config "${config}" \
         --metadir "${TEMP_DIR}/${model}-states" \
         "${RUNNER_ADMISSION_ARGS[@]}"
@@ -103,9 +109,11 @@ else
     )
     mkdir --mode=700 "${SLICE_DIR}"
     for operation_name in "${local_operations[@]}"; do
-        slice="${SLICE_DIR}/HandoffctlSlice-${operation_name}.cfg"
-        python3 "${SPEC_DIR}/slices.py" --base "${SPEC_DIR}/Handoffctl.cfg" --operation "${operation_name}" --output "${slice}"
-        run_model "HandoffctlSlice-${operation_name}" Handoffctl "${slice}"
+        slice_module="$(cd "${SPEC_DIR}" && python3 -c 'import sys; from slices import module_name; print(module_name(sys.argv[1]))' "${operation_name}")"
+        slice="${SLICE_DIR}/${slice_module}"
+        python3 "${SPEC_DIR}/slices.py" --base-source "${SPEC_DIR}/Handoffctl.tla" --operation "${operation_name}" --output-source "${slice}.tla"
+        cp -- "${SPEC_DIR}/Handoffctl.cfg" "${slice}.cfg"
+        run_model "HandoffctlSlice-${operation_name}" "${slice}" "${slice}.cfg"
     done
     run_model HandoffctlRecovery
 fi
