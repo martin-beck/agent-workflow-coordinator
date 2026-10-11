@@ -1040,7 +1040,7 @@ class FormalEvidenceTests(unittest.TestCase):
         )
         self.assertIn(
             "timeout-minutes: ${{ (github.event_name == 'schedule' || "
-            "inputs.tier == 'full-exhaustive') && 360 || 30 }}",
+            "inputs.tier == 'full-exhaustive') && 1440 || 30 }}",
             formal,
         )
         self.assertIn("continue-on-error: ${{ github.event_name == 'schedule' }}", formal)
@@ -1064,9 +1064,9 @@ class FormalEvidenceTests(unittest.TestCase):
             "(github.event_name == 'schedule' || inputs.tier == 'full-exhaustive')"
         )
         for resource_setting, full_value, fast_value in (
-            ("TLC_HEAP", "4096m", "2048m"),
-            ("TLC_MEMORY_MAX", "6G", "3G"),
-            ("TLC_SWAP_MAX", "6G", "3G"),
+            ("TLC_HEAP", "48g", "2048m"),
+            ("TLC_MEMORY_MAX", "64G", "3G"),
+            ("TLC_SWAP_MAX", "64G", "3G"),
         ):
             resource_expression = (
                 f"{resource_setting}: ${{{{ {full_tier_condition} && "
@@ -1076,8 +1076,9 @@ class FormalEvidenceTests(unittest.TestCase):
                 resource_expression,
                 formal_step,
             )
-        self.assertIn("MemoryMax=6G", formal)
-        self.assertIn("MemorySwapMax=6G", formal)
+        self.assertIn('formal_memory_max=64G', formal)
+        self.assertIn('MemoryMax="${formal_memory_max}"', formal)
+        self.assertIn('MemorySwapMax="${formal_memory_max}"', formal)
         self.assertIn("MemTotal", formal)
         self.assertIn("/proc/self/cgroup", formal)
         self.assertIn("/proc/self/mountinfo", formal)
