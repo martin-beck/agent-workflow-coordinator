@@ -29,9 +29,10 @@ readonly TLA_VERSION=1.7.4
 readonly TLA_SHA256=936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88
 readonly SPEC_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 readonly TEMP_DIR="$(mktemp -d)"
+readonly SLICE_DIR="${SPEC_DIR}/.tlc-slices-$$"
 readonly MANIFEST="${TEMP_DIR}/outcomes.manifest"
 : > "${MANIFEST}"
-trap 'rm -rf -- "${TEMP_DIR}"' EXIT
+trap 'rm -rf -- "${TEMP_DIR}" "${SLICE_DIR}"' EXIT
 
 readonly JAR="${TEMP_DIR}/tla2tools.jar"
 readonly URL="https://github.com/tlaplus/tlaplus/releases/download/v${TLA_VERSION}/tla2tools.jar"
@@ -100,8 +101,9 @@ else
     mapfile -t local_operations < <(
         cd "${SPEC_DIR}" && python3 -c 'from slices import OPERATIONS; print(*OPERATIONS, sep="\n")'
     )
+    mkdir --mode=700 "${SLICE_DIR}"
     for operation_name in "${local_operations[@]}"; do
-        slice="${TEMP_DIR}/HandoffctlSlice-${operation_name}.cfg"
+        slice="${SLICE_DIR}/HandoffctlSlice-${operation_name}.cfg"
         python3 "${SPEC_DIR}/slices.py" --base "${SPEC_DIR}/Handoffctl.cfg" --operation "${operation_name}" --output "${slice}"
         run_model "HandoffctlSlice-${operation_name}" Handoffctl "${slice}"
     done
