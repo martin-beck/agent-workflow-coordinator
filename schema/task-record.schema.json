@@ -81,6 +81,9 @@
         "spec_ref": {"type": "string"},
         "spec_revision": {"type": "integer", "minimum": 1},
         "spec_acceptance": {},
+        "execution_envelope_ref": {"type": "string"},
+        "execution_envelope_revision": {"type": "integer", "minimum": 1},
+        "execution_envelope_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
         "parent_task_ref": {
             "anyOf": [{"type": "string", "maxLength": 0}, {"$ref": "#/$defs/taskId"}]
         },

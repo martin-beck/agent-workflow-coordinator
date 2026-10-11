@@ -54,6 +54,9 @@ def _artifact_refs(meta: Meta) -> list[str]:
     spec_ref = meta.get("spec_ref")
     if isinstance(spec_ref, str) and spec_ref:
         refs.append(f"spec:{spec_ref}")
+    envelope_ref = meta.get("execution_envelope_ref")
+    if isinstance(envelope_ref, str) and envelope_ref:
+        refs.append(f"envelope:{envelope_ref}")
     acceptance = meta.get("spec_acceptance")
     if isinstance(acceptance, dict):
         evidence_ref = acceptance.get("evidence_ref")
@@ -79,6 +82,9 @@ def build_session_record(meta: Meta, trigger: str, recorded_at: str) -> Meta:
         "worktree_key": meta.get("worktree_key", ""),
         "spec_ref": meta.get("spec_ref", ""),
         "spec_revision": meta.get("spec_revision", 0),
+        "execution_envelope_ref": meta.get("execution_envelope_ref", ""),
+        "execution_envelope_revision": meta.get("execution_envelope_revision", 0),
+        "execution_envelope_digest": meta.get("execution_envelope_digest", ""),
     }
     record: Meta = {
         "schema_version": SESSION_SCHEMA_VERSION,

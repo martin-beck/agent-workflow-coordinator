@@ -499,6 +499,56 @@ class SQLiteStorageTest(unittest.TestCase):
                 "bind-worktree",
             )
 
+    def test_sqlite_preserves_a_bound_execution_envelope(self) -> None:
+        spec = json.loads(
+            (Path(__file__).resolve().parents[1] / "examples/task-specs/AR-0070.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        spec["spec_ref"] = "spec.json"
+        (self.root / "spec.json").write_text(json.dumps(spec) + "\n", encoding="utf-8")
+        active = task("AR-0001", status="in_progress")
+        active[1].update(
+            owner="worker-a",
+            claim_expires="2099-01-01T00:00:00+00:00",
+            spec_ref="spec.json",
+            spec_revision=1,
+        )
+        backend = self.create([active])
+        self.configure_core(backend="sqlite")
+        envelope_path = self.root / "envelopes"
+        envelope_path.mkdir()
+        payload = {
+            "schema_version": 1,
+            "envelope_id": "AR-0001-e1",
+            "envelope_revision": 1,
+            "task": "AR-0001",
+            "task_revision": 1,
+            "spec_ref": "spec.json",
+            "spec_revision": 1,
+            "outputs": [{"id": "implementation"}],
+            "non_goals": ["No prompt-derived authorization."],
+            "path_scope": {"read": ["src"], "write": ["src"]},
+            "command_classes": {"test": {"allowed": True}},
+            "evidence": [{"id": "tests"}],
+            "stop_conditions": [{"id": "scope", "kind": "deny"}],
+        }
+        (envelope_path / "AR-0001-e1.json").write_text(json.dumps(payload), encoding="utf-8")
+        CORE.mutate(
+            argparse.Namespace(
+                task="AR-0001",
+                owner="worker-a",
+                expected_revision=1,
+                envelope_ref="envelopes/AR-0001-e1.json",
+                envelope_revision=1,
+            ),
+            "bind-envelope",
+        )
+        bound = backend.load_tasks()[0][1]
+        self.assertEqual("envelopes/AR-0001-e1.json", bound["execution_envelope_ref"])
+        self.assertEqual(1, bound["execution_envelope_revision"])
+        self.assertRegex(str(bound["execution_envelope_digest"]), r"^sha256:[0-9a-f]{64}$")
+
     def test_every_write_route_enters_fence_before_sqlite_mutation(self) -> None:
         ordinary = self.create()
 

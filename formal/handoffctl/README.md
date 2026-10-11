@@ -41,6 +41,7 @@ authoritative revision, task status and owner unchanged.
 | `heartbeat` | `in_progress` | current owner, positive lease | lease renewed |
 | `update` | `in_progress` | current owner, exact revision | active fields updated |
 | `accept` | `in_progress`, referenced spec | current owner, exact revision, valid evidence metadata | spec acceptance recorded; lifecycle status unchanged |
+| `bind-envelope` | `in_progress`, referenced spec | current owner, exact revision, immutable matching envelope | envelope reference, revision, and digest recorded |
 | `release` | `in_progress` | current owner | chosen non-active state, owner and lease cleared |
 | `recover-expired` | expired `in_progress` | exact revision; a verified claim-time worker identity must now be absent unless a validated exact-current session exists; pre-identity records require explicit `--allow-legacy-without-identity` | `open`, ownership cleared; restores `next_action` only from an exact-current session snapshot |
 | `run` record | `in_progress`, unexpired | owner and current revision | bounded result recorded |
@@ -58,6 +59,12 @@ lock. Immediately after execution it fsyncs a privacy-safe local journal entry, 
 task result before attempting live reconciliation. `HandoffctlRun.tla` proves that preflight
 rejection has no external effect and that task-record or post-reconciliation failure cannot erase
 journal evidence. Arbitrary command correctness remains outside the proof.
+
+For a task with a bound execution envelope, `run` additionally requires a declared allowed command
+class and evaluates its declared scope paths before the external effect. This is a deterministic
+admission check, not a sandbox and not a claim that the wrapped command respects its declaration.
+The envelope binding and preflight are covered by concrete Git/SQLite tests; the current bounded
+lifecycle model does not add an envelope state variable.
 
 The linearization point is the successful transition while the process holds the lock below Git's
 common directory. Every worktree of one local clone resolves the same lock path. Expected revisions

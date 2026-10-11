@@ -20,6 +20,7 @@ LOCK_NAME = "coordinator.vendor.json"
 SOURCE_FILES: tuple[tuple[str, str], ...] = (
     ("tools/handoffctl", "tools/handoffctl"),
     ("tools/handoffctl.py", "tools/handoffctl.py"),
+    ("tools/execution_envelope.py", "tools/execution_envelope.py"),
     ("tools/fast_receipts.py", "tools/fast_receipts.py"),
     ("tools/fast_observation.py", "tools/fast_observation.py"),
     ("tools/fast_receipt_worker.py", "tools/fast_receipt_worker.py"),
@@ -84,6 +85,7 @@ SOURCE_FILES: tuple[tuple[str, str], ...] = (
     ("tools/vendor.py", "tools/handoffctl_vendor.py"),
     ("tests/test_handoffctl.py", "tests/test_handoffctl.py"),
     ("tests/test_concise_titles.py", "tests/test_concise_titles.py"),
+    ("tests/test_execution_envelope.py", "tests/test_execution_envelope.py"),
     ("tests/test_handoffctl_recovery.py", "tests/test_handoffctl_recovery.py"),
     ("tests/test_fast_receipts.py", "tests/test_fast_receipts.py"),
     ("tests/test_fast_observation.py", "tests/test_fast_observation.py"),
@@ -128,6 +130,7 @@ SOURCE_FILES: tuple[tuple[str, str], ...] = (
         "schema/handoffctl-directive-record.schema.json",
     ),
     ("schema/task-record.schema.json", "schema/task-record.schema.json"),
+    ("schema/execution-envelope.schema.json", "schema/execution-envelope.schema.json"),
     ("schema/role.schema.json", "schema/role.schema.json"),
     ("schema/role-registry.schema.json", "schema/role-registry.schema.json"),
     ("schema/role-assignment.schema.json", "schema/role-assignment.schema.json"),

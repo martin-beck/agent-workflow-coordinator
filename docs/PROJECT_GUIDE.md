@@ -116,7 +116,12 @@ separate release and provenance gates.
 ```sh
 tools/handoffctl snapshot
 tools/handoffctl claim AR-0001 --owner worker-unique --lease-minutes 120
-tools/handoffctl run --owner worker-unique AR-0001 -- command arg
+tools/handoffctl bind-envelope AR-0001 --owner worker-unique --expected-revision 2 \
+  --envelope-ref envelopes/AR-0001-e1.json --envelope-revision 1
+tools/handoffctl preflight AR-0001 --owner worker-unique --command-class source-write \
+  --scope-path tools --json
+tools/handoffctl run --owner worker-unique --command-class source-write --scope-path tools \
+  AR-0001 -- command arg
 tools/handoffctl update AR-0001 --owner worker-unique --expected-revision 2 \
   --note "Verified result and exact next action"
 tools/handoffctl accept AR-0001 --owner worker-unique --expected-revision 3 \
@@ -137,6 +142,11 @@ identity at claim time and later recovers only after it is absent.
 spec and validates the metadata. It does not independently inspect or prove the
 evidence contents; project review and evidence-class obligations still apply.
 The `done` release gate remains fail closed when acceptance is missing or invalid.
+
+An execution envelope is an optional, immutable, revision-bound task contract. Once bound, every
+`run` must declare an allowed command class and, for mutations, at least one allowed scope path.
+`preflight` gives a machine-readable explanation without changing state. Scope paths are admission
+claims, not an operating-system sandbox: use normal repository and platform isolation as well.
 
 Restore a verified checkpoint only from a clean descendant product checkout:
 

@@ -39,6 +39,7 @@ if not __package__:
         sys.path.insert(0, _SCRIPT_ROOT)
 
 if __package__:
+    from . import execution_envelope
     from .board_metrics import build_metrics
     from .board_metrics import encode as encode_metrics
     from .checkpoint_records import (
@@ -118,6 +119,7 @@ else:  # pragma: no cover - direct script execution
             del metrics
             raise RuntimeError("board metrics module is unavailable in this vendored bootstrap")
 
+    import execution_envelope  # type: ignore[import-not-found,no-redef]
     from checkpoint_records import (  # type: ignore[import-not-found,no-redef]
         append_checkpoint,
         build_checkpoint,
@@ -226,6 +228,7 @@ LIFECYCLE_MUTATION_COMMANDS = (
     "accept",
     "bind-spec",
     "bind-worktree",
+    "bind-envelope",
     "release",
     "promote",
     "pause",
@@ -275,6 +278,9 @@ FIELDS = set(REQ) | {
     "spec_ref",
     "spec_revision",
     "spec_acceptance",
+    "execution_envelope_ref",
+    "execution_envelope_revision",
+    "execution_envelope_digest",
     "parent_task_ref",
     "children",
 }
@@ -1365,6 +1371,19 @@ def value_errors(path: Path, meta: Meta) -> list[str]:
     claim_process = meta.get("claim_process")
     if claim_process is not None and not valid_claim_process(claim_process):
         errors.append(f"{task_id}: invalid claim_process")
+    envelope = (
+        meta.get("execution_envelope_ref"),
+        meta.get("execution_envelope_revision"),
+        meta.get("execution_envelope_digest"),
+    )
+    if any(value is not None for value in envelope) and not (
+        isinstance(envelope[0], str)
+        and isinstance(envelope[1], int)
+        and envelope[1] >= 1
+        and isinstance(envelope[2], str)
+        and re.fullmatch(r"sha256:[0-9a-f]{64}", envelope[2])
+    ):
+        errors.append(f"{task_id}: invalid execution envelope binding")
     return errors
 
 
@@ -1381,6 +1400,15 @@ def reference_errors(path: Path, meta: Meta) -> list[str]:
     plan = meta.get("plan")
     if plan and not (path.parent / plan).resolve().is_file():
         errors.append(f"{task_id}: missing plan {plan}")
+    reference = meta.get("execution_envelope_ref")
+    if isinstance(reference, str):
+        envelope, actual_digest, found = execution_envelope.load(ROOT, reference)
+        if found or envelope is None:
+            errors.append(f"{task_id}: invalid execution envelope: {'; '.join(found)}")
+        elif meta.get("execution_envelope_digest") != actual_digest:
+            errors.append(f"{task_id}: execution envelope digest mismatch")
+        elif meta.get("execution_envelope_revision") != envelope.get("envelope_revision"):
+            errors.append(f"{task_id}: execution envelope revision mismatch")
     return errors
 
 
@@ -2704,6 +2732,50 @@ def apply_bind_worktree(args: argparse.Namespace, meta: Meta, tasks: list[Task])
     return f"Bound worktree {args.worktree_key} on branch {args.branch}."
 
 
+def bind_envelope_candidate(args: argparse.Namespace, meta: Meta) -> tuple[Meta, str]:
+    """Load an envelope and verify its identity against the exact task revision."""
+    if not isinstance(meta.get("spec_ref"), str) or not isinstance(meta.get("spec_revision"), int):
+        raise RuntimeError("bind-envelope requires a bound task spec")
+    envelope, actual_digest, found = execution_envelope.load(ROOT, args.envelope_ref)
+    if found or envelope is None:
+        raise RuntimeError("bind-envelope envelope is invalid: " + "; ".join(found))
+    if execution_envelope.errors(envelope):  # defensive: loader already validates this.
+        raise RuntimeError("bind-envelope envelope is invalid")
+    if envelope["task"] != args.task or envelope["spec_ref"] != meta["spec_ref"]:
+        raise RuntimeError("bind-envelope envelope task or spec does not match")
+    if envelope["task_revision"] != meta["task_revision"]:
+        raise RuntimeError("bind-envelope envelope task revision does not match")
+    if envelope["spec_revision"] != meta["spec_revision"]:
+        raise RuntimeError("bind-envelope envelope spec revision does not match")
+    if args.envelope_revision != envelope["envelope_revision"]:
+        raise RuntimeError("bind-envelope envelope revision does not match")
+    return envelope, actual_digest
+
+
+def apply_bind_envelope(args: argparse.Namespace, meta: Meta) -> str:
+    """Bind one immutable, validated execution envelope to an active task."""
+    require_active_binding_owner(args, meta)
+    _, actual_digest = bind_envelope_candidate(args, meta)
+    existing = (
+        meta.get("execution_envelope_ref"),
+        meta.get("execution_envelope_revision"),
+        meta.get("execution_envelope_digest"),
+    )
+    requested = (args.envelope_ref, args.envelope_revision, actual_digest)
+    if any(value is not None for value in existing):
+        if existing == requested:
+            raise IdempotentMutationError(
+                f"Execution envelope {args.envelope_ref} is already bound."
+            )
+        raise RuntimeError("bind-envelope requires an unbound execution envelope")
+    meta.update(
+        execution_envelope_ref=args.envelope_ref,
+        execution_envelope_revision=args.envelope_revision,
+        execution_envelope_digest=actual_digest,
+    )
+    return f"Bound execution envelope {args.envelope_ref} revision {args.envelope_revision}."
+
+
 def apply_owned_change(  # noqa: C901
     args: argparse.Namespace,
     kind: str,
@@ -2901,6 +2973,7 @@ def apply_transition(
         "accept": lambda: apply_accept(args, meta, policy),
         "bind-spec": lambda: apply_bind_spec(args, meta, policy),
         "bind-worktree": lambda: apply_bind_worktree(args, meta, tasks),
+        "bind-envelope": lambda: apply_bind_envelope(args, meta),
     }.get(kind)
     if transition is not None:
         return transition()
@@ -3756,6 +3829,63 @@ def require_active_owner(task_id: str, owner: str) -> EvidencePolicy:
         return policy
 
 
+def execution_preflight(args: argparse.Namespace) -> tuple[bool, str, str, float | None]:
+    """Evaluate a bound envelope and return its admission result plus timeout cap."""
+    with locked(exclusive=False, phase="execution_envelope_preflight"):
+        _, meta, _ = locate(args.task)
+        worktree_key = meta.get("worktree_key")
+        if not isinstance(worktree_key, str) or not worktree_key:
+            return False, "WORKTREE_BINDING_REQUIRED", "bound execution requires a worktree", None
+        worktree = Path(str(config()["projects_root"])).resolve() / worktree_key
+        result = execution_envelope.preflight(
+            ROOT,
+            meta,
+            args.owner,
+            args.command_class,
+            list(args.scope_path),
+            worktree,
+        )
+        if not result.allowed:
+            return False, result.code, result.detail, None
+        envelope, _, found = execution_envelope.load(ROOT, str(meta["execution_envelope_ref"]))
+        if found or envelope is None:
+            return False, "ENVELOPE_INVALID", "; ".join(found), None
+        rule = envelope["command_classes"][args.command_class]
+        return True, result.code, result.detail, rule.get("timeout_seconds")
+
+
+def print_execution_preflight(args: argparse.Namespace) -> int:
+    """Print an explainable, side-effect-free envelope admission decision."""
+    allowed, code, detail, timeout = execution_preflight(args)
+    result: dict[str, object] = {"allowed": allowed, "code": code, "detail": detail}
+    if timeout is not None:
+        result["timeout_seconds"] = timeout
+    if args.json:
+        print(json.dumps(result, sort_keys=True, separators=(",", ":")))
+    else:
+        print(f"{code}: {detail}")
+    return 0 if allowed else 2
+
+
+def run_envelope_timeout(args: argparse.Namespace) -> float | None:
+    """Require envelope admission for a bound task and return its timeout cap."""
+    with locked(exclusive=False, phase="run_envelope_check"):
+        _, meta, _ = locate(args.task)
+        has_envelope = "execution_envelope_ref" in meta
+    command_class = getattr(args, "command_class", None)
+    if has_envelope and command_class is None:
+        raise RuntimeError("bound execution envelope requires --command-class")
+    if command_class is None:
+        return None
+    args.command_class = command_class
+    if not hasattr(args, "scope_path"):
+        args.scope_path = []
+    allowed, code, detail, timeout_cap = execution_preflight(args)
+    if not allowed:
+        raise RuntimeError(f"execution preflight {code}: {detail}")
+    return timeout_cap
+
+
 def invocation_worktree() -> tuple[str, str] | None:
     """Return the product worktree identity when called from a product checkout.
 
@@ -3887,12 +4017,15 @@ def cmd_run(args: argparse.Namespace) -> int:
     if backend_selection()["backend"] == "git":
         config()
     policy = require_active_owner(args.task, args.owner)
+    timeout_cap = run_envelope_timeout(args)
     # Never execute or consume untracked caller input. Scripts and data must be
     # named by argv or a stable file, whose content digest can be recorded too.
     command_hash = hashlib.sha256("\0".join(args.command).encode()).hexdigest()
     timeout = float(getattr(args, "timeout_seconds", COMMAND_TIMEOUT_SECONDS))
     if timeout <= 0:
         raise RuntimeError("command timeout must be positive")
+    if timeout_cap is not None and timeout > timeout_cap:
+        raise RuntimeError(f"command timeout exceeds envelope limit of {timeout_cap}s")
     require_policy_unchanged(ROOT, policy)
     timed_out = False
     try:
@@ -4267,6 +4400,8 @@ def dispatch_bound_standard_command(args: argparse.Namespace) -> int:  # noqa: C
         if args.command and args.command[0] == "--":
             args.command = args.command[1:]
         return cmd_run(args)
+    elif args.cmd == "preflight":
+        return print_execution_preflight(args)
     elif args.cmd == "migrate":
         cmd_migrate(args)
     elif args.cmd == "upgrade":
@@ -4449,6 +4584,20 @@ def main() -> int:
     item.add_argument("--expected-revision", type=int, required=True)
     item.add_argument("--branch", required=True)
     item.add_argument("--worktree-key", required=True)
+    item = commands.add_parser("bind-envelope")
+    item.add_argument("task")
+    item.add_argument("--owner", required=True)
+    item.add_argument("--expected-revision", type=int, required=True)
+    item.add_argument("--envelope-ref", required=True)
+    item.add_argument("--envelope-revision", type=int, required=True)
+    item = commands.add_parser("preflight")
+    item.add_argument("task")
+    item.add_argument("--owner", required=True)
+    item.add_argument(
+        "--command-class", choices=sorted(execution_envelope.COMMAND_CLASSES), required=True
+    )
+    item.add_argument("--scope-path", action="append", default=[])
+    item.add_argument("--json", action="store_true")
     item = commands.add_parser("promote")
     item.add_argument("task")
     item.add_argument("--expected-revision", type=int, required=True)
@@ -4513,6 +4662,8 @@ def main() -> int:
     item.add_argument("task")
     item.add_argument("--owner", required=True)
     item.add_argument("--timeout-seconds", type=float, default=COMMAND_TIMEOUT_SECONDS)
+    item.add_argument("--command-class", choices=sorted(execution_envelope.COMMAND_CLASSES))
+    item.add_argument("--scope-path", action="append", default=[])
     item.add_argument("command", nargs=argparse.REMAINDER)
     args = parser.parse_args()
     if args.cmd == "init":
