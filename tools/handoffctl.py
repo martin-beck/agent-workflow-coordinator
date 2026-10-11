@@ -288,6 +288,25 @@ def task_label(meta: Meta) -> str:
     return f"{meta['id']} — {meta.get('short_title') or meta['title']}"
 
 
+def short_title_errors(path: Path, task_id: str, value: object) -> list[str]:
+    """Validate optional concise navigational metadata independently of task state."""
+    if value is None:
+        return []
+    if (
+        not isinstance(value, str)
+        or not value.strip()
+        or any(ord(char) < 32 or ord(char) == 127 for char in value)
+    ):
+        return [f"{task_id}: invalid short_title"]
+    if len(value) > 120:
+        return [f"{task_id}: short_title exceeds 120 characters"]
+    if len(value.split()) > 4:
+        return [f"{task_id}: short_title exceeds four words"]
+    if private_text_errors(path, value):
+        return [f"{task_id}: privacy-unsafe short_title"]
+    return []
+
+
 COORDINATOR_VERSION = "0.5.2"
 DEFAULT_PROJECT_SETTINGS: Meta = {
     "schema_version": 1,
@@ -1341,18 +1360,7 @@ def value_errors(path: Path, meta: Meta) -> list[str]:
         for name in ("title", "summary", "next_action", "updated_at")
         if not isinstance(meta.get(name), str) or not meta.get(name)
     )
-    short_title = meta.get("short_title")
-    if short_title is not None:
-        if not isinstance(short_title, str) or not short_title.strip():
-            errors.append(f"{task_id}: invalid short_title")
-        elif any(ord(char) < 32 or ord(char) == 127 for char in short_title):
-            errors.append(f"{task_id}: invalid short_title")
-        elif len(short_title) > 120:
-            errors.append(f"{task_id}: short_title exceeds 120 characters")
-        elif len(short_title.split()) > 4:
-            errors.append(f"{task_id}: short_title exceeds four words")
-        elif private_text_errors(path, short_title):
-            errors.append(f"{task_id}: privacy-unsafe short_title")
+    errors.extend(short_title_errors(path, task_id, meta.get("short_title")))
     errors.extend(f"{task_id}: {error}" for error in gate_errors(meta.get("oracle_gate")))
     claim_process = meta.get("claim_process")
     if claim_process is not None and not valid_claim_process(claim_process):
