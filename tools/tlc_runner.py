@@ -223,9 +223,15 @@ def _cgroup_v2_directory(proc_root: Path = Path("/proc")) -> tuple[Path, Path]:
     return directory, mount
 
 
-def _cgroup_limit(path: Path) -> int | None:
+def _cgroup_limit(path: Path, *, required: bool = False) -> int | None:
     try:
         value = path.read_text(encoding="utf-8").strip()
+    except FileNotFoundError as error:
+        if required:
+            raise AdmissionError(f"required cgroup control is unavailable: {path.name}") from error
+        # A controller can be undelegated at an intermediate cgroup.  That
+        # level cannot impose this control, so continue checking its parents.
+        return None
     except OSError as error:
         raise AdmissionError(f"required cgroup control is unavailable: {path.name}") from error
     if value == "max":
@@ -246,7 +252,7 @@ def verify_effective_cgroup(
     for name, expected, exact_leaf in requested:
         current = directory
         while True:
-            actual = _cgroup_limit(current / name)
+            actual = _cgroup_limit(current / name, required=current == directory and exact_leaf)
             if current == directory and exact_leaf and actual != expected:
                 raise AdmissionError(f"leaf {name} does not match requested bound")
             if actual is not None and actual < expected:
