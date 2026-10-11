@@ -975,6 +975,26 @@ class FormalEvidenceTests(unittest.TestCase):
         self.assertIn("tools/lifecycle_trace.py", workflow)
         self.assertIn("push:", formal)
         self.assertIn("workflow_dispatch:", formal)
+        manual_dispatch = formal[
+            formal.index("  workflow_dispatch:\n") : formal.index("  schedule:\n")
+        ]
+        self.assertIn("      tier:\n", manual_dispatch)
+        self.assertIn("        type: choice\n", manual_dispatch)
+        self.assertEqual(
+            re.findall(r"^          - (.+)$", manual_dispatch, re.MULTILINE),
+            ["pr-fast", "full-exhaustive"],
+        )
+        self.assertIn(
+            "TLC_TIER: ${{ github.event_name == 'schedule' && 'full-exhaustive' || "
+            "inputs.tier || 'pr-fast' }}",
+            formal,
+        )
+        self.assertIn(
+            "timeout-minutes: ${{ (github.event_name == 'schedule' || "
+            "inputs.tier == 'full-exhaustive') && 360 || 30 }}",
+            formal,
+        )
+        self.assertIn("continue-on-error: ${{ github.event_name == 'schedule' }}", formal)
         self.assertIn("schedule:", formal)
         self.assertIn("if: github.ref == 'refs/heads/main'", formal)
         self.assertIn("runs-on: [self-hosted, Linux, X64, agent-workflow-coordinator-ci]", formal)
@@ -991,6 +1011,22 @@ class FormalEvidenceTests(unittest.TestCase):
             "TLC_TIMEOUT_SECONDS",
         ):
             self.assertIn(resource_setting, formal_step)
+        full_tier_condition = (
+            "(github.event_name == 'schedule' || inputs.tier == 'full-exhaustive')"
+        )
+        for resource_setting, full_value, fast_value in (
+            ("TLC_HEAP", "4096m", "2048m"),
+            ("TLC_MEMORY_MAX", "6G", "3G"),
+            ("TLC_SWAP_MAX", "6G", "3G"),
+        ):
+            resource_expression = (
+                f"{resource_setting}: ${{{{ {full_tier_condition} && "
+                f"'{full_value}' || '{fast_value}' }}}}"
+            )
+            self.assertIn(
+                resource_expression,
+                formal_step,
+            )
         self.assertIn("MemoryMax=6G", formal)
         self.assertIn("MemorySwapMax=6G", formal)
         self.assertIn("MemTotal", formal)
@@ -1000,12 +1036,12 @@ class FormalEvidenceTests(unittest.TestCase):
         self.assertIn('"${cgroup_dir}/memory.max"', formal)
         self.assertIn('"${cgroup_dir}/memory.swap.max"', formal)
         self.assertNotIn("needs.scope.outputs.release_sensitive", formal_step)
-        self.assertIn("github.event_name == 'schedule' && 360", formal)
         timeout_expression = formal[
             formal.index("TLC_TIMEOUT_SECONDS:") : formal.index(
                 "\n", formal.index("TLC_TIMEOUT_SECONDS:")
             )
         ]
+        self.assertIn("inputs.tier == 'full-exhaustive'", timeout_expression)
         self.assertIn("'6000'", timeout_expression)
         self.assertIn("'1200'", timeout_expression)
 
