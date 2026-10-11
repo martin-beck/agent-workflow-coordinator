@@ -1347,6 +1347,8 @@ def value_errors(path: Path, meta: Meta) -> list[str]:
             errors.append(f"{task_id}: invalid short_title")
         elif any(ord(char) < 32 or ord(char) == 127 for char in short_title):
             errors.append(f"{task_id}: invalid short_title")
+        elif len(short_title) > 120:
+            errors.append(f"{task_id}: short_title exceeds 120 characters")
         elif len(short_title.split()) > 4:
             errors.append(f"{task_id}: short_title exceeds four words")
         elif private_text_errors(path, short_title):
@@ -2753,8 +2755,11 @@ def apply_rollback(args: argparse.Namespace, meta: Meta) -> str:
     state = checkpoint["state"]
     if not isinstance(state, dict) or state.get("id") != meta.get("id"):
         raise RuntimeError("rollback checkpoint task does not match target task")
+    if "short_title" in state:
+        meta["short_title"] = state["short_title"]
+    else:
+        meta.pop("short_title", None)
     for field in (
-        "short_title",
         "priority",
         "summary",
         "next_action",

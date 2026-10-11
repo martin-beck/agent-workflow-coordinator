@@ -636,6 +636,12 @@ class HandoffTest(unittest.TestCase):
         path = self.make_task(short_title="One two three four")
         self.assertEqual([], CORE.basic_task_errors(path, CORE.read_task(path)[0]))
         meta, body = CORE.read_task(path)
+        meta["short_title"] = "x" * 120
+        CORE.write_task(path, meta, body)
+        self.assertEqual([], CORE.basic_task_errors(path, CORE.read_task(path)[0]))
+        meta["short_title"] = "x" * 121
+        CORE.write_task(path, meta, body)
+        self.assertIn("short_title exceeds 120 characters", "\n".join(CORE.validate()))
         meta["short_title"] = "one two three four five"
         CORE.write_task(path, meta, body)
         self.assertIn("short_title exceeds four words", "\n".join(CORE.validate()))
@@ -650,6 +656,25 @@ class HandoffTest(unittest.TestCase):
 
         self.assertIn("Bad \\]\\(https://example.invalid\\)", current)
         self.assertNotIn("[AR-0001 — Bad ](https://example.invalid)]", current)
+
+    def test_rollback_removes_short_title_missing_from_checkpoint(self) -> None:
+        path = self.make_task(short_title="Later added title")
+        meta, _ = CORE.read_task(path)
+        checkpoint_state = dict(meta)
+        checkpoint_state.pop("short_title")
+
+        CORE.apply_rollback(
+            argparse.Namespace(
+                rollback_checkpoint={
+                    "name": "AR-0001-r0001",
+                    "source_commit": "a" * 40,
+                    "state": checkpoint_state,
+                }
+            ),
+            meta,
+        )
+
+        self.assertNotIn("short_title", meta)
 
     def test_current_projection_is_actionable_and_keeps_terminal_history_out(self) -> None:
         self.make_task("AR-0001", status="open", priority="P0")
