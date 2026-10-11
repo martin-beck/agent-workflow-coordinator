@@ -37,5 +37,8 @@ def test_release_workflow_accepts_one_bounded_transient_transition_without_dirty
     assert 'printf \'%s\' "$TRANSITION_JSON" > "$TRANSITION"' in WORKFLOW
     assert 'chmod 600 "$TRANSITION"' in WORKFLOW
     assert 'TRANSITION_WORKSPACE="$transition_dir"' in WORKFLOW
+    assert 'printf \'TRANSITION_MODE=%s\\n\' "$TRANSITION_MODE" >> "$GITHUB_ENV"' in WORKFLOW
+    assert 'TRANSITION="$RUNNER_TEMP/release-clone/$TRANSITION_PATH"' in WORKFLOW
+    assert 'TRANSITION_WORKSPACE="$RUNNER_TEMP/release-clone"' in WORKFLOW
     assert '--workspace "$TRANSITION_WORKSPACE" --candidate' in WORKFLOW
     assert 'if [[ -n "$(git status --porcelain=v1)" ]]; then' in WORKFLOW

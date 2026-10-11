@@ -37,6 +37,7 @@ jobs:
             case "$TRANSITION_PATH" in /*|*..*) exit 1;; esac
             TRANSITION="$GITHUB_WORKSPACE/$TRANSITION_PATH"
             TRANSITION_WORKSPACE="$GITHUB_WORKSPACE"
+            TRANSITION_MODE=path
           elif [[ -n "$TRANSITION_JSON" ]]; then
             transition_dir="$RUNNER_TEMP/release-transition-input"
             install -d -m 700 "$transition_dir"
@@ -45,12 +46,17 @@ jobs:
             printf '%s' "$TRANSITION_JSON" > "$TRANSITION"
             chmod 600 "$TRANSITION"
             TRANSITION_WORKSPACE="$transition_dir"
+            TRANSITION_MODE=json
           else
             echo "a transition path or JSON input is required" >&2
             exit 1
           fi
           printf 'TRANSITION=%s\n' "$TRANSITION" >> "$GITHUB_ENV"
           printf 'TRANSITION_WORKSPACE=%s\n' "$TRANSITION_WORKSPACE" >> "$GITHUB_ENV"
+          printf 'TRANSITION_MODE=%s\n' "$TRANSITION_MODE" >> "$GITHUB_ENV"
+          if [[ "$TRANSITION_MODE" == path ]]; then
+            printf 'TRANSITION_PATH=%s\n' "$TRANSITION_PATH" >> "$GITHUB_ENV"
+          fi
       - name: Generate and validate release contract
         run: |
           test -n "$TRANSITION"
@@ -64,6 +70,10 @@ jobs:
       - name: Revalidate from a fresh clone
         run: |
           git clone --no-local --no-hardlinks "$GITHUB_WORKSPACE" "$RUNNER_TEMP/release-clone"
+          if [[ "$TRANSITION_MODE" == path ]]; then
+            TRANSITION="$RUNNER_TEMP/release-clone/$TRANSITION_PATH"
+            TRANSITION_WORKSPACE="$RUNNER_TEMP/release-clone"
+          fi
           uv run --directory "$RUNNER_TEMP/release-clone" python -m tools.verify_release_identity \
             "$TRANSITION" --repository "$RUNNER_TEMP/release-clone" \
             --workspace "$TRANSITION_WORKSPACE" --candidate
