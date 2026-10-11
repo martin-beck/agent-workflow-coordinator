@@ -73,6 +73,22 @@ Existing initialized projects without `coordinator.backend.json` remain Git-back
 Never manufacture that file to migrate; use `handoffctl migrate --to sqlite`, verify the database
 and projections, and retain the Git files for the documented `migrate --to git` rollback.
 
+## Concise task titles
+
+Task records may carry an optional `short_title`: one to four human-readable words used beside
+the task ID in operator-facing views. `title` remains the full durable description. During the
+v0.5 compatibility window, records without `short_title` render their full title after the ID and
+remain valid; the coordinator never derives or writes a short title while reading a record.
+
+Migrate a Git-backed project in one reviewable state change: add a valid `short_title` to each
+task front matter, regenerate `CURRENT.md` and `STATUS.md` with `render-status`, then require
+`render-status --check` and `doctor` in the state PR. For SQLite authority, use the supported
+`migrate --to git` export, apply and review that same mapping in Git, then `migrate --to sqlite`;
+the migration equivalence check must preserve the distinct field. Before the next schema-major
+release, the project must explicitly either complete that mapping or retain the v0.5 compatibility
+policy; a future required-field change must reject missing titles during validation rather than
+silently inventing them.
+
 Omit `--status-view` if the project has no `STATUS.md`. Omit `--commit-signoff` if DCO trailers
 are not project policy. Commit both binding files with the vendor snapshot. There is deliberately
 no rebind command: create a fresh state repository and initialize it separately.

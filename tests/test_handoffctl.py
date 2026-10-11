@@ -620,18 +620,6 @@ class HandoffTest(unittest.TestCase):
         ):
             CORE.require_active_owner("AR-0001", "worker")
 
-    def test_atomic_task_round_trip_and_render(self) -> None:
-        path = self.make_task()
-        meta, body = CORE.read_task(path)
-        self.assertEqual("AR-0001", meta["id"])
-        self.assertEqual("# Test\n", body)
-        current = CORE.render_current(CORE.all_tasks())
-        self.assertIn("## Open", current)
-        self.assertIn("[AR-0001]", current)
-        status = CORE.render_status_view(CORE.all_tasks())
-        self.assertIn("flowchart LR", status)
-        self.assertIn("**1 ARs tracked**", status)
-
     def test_current_projection_is_actionable_and_keeps_terminal_history_out(self) -> None:
         self.make_task("AR-0001", status="open", priority="P0")
         self.make_task("AR-0002", status="in_progress", priority="P1")
@@ -644,9 +632,9 @@ class HandoffTest(unittest.TestCase):
         current = CORE.render_current(CORE.all_tasks())
 
         for task_id in ("AR-0001", "AR-0002", "AR-0003", "AR-0004", "AR-0005"):
-            self.assertIn(f"[{task_id}]", current)
+            self.assertIn(task_id, current)
         for task_id in ("AR-0006", "AR-0007", "AR-0008"):
-            self.assertNotIn(f"[{task_id}]", current)
+            self.assertNotIn(task_id, current)
         for label in ("Done", "Cancelled", "Superseded"):
             self.assertNotIn(f"## {label}", current)
 

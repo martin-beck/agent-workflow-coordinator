@@ -256,6 +256,7 @@ REQ = (
     "updated_at",
 )
 FIELDS = set(REQ) | {
+    "short_title",
     "owner",
     "role",
     "team",
@@ -280,6 +281,31 @@ FIELDS = set(REQ) | {
 type Meta = dict[str, Any]
 type Task = tuple[Path, Meta, str]
 type State = dict[str, Any]
+
+
+def task_label(meta: Meta) -> str:
+    """Return the compatibility-safe human label for one task."""
+    return f"{meta['id']} — {meta.get('short_title') or meta['title']}"
+
+
+def short_title_errors(path: Path, task_id: str, value: object) -> list[str]:
+    """Validate optional concise navigational metadata independently of task state."""
+    if value is None:
+        return []
+    if (
+        not isinstance(value, str)
+        or not value.strip()
+        or any(ord(char) < 32 or ord(char) == 127 for char in value)
+    ):
+        return [f"{task_id}: invalid short_title"]
+    if len(value) > 120:
+        return [f"{task_id}: short_title exceeds 120 characters"]
+    if len(value.split()) > 4:
+        return [f"{task_id}: short_title exceeds four words"]
+    if private_text_errors(path, value):
+        return [f"{task_id}: privacy-unsafe short_title"]
+    return []
+
 
 COORDINATOR_VERSION = "0.5.2"
 DEFAULT_PROJECT_SETTINGS: Meta = {
@@ -943,7 +969,16 @@ def render_current(tasks: list[Task]) -> str:
     by_id = {meta["id"]: path.name for path, meta, _ in tasks}
 
     def clean(value: object) -> str:
-        return str(value or "-").replace("|", "\\|").replace("\n", " ")
+        return (
+            str(value or "-")
+            .replace("\\", "\\\\")
+            .replace("|", "\\|")
+            .replace("\n", " ")
+            .replace("[", "\\[")
+            .replace("]", "\\]")
+            .replace("(", "\\(")
+            .replace(")", "\\)")
+        )
 
     for status in CURRENT_STATUSES:
         rows = sorted(
@@ -958,9 +993,9 @@ def render_current(tasks: list[Task]) -> str:
             "| --- | --- | --- | --- | --- |",
         ]
         for meta in rows:
-            link = f"[{meta['id']}](tasks/{by_id[meta['id']]})"
+            link = f"[{clean(task_label(meta))}](tasks/{by_id[meta['id']]})"
             row = (
-                f"| {meta['priority']} | {link}: {clean(meta['title'])} | "
+                f"| {meta['priority']} | {link} | "
                 f"{clean(meta['summary'])} | {clean(meta['next_action'])} | "
                 f"{clean(meta.get('owner'))} |"
             )
@@ -1325,6 +1360,7 @@ def value_errors(path: Path, meta: Meta) -> list[str]:
         for name in ("title", "summary", "next_action", "updated_at")
         if not isinstance(meta.get(name), str) or not meta.get(name)
     )
+    errors.extend(short_title_errors(path, task_id, meta.get("short_title")))
     errors.extend(f"{task_id}: {error}" for error in gate_errors(meta.get("oracle_gate")))
     claim_process = meta.get("claim_process")
     if claim_process is not None and not valid_claim_process(claim_process):
@@ -2727,6 +2763,10 @@ def apply_rollback(args: argparse.Namespace, meta: Meta) -> str:
     state = checkpoint["state"]
     if not isinstance(state, dict) or state.get("id") != meta.get("id"):
         raise RuntimeError("rollback checkpoint task does not match target task")
+    if "short_title" in state:
+        meta["short_title"] = state["short_title"]
+    else:
+        meta.pop("short_title", None)
     for field in (
         "priority",
         "summary",
