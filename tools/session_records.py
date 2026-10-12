@@ -49,6 +49,21 @@ def _canonical(value: object) -> bytes:
     return json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
 
 
+def _ledger_artifact_refs(ledger: object) -> list[str]:
+    if not isinstance(ledger, dict):
+        return []
+    refs = []
+    candidate = ledger.get("candidate_ref")
+    if isinstance(candidate, str) and candidate:
+        refs.append(f"candidate:{candidate}")
+    refs.extend(
+        f"evidence:{step['evidence_ref']}"
+        for step in ledger.get("steps", [])
+        if isinstance(step, dict) and isinstance(step.get("evidence_ref"), str)
+    )
+    return refs
+
+
 def _artifact_refs(meta: Meta) -> list[str]:
     refs: list[str] = []
     spec_ref = meta.get("spec_ref")
@@ -62,6 +77,7 @@ def _artifact_refs(meta: Meta) -> list[str]:
         evidence_ref = acceptance.get("evidence_ref")
         if isinstance(evidence_ref, str) and evidence_ref:
             refs.append(f"evidence:{evidence_ref}")
+    refs.extend(_ledger_artifact_refs(meta.get("evidence_ledger")))
     checkpoint = meta.get("checkpoint_commit")
     if (
         isinstance(checkpoint, str)
@@ -69,7 +85,7 @@ def _artifact_refs(meta: Meta) -> list[str]:
         and all(character in "0123456789abcdef" for character in checkpoint)
     ):
         refs.append(f"git:{checkpoint}")
-    return refs
+    return list(dict.fromkeys(refs))[:8]
 
 
 def build_session_record(meta: Meta, trigger: str, recorded_at: str) -> Meta:

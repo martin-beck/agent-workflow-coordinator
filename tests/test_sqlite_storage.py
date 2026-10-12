@@ -4,6 +4,7 @@
 """SQLite backend conformance, fault and real multiprocess tests."""
 
 import argparse
+import hashlib
 import importlib.util
 import json
 import multiprocessing
@@ -1188,6 +1189,12 @@ class SQLiteStorageTest(unittest.TestCase):
                 }
             )
         )
+        (self.root / "candidate.txt").write_text("candidate", encoding="utf-8")
+        (self.root / "evidence.txt").write_text("evidence", encoding="utf-8")
+
+        def digest(name: str) -> str:
+            return "sha256:" + hashlib.sha256((self.root / name).read_bytes()).hexdigest()
+
         CORE.export_sqlite_projections()
         with patch.object(CORE, "push_replica"):
             CORE.mutate(
@@ -1217,8 +1224,12 @@ class SQLiteStorageTest(unittest.TestCase):
                 owner="worker",
                 expected_revision=3,
                 evidence_class="contract-test",
-                evidence_ref="awq/evidence/AR-0001",
-                evidence_digest="sha256:" + "c" * 64,
+                evidence_ref="evidence.txt",
+                evidence_digest=digest("evidence.txt"),
+                predicate="predicate",
+                candidate_ref="candidate.txt",
+                candidate_digest=digest("candidate.txt"),
+                reopen=False,
                 note="accepted",
             )
             with self.assertRaisesRegex(RuntimeError, "stale revision"):
@@ -1234,7 +1245,7 @@ class SQLiteStorageTest(unittest.TestCase):
         self.assertEqual(
             ("done", 5, "P0"), (final["status"], final["task_revision"], final["priority"])
         )
-        self.assertEqual("pass", final["spec_acceptance"]["status"])
+        self.assertEqual("pass", final["evidence_ledger"]["steps"][0]["status"])
         self.assertIn("updated", (self.tasks / "AR-0001-test.md").read_text())
 
     def test_sqlite_gate_persists_and_exports_human_session_metadata(self) -> None:

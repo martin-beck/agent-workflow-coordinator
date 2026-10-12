@@ -5,6 +5,7 @@
 
 import argparse
 import datetime as dt
+import hashlib
 import importlib.util
 import json
 import multiprocessing
@@ -4226,6 +4227,60 @@ class HandoffTest(unittest.TestCase):
         acceptance = meta["spec_acceptance"]
         self.assertEqual("best_effort", acceptance["match"])
         self.assertNotIn("spec_ref", acceptance)
+
+    def test_predicate_acceptance_reopens_only_for_a_new_candidate(self) -> None:
+        self.enable_additive_policy()
+        self.write_additive_spec()
+        for name, content in (
+            ("candidate-a.txt", "a"),
+            ("candidate-b.txt", "b"),
+            ("evidence.txt", "ok"),
+        ):
+            (self.root / name).write_text(content, encoding="utf-8")
+
+        def digest(name: str) -> str:
+            return "sha256:" + hashlib.sha256((self.root / name).read_bytes()).hexdigest()
+
+        self.make_task(
+            status="in_progress",
+            owner="worker-a",
+            claim_expires="2099-01-01T00:00:00+00:00",
+            spec_ref="spec.json",
+            spec_revision=1,
+        )
+        first = argparse.Namespace(
+            task="AR-0001",
+            owner="worker-a",
+            expected_revision=1,
+            evidence_class="hosted",
+            evidence_ref="evidence.txt",
+            evidence_digest=digest("evidence.txt"),
+            predicate="downstream-policy",
+            candidate_ref="candidate-a.txt",
+            candidate_digest=digest("candidate-a.txt"),
+            reopen=False,
+            note="candidate a",
+        )
+        with (
+            patch.object(CORE, "sync_replica_before_write"),
+            patch.object(CORE, "commit", return_value=True),
+            patch.object(CORE, "push_replica"),
+        ):
+            CORE.mutate(first, "accept")
+            changed = argparse.Namespace(
+                **{
+                    **vars(first),
+                    "expected_revision": 2,
+                    "candidate_ref": "candidate-b.txt",
+                    "candidate_digest": digest("candidate-b.txt"),
+                }
+            )
+            with self.assertRaisesRegex(RuntimeError, "candidate changed"):
+                CORE.mutate(changed, "accept")
+            CORE.mutate(argparse.Namespace(**{**vars(changed), "reopen": True}), "accept")
+        ledger = CORE.locate("AR-0001")[1]["evidence_ledger"]
+        self.assertEqual("candidate-b.txt", ledger["candidate_ref"])
+        self.assertEqual("pass", ledger["steps"][0]["status"])
 
     def test_policy_and_spec_failures_cover_every_read_only_preflight(self) -> None:
         self.make_task(

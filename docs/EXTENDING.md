@@ -27,6 +27,19 @@ cannot select another policy.
 
 ## Upstream extensions
 
+### Predicate evidence ledger
+
+Spec-bound tasks may use `handoffctl accept --predicate ID --candidate-ref PATH`
+with `--candidate-digest` and the evidence artifact's `--evidence-ref` and
+`--evidence-digest`.  Both references are bounded repository-relative regular
+files and their SHA-256 digests are verified before the transition commits.
+Every accepted predicate is bound to the current candidate.  Recording a new
+candidate requires `--reopen`; existing passing predicates become `stale` and
+must be accepted again for the new candidate before `release --status done`.
+This proves artifact identity and binding only, never the semantic correctness
+of arbitrary evidence.  `snapshot TASK` emits `NEXT_UNMET_STEP` when a
+specification still has a predicate without current-candidate passing evidence.
+
 Change upstream when behavior affects:
 
 - lifecycle transitions, ownership, revisions or dependencies;

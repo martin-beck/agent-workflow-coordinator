@@ -100,7 +100,9 @@ if __package__:
         DEFAULT_EVIDENCE_POLICY,
         EvidencePolicy,
         done_admission_error,
+        evidence_ledger_errors,
         evidence_policy,
+        next_unmet_predicate,
         require_policy_unchanged,
         task_spec_errors,
         task_spec_policy_errors,
@@ -182,7 +184,9 @@ else:  # pragma: no cover - direct script execution
         DEFAULT_EVIDENCE_POLICY,
         EvidencePolicy,
         done_admission_error,
+        evidence_ledger_errors,
         evidence_policy,
+        next_unmet_predicate,
         require_policy_unchanged,
         task_spec_errors,
         task_spec_policy_errors,
@@ -280,6 +284,7 @@ FIELDS = set(REQ) | {
     "spec_ref",
     "spec_revision",
     "spec_acceptance",
+    "evidence_ledger",
     "execution_envelope_ref",
     "execution_envelope_revision",
     "execution_envelope_task_revision",
@@ -2638,7 +2643,9 @@ def require_promotion_preflight(kind: str) -> None:
         raise RuntimeError("promotion requires a clean state repository")
 
 
-def apply_accept(args: argparse.Namespace, meta: Meta, policy: EvidencePolicy | None) -> str:
+def apply_accept(  # noqa: C901
+    args: argparse.Namespace, meta: Meta, policy: EvidencePolicy | None
+) -> str:
     """Record one owner's exact-revision assertion against the referenced spec."""
     if meta.get("owner") != args.owner:
         raise RuntimeError(f"{args.task} is owned by {meta.get('owner') or 'nobody'}")
@@ -2649,6 +2656,70 @@ def apply_accept(args: argparse.Namespace, meta: Meta, policy: EvidencePolicy | 
         raise RuntimeError(
             f"stale revision: expected {args.expected_revision}, current {meta['task_revision']}"
         )
+    predicate = getattr(args, "predicate", None)
+    candidate_ref = getattr(args, "candidate_ref", None)
+    candidate_digest = getattr(args, "candidate_digest", None)
+    reopen = bool(getattr(args, "reopen", False))
+    if predicate is not None or candidate_ref is not None or candidate_digest is not None or reopen:
+        if not all(
+            isinstance(value, str) and value
+            for value in (predicate, candidate_ref, candidate_digest)
+        ):
+            raise RuntimeError(
+                "predicate acceptance requires predicate, candidate ref, and candidate digest"
+            )
+        if "spec_ref" not in meta or "spec_revision" not in meta:
+            raise RuntimeError("predicate acceptance requires a bound task spec")
+        errors = task_spec_errors(ROOT, meta, policy)
+        if errors:
+            raise RuntimeError("predicate acceptance task spec is unavailable")
+        import json
+
+        spec = json.loads((ROOT / str(meta["spec_ref"])).read_text(encoding="utf-8"))
+        predicates = {item["id"] for item in spec["acceptance_predicates"]}
+        if predicate not in predicates:
+            raise RuntimeError("predicate acceptance names an unknown predicate")
+        ledger = meta.get("evidence_ledger")
+        if ledger is None:
+            ledger = {
+                "candidate_ref": candidate_ref,
+                "candidate_digest": candidate_digest,
+                "steps": [],
+            }
+        if not isinstance(ledger, dict):
+            raise RuntimeError("predicate evidence ledger is malformed")
+        changed_candidate = (
+            ledger.get("candidate_ref") != candidate_ref
+            or ledger.get("candidate_digest") != candidate_digest
+        )
+        if changed_candidate and not reopen:
+            raise RuntimeError("candidate changed; reopen predicate evidence before recording")
+        if reopen and not changed_candidate:
+            raise RuntimeError("reopen requires a different candidate")
+        steps = [dict(step) for step in ledger.get("steps", []) if isinstance(step, dict)]
+        if changed_candidate:
+            for step in steps:
+                if step.get("status") == "pass":
+                    step["status"] = "stale"
+            ledger["candidate_ref"] = candidate_ref
+            ledger["candidate_digest"] = candidate_digest
+        step: Meta = {
+            "predicate_id": predicate,
+            "status": "pass",
+            "candidate_ref": candidate_ref,
+            "candidate_digest": candidate_digest,
+            "evidence_class": args.evidence_class,
+            "evidence_ref": args.evidence_ref,
+            "evidence_digest": args.evidence_digest,
+            "recorded_task_revision": int(meta["task_revision"]) + 1,
+        }
+        steps = [item for item in steps if item.get("predicate_id") != predicate]
+        ledger["steps"] = [*steps, step]
+        meta["evidence_ledger"] = ledger
+        errors = evidence_ledger_errors(ROOT, meta, policy)
+        if errors:
+            raise RuntimeError("predicate evidence is invalid: " + "; ".join(errors))
+        return str(args.note)
     acceptance: Meta = {
         "status": "pass",
         "evidence_class": args.evidence_class,
@@ -3627,6 +3698,12 @@ def print_snapshot_under_lock(task_id: str | None, sqlite: bool) -> None:
         if record is None:
             raise RuntimeError(f"no session snapshot for {task_id}")
         validate_session_record(record)
+        task = next((meta for _, meta, _ in all_tasks() if meta.get("id") == task_id), None)
+        if task is None:
+            raise RuntimeError(f"unknown task {task_id}")
+        next_step = next_unmet_predicate(ROOT, task)
+        if next_step is not None:
+            print("NEXT_UNMET_STEP=" + next_step)
         print("SESSION_SNAPSHOT=" + json.dumps(record, sort_keys=True, separators=(",", ":")))
 
 
@@ -4820,6 +4897,10 @@ def main() -> int:
     item.add_argument("--evidence-class", required=True)
     item.add_argument("--evidence-ref", required=True)
     item.add_argument("--evidence-digest", required=True)
+    item.add_argument("--predicate")
+    item.add_argument("--candidate-ref")
+    item.add_argument("--candidate-digest")
+    item.add_argument("--reopen", action="store_true")
     item.add_argument("--note", required=True)
     item = commands.add_parser("bind-spec")
     item.add_argument("task")
