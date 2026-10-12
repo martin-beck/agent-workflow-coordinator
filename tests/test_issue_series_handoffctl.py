@@ -292,6 +292,19 @@ class IssueSeriesHandoffTest(unittest.TestCase):
         self.assertEqual("ambiguous", outcome.status)
         self.assertIsNone(outcome.comment_id)
 
+    def test_live_publication_recovers_marker_before_posting(self) -> None:
+        digest = "sha256:" + "b" * 64
+        with patch.object(CORE, "CONFIG", self.root / "config.json"):
+            CORE.CONFIG.write_text(json.dumps({"github_repository": "owner/product"}))
+            found = subprocess.CompletedProcess([], 0, "77\n", "")
+            with patch.object(CORE.subprocess, "run", return_value=found) as run:
+                outcome = CORE._live_issue_series_publication(
+                    "github.com/owner/product", 42, digest, "body"
+                )
+        self.assertEqual("already_published", outcome.status)
+        self.assertEqual("77", outcome.comment_id)
+        run.assert_called_once()
+
     def test_issue_series_create_restores_every_precommit_write(self) -> None:
         self.make_task()
         manifest = self.issue_series_manifest()
