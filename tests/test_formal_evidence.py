@@ -1047,10 +1047,10 @@ class FormalEvidenceTests(unittest.TestCase):
         reduced_invariants = re.search(r"INVARIANTS\n(.*?)\n\nPROPERTIES", reduced, re.DOTALL)
         source_properties = re.search(r"PROPERTIES\n(.*)", source, re.DOTALL)
         reduced_properties = re.search(r"PROPERTIES\n(.*)", reduced, re.DOTALL)
-        self.assertIsNotNone(source_invariants)
-        self.assertIsNotNone(reduced_invariants)
-        self.assertIsNotNone(source_properties)
-        self.assertIsNotNone(reduced_properties)
+        assert source_invariants is not None
+        assert reduced_invariants is not None
+        assert source_properties is not None
+        assert reduced_properties is not None
 
         def names(match: re.Match[str]) -> list[str]:
             return [line.strip() for line in match.group(1).splitlines() if line.strip()]
