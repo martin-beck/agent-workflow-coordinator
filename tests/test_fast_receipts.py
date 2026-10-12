@@ -1133,6 +1133,85 @@ class FastReceiptTests(unittest.TestCase):
         ):
             ReceiptStore(self.path, self.project_id)
 
+    def test_claim_and_update_reject_boolean_and_malformed_inputs_before_enqueue(self) -> None:
+        store = self.store()
+        invalid_claims = (
+            {"expected_revision": 0},
+            {"worker_pid": True, "worker_start_time": 1},
+            {"worker_pid": 1, "worker_start_time": -1},
+        )
+        for changes in invalid_claims:
+            with self.subTest(changes=changes), self.assertRaisesRegex(ValueError, "worker|revision"):
+                claim = {
+                    "key": "worker-a:claim:invalid",
+                    "task": "AR-0120",
+                    "owner": "worker-a",
+                    "expected_revision": 1,
+                    "lease_minutes": 20,
+                }
+                claim.update(changes)
+                store.enqueue_claim(**claim)  # type: ignore[arg-type]
+        for changes in (
+            {"expected_revision": True},
+            {"note": "contains\x00nul"},
+            {"owner": "not valid"},
+        ):
+            with self.subTest(changes=changes), self.assertRaisesRegex(ValueError, "update receipt"):
+                update = {
+                    "key": "worker-a:update:invalid",
+                    "task": "AR-0120",
+                    "owner": "worker-a",
+                    "expected_revision": 1,
+                    "changes": {"priority": "P1"},
+                    "note": "ordinary note",
+                }
+                update.update(changes)
+                store.enqueue_update(**update)  # type: ignore[arg-type]
+        self.assertEqual(0, store.connection.execute("SELECT count(*) FROM intents").fetchone()[0])
+
+    def test_publication_admission_and_finish_fail_closed_for_invalid_or_missing_jobs(self) -> None:
+        store = self.store()
+        for changes in (
+            {"key": "invalid key", "candidate_oid": "a" * 40, "expected_remote_oid": "b" * 40},
+            {"key": "publisher:invalid", "candidate_oid": "not-an-oid", "expected_remote_oid": "b" * 40},
+            {"key": "publisher:invalid", "candidate_oid": "a" * 40, "expected_remote_oid": "a" * 40},
+        ):
+            with self.subTest(changes=changes), self.assertRaisesRegex(ValueError, "publication admission"):
+                store.admit_publication(**changes)
+        with self.assertRaisesRegex(RuntimeError, "unknown publication job"):
+            store.finish_publication(
+                "1" * 32,
+                lease="2" * 32,
+                phase="rejected",
+                error_code="REMOTE_ADVANCED",
+            )
+        self.assertEqual(0, store.connection.execute("SELECT count(*) FROM publication_jobs").fetchone()[0])
+
+    def test_superseded_resolution_visibility_failure_rolls_back_the_outcome(self) -> None:
+        store = self.store()
+        admitted = store.admit_publication(
+            key="visibility:superseded", candidate_oid="a" * 40, expected_remote_oid="b" * 40
+        )
+        job_id = str(admitted["job_id"])
+        store.connection.execute(
+            """CREATE TRIGGER publication_resolution_invisible AFTER UPDATE ON publication_jobs
+            WHEN NEW.phase = 'rejected' BEGIN
+            DELETE FROM publication_jobs WHERE job_id=NEW.job_id;
+            END"""
+        )
+        with self.assertRaisesRegex(RuntimeError, "resolution was not visible"):
+            store.resolve_superseded_publication(job_id, observed_remote_oid="c" * 40)
+        store.connection.execute("DROP TRIGGER publication_resolution_invisible")
+        current = store.read_publication(job_id)
+        assert current is not None
+        self.assertEqual("queued", current["phase"])
+
+    def test_nonunique_and_nonmatching_indexes_do_not_satisfy_publication_schema(self) -> None:
+        store = self.store()
+        store.connection.execute("CREATE INDEX intents_task_nonunique ON intents(task_id)")
+        self.assertFalse(store._has_unique_index("intents", ("task_id",)))
+        self.assertFalse(store._has_unique_index("intents", ("missing_column",)))
+
 
 if __name__ == "__main__":
     unittest.main()
