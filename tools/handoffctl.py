@@ -4927,7 +4927,7 @@ def main() -> int:
     if args.cmd == "directive":
         cmd_directive(args)
         return 0
-    if issue_series_service.dispatch_cli(args):
+    if issue_series_service.dispatch_cli(args, globals()):
         return 0
     return dispatch_bound_command(args)
 

@@ -734,19 +734,25 @@ def add_cli_parser(commands: Any) -> None:
     publish.add_argument("--mock-comment-id", default="mock-comment")
 
 
-def dispatch_cli(args: Any) -> bool:
+def dispatch_cli(args: Any, core: dict[str, Any] | None = None) -> bool:
     """Dispatch an issue-series command and report whether it was selected."""
     if args.cmd != "issue-series":
         return False
-    actions = {
-        "plan": _core_value("cmd_issue_series_plan"),
-        "create": _core_value("cmd_issue_series_create"),
-        "publish": _core_value("cmd_issue_series_publish"),
-    }
+    marker = _ACTIVE_CORE.set(core) if core is not None else None
     try:
-        actions[args.issue_series_action](args)
-    except KeyError as error:
-        raise RuntimeError("unsupported issue-series action") from error
+        _refresh()
+        actions = {
+            "plan": _core_value("cmd_issue_series_plan"),
+            "create": _core_value("cmd_issue_series_create"),
+            "publish": _core_value("cmd_issue_series_publish"),
+        }
+        try:
+            actions[args.issue_series_action](args)
+        except KeyError as error:
+            raise RuntimeError("unsupported issue-series action") from error
+    finally:
+        if marker is not None:
+            _ACTIVE_CORE.reset(marker)
     return True
 
 

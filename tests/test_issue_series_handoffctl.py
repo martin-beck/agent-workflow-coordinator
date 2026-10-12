@@ -502,6 +502,16 @@ class IssueSeriesHandoffTest(unittest.TestCase):
         self.assertEqual({"AR-0001", "AR-9000", "AR-9001"}, created)
         self.assertEqual(1, len(list((self.root / "issue-series").glob("*.json"))))
 
+    def test_cli_dispatch_keeps_the_calling_controller_after_another_import(self) -> None:
+        """The shared service must not route the first CLI through a later controller."""
+        install_secondary_controller()
+        args = argparse.Namespace(
+            cmd="issue-series", issue_series_action="plan", manifest=self.root / "plan.json"
+        )
+        with patch.object(CORE, "cmd_issue_series_plan") as primary:
+            self.assertTrue(CORE.issue_series_service.dispatch_cli(args, vars(CORE)))
+        primary.assert_called_once_with(args)
+
     def test_sixteen_processes_commit_one_issue_series_to_a_real_remote(self) -> None:
         self.make_task()
         manifest = self.issue_series_manifest()
