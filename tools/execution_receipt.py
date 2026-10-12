@@ -13,7 +13,13 @@ from typing import Any
 def valid(value: object) -> bool:
     """Validate one privacy-safe terminal receipt."""
     fields = {
-        "execution_id", "owner", "envelope_digest", "argv_digest", "classification", "returncode", "recorded_at"
+        "execution_id",
+        "owner",
+        "envelope_digest",
+        "argv_digest",
+        "classification",
+        "returncode",
+        "recorded_at",
     }
     if not isinstance(value, dict) or set(value) != fields:
         return False
@@ -29,7 +35,9 @@ def valid(value: object) -> bool:
     ):
         return False
     try:
-        recorded_at = dt.datetime.fromisoformat(str(value.get("recorded_at", "")).replace("Z", "+00:00"))
+        recorded_at = dt.datetime.fromisoformat(
+            str(value.get("recorded_at", "")).replace("Z", "+00:00")
+        )
     except ValueError:
         return False
     return recorded_at.tzinfo is not None and recorded_at.utcoffset() is not None
@@ -37,7 +45,9 @@ def valid(value: object) -> bool:
 
 def matches(reservation: dict[str, Any], result: object) -> bool:
     """Return whether a receipt proves completion of this exact reservation."""
-    return valid(result) and all(
+    if not valid(result) or not isinstance(result, dict):
+        return False
+    return all(
         result[key] == reservation[key]
         for key in ("execution_id", "owner", "envelope_digest", "argv_digest")
     )

@@ -176,14 +176,21 @@ class ExecutionEnvelopeHandoffctlCoverageTest(unittest.TestCase):
                 return_value=(policy, "a" * 64, 5.0, False, 0, "b" * 32, 8),
             ),
             patch.object(CORE, "append_command_result") as recorded,
-            patch.object(CORE, "mutate", side_effect=[None, RuntimeError("stale reservation")]) as finish,
-            patch.object(CORE, "locate", return_value=(self.root / "task", {"task_revision": 9}, "")),
+            patch.object(
+                CORE, "mutate", side_effect=[None, RuntimeError("stale reservation")]
+            ) as finish,
+            patch.object(
+                CORE, "locate", return_value=(self.root / "task", {"task_revision": 9}, "")
+            ),
             patch.object(CORE, "reconcile") as reconciled,
             self.assertRaisesRegex(RuntimeError, "stale reservation"),
         ):
             CORE.cmd_run(args)
         recorded.assert_called_once_with("AR-0001", "worker-a", "a" * 64, 0, False)
-        self.assertEqual(["execution-result", "execution-finish"], [call.args[1] for call in finish.call_args_list])
+        self.assertEqual(
+            ["execution-result", "execution-finish"],
+            [call.args[1] for call in finish.call_args_list],
+        )
         reconciled.assert_not_called()
 
     def test_journal_failure_keeps_bound_execution_fence_and_skips_completion(self) -> None:
@@ -198,7 +205,9 @@ class ExecutionEnvelopeHandoffctlCoverageTest(unittest.TestCase):
             ),
             patch.object(CORE, "append_command_result", side_effect=OSError("disk full")),
             patch.object(CORE, "mutate") as completion,
-            patch.object(CORE, "locate", return_value=(self.root / "task", {"task_revision": 9}, "")),
+            patch.object(
+                CORE, "locate", return_value=(self.root / "task", {"task_revision": 9}, "")
+            ),
             patch.object(CORE, "reconcile") as reconciled,
             self.assertRaisesRegex(RuntimeError, "EXECUTION_RESULT_UNKNOWN"),
         ):

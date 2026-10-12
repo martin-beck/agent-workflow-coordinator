@@ -39,8 +39,7 @@ if not __package__:
         sys.path.insert(0, _SCRIPT_ROOT)
 
 if __package__:
-    from . import execution_envelope
-    from . import execution_receipt
+    from . import execution_envelope, execution_receipt
     from .board_metrics import build_metrics
     from .board_metrics import encode as encode_metrics
     from .checkpoint_records import (
@@ -121,7 +120,7 @@ else:  # pragma: no cover - direct script execution
             raise RuntimeError("board metrics module is unavailable in this vendored bootstrap")
 
     import execution_envelope  # type: ignore[import-not-found,no-redef]
-    import execution_receipt  # type: ignore[import-not-found]
+    import execution_receipt  # type: ignore[import-not-found,no-redef]
     from checkpoint_records import (  # type: ignore[import-not-found,no-redef]
         append_checkpoint,
         build_checkpoint,
@@ -902,7 +901,6 @@ def locked(
         os.close(fd)
         if metric is not None:
             trace_lock_metric(*metric)
-
 
 
 def trace_lock_metric(phase: str, mode: str, wait: float, hold: float | None) -> None:
@@ -1812,7 +1810,7 @@ def directive_validation_errors() -> list[str]:
     return []
 
 
-def validate(  # noqa: C901
+def validate(
     *, live: bool = False, policy: EvidencePolicy | None = None, live_state: State | None = None
 ) -> list[str]:
     errors: list[str] = []
@@ -2909,7 +2907,9 @@ def apply_recover_execution(args: argparse.Namespace, meta: Meta) -> str:
         raise RuntimeError("EXECUTION_IN_PROGRESS: execution reservation has not expired")
     require_claimed_worker_absent(meta)
     if not execution_result_matches(valid_reservation, meta.get("execution_result")):
-        raise RuntimeError("EXECUTION_RESULT_UNKNOWN: reservation-specific completion evidence is unavailable")
+        raise RuntimeError(
+            "EXECUTION_RESULT_UNKNOWN: reservation-specific completion evidence is unavailable"
+        )
     meta.pop("execution_reservation", None)
     return f"Recovered completed execution {valid_reservation['execution_id']}."
 
@@ -3491,7 +3491,6 @@ def mutate_sqlite(
             f"SQLITE_COMMITTED_EXPORT_FAILED: task={args.task}; revision={expected + 1}; {error}"
         ) from error
     return None
-
 
 
 def cmd_render_status(*, check: bool) -> None:
@@ -4555,7 +4554,7 @@ def dispatch_roles_command(args: argparse.Namespace) -> int:
         from .roles import list_assignments as list_roles
         from .roles import remove as remove_role
     else:  # pragma: no cover - direct script execution
-        from roles import RolesError  # type: ignore[no-redef]
+        from roles import RolesError  # type: ignore[import-not-found,no-redef]
         from roles import assign as assign_role  # type: ignore[no-redef]
         from roles import check as check_roles  # type: ignore[no-redef]
         from roles import list_assignments as list_roles  # type: ignore[no-redef]
@@ -4653,7 +4652,7 @@ def dispatch_bound_standard_command(args: argparse.Namespace) -> int:  # noqa: C
 if __package__:
     from . import issue_series_service
 else:  # pragma: no cover - direct vendored execution
-    import issue_series_service  # type: ignore[import-not-found]
+    import issue_series_service  # type: ignore[import-not-found,no-redef]
 
 globals().update(issue_series_service.install(globals()))
 
