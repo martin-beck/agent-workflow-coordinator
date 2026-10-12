@@ -4778,6 +4778,35 @@ class HandoffTest(unittest.TestCase):
             CORE.cmd_issue_series_create(args)
         self.assertEqual(before, (self.root / "CURRENT.md").read_text())
 
+    def test_issue_series_create_restores_every_precommit_write(self) -> None:
+        self.make_task()
+        manifest = self.issue_series_manifest()
+        args = argparse.Namespace(
+            manifest=manifest,
+            expected_state_digest=CORE.issue_series_state_digest(CORE.all_tasks()),
+        )
+        before = {path: path.read_text() for path in (self.root / "tasks").glob("*.md")}
+        before[self.root / "CURRENT.md"] = (self.root / "CURRENT.md").read_text()
+        before[self.root / "STATUS.md"] = (self.root / "STATUS.md").read_text()
+        original = CORE.write_task
+        writes = 0
+
+        def fail_second_task(path: Path, meta: dict[str, object], body: str) -> None:
+            nonlocal writes
+            writes += 1
+            if writes == 2:
+                raise RuntimeError("injected task write failure")
+            original(path, meta, body)
+
+        with (
+            patch.object(CORE, "write_task", side_effect=fail_second_task),
+            self.assertRaisesRegex(RuntimeError, "injected task write failure"),
+        ):
+            CORE.cmd_issue_series_create(args)
+        self.assertEqual({"AR-0001"}, {meta["id"] for _path, meta, _body in CORE.all_tasks()})
+        self.assertFalse(list((self.root / "issue-series").glob("*.json")))
+        self.assertEqual(before, {path: path.read_text() for path in before})
+
 
 if __name__ == "__main__":
     unittest.main()
