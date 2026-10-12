@@ -2738,9 +2738,9 @@ def apply_accept(  # noqa: C901
         # historical entry is authority data.
         steps = [dict(step) for step in existing_steps] if isinstance(existing_steps, list) else []
         if changed_candidate:
-            for step in steps:
-                if step.get("status") == "pass":
-                    step["status"] = "stale"
+            for recorded_step in steps:
+                if recorded_step.get("status") == "pass":
+                    recorded_step["status"] = "stale"
             ledger["candidate_ref"] = candidate_ref
             ledger["candidate_digest"] = candidate_digest
         step: Meta = {

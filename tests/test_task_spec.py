@@ -110,7 +110,7 @@ class TaskSpecTests(unittest.TestCase):
                 return "sha256:" + hashlib.sha256((root / name).read_bytes()).hexdigest()
 
             predicate = spec["acceptance_predicates"][0]["id"]
-            meta = {
+            meta: dict[str, Any] = {
                 "id": "AR-0070",
                 "spec_ref": "spec.json",
                 "spec_revision": 1,
