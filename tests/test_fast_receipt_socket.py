@@ -326,6 +326,49 @@ class FastReceiptSocketTests(unittest.TestCase):
         for argv in cases:
             with self.subTest(argv=argv):
                 self.assertIsNone(_fast_request(argv))
+
+    def test_update_parser_rejects_duplicate_missing_and_empty_change_sets(self) -> None:
+        base = [
+            "fast", "update", "AR-0120", "--owner", "worker-a", "--expected-revision", "2",
+            "--priority", "P1", "--note", "n", "--key", "k",
+        ]
+        cases = (
+            base[:-2] + ["--priority", "P2", "--key", "k"],
+            ["fast", "update", "AR-0120", "--owner", "worker-a", "--expected-revision", "2", "--priority", "P1", "--note", "n", "--bad", "x"],
+            ["fast", "update", "AR-0120", "--owner", "worker-a", "--expected-revision", "2", "--note", "n", "--key", "k"],
+        )
+        for argv in cases:
+            with self.subTest(argv=argv):
+                self.assertIsNone(_fast_request(argv))
+
+    def test_observation_oversize_and_unknown_cli_paths_fall_back_without_authority(self) -> None:
+        class OversizeSocket:
+            def __init__(self, *_args: object) -> None:
+                pass
+
+            def __enter__(self) -> "OversizeSocket":
+                return self
+
+            def __exit__(self, *_args: object) -> None:
+                return None
+
+            def settimeout(self, _value: float) -> None:
+                return None
+
+            def connect(self, _path: str) -> None:
+                return None
+
+            def sendall(self, _value: bytes) -> None:
+                return None
+
+        self.assertIsNone(try_socket_fast(["not-fast"]))
+        with (
+            patch("tools.fast_receipt_socket._socket_path", return_value=self.path),
+            patch("tools.fast_receipt_socket._safe_socket", return_value=True),
+            patch("tools.fast_receipt_socket.socket.socket", OversizeSocket),
+            patch("tools.fast_receipt_socket._read_line", side_effect=RuntimeError("fast receipt socket message is too large")),
+        ):
+            self.assertIsNone(try_socket_fast(["fast", "observe", "--max-age-seconds", "30"]))
         self.assertIsNone(
             _fast_request(
                 [
