@@ -11,6 +11,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 
 from tools.issue_series_plan import IssueSeriesPlanError, plan_issue_series
 
@@ -114,6 +115,22 @@ class IssueSeriesPlanCoreTests(unittest.TestCase):
             ),
             str,
         )
+
+    def test_unreadable_manifest_and_invalid_existing_identities_fail_closed(self) -> None:
+        path = self.write_manifest(manifest())
+        with patch.object(Path, "read_text", side_effect=OSError("denied")):
+            with self.assertRaisesRegex(IssueSeriesPlanError, "cannot be read"):
+                self.plan(path)
+        receipt = self.plan(
+            path,
+            existing_issue_series_identities=(
+                [],
+                {"repository": "not a repository", "issue_number": 42},
+                {"repository": "example/coordinator", "issue_number": True},
+                {"repository": "example/coordinator", "issue_number": "42"},
+            ),
+        )
+        self.assertIn("series_identity", receipt)
 
     def test_wrong_product_repository_is_rejected(self) -> None:
         value = manifest()

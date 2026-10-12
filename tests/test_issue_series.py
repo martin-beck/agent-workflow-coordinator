@@ -106,6 +106,35 @@ class IssueSeriesTests(unittest.TestCase):
         value["issue"]["url"] = "https://github.com/other/project/issues/42"
         self.assert_invalid(value, "immutable issue number")
 
+    def test_text_and_member_types_are_strictly_bounded(self) -> None:
+        cases: list[tuple[str, object, str]] = [
+            ("scope", "x" * 501, "exceeds 500"),
+            ("scope", "first\nsecond", "single line"),
+            ("id", "TASK-1000", "AR identifier"),
+            ("depends_on", {}, "must be a list"),
+        ]
+        for field, replacement, message in cases:
+            with self.subTest(field=field):
+                value = manifest()
+                value["members"][0][field] = replacement
+                self.assert_invalid(value, message)
+        value = manifest()
+        value["members"][1]["depends_on"][0]["id"] = "TASK-1000"
+        self.assert_invalid(value, "depends_on\\[0\\].id must be an AR identifier")
+        for number in (0, -1, True, "42"):
+            with self.subTest(number=number):
+                value = manifest()
+                value["issue"]["number"] = number
+                self.assert_invalid(value, "positive integer")
+
+    def test_members_must_be_nonempty_objects(self) -> None:
+        value = manifest()
+        value["members"] = []
+        self.assert_invalid(value, "non-empty list")
+        value = manifest()
+        value["members"][0] = []
+        self.assert_invalid(value, "members\\[0\\] must be an object")
+
     def test_member_requirements_and_dependency_rationale_are_strict(self) -> None:
         cases = [
             ("short_title", "", "short_title"),
