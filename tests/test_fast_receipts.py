@@ -1212,6 +1212,25 @@ class FastReceiptTests(unittest.TestCase):
         self.assertFalse(store._has_unique_index("intents", ("task_id",)))
         self.assertFalse(store._has_unique_index("intents", ("missing_column",)))
 
+    def test_claim_and_private_enqueue_reject_invalid_descriptors_before_writes(self) -> None:
+        store = self.store()
+        with self.assertRaisesRegex(ValueError, "invalid owner"):
+            store.enqueue_claim(
+                key="worker-a:claim:bad-owner",
+                task="AR-0120",
+                owner="owner with spaces",
+                expected_revision=1,
+                lease_minutes=20,
+            )
+        with self.assertRaisesRegex(ValueError, "invalid receipt operation"):
+            store._enqueue(
+                key="worker-a:unknown-operation",
+                task="AR-0120",
+                expected_revision=1,
+                payload={},
+            )
+        self.assertEqual(0, store.connection.execute("SELECT count(*) FROM intents").fetchone()[0])
+
 
 if __name__ == "__main__":
     unittest.main()
