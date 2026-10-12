@@ -316,6 +316,49 @@ class IssueSeriesHandoffTest(unittest.TestCase):
         self.assertEqual("deferred_unavailable", outcome.status)
         run.assert_not_called()
 
+    def test_sqlite_issue_series_projections_replace_stale_files(self) -> None:
+        key = "a" * 64
+        receipt = {
+            "series_identity": {"repository": "github.com/owner/product", "issue_number": 42},
+            "manifest": {"schema_version": 1, "members": []},
+        }
+        publication = {
+            "publication_key": key,
+            "manifest_digest": "sha256:" + "b" * 64,
+            "status": "deferred_unavailable",
+            "comment_id": "",
+        }
+
+        class Backend:
+            def load_issue_series(self) -> list[dict[str, object]]:
+                return [receipt]
+
+            def load_issue_series_publications(self) -> list[dict[str, object]]:
+                return [publication]
+
+        stale_manifest = self.root / "issue-series" / "stale.json"
+        stale_manifest.parent.mkdir()
+        stale_manifest.write_text("stale")
+        stale_publication = self.root / "issue-series-publications" / ("c" * 64 + ".json")
+        stale_publication.parent.mkdir()
+        stale_publication.write_text("stale")
+
+        self.assertEqual(1, len(CORE.write_sqlite_issue_series_projections(Backend())))
+        self.assertEqual(1, len(CORE.write_sqlite_issue_series_publication_projections(Backend())))
+        self.assertFalse(stale_manifest.exists())
+        self.assertFalse(stale_publication.exists())
+        self.assertEqual(
+            {key + ".json"}, {path.name for path in stale_publication.parent.glob("*.json")}
+        )
+
+    def test_publication_lock_releases_after_scope(self) -> None:
+        key = "d" * 64
+        with patch.object(CORE, "coordinator_lock_path", return_value=self.root / "state.lock"):
+            with CORE.issue_series_publication_locked(key):
+                self.assertTrue((self.root / "issue-series-publications" / f"{key}.lock").exists())
+            with CORE.issue_series_publication_locked(key):
+                pass
+
     def test_live_publication_recovers_marker_before_posting(self) -> None:
         digest = "sha256:" + "b" * 64
         with patch.object(CORE, "CONFIG", self.root / "config.json"):
