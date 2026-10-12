@@ -16,6 +16,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from tools.durable_binding import (
+    AuthorityIdentity,
     DurableBindingError,
     FilesystemAuthorityBinding,
     SQLiteCompatibilitySession,
@@ -23,6 +24,77 @@ from tools.durable_binding import (
 
 
 class DurableBindingTests(unittest.TestCase):
+    def test_authority_capture_rejects_invalid_missing_and_wrong_kind_paths(self) -> None:
+        with self.assertRaisesRegex(DurableBindingError, "input"):
+            AuthorityIdentity.capture("not-a-path", "sqlite")  # type: ignore[arg-type]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with self.assertRaisesRegex(DurableBindingError, "unavailable"):
+                AuthorityIdentity.capture(root / "missing.sqlite", "sqlite")
+            file_path = root / "file"
+            file_path.touch()
+            directory_path = root / "directory"
+            directory_path.mkdir()
+            with self.assertRaisesRegex(DurableBindingError, "SQLite authority"):
+                AuthorityIdentity.capture(directory_path, "sqlite")
+            with self.assertRaisesRegex(DurableBindingError, "Git authority"):
+                AuthorityIdentity.capture(file_path, "git")
+
+    def test_sqlite_session_rejects_wrong_binding_and_unsafe_journal(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            git_root = root / "git"
+            git_root.mkdir()
+            binding = FilesystemAuthorityBinding.bind(git_root, "git")
+
+            class Store:
+                authority_path = git_root
+                control_store_path = root / "control"
+                control_lock_path = root / "lock"
+
+                @staticmethod
+                def operation_lock() -> _Lock:
+                    return _Lock()
+
+            with self.assertRaisesRegex(DurableBindingError, "requires SQLite"):
+                SQLiteCompatibilitySession(binding, Store(), root / "journal")
+
+            authority = root / "authority.sqlite"
+            authority.touch()
+            sqlite_binding = FilesystemAuthorityBinding.bind(authority, "sqlite")
+            Store.authority_path = authority
+            journal_link = root / "journal-link"
+            journal_link.symlink_to(root / "missing-target")
+            with self.assertRaisesRegex(DurableBindingError, "journal is unsafe"):
+                SQLiteCompatibilitySession(sqlite_binding, Store(), journal_link)
+
+    def test_sqlite_snapshot_rejects_non_regular_control_paths_before_read(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            authority = root / "authority.sqlite"
+            authority.touch()
+            control = root / "control.sqlite"
+            control.mkdir()
+            lock = root / "control.lock"
+            lock.touch()
+            journal = root / "journal.json"
+            journal.write_bytes(b"{}")
+            binding = FilesystemAuthorityBinding.bind(authority, "sqlite")
+
+            class Store:
+                authority_path = authority
+                control_store_path = control
+                control_lock_path = lock
+
+                @staticmethod
+                def operation_lock() -> _Lock:
+                    return _Lock()
+
+            session = SQLiteCompatibilitySession(binding, Store(), journal)
+            with self.assertRaisesRegex(DurableBindingError, "ambiguous"):
+                session.snapshot()
+            self.assertTrue(session.safe_mode)
+
     def test_snapshot_read_binds_to_formal_model_action(self) -> None:
         map_path = (
             Path(__file__).parents[1] / "formal" / "upgrade" / "sqlite-snapshot-correspondence.json"

@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.3 - 2026-10-12
+
+- Repair trusted-runner workflow isolation and declare the dedicated advisory
+  stress runner in the local trust policy.
+- Keep hosted workflows advisory to progression without allowing their own
+  configured executions to fail open.
+
 ## 0.5.2 - 2026-10-11
 
 - Add durable, candidate-bound protected-main publication jobs to the opt-in

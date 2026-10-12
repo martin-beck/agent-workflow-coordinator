@@ -88,6 +88,28 @@ class AdmittedControlStoreTests(unittest.TestCase):
         with self.assertRaisesRegex(AdmissionLeaseError, "store is required"):
             AdmittedControlBinding.bind(object(), self.lease, self.recheck, Scope())  # type: ignore[arg-type]
 
+    def test_typed_binding_rejects_missing_lease_recheck_or_scope(self) -> None:
+        class Store:
+            def cas(self, _expected: int, _record: Mapping[str, object]) -> dict[str, object]:
+                return {"revision": 2}
+
+        class Scope:
+            def assert_ordered(self) -> None: ...
+
+            def hold(self) -> Any: ...
+
+        cases = (
+            (object(), self.recheck, Scope(), "lease"),
+            (self.lease, object(), Scope(), "recheck"),
+            (self.lease, self.recheck, object(), "scope"),
+        )
+        for lease, recheck, scope, message in cases:
+            with (
+                self.subTest(message=message),
+                self.assertRaisesRegex(AdmissionLeaseError, message),
+            ):
+                AdmittedControlBinding.bind(Store(), lease, recheck, scope)  # type: ignore[arg-type]
+
     def test_typed_binding_validate_is_backend_free(self) -> None:
         class Store:
             def cas(self, *_args: object, **_kwargs: object) -> dict[str, object]:
@@ -245,6 +267,23 @@ class AdmittedControlStoreTests(unittest.TestCase):
         changed = dict(self.record, fencing_token="other")  # noqa: S106
         with self.assertRaisesRegex(AdmissionLeaseError, "does not match"):
             admitted_cas(Store(), 1, changed, self.lease, self.recheck, Scope())
+
+    def test_invalid_expected_revision_and_record_mapping_fail_before_scope(self) -> None:
+        class Scope:
+            def assert_ordered(self) -> None:
+                raise AssertionError("scope must not be touched")
+
+            def hold(self) -> Any:
+                raise AssertionError("scope must not be touched")
+
+        class Store:
+            def cas(self, *_args: object, **_kwargs: object) -> dict[str, object]:
+                raise AssertionError("store must not be touched")
+
+        with self.assertRaisesRegex(AdmissionLeaseError, "revision"):
+            admitted_cas(Store(), True, self.record, self.lease, self.recheck, Scope())
+        with self.assertRaisesRegex(AdmissionLeaseError, "record is invalid"):
+            admitted_cas(Store(), 1, object(), self.lease, self.recheck, Scope())  # type: ignore[arg-type]
 
     def test_hostile_record_value_fails_before_scope_or_store(self) -> None:
         class ExplodingEquality:

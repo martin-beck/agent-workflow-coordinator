@@ -8,10 +8,12 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from types import SimpleNamespace
+from unittest.mock import ANY, Mock, patch
 
 ROOT = Path(__file__).resolve().parents[1]
 _runner_spec = importlib.util.spec_from_file_location("tlc_runner", ROOT / "tools/tlc_runner.py")
@@ -31,6 +33,30 @@ memory_bytes = _runner._memory_bytes
 
 
 class TLCAdmissionTests(unittest.TestCase):
+    @staticmethod
+    def _args(queue: Path, **overrides: object) -> SimpleNamespace:
+        values: dict[str, object] = {
+            "queue": str(queue),
+            "model": "Model.tla",
+            "jar": "tla.jar",
+            "config": "Model.cfg",
+            "metadir": str(queue / "workspace" / "states"),
+            "workspace": str(queue / "workspace"),
+            "workers": 2,
+            "heap": "64m",
+            "memory_max": "1G",
+            "swap_max": "1G",
+            "storage_max": "1M",
+            "storage_reserve": "1M",
+            "cgroup_mode": "portable",
+            "cpu_quota": "200%",
+            "tasks_max": 64,
+            "timeout_seconds": 1800,
+            "admission_lock": str(queue / "admission.lock"),
+        }
+        values.update(overrides)
+        return SimpleNamespace(**values)
+
     def test_command_has_finite_workers_heap_and_cgroup_limits(self) -> None:
         command = build_command(
             jar=Path("tla.jar"),
@@ -362,6 +388,125 @@ class TLCAdmissionTests(unittest.TestCase):
             outcomes = list(queue.glob("*.outcome.json"))
             self.assertEqual(len(outcomes), 1)
             self.assertEqual(json.loads(outcomes[0].read_text())["state"], "completed")
+
+    def test_run_marks_a_running_storage_breach_and_stops_portable_process(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            queue = Path(directory)
+            args = self._args(queue)
+            with (
+                patch.object(_runner, "build_command", return_value=["tlc"]),
+                patch.object(_runner, "_available_bytes", return_value=2 * 1024**2),
+                patch.object(_runner, "_directory_bytes", side_effect=[2 * 1024**2] * 2),
+                patch.object(_runner, "_stop_over_budget") as stop,
+                patch.object(_runner.subprocess, "Popen") as execute,
+            ):
+                execute.return_value.poll.return_value = None
+                execute.return_value.returncode = 9
+                self.assertEqual(run(args), 75)
+            stop.assert_called_once_with(execute.return_value, "portable", ANY)
+            outcome = next(queue.glob("*.outcome.json"))
+            record = json.loads(outcome.read_text())
+            self.assertEqual(record["state"], "storage-exhausted")
+            self.assertEqual(record["workspace_bytes"], 2 * 1024**2)
+
+    def test_run_catches_a_fast_exit_that_exceeds_storage_after_poll(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            queue = Path(directory)
+            args = self._args(queue)
+            with (
+                patch.object(_runner, "build_command", return_value=["tlc"]),
+                patch.object(_runner, "_available_bytes", return_value=2 * 1024**2),
+                patch.object(_runner, "_directory_bytes", return_value=2 * 1024**2),
+                patch.object(_runner.subprocess, "Popen") as execute,
+            ):
+                execute.return_value.poll.return_value = 0
+                execute.return_value.returncode = 0
+                self.assertEqual(run(args), 75)
+            record = json.loads(next(queue.glob("*.outcome.json")).read_text())
+            self.assertEqual(record["state"], "storage-exhausted")
+
+    def test_run_preserves_a_failed_admission_as_a_durable_outcome(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            queue = Path(directory)
+            args = self._args(queue)
+            with (
+                patch.object(_runner, "_available_bytes", return_value=2 * 1024**2),
+                patch.object(_runner, "build_command", side_effect=AdmissionError("no sandbox")),
+                patch.object(_runner.sys, "stderr"),
+            ):
+                # stderr is intentionally not part of the durable proof; the outcome is.
+                self.assertEqual(run(args), 2)
+            record = json.loads(next(queue.glob("*.outcome.json")).read_text())
+            self.assertEqual(record["state"], "failed")
+            self.assertEqual(record["error"], "no sandbox")
+            self.assertEqual(list(queue.glob("*.job.json")), [])
+
+    def test_stop_over_budget_fails_closed_without_systemctl_for_required_unit(self) -> None:
+        process = Mock()
+        with (
+            patch.object(_runner.shutil, "which", return_value=None),
+            self.assertRaisesRegex(AdmissionError, "systemctl is required"),
+        ):
+            _runner._stop_over_budget(process, "required", "handoffctl-tlc-test")
+        process.terminate.assert_not_called()
+
+    def test_stop_over_budget_kills_a_portable_process_that_ignores_term(self) -> None:
+        process = Mock()
+        process.wait.side_effect = [subprocess.TimeoutExpired(["tlc"], 5), None]
+        _runner._stop_over_budget(process, "portable", "unused")
+        process.terminate.assert_called_once_with()
+        process.kill.assert_called_once_with()
+        self.assertEqual(process.wait.call_count, 2)
+
+    def test_stale_pruning_preserves_existing_outcome_and_tolerates_disappearance(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            queue = Path(directory)
+            record = queue / "stale.job.json"
+            outcome = queue / "stale.outcome.json"
+            record.write_text(json.dumps({"state": "queued"}))
+            outcome.write_text('{"state":"completed"}\n')
+            original_stat = Path.stat
+            with patch.object(
+                _runner.Path,
+                "stat",
+                autospec=True,
+                side_effect=lambda path, *args, **kwargs: (
+                    (_ for _ in ()).throw(FileNotFoundError)
+                    if path == record
+                    else original_stat(path, *args, **kwargs)
+                ),
+            ):
+                _prune_stale(queue)
+            self.assertEqual(outcome.read_text(), '{"state":"completed"}\n')
+
+    def test_stale_pruning_marks_an_unreadable_queue_record_orphaned(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            queue = Path(directory)
+            record = queue / "stale.job.json"
+            record.write_text("not json")
+            with patch("tools.tlc_runner.time.time", return_value=record.stat().st_mtime + 90000):
+                _prune_stale(queue)
+            outcome = json.loads((queue / "stale.outcome.json").read_text())
+            self.assertEqual(outcome["state"], "orphaned")
+            self.assertEqual(outcome["error"], "stale queue record was unreadable")
+
+    def test_cgroup_discovery_and_required_leaf_controls_fail_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "self").mkdir()
+            (root / "self/cgroup").write_text("0::/unit\n")
+            (root / "self/mountinfo").write_text("")
+            with self.assertRaisesRegex(AdmissionError, "membership is unavailable"):
+                _runner._cgroup_v2_directory(root)
+
+            mount = root / "cgroup"
+            leaf = mount / "unit"
+            leaf.mkdir(parents=True)
+            (root / "self/mountinfo").write_text(f"1 0 0:1 / {mount} rw - cgroup2 cgroup rw\n")
+            for name in ("memory.high", "memory.swap.max"):
+                (leaf / name).write_text("max\n")
+            with self.assertRaisesRegex(AdmissionError, "required cgroup control"):
+                verify_effective_cgroup(memory_max="3G", swap_max="3G", proc_root=root)
 
     def test_parser_keeps_canonical_lock_default_and_accepts_explicit_isolated_lock(self) -> None:
         isolated_lock = "isolated-admission.lock"

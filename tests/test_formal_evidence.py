@@ -1110,7 +1110,6 @@ class FormalEvidenceTests(unittest.TestCase):
             self.assertIn(release_path, workflow)
         self.assertIn("tools/lifecycle_trace.py", workflow)
         self.assertIn("push:", formal)
-        self.assertIn("pull_request:", formal)
         self.assertIn("workflow_dispatch:", formal)
         self.assertNotIn("schedule:", formal)
         self.assertNotIn("full-exhaustive", formal)
@@ -1121,8 +1120,9 @@ class FormalEvidenceTests(unittest.TestCase):
         self.assertNotIn("inputs:", manual_dispatch)
         self.assertIn("TLC_TIER: pr-publication", formal)
         self.assertIn("timeout-minutes: 15", formal)
-        self.assertIn("github.event.pull_request.head.repo.full_name == github.repository", formal)
-        self.assertIn("continue-on-error: true", formal)
+        self.assertNotIn("pull_request:", formal)
+        self.assertIn("if: github.ref == 'refs/heads/main'", formal)
+        self.assertNotIn("continue-on-error: true", formal)
         self.assertIn("runs-on: [self-hosted, Linux, X64, agent-workflow-coordinator-ci]", formal)
         formal_step = formal[
             formal.index("      - name: Run bounded formal tier\n") : formal.index(
@@ -1146,7 +1146,7 @@ class FormalEvidenceTests(unittest.TestCase):
         self.assertIn("/proc/self/mountinfo", formal)
         self.assertNotIn("needs.scope.outputs.release_sensitive", formal_step)
         self.assertIn('TLC_BUDGET_SECONDS: "900"', formal)
-        self.assertIn("ref: ${{ github.event.pull_request.head.sha || github.sha }}", formal)
+        self.assertIn("ref: ${{ github.sha }}", formal)
         self.assertIn("Validate local exact-head bounded receipt", formal)
         self.assertIn("tools/formal_receipt.py", formal)
         self.assertIn("--tier pr-publication", formal)
@@ -1155,9 +1155,17 @@ class FormalEvidenceTests(unittest.TestCase):
         self.assertIn("retry_note:", stress)
         self.assertIn("advisory-formal-stress-${{ github.ref }}", stress)
         self.assertIn("agent-workflow-coordinator-formal-stress", stress)
-        self.assertIn("continue-on-error: true", stress)
+        self.assertNotIn("continue-on-error: true", stress)
         self.assertIn("TLC_TIER: full-exhaustive", stress)
         self.assertIn("TLC_DIAGNOSTICS_DIR", stress)
+        stress_step = stress[
+            stress.index("      - name: Run exploratory full-exhaustive stress\n") : stress.index(
+                "      - name: Publish exploratory stress receipt"
+            )
+        ]
+        self.assertIn("TLC_WORK_ROOT: ${{ runner.temp }}", stress_step)
+        self.assertIn("TLC_DIAGNOSTICS_DIR: ${{ runner.temp }}", stress_step)
+        self.assertIn("TLC_ATTESTATION_PATH: ${{ runner.temp }}", stress_step)
         self.assertIn("--diagnostic-queue", stress)
         self.assertIn("--diagnostic-admission-lock", stress)
         self.assertIn("if: always()", stress)

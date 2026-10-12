@@ -147,3 +147,64 @@ class FormalJobReceiptTests(unittest.TestCase):
             self.store.start(
                 scope="x", candidate=self.candidate_a, tier_digest="bad", resource_class="ordinary"
             )
+
+    def test_rejects_invalid_candidate_empty_scope_and_unknown_job(self) -> None:
+        with self.assertRaisesRegex(FormalJobError, "candidate"):
+            self.store.start(
+                scope="coordinator",
+                candidate="INVALID",
+                tier_digest=self.digest,
+                resource_class="ordinary",
+            )
+        with self.assertRaisesRegex(FormalJobError, "scope"):
+            self.store.start(
+                scope="",
+                candidate=self.candidate_a,
+                tier_digest=self.digest,
+                resource_class="ordinary",
+            )
+        with self.assertRaisesRegex(FormalJobError, "unknown formal job"):
+            self.store.status("missing")
+
+    def test_rejects_stale_begin_and_recover_revisions(self) -> None:
+        started = self.start()
+        job_id = str(started["job_id"])
+        with self.assertRaisesRegex(FormalJobError, "not startable"):
+            self.store.begin(job_id, expected_revision=cast(int, started["revision"]) + 1)
+        running = self.store.begin(job_id, expected_revision=cast(int, started["revision"]))
+        with self.assertRaisesRegex(FormalJobError, "not startable"):
+            self.store.begin(job_id, expected_revision=int(running["revision"]))
+        with self.assertRaisesRegex(FormalJobError, "not recoverable"):
+            self.store.recover(job_id, expected_revision=int(running["revision"]) + 1)
+
+    def test_rejects_invalid_terminal_state_and_runner_exception_is_receipted(self) -> None:
+        started = self.start()
+        running = self.store.begin(
+            str(started["job_id"]), expected_revision=cast(int, started["revision"])
+        )
+        with self.assertRaisesRegex(FormalJobError, "invalid terminal"):
+            self.store.finish(
+                str(started["job_id"]),
+                expected_revision=int(running["revision"]),
+                execution_token=str(running["execution_token"]),
+                state="started",
+                exit_code=None,
+                detail="bad-state",
+            )
+
+        exceptional = self.start(self.candidate_b)
+
+        def broken_runner() -> tuple[int, str]:
+            raise RuntimeError("runner failed")
+
+        failed = self.store.execute(
+            str(exceptional["job_id"]),
+            expected_revision=cast(int, exceptional["revision"]),
+            runner=broken_runner,
+        )
+        self.assertEqual("failed", failed["state"])
+        self.assertEqual("RuntimeError", cast(dict[str, object], failed["receipt"])["detail"])
+        with self.assertRaisesRegex(FormalJobError, "incomplete"):
+            self.store.receipt(
+                str(exceptional["job_id"]), candidate=self.candidate_b, tier_digest=self.digest
+            )

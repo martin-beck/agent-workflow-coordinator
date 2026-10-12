@@ -113,6 +113,11 @@ class FormalTierQualificationTests(unittest.TestCase):
         self.assertIn("cancel-in-progress: false", stress)
         self.assertIn("agent-workflow-coordinator-ci", bounded)
         self.assertIn("agent-workflow-coordinator-formal-stress", stress)
+        self.assertIn("if: github.ref == 'refs/heads/main'", bounded)
+        self.assertIn("if: github.ref == 'refs/heads/main'", stress)
+        self.assertNotIn("pull_request:", bounded)
+        self.assertNotIn("continue-on-error: true", bounded)
+        self.assertNotIn("continue-on-error: true", stress)
         self.assertIn("advisory-formal-stress", stress)
 
     def test_legacy_liveness_bootstrap_has_a_one_sync_compatibility_contract(self) -> None:
