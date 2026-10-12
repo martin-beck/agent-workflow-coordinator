@@ -10,7 +10,7 @@
     "Before each required run, the runner verifies in its transient unit that leaf memory and swap limits exactly match the requested bounds.",
     "Before each required run, the runner verifies that no ancestor has a lower memory, memory-high, or swap limit.",
     "pr-fast has a 300-second aggregate end-to-end verifier budget and pr-publication has a 900-second aggregate end-to-end verifier budget, including admission; full-exhaustive has an 86400-second advisory aggregate budget.",
-    "Formal jobs use one canonical host-wide flock admission lock and durable per-job queue and outcome records; admission does not stop coordinator workers."
+    "Bounded validation uses one canonical host-wide flock admission lock; exploratory full-exhaustive stress uses isolated admission paths and durable per-job queue and outcome records, neither of which stops coordinator workers."
   ],
   "bounds": {
     "max_actors": 2,
@@ -39,7 +39,7 @@
     "The evidence applies only to the specifications, configurations, invariants, and temporal properties executed by formal/handoffctl/verify.sh.",
     "Implementation tests provide separate correspondence evidence but do not turn bounded model checking into an implementation proof.",
     "Separate clones, network filesystems, non-cooperating writers, and failures outside the documented recovery boundary are excluded.",
-    "Same-repository PR publication and weekly full-exhaustive use systemd-run user cgroups. Fork PR smoke uses the portable timeout and prlimit boundary, which is not equivalent to cgroup RSS or swap accounting."
+    "Same-repository PR publication and the isolated exploratory full-exhaustive workflow use systemd-run user cgroups. Fork PR smoke uses the portable timeout and prlimit boundary, which is not equivalent to cgroup RSS or swap accounting."
   ],
   "non_claims": [
     "This evidence does not prove the Python implementation correct.",

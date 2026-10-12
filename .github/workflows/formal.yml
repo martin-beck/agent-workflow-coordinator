@@ -13,31 +13,24 @@ name: Formal
         options:
           - pr-fast
           - pr-publication
-          - full-exhaustive
-  schedule:
-    - cron: "17 3 * * 0"
 
 permissions:
   contents: read
 
 concurrency:
-  # Full qualification is bound to its triggering immutable SHA and remains
-  # useful evidence even when main advances.  Do not cancel it merely because
-  # autonomous development merged another change; release admission still
-  # requires a fresh exact-main attestation.
-  group: ${{ github.workflow }}-${{ github.ref }}-${{ (github.event_name == 'schedule' || inputs.tier == 'full-exhaustive') && 'full-exhaustive' || 'pr-fast' }}
+  # Bounded validation is intentionally separate from exploratory stress.
+  # The latter has its own workflow, runner label, admission paths, and
+  # concurrency domain, so it cannot delay this minute-scale workflow.
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ inputs.tier || 'pr-fast' }}
   cancel-in-progress: false
 
 jobs:
   formal-trusted:
     if: github.ref == 'refs/heads/main'
     runs-on: [self-hosted, Linux, X64, agent-workflow-coordinator-ci]
-    timeout-minutes: ${{ (github.event_name == 'schedule' || inputs.tier == 'full-exhaustive') && 1440 || inputs.tier == 'pr-publication' && 15 || 5 }}
-    # Full-exhaustive remains scheduled/manual advisory evidence until AR-0102;
-    # it must not obstruct ordinary development progression.
-    continue-on-error: ${{ github.event_name == 'schedule' || inputs.tier == 'full-exhaustive' }}
+    timeout-minutes: ${{ inputs.tier == 'pr-publication' && 15 || 5 }}
     env:
-      TLC_TIER: ${{ github.event_name == 'schedule' && 'full-exhaustive' || inputs.tier || 'pr-fast' }}
+      TLC_TIER: ${{ inputs.tier || 'pr-fast' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -63,11 +56,7 @@ jobs:
           echo "DBUS_SESSION_BUS_ADDRESS=${bus_address}" >> "$GITHUB_ENV"
           test -S "${runtime_dir}/bus"
           test "$(stat -fc %T /sys/fs/cgroup)" = cgroup2fs
-          if [[ "${TLC_TIER}" == "full-exhaustive" ]]; then
-            required_bytes=$((64 * 1024 * 1024 * 1024))
-          else
-            required_bytes=$((6 * 1024 * 1024 * 1024))
-          fi
+          required_bytes=$((6 * 1024 * 1024 * 1024))
           host_bytes=$(awk '/^MemTotal:/ {print $2 * 1024}' /proc/meminfo)
           test "${host_bytes}" -ge "${required_bytes}"
           cgroup_relative=$(awk -F: '$1 == "0" {print $3; exit}' /proc/self/cgroup)
@@ -84,13 +73,13 @@ jobs:
           # tools/tlc_runner.py verifies the effective limits from inside its
           # own transient unit immediately before every TLC process starts.
           command -v systemd-run
-      - name: Run required formal tier
+      - name: Run bounded formal tier
         env:
           TLC_CGROUP_MODE: required
-          TLC_HEAP: ${{ (github.event_name == 'schedule' || inputs.tier == 'full-exhaustive') && '48g' || '2048m' }}
-          TLC_MEMORY_MAX: ${{ (github.event_name == 'schedule' || inputs.tier == 'full-exhaustive') && '64G' || '3G' }}
-          TLC_SWAP_MAX: ${{ (github.event_name == 'schedule' || inputs.tier == 'full-exhaustive') && '64G' || '3G' }}
-          TLC_BUDGET_SECONDS: ${{ (github.event_name == 'schedule' || inputs.tier == 'full-exhaustive') && '86400' || inputs.tier == 'pr-publication' && '900' || '300' }}
+          TLC_HEAP: 2048m
+          TLC_MEMORY_MAX: 3G
+          TLC_SWAP_MAX: 3G
+          TLC_BUDGET_SECONDS: ${{ inputs.tier == 'pr-publication' && '900' || '300' }}
           TLC_ATTESTATION_PATH: ${{ runner.temp }}/formal-attestation.json
         run: formal/handoffctl/verify.sh --tier "$TLC_TIER"
       - name: Publish exact-head tier attestation

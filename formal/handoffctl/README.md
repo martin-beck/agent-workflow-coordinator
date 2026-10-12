@@ -232,10 +232,14 @@ the complete two-process lifecycle domain as fifteen disjoint immutable-
 operation slices. Each slice fixes one process's request operation and leaves
 the competing process's operation domain complete; because requests do not
 change operation, their union is exactly the original aggregate state graph.
-The scheduled weekly run or an explicit `full-exhaustive` manual-dispatch choice
-on `main` checks every slice as advisory evidence. Until AR-0102, a failed or
-missing full-exhaustive run cannot block normal progression. Neither a missing
-slice nor a smaller tier supports a full formal claim.
+The scheduled weekly run or an explicit dispatch of the separate **Advisory
+Formal Stress** workflow on `main` checks every slice as exploratory evidence.
+It uses a dedicated runner label, private workspace, queue, and admission lock;
+it can be canceled or retried independently of bounded validation. Its receipt
+and any partial or interrupted outcomes are explicitly exploratory. A failed or
+missing full-exhaustive run cannot block normal progression, acceptance, merge,
+or release. Neither a missing slice nor a smaller tier supports a full formal
+claim.
 
 Each model is executed through `tools/tlc_runner.py`, never directly through
 TLC. The runner uses finite workers (`2`), a dedicated `48g` heap and `64G`/`64G`
@@ -265,9 +269,9 @@ a durable `storage-exhausted` outcome rather than misclassifying it as a model
 success.
 
 The runner retains `/tmp/agent-workflow-coordinator-tlc-admission.lock` as the canonical
-publication lock. The verifier uses that shared admission path by default. For an isolated
-clean-destination diagnostic on a host where the shared path is inaccessible, the verifier accepts
-an explicit private queue and lock pair:
+publication lock. Bounded validation uses that shared admission path by default.
+Exploratory stress uses an explicit private queue and lock pair, as can an
+isolated clean-destination diagnostic on a host where the shared path is inaccessible:
 
 ```bash
 formal/handoffctl/verify.sh --tier portable-smoke \
