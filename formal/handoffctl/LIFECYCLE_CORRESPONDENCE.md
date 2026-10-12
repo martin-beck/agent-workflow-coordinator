@@ -66,3 +66,43 @@ The executable checker binds this vocabulary to the authoritative predicates:
 `NoReplacementBeforeBackup` to `ProjectionAtomicity`, `AmbiguousIsWriteClosed`
 to `LockSafety`, and `ReconcileRequiresFence` to `RevisionAccounting`. It also
 records SHA-256 hashes of `Handoffctl.tla` and `Handoffctl.cfg` with each trace.
+
+## Predicate evidence ledger acceptance
+
+`HandoffctlPredicateLedger.tla` is the bounded model for the predicate-aware
+form of `accept`. It keeps `candidateRef` and `candidateDigest` as separate
+state variables and admits only coherent ref/digest pairs in its finite
+domain. Each accepted predicate row carries that exact pair; a row with either
+a different reference or a different digest cannot be live evidence for the
+current candidate.
+
+The model uses two workers, two predicates, two candidate pairs, current and
+stale expected revisions, valid and invalid evidence, and both settings of
+`--reopen`. `AcceptEnabled` maps to
+`predicate_ledger.apply_predicate_acceptance` after bound-spec and evidence
+preflight; its owner and `expectedRevision` conditions map to `handoffctl`'s
+shared active-owner and revision-CAS checks. `Accept` preserves `status` and
+`owner`, advances `revision` once, and writes a passing row bound to the
+requested pair.
+
+`CandidateChanged` is admitted only with `requestedReopen`.
+`MarkPassesStale` is the bounded representation of `_historical_steps`: on a
+candidate transition it retains well-formed historical rows and changes old
+passing rows to `stale` before recording the new pass. The runtime first
+validates prospective history and then its final ledger; a malformed row maps
+to `Reject` and leaves all modelled durable state unchanged. Subsequent
+evidence for the same predicate replaces that predicate's current row,
+matching `_record_step`; stale evidence cannot satisfy completion.
+`RequestedCandidateHasNoStaleHistory` also rejects reopening an already
+retired ref/digest pair, because making its retained stale row current would
+violate the ledger validator's candidate-binding rule.
+
+`ReleaseDone` maps to `release --status done` after shared done admission.
+`PredicateComplete` requires one live pass for every declared bounded
+predicate for the current ref/digest pair.
+`CandidateBinding`, `ExplicitReopenOnCandidateChange`,
+`StaleEvidenceIsHistorical`, `StaleEvidenceCannotComplete`, and
+`DoneRequiresCompletePredicates` are checked at every state. The model is
+included in the `pr-publication` and `full-exhaustive` tiers. Concrete
+Git/SQLite tests provide hostile file, schema, digest, malformed-history, and
+post-write validation evidence outside this finite abstraction.

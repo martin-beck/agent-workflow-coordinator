@@ -188,6 +188,14 @@ SOURCE_FILES: tuple[tuple[str, str], ...] = (
         "formal/handoffctl/HandoffctlObservation.tla",
     ),
     (
+        "formal/handoffctl/HandoffctlPredicateLedger.cfg",
+        "formal/handoffctl/HandoffctlPredicateLedger.cfg",
+    ),
+    (
+        "formal/handoffctl/HandoffctlPredicateLedger.tla",
+        "formal/handoffctl/HandoffctlPredicateLedger.tla",
+    ),
+    (
         "formal/handoffctl/OBSERVATION_CORRESPONDENCE.md",
         "formal/handoffctl/OBSERVATION_CORRESPONDENCE.md",
     ),

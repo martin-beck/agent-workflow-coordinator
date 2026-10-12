@@ -24,6 +24,7 @@
         "HandoffctlReceipts",
         "HandoffctlPublication",
         "HandoffctlObservation",
+        "HandoffctlPredicateLedger",
         "HandoffctlLiveness",
         "HandoffctlRecovery"
       ],
@@ -40,6 +41,7 @@
         "HandoffctlReceipts",
         "HandoffctlPublication",
         "HandoffctlObservation",
+        "HandoffctlPredicateLedger",
         "HandoffctlSlice-promote",
         "HandoffctlSlice-resume",
         "HandoffctlSlice-unblock",
