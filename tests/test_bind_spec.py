@@ -275,6 +275,45 @@ class BindSpecTests(unittest.TestCase):
                 core.all_tasks(),
             )
 
+        partial_args = argparse.Namespace(**{**vars(args), "expected_revision": revision})
+        partial_key = {**bound, "branch": "", "worktree_key": args.worktree_key}
+        core.apply_bind_worktree(partial_args, partial_key, core.all_tasks())
+        self.assertEqual(
+            (args.branch, args.worktree_key),
+            (partial_key["branch"], partial_key["worktree_key"]),
+        )
+        with self.assertRaisesRegex(RuntimeError, "worktree key conflicts"):
+            core.apply_bind_worktree(
+                argparse.Namespace(**{**vars(partial_args), "worktree_key": "other-worker"}),
+                {**bound, "branch": "", "worktree_key": args.worktree_key},
+                core.all_tasks(),
+            )
+
+        persisted_input = {**bound, "branch": "", "worktree_key": args.worktree_key}
+        core.write_task(core.TASKS / "AR-0001-test.md", persisted_input, body)
+        with (
+            patch.object(core, "sync_replica_before_write"),
+            patch.object(core, "commit", return_value=True),
+            patch.object(core, "push_replica"),
+        ):
+            core.mutate(partial_args, "bind-worktree")
+        persisted_partial = core.locate("AR-0001")[1]
+        self.assertEqual(
+            (args.branch, args.worktree_key, revision + 1),
+            (
+                persisted_partial["branch"],
+                persisted_partial["worktree_key"],
+                persisted_partial["task_revision"],
+            ),
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "requires an empty legacy branch"):
+            core.apply_bind_worktree(
+                partial_args,
+                {**bound, "branch": args.branch, "worktree_key": ""},
+                core.all_tasks(),
+            )
+
     def test_bind_worktree_validation_fails_closed_and_rejects_conflicts(self) -> None:
         self.make_task()
         args = argparse.Namespace(

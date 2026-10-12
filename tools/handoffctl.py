@@ -2674,7 +2674,7 @@ def require_active_binding_owner(args: argparse.Namespace, meta: Meta) -> None:
 def require_bind_worktree_admission(
     args: argparse.Namespace, meta: Meta, tasks: list[Task]
 ) -> None:
-    """Admit a first binding or an exact no-op replay, rejecting every other request."""
+    """Admit a first binding or a matching partial-legacy completion safely."""
     require_active_binding_owner(args, meta)
     if not valid_binding_branch(args.branch):
         raise RuntimeError("bind-worktree branch is invalid")
@@ -2684,17 +2684,16 @@ def require_bind_worktree_admission(
         raise RuntimeError("bind-worktree identity conflicts with an active task")
     branch = meta.get("branch", "")
     worktree_key = meta.get("worktree_key", "")
-    if branch or worktree_key:
-        if (
-            branch == args.branch
-            and worktree_key == args.worktree_key
-            and valid_binding_branch(branch)
-            and valid_binding_worktree(worktree_key)
-        ):
+    if branch and worktree_key:
+        if branch == args.branch and worktree_key == args.worktree_key:
             raise IdempotentMutationError(
                 f"Worktree {args.worktree_key} on branch {args.branch} is already bound."
             )
         raise RuntimeError("bind-worktree requires empty legacy worktree metadata")
+    if branch:
+        raise RuntimeError("bind-worktree requires an empty legacy branch")
+    if worktree_key and worktree_key != args.worktree_key:
+        raise RuntimeError("bind-worktree worktree key conflicts with declared legacy metadata")
 
 
 def apply_bind_worktree(args: argparse.Namespace, meta: Meta, tasks: list[Task]) -> str:
