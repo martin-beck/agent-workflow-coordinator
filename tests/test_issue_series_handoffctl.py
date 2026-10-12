@@ -307,7 +307,7 @@ class IssueSeriesHandoffTest(unittest.TestCase):
         with patch.object(CORE, "CONFIG", self.root / "config.json"):
             CORE.CONFIG.write_text(json.dumps({"github_repository": "owner/product"}))
             with (
-                patch.object(CORE.shutil, "which", return_value=None),
+                patch.object(CORE.issue_series_service.shutil, "which", return_value=None),
                 patch.object(CORE.subprocess, "run") as run,
             ):
                 outcome = CORE._live_issue_series_publication(
