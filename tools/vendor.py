@@ -86,6 +86,7 @@ SOURCE_FILES: tuple[tuple[str, str], ...] = (
     ("tests/test_handoffctl.py", "tests/test_handoffctl.py"),
     ("tests/test_concise_titles.py", "tests/test_concise_titles.py"),
     ("tests/test_execution_envelope.py", "tests/test_execution_envelope.py"),
+    ("tests/test_execution_sandbox.py", "tests/test_execution_sandbox.py"),
     ("tests/test_handoffctl_recovery.py", "tests/test_handoffctl_recovery.py"),
     ("tests/test_fast_receipts.py", "tests/test_fast_receipts.py"),
     ("tests/test_fast_observation.py", "tests/test_fast_observation.py"),
@@ -546,6 +547,8 @@ def verify_formal_lifecycle_alignment(target: Path) -> None:
             if item.startswith("release_")
             else "recover-expired"
             if item == "recover_expired"
+            else "recover-execution"
+            if item == "recover_execution"
             else item
         )
         for item in modeled

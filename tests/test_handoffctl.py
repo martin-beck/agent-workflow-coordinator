@@ -3211,6 +3211,16 @@ class HandoffTest(unittest.TestCase):
             CORE.cmd_run(argparse.Namespace(task="AR-0001", owner="worker-a", command=["true"]))
         command.assert_not_called()
 
+    def test_active_owner_rejects_an_elapsed_lease_before_execution(self) -> None:
+        """A real elapsed lease cannot pass the run-admission check."""
+        self.make_task(
+            status="in_progress",
+            owner="worker-a",
+            claim_expires="2000-01-01T00:00:00+00:00",
+        )
+        with self.assertRaisesRegex(RuntimeError, "expired claim"):
+            CORE.require_active_owner("AR-0001", "worker-a")
+
     def test_run_a_b_a_policy_swap_has_no_command_or_journal_effect(self) -> None:
         self.enable_additive_policy()
         self.make_task(

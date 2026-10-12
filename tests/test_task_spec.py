@@ -129,7 +129,8 @@ class TaskSpecTests(unittest.TestCase):
             "spec_ref": "examples/task-specs/AR-0070.json",
             "spec_revision": 1,
         }
-        self.assertEqual([], handoffctl.basic_task_errors(ROOT / "task.md", meta))
+        with patch.object(handoffctl, "ROOT", ROOT):
+            self.assertEqual([], handoffctl.basic_task_errors(ROOT / "task.md", meta))
 
     def test_hostile_specs_fail_closed(self) -> None:
         self.assertTrue(

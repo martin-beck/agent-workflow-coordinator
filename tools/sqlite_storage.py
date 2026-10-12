@@ -464,6 +464,8 @@ class Backend(Protocol):
 
     def load_checkpoint_records(self, task_id: str | None = None) -> list[Meta]: ...
 
+    def has_command_result(self, task_id: str, owner: str, argv_sha256: str) -> bool: ...
+
     def append_command_result(
         self,
         task_id: str,
@@ -920,6 +922,21 @@ class SQLiteBackend:
                        VALUES (?, ?, 'reconcile', ?, ?)""",
                     (meta["id"], meta["task_revision"], at, "Recorded live worktree state."),
                 )
+
+    def has_command_result(self, task_id: str, owner: str, argv_sha256: str) -> bool:
+        """Check for exact command evidence without opening a writer transaction."""
+        connection = self._connect(read_only=True)
+        try:
+            row = connection.execute(
+                """SELECT 1 FROM command_results
+                   WHERE task_id=? AND owner=? AND argv_sha256=? LIMIT 1""",
+                (task_id, owner, argv_sha256),
+            ).fetchone()
+            return row is not None
+        except sqlite3.Error as error:
+            raise _translate(error) from error
+        finally:
+            connection.close()
 
     def append_command_result(
         self,

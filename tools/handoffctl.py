@@ -235,6 +235,7 @@ LIFECYCLE_MUTATION_COMMANDS = (
     "resume",
     "unblock",
     "recover-expired",
+    "recover-execution",
     "update",
 )
 
@@ -280,7 +281,10 @@ FIELDS = set(REQ) | {
     "spec_acceptance",
     "execution_envelope_ref",
     "execution_envelope_revision",
+    "execution_envelope_task_revision",
     "execution_envelope_digest",
+    "execution_envelope",
+    "execution_reservation",
     "parent_task_ref",
     "children",
 }
@@ -313,7 +317,7 @@ def short_title_errors(path: Path, task_id: str, value: object) -> list[str]:
     return []
 
 
-COORDINATOR_VERSION = "0.5.2"
+COORDINATOR_VERSION = "0.6.0"
 DEFAULT_PROJECT_SETTINGS: Meta = {
     "schema_version": 1,
     "project_id": "00000000-0000-4000-8000-000000000000",
@@ -407,6 +411,14 @@ class GitBackend:
 
     def load_checkpoint_records(self, task_id: str | None = None) -> list[Meta]:
         return load_checkpoints(ROOT, task_id)
+
+    def has_command_result(self, task_id: str, owner: str, argv_sha256: str) -> bool:
+        return any(
+            record["task"] == task_id
+            and record["owner"] == owner
+            and record["argv_sha256"] == argv_sha256
+            for record in legacy_command_results()
+        )
 
     def append_command_result(
         self,
@@ -811,6 +823,44 @@ def coordinator_lock_path() -> Path:
     if not common.is_absolute():
         common = ROOT / common
     return common.resolve() / "handoffctl" / "state.lock"
+
+
+def task_execution_lock_path(task_id: str) -> Path:
+    if not execution_envelope.TASK.fullmatch(task_id):
+        raise RuntimeError("invalid task execution fence identifier")
+    return coordinator_lock_path().parent / "task-executions" / f"{task_id}.lock"
+
+
+@contextlib.contextmanager
+def task_execution_locked(
+    task_id: str,
+    *,
+    exclusive: bool,
+    timeout: float = LOCK_TIMEOUT_SECONDS,
+    phase: str = "task_execution",
+) -> Iterator[None]:
+    lock_path = task_execution_lock_path(task_id)
+    lock_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        operation = fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH
+        deadline = time.monotonic() + timeout
+        while True:
+            try:
+                fcntl.flock(fd, operation | fcntl.LOCK_NB)
+                break
+            except BlockingIOError as error:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    mode = "exclusive" if exclusive else "shared"
+                    raise LockTimeoutError(
+                        f"LOCK_TIMEOUT after {timeout:.1f}s acquiring {mode} {phase} fence"
+                    ) from error
+                time.sleep(min(LOCK_POLL_SECONDS, remaining))
+        yield
+    finally:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
 
 
 @contextlib.contextmanager
@@ -1368,23 +1418,40 @@ def value_errors(path: Path, meta: Meta) -> list[str]:
     )
     errors.extend(short_title_errors(path, task_id, meta.get("short_title")))
     errors.extend(f"{task_id}: {error}" for error in gate_errors(meta.get("oracle_gate")))
+    errors.extend(execution_metadata_errors(task_id, meta))
+    return errors
+
+
+def execution_metadata_errors(task_id: str, meta: Meta) -> list[str]:
+    """Validate optional process and execution-fence metadata together."""
+    errors: list[str] = []
     claim_process = meta.get("claim_process")
     if claim_process is not None and not valid_claim_process(claim_process):
         errors.append(f"{task_id}: invalid claim_process")
-    envelope = (
-        meta.get("execution_envelope_ref"),
-        meta.get("execution_envelope_revision"),
-        meta.get("execution_envelope_digest"),
-    )
-    if any(value is not None for value in envelope) and not (
-        isinstance(envelope[0], str)
-        and isinstance(envelope[1], int)
-        and envelope[1] >= 1
-        and isinstance(envelope[2], str)
-        and re.fullmatch(r"sha256:[0-9a-f]{64}", envelope[2])
-    ):
+    reservation = meta.get("execution_reservation")
+    if reservation is not None and not valid_execution_reservation(reservation):
+        errors.append(f"{task_id}: invalid execution_reservation")
+    if not valid_execution_envelope_binding(meta):
         errors.append(f"{task_id}: invalid execution envelope binding")
     return errors
+
+
+valid_execution_reservation = execution_envelope.valid_reservation
+valid_execution_envelope_binding = execution_envelope.valid_binding
+
+
+def live_execution_reservation(meta: Meta) -> Meta | None:
+    reservation = meta.get("execution_reservation")
+    if not valid_execution_reservation(reservation):
+        return None
+    valid_reservation = cast(Meta, reservation)
+    expires = dt.datetime.fromisoformat(str(valid_reservation["expires_at"]).replace("Z", "+00:00"))
+    return valid_reservation if expires > dt.datetime.now(dt.UTC) else None
+
+
+def require_no_execution_reservation(meta: Meta) -> None:
+    if meta.get("execution_reservation") is not None:
+        raise RuntimeError("EXECUTION_RECOVERY_REQUIRED: task has a bound execution reservation")
 
 
 def reference_errors(path: Path, meta: Meta) -> list[str]:
@@ -1402,13 +1469,16 @@ def reference_errors(path: Path, meta: Meta) -> list[str]:
         errors.append(f"{task_id}: missing plan {plan}")
     reference = meta.get("execution_envelope_ref")
     if isinstance(reference, str):
-        envelope, actual_digest, found = execution_envelope.load(ROOT, reference)
-        if found or envelope is None:
+        envelope = meta.get("execution_envelope")
+        found = execution_envelope.errors(envelope)
+        if not isinstance(envelope, dict) or found:
             errors.append(f"{task_id}: invalid execution envelope: {'; '.join(found)}")
-        elif meta.get("execution_envelope_digest") != actual_digest:
+        elif meta.get("execution_envelope_digest") != execution_envelope.canonical_digest(envelope):
             errors.append(f"{task_id}: execution envelope digest mismatch")
         elif meta.get("execution_envelope_revision") != envelope.get("envelope_revision"):
             errors.append(f"{task_id}: execution envelope revision mismatch")
+        elif meta.get("execution_envelope_task_revision") != envelope.get("task_revision"):
+            errors.append(f"{task_id}: execution envelope task revision mismatch")
     return errors
 
 
@@ -2456,6 +2526,7 @@ def apply_pause(args: argparse.Namespace, meta: Meta) -> str:
     if meta.get("owner") != args.owner:
         raise RuntimeError(f"{args.task} is owned by {meta.get('owner') or 'nobody'}")
     require_role_admission(str(args.owner))
+    require_no_execution_reservation(meta)
     if args.expected_revision != meta["task_revision"]:
         raise RuntimeError(
             f"stale revision: expected {args.expected_revision}, current {meta['task_revision']}"
@@ -2728,6 +2799,7 @@ def require_bind_worktree_admission(
 def apply_bind_worktree(args: argparse.Namespace, meta: Meta, tasks: list[Task]) -> str:
     """Bind one legacy task, or report an exact retry without mutating it."""
     require_bind_worktree_admission(args, meta, tasks)
+    require_no_execution_reservation(meta)
     meta.update(branch=args.branch, worktree_key=args.worktree_key)
     return f"Bound worktree {args.worktree_key} on branch {args.branch}."
 
@@ -2736,7 +2808,7 @@ def bind_envelope_candidate(args: argparse.Namespace, meta: Meta) -> tuple[Meta,
     """Load an envelope and verify its identity against the exact task revision."""
     if not isinstance(meta.get("spec_ref"), str) or not isinstance(meta.get("spec_revision"), int):
         raise RuntimeError("bind-envelope requires a bound task spec")
-    envelope, actual_digest, found = execution_envelope.load(ROOT, args.envelope_ref)
+    envelope, _actual_digest, found = execution_envelope.load(ROOT, args.envelope_ref)
     if found or envelope is None:
         raise RuntimeError("bind-envelope envelope is invalid: " + "; ".join(found))
     if execution_envelope.errors(envelope):  # defensive: loader already validates this.
@@ -2749,19 +2821,28 @@ def bind_envelope_candidate(args: argparse.Namespace, meta: Meta) -> tuple[Meta,
         raise RuntimeError("bind-envelope envelope spec revision does not match")
     if args.envelope_revision != envelope["envelope_revision"]:
         raise RuntimeError("bind-envelope envelope revision does not match")
-    return envelope, actual_digest
+    return envelope, execution_envelope.canonical_digest(envelope)
 
 
 def apply_bind_envelope(args: argparse.Namespace, meta: Meta) -> str:
     """Bind one immutable, validated execution envelope to an active task."""
     require_active_binding_owner(args, meta)
-    _, actual_digest = bind_envelope_candidate(args, meta)
+    require_no_execution_reservation(meta)
+    envelope, actual_digest = bind_envelope_candidate(args, meta)
     existing = (
         meta.get("execution_envelope_ref"),
         meta.get("execution_envelope_revision"),
+        meta.get("execution_envelope_task_revision"),
         meta.get("execution_envelope_digest"),
+        meta.get("execution_envelope"),
     )
-    requested = (args.envelope_ref, args.envelope_revision, actual_digest)
+    requested = (
+        args.envelope_ref,
+        args.envelope_revision,
+        meta["task_revision"],
+        actual_digest,
+        envelope,
+    )
     if any(value is not None for value in existing):
         if existing == requested:
             raise IdempotentMutationError(
@@ -2771,22 +2852,105 @@ def apply_bind_envelope(args: argparse.Namespace, meta: Meta) -> str:
     meta.update(
         execution_envelope_ref=args.envelope_ref,
         execution_envelope_revision=args.envelope_revision,
+        execution_envelope_task_revision=meta["task_revision"],
         execution_envelope_digest=actual_digest,
+        execution_envelope=envelope,
     )
     return f"Bound execution envelope {args.envelope_ref} revision {args.envelope_revision}."
 
 
-def apply_owned_change(  # noqa: C901
+def apply_execution_start(args: argparse.Namespace, meta: Meta) -> str:
+    require_active_binding_owner(args, meta)
+    if not isinstance(meta.get("execution_envelope"), dict):
+        raise RuntimeError("execution reservation requires a bound execution envelope")
+    if live_execution_reservation(meta) is not None:
+        raise RuntimeError("EXECUTION_IN_PROGRESS: bound task already has a live execution")
+    if meta.get("execution_reservation") is not None:
+        raise RuntimeError("EXECUTION_RECOVERY_REQUIRED: expired execution reservation remains")
+    execution_id = getattr(args, "execution_id", "")
+    expires_at = getattr(args, "execution_expires_at", "")
+    if not re.fullmatch(r"[0-9a-f]{32}", str(execution_id)):
+        raise RuntimeError("invalid execution reservation identifier")
+    try:
+        expires = dt.datetime.fromisoformat(str(expires_at).replace("Z", "+00:00"))
+    except ValueError as error:
+        raise RuntimeError("invalid execution reservation expiry") from error
+    if expires <= dt.datetime.now(dt.UTC):
+        raise RuntimeError("execution reservation expiry must be in the future")
+    meta["execution_reservation"] = {
+        "execution_id": execution_id,
+        "owner": args.owner,
+        "task_revision": meta["task_revision"],
+        "envelope_digest": meta["execution_envelope_digest"],
+        "command_class": args.command_class,
+        "scope_digest": args.scope_digest,
+        "argv_digest": args.argv_digest,
+        "expires_at": expires.replace(microsecond=0).isoformat(),
+    }
+    claim_expiry = parse_claim_expiry(meta.get("claim_expires"))
+    if claim_expiry < expires:
+        meta["claim_expires"] = expires.replace(microsecond=0).isoformat()
+    return f"Reserved bound execution {execution_id}."
+
+
+def apply_execution_finish(args: argparse.Namespace, meta: Meta) -> str:
+    reservation = meta.get("execution_reservation")
+    if not isinstance(reservation, dict) or reservation.get("execution_id") != args.execution_id:
+        raise RuntimeError("execution reservation no longer matches this command")
+    if reservation.get("owner") != args.owner:
+        raise RuntimeError("execution reservation owner does not match")
+    require_optional_revision(args, meta)
+    meta.pop("execution_reservation", None)
+    return str(args.note)
+
+
+def apply_recover_execution(args: argparse.Namespace, meta: Meta) -> str:
+    require_optional_revision(args, meta)
+    reservation = meta.get("execution_reservation")
+    if not valid_execution_reservation(reservation):
+        raise RuntimeError("execution recovery requires a valid reservation")
+    valid_reservation = cast(Meta, reservation)
+    if live_execution_reservation(meta) is not None:
+        raise RuntimeError("EXECUTION_IN_PROGRESS: execution reservation has not expired")
+    require_claimed_worker_absent(meta)
+    if not storage_backend().has_command_result(
+        str(getattr(args, "task", "")),
+        str(valid_reservation["owner"]),
+        str(valid_reservation["argv_digest"]),
+    ):
+        raise RuntimeError(
+            "EXECUTION_RESULT_UNKNOWN: recovery requires durable command-result evidence"
+        )
+    meta.pop("execution_reservation", None)
+    return str(args.note)
+
+
+def require_owned_change_admission(
+    args: argparse.Namespace,
+    kind: str,
+    meta: Meta,
+    tasks: list[Task] | None,
+    policy: EvidencePolicy | None,
+) -> None:
+    """Apply shared owner, role, fence, and release-admission checks."""
+    if meta.get("owner") != args.owner:
+        raise RuntimeError(f"{args.task} is owned by {meta.get('owner') or 'nobody'}")
+    require_update_role_admission(kind, str(args.owner))
+    if kind in {"release", "pause"}:
+        require_no_execution_reservation(meta)
+    if kind in {"heartbeat", "update"} and meta.get("execution_reservation") is not None:
+        raise RuntimeError("EXECUTION_IN_PROGRESS: use the bound command completion path")
+    require_release_admission(kind, getattr(args, "status", None), meta, tasks, policy)
+
+
+def apply_owned_change(
     args: argparse.Namespace,
     kind: str,
     meta: Meta,
     tasks: list[Task] | None = None,
     policy: EvidencePolicy | None = None,
 ) -> str:
-    if meta.get("owner") != args.owner:
-        raise RuntimeError(f"{args.task} is owned by {meta.get('owner') or 'nobody'}")
-    require_update_role_admission(kind, str(args.owner))
-    require_release_admission(kind, getattr(args, "status", None), meta, tasks, policy)
+    require_owned_change_admission(args, kind, meta, tasks, policy)
     if kind == "heartbeat":
         if args.lease_minutes <= 0 or meta.get("status") != "in_progress":
             raise RuntimeError("heartbeat requires an active task and positive lease")
@@ -2945,7 +3109,7 @@ def apply_gate(args: argparse.Namespace, meta: Meta) -> str:
         raise RuntimeError(str(error)) from error
 
 
-def apply_transition(
+def apply_transition(  # noqa: C901
     args: argparse.Namespace,
     kind: str,
     meta: Meta,
@@ -2963,7 +3127,10 @@ def apply_transition(
     if reopen is not None:
         return reopen(args, meta, tasks)
     if kind == "recover-expired":
+        require_no_execution_reservation(meta)
         return apply_recover_expired(args, meta, tasks)
+    if kind == "recover-execution":
+        return apply_recover_execution(args, meta)
     if kind == "gate":
         return apply_gate(args, meta)
     record_transition = {"checkpoint": apply_checkpoint, "rollback": apply_rollback}.get(kind)
@@ -2977,6 +3144,12 @@ def apply_transition(
     }.get(kind)
     if transition is not None:
         return transition()
+    execution = {
+        "execution-start": apply_execution_start,
+        "execution-finish": apply_execution_finish,
+    }.get(kind)
+    if execution is not None:
+        return execution(args, meta)
     return apply_owned_change(args, kind, meta, tasks, policy)
 
 
@@ -3172,6 +3345,15 @@ def commit_persisted_mutation(
 
 
 def mutate(args: argparse.Namespace, kind: str, policy: EvidencePolicy | None = None) -> str | None:
+    if kind not in {"release", "pause", "recover-expired", "recover-execution"}:
+        return _mutate_fenced(args, kind, policy)
+    with task_execution_locked(args.task, exclusive=True, phase="task_lifecycle_mutation"):
+        return _mutate_fenced(args, kind, policy)
+
+
+def _mutate_fenced(
+    args: argparse.Namespace, kind: str, policy: EvidencePolicy | None = None
+) -> str | None:
     receipt_id = fast_receipt_id(args, kind)
     if backend_selection()["backend"] == "sqlite":
         if receipt_id is not None:
@@ -3838,7 +4020,6 @@ def execution_preflight(args: argparse.Namespace) -> tuple[bool, str, str, float
             return False, "WORKTREE_BINDING_REQUIRED", "bound execution requires a worktree", None
         worktree = Path(str(config()["projects_root"])).resolve() / worktree_key
         result = execution_envelope.preflight(
-            ROOT,
             meta,
             args.owner,
             args.command_class,
@@ -3847,10 +4028,27 @@ def execution_preflight(args: argparse.Namespace) -> tuple[bool, str, str, float
         )
         if not result.allowed:
             return False, result.code, result.detail, None
-        envelope, _, found = execution_envelope.load(ROOT, str(meta["execution_envelope_ref"]))
-        if found or envelope is None:
-            return False, "ENVELOPE_INVALID", "; ".join(found), None
+        envelope = meta.get("execution_envelope")
+        if not isinstance(envelope, dict):
+            return False, "ENVELOPE_INVALID", "durable execution envelope is missing", None
+        if execution_envelope.canonical_digest(envelope) != meta.get("execution_envelope_digest"):
+            return False, "ENVELOPE_INVALID", "durable execution envelope digest mismatches", None
+        mount_scope = list(envelope["path_scope"]["read"])
+        if args.command_class in {"source-write", "git-publication"}:
+            mount_scope.extend(args.scope_path)
+        try:
+            for relative in mount_scope:
+                envelope_scope_path(worktree, str(relative))
+        except RuntimeError as error:
+            return False, "PATH_SCOPE_UNAVAILABLE", str(error), None
         rule = envelope["command_classes"][args.command_class]
+        args._envelope_worktree = str(worktree)
+        args._envelope_write_scope = (
+            list(args.scope_path)
+            if args.command_class in {"source-write", "git-publication"}
+            else []
+        )
+        args._envelope_read_scope = list(envelope["path_scope"]["read"])
         return True, result.code, result.detail, rule.get("timeout_seconds")
 
 
@@ -3884,6 +4082,12 @@ def run_envelope_timeout(args: argparse.Namespace) -> float | None:
     if not allowed:
         raise RuntimeError(f"execution preflight {code}: {detail}")
     return timeout_cap
+
+
+sandboxed_envelope_command = execution_envelope.sandboxed_envelope_command
+envelope_sandbox_mounts = execution_envelope.envelope_sandbox_mounts
+sandbox_base_command = execution_envelope.sandbox_base_command
+envelope_scope_path = execution_envelope.envelope_scope_path
 
 
 def invocation_worktree() -> tuple[str, str] | None:
@@ -4014,6 +4218,62 @@ def append_command_result(
 def cmd_run(args: argparse.Namespace) -> int:
     if not args.command:
         raise RuntimeError("missing command")
+    with task_execution_locked(args.task, exclusive=False, phase="task_run"):
+        (
+            policy,
+            command_hash,
+            timeout,
+            timed_out,
+            returncode,
+            execution_id,
+            execution_revision,
+        ) = _cmd_run_fenced(args)
+    try:
+        append_command_result(args.task, args.owner, command_hash, returncode, timed_out)
+    except Exception as error:
+        if execution_id is not None:
+            raise RuntimeError(
+                "EXECUTION_RESULT_UNKNOWN: command result could not be journaled"
+            ) from error
+        raise
+    note = (
+        f"Recorded command timeout; classification=SUBPROCESS_TIMEOUT; "
+        f"deadline={timeout:.1f}s; command argv SHA-256 {command_hash}."
+        if timed_out
+        else f"Recorded command exit {returncode}; command argv SHA-256 {command_hash}."
+    )
+    update = argparse.Namespace(
+        task=args.task,
+        owner=args.owner,
+        expected_revision=execution_revision,
+        status=None,
+        priority=None,
+        summary=None,
+        next_action=None,
+        note=note,
+        _session_trigger="run",
+    )
+    if execution_id is not None:
+        update.execution_id = execution_id
+        mutate(update, "execution-finish", policy)
+    else:
+        mutate(update, "update", policy)
+    sqlite = backend_selection()["backend"] == "sqlite"
+    try:
+        require_policy_unchanged(ROOT, policy)
+        reconcile(do_commit=not sqlite, push=not sqlite, policy=policy)
+    except Exception as error:
+        raise PostCommandReconcileError(
+            "COMMAND_RECORDED_POST_RECONCILE_FAILED: "
+            f"task={args.task}; argv_sha256={command_hash}; {error}"
+        ) from error
+    return returncode
+
+
+def _cmd_run_fenced(
+    args: argparse.Namespace,
+) -> tuple[EvidencePolicy, str, float, bool, int, str | None, int | None]:
+    """Execute one command while its shared task-execution fence is held."""
     if backend_selection()["backend"] == "git":
         config()
     policy = require_active_owner(args.task, args.owner)
@@ -4027,49 +4287,47 @@ def cmd_run(args: argparse.Namespace) -> int:
     if timeout_cap is not None and timeout > timeout_cap:
         raise RuntimeError(f"command timeout exceeds envelope limit of {timeout_cap}s")
     require_policy_unchanged(ROOT, policy)
+    command = sandboxed_envelope_command(args)
+    execution_id: str | None = None
+    execution_revision: int | None = None
+    if hasattr(args, "_envelope_worktree"):
+        execution_id = uuid.uuid4().hex
+        expires_at = (
+            (dt.datetime.now(dt.UTC) + dt.timedelta(seconds=timeout + 60))
+            .replace(microsecond=0)
+            .isoformat()
+        )
+        _, current, _ = locate(args.task)
+        reserve = argparse.Namespace(
+            task=args.task,
+            owner=args.owner,
+            expected_revision=current["task_revision"],
+            execution_id=execution_id,
+            execution_expires_at=expires_at,
+            command_class=args.command_class,
+            scope_digest="sha256:"
+            + hashlib.sha256(
+                json.dumps(list(args.scope_path), separators=(",", ":")).encode()
+            ).hexdigest(),
+            argv_digest=command_hash,
+        )
+        mutate(reserve, "execution-start", policy)
+        _, reserved, _ = locate(args.task)
+        execution_revision = int(reserved["task_revision"])
     timed_out = False
     try:
-        proc = subprocess.run(args.command, check=False, stdin=subprocess.DEVNULL, timeout=timeout)
+        proc = subprocess.run(
+            command,
+            check=False,
+            stdin=subprocess.DEVNULL,
+            timeout=timeout,
+        )
     except subprocess.TimeoutExpired:
         timed_out = True
         returncode = 124
     else:
         returncode = proc.returncode
-    append_command_result(
-        args.task,
-        args.owner,
-        command_hash,
-        returncode,
-        timed_out,
-    )
-    note = (
-        f"Recorded command timeout; classification=SUBPROCESS_TIMEOUT; "
-        f"deadline={timeout:.1f}s; command argv SHA-256 {command_hash}."
-        if timed_out
-        else f"Recorded command exit {returncode}; command argv SHA-256 {command_hash}."
-    )
-    update = argparse.Namespace(
-        task=args.task,
-        owner=args.owner,
-        expected_revision=None,
-        status=None,
-        priority=None,
-        summary=None,
-        next_action=None,
-        note=note,
-        _session_trigger="run",
-    )
-    mutate(update, "update", policy)
-    sqlite = backend_selection()["backend"] == "sqlite"
-    try:
-        require_policy_unchanged(ROOT, policy)
-        reconcile(do_commit=not sqlite, push=not sqlite, policy=policy)
-    except Exception as error:
-        raise PostCommandReconcileError(
-            "COMMAND_RECORDED_POST_RECONCILE_FAILED: "
-            f"task={args.task}; argv_sha256={command_hash}; {error}"
-        ) from error
-    return returncode
+    return policy, command_hash, timeout, timed_out, returncode, execution_id, execution_revision
 
 
 def cmd_init(args: argparse.Namespace) -> None:
@@ -4351,14 +4609,17 @@ def dispatch_roles_command(args: argparse.Namespace) -> int:
     return 0
 
 
-def dispatch_read_only_command(args: argparse.Namespace) -> None:
+def dispatch_read_only_command(args: argparse.Namespace) -> int:
     """Dispatch read-only projections without inflating the mutation dispatcher."""
     if args.cmd == "snapshot":
         cmd_snapshot(args.task)
     elif args.cmd == "board":
         cmd_board()
-    else:
+    elif args.cmd == "metrics":
         cmd_metrics()
+    else:
+        return print_execution_preflight(args)
+    return 0
 
 
 def dispatch_fast_command(args: argparse.Namespace) -> int:
@@ -4381,8 +4642,8 @@ def dispatch_bound_standard_command(args: argparse.Namespace) -> int:  # noqa: C
         reconcile(do_commit=args.commit, push=args.push)
     elif args.cmd == "roles":
         return dispatch_roles_command(args)
-    elif args.cmd in ("snapshot", "board", "metrics"):
-        dispatch_read_only_command(args)
+    elif args.cmd in ("snapshot", "board", "metrics", "preflight"):
+        return dispatch_read_only_command(args)
     elif args.cmd == "checkpoint":
         cmd_checkpoint(args)
     elif args.cmd == "rollback":
@@ -4400,8 +4661,6 @@ def dispatch_bound_standard_command(args: argparse.Namespace) -> int:  # noqa: C
         if args.command and args.command[0] == "--":
             args.command = args.command[1:]
         return cmd_run(args)
-    elif args.cmd == "preflight":
-        return print_execution_preflight(args)
     elif args.cmd == "migrate":
         cmd_migrate(args)
     elif args.cmd == "upgrade":
@@ -4620,6 +4879,10 @@ def main() -> int:
     item.add_argument("task")
     item.add_argument("--expected-revision", type=int, required=True)
     item.add_argument("--allow-legacy-without-identity", action="store_true")
+    item.add_argument("--note", required=True)
+    item = commands.add_parser("recover-execution")
+    item.add_argument("task")
+    item.add_argument("--expected-revision", type=int, required=True)
     item.add_argument("--note", required=True)
     item = commands.add_parser("update")
     item.add_argument("task")

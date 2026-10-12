@@ -145,8 +145,18 @@ The `done` release gate remains fail closed when acceptance is missing or invali
 
 An execution envelope is an optional, immutable, revision-bound task contract. Once bound, every
 `run` must declare an allowed command class and, for mutations, at least one allowed scope path.
-`preflight` gives a machine-readable explanation without changing state. Scope paths are admission
-claims, not an operating-system sandbox: use normal repository and platform isolation as well.
+`preflight` gives a machine-readable explanation without changing state. The bound envelope is the
+durable authority and its write paths are enforced by a Bubblewrap sandbox; `--scope-path` remains
+an auditable admission declaration and cannot expand that envelope-wide write capability. Commands
+without a mutating class receive no writable project path. Before a bound command starts,
+`handoffctl` commits a revision-CAS execution fence carrying the owner, envelope digest,
+command class, scope digest, argv digest, and deadline. With replicated Git authority, workers
+begin only after that mutation has been pushed; competing clones therefore fail before launching a
+subprocess. Lifecycle changes
+cannot bypass either live or expired execution fences. An expired execution fence requires the explicit
+`recover-execution` path, which independently verifies the claim worker has exited and the exact durable
+command-result evidence exists before clearing it. This is a safety fence, not a remote kill switch: a worker that loses authority must terminate
+its subprocess, and strict cross-host fencing still requires a target-side gateway.
 
 Restore a verified checkpoint only from a clean descendant product checkout:
 

@@ -83,7 +83,24 @@
         "spec_acceptance": {},
         "execution_envelope_ref": {"type": "string"},
         "execution_envelope_revision": {"type": "integer", "minimum": 1},
+        "execution_envelope_task_revision": {"type": "integer", "minimum": 1},
         "execution_envelope_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+        "execution_envelope": {"type": "object"},
+        "execution_reservation": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["execution_id", "owner", "task_revision", "envelope_digest", "command_class", "scope_digest", "argv_digest", "expires_at"],
+            "properties": {
+                "execution_id": {"type": "string", "pattern": "^[0-9a-f]{32}$"},
+                "owner": {"type": "string", "minLength": 1, "maxLength": 128},
+                "task_revision": {"type": "integer", "minimum": 1},
+                "envelope_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+                "command_class": {"enum": ["read", "test", "source-write", "git-publication"]},
+                "scope_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+                "argv_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+                "expires_at": {"type": "string", "format": "date-time"}
+            }
+        },
         "parent_task_ref": {
             "anyOf": [{"type": "string", "maxLength": 0}, {"$ref": "#/$defs/taskId"}]
         },

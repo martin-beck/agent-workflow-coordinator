@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.6.0 - 2026-10-12
+
+- Add revision-bound, durable execution envelopes for active tasks. They carry
+  immutable task/spec identity, declared command classes, bounded path scope,
+  evidence, and stop conditions; bound execution uses a private Bubblewrap
+  root when available and fails closed when it is not.
+- Add exact `execution-start`, `execution-finish`, and `recover-execution`
+  lifecycle paths. A durable execution fence is committed before a bound command
+  starts, blocks conflicting lifecycle changes, retains ambiguity after a
+  failed result/completion path, and requires verified recovery after expiry.
+- Cover Git two-clone and SQLite multi-process execution-fence contention, hostile
+  path/mount behavior, completion failures, and the corresponding bounded
+  execution-fence lifecycle model.
+
 ## 0.5.2 - 2026-10-11
 
 - Add durable, candidate-bound protected-main publication jobs to the opt-in

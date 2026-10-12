@@ -136,7 +136,10 @@ it does not independently prove the evidence contents or substitute for review.
 Projects can additionally bind an immutable execution envelope to a task. A bound task requires
 an allowed `--command-class` for `run`; mutation classes also require declared scope paths.
 `handoffctl preflight ... --json` explains the admission decision without executing a command.
-These declarations are not a sandbox and must be paired with ordinary worktree and platform
+Bound commands receive a private Bubblewrap root, plus only the declared read/write worktree
+mounts. A revision-CAS execution fence is durably recorded before the command starts, so
+competing clones cannot both begin the same bound command; expired execution fences require verified
+worker-exit recovery. These boundaries must still be paired with ordinary worktree and platform
 isolation.
 
 ## Develop
