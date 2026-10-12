@@ -4863,6 +4863,35 @@ class HandoffTest(unittest.TestCase):
         self.assertFalse(list((self.root / "issue-series").glob("*.json")))
         self.assertEqual(before, {path: path.read_text() for path in before})
 
+    def test_git_series_records_survive_sqlite_authority_import(self) -> None:
+        self.make_task()
+        manifest = self.issue_series_manifest()
+        args = argparse.Namespace(
+            manifest=manifest,
+            expected_state_digest=CORE.issue_series_state_digest(CORE.all_tasks()),
+        )
+        with patch.object(CORE, "commit", return_value=True):
+            CORE.cmd_issue_series_create(args)
+        tasks = CORE.git_tasks()
+        records = CORE.git_issue_series_receipts(tasks)
+        self.assertEqual(1, len(records))
+        CORE.DATABASE.parent.mkdir(exist_ok=True)
+        CORE.create_database(
+            CORE.DATABASE,
+            CORE.project_binding(),
+            tasks,
+            imported_at="2026-10-12T00:00:00+00:00",
+            source_backend="git",
+            source_checkpoint="a" * 40,
+            issue_series=records,
+        )
+        self.assertEqual(
+            records[0]["manifest"],
+            CORE.SQLiteBackend(
+                CORE.DATABASE, CORE.project_binding(), CORE.TASKS
+            ).load_issue_series()[0]["manifest"],
+        )
+
     def test_issue_series_create_restores_every_write_when_commit_fails(self) -> None:
         self.make_task()
         manifest = self.issue_series_manifest()

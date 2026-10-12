@@ -3347,7 +3347,7 @@ def _load_git_issue_series_receipt(manifest_ref: str, members: list[Meta]) -> Me
     if linked_ids != expected_ids:
         raise RuntimeError(f"issue-series membership does not match manifest {manifest_ref}")
     digest = str(receipt["manifest_digest"])
-    if any(item.get("manifest_digest") != digest for item in members):
+    if any(cast(Meta, item["issue_series"]).get("manifest_digest") != digest for item in members):
         raise RuntimeError(f"issue-series digest does not match manifest {manifest_ref}")
     return receipt
 
