@@ -170,8 +170,8 @@ class FormalJobReceiptTests(unittest.TestCase):
         started = self.start()
         job_id = str(started["job_id"])
         with self.assertRaisesRegex(FormalJobError, "not startable"):
-            self.store.begin(job_id, expected_revision=int(started["revision"]) + 1)
-        running = self.store.begin(job_id, expected_revision=int(started["revision"]))
+            self.store.begin(job_id, expected_revision=cast(int, started["revision"]) + 1)
+        running = self.store.begin(job_id, expected_revision=cast(int, started["revision"]))
         with self.assertRaisesRegex(FormalJobError, "not startable"):
             self.store.begin(job_id, expected_revision=int(running["revision"]))
         with self.assertRaisesRegex(FormalJobError, "not recoverable"):

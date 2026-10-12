@@ -83,9 +83,8 @@ class FormalReceiptTests(unittest.TestCase):
         with self.assertRaisesRegex(FormalReceiptError, "40-character"):
             validate_receipt(receipt(), root=ROOT, candidate="not-an-object", tier=TIER)
         with (
-            patch.object(
-                formal_receipt.subprocess,
-                "run",
+            patch(
+                "tools.formal_receipt.subprocess.run",
                 return_value=subprocess.CompletedProcess(["git"], 1, "", "missing"),
             ),
             self.assertRaisesRegex(FormalReceiptError, "cannot resolve"),
@@ -154,21 +153,21 @@ class FormalReceiptTests(unittest.TestCase):
         with (
             self.assertRaises(SystemExit) as list_error,
             patch.object(sys, "argv", argv),
-            patch.object(formal_receipt.Path, "read_text", return_value="[]"),
+            patch.object(Path, "read_text", return_value="[]"),
         ):
             formal_receipt.main()
         self.assertEqual(2, list_error.exception.code)
         with (
             self.assertRaises(SystemExit) as malformed_error,
             patch.object(sys, "argv", argv),
-            patch.object(formal_receipt.Path, "read_text", return_value="not-json"),
+            patch.object(Path, "read_text", return_value="not-json"),
         ):
             formal_receipt.main()
         self.assertEqual(2, malformed_error.exception.code)
         with (
             self.assertRaises(SystemExit) as json_error,
             patch.object(sys, "argv", argv),
-            patch.object(formal_receipt.Path, "read_text", side_effect=OSError("unreadable")),
+            patch.object(Path, "read_text", side_effect=OSError("unreadable")),
         ):
             formal_receipt.main()
         self.assertEqual(2, json_error.exception.code)
