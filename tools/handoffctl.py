@@ -57,6 +57,7 @@ if __package__:
         validate_directive,
     )
     from .hierarchy import hierarchy_errors, open_child_error
+    from .issue_series_plan import IssueSeriesPlanError, plan_issue_series
     from .oracle_lifecycle import (
         ArtifactRef,
         GateError,
@@ -136,6 +137,10 @@ else:  # pragma: no cover - direct script execution
     from hierarchy import (  # type: ignore[import-not-found,no-redef]
         hierarchy_errors,
         open_child_error,
+    )
+    from issue_series_plan import (  # type: ignore[import-not-found,no-redef]
+        IssueSeriesPlanError,
+        plan_issue_series,
     )
     from oracle_lifecycle import (  # type: ignore[import-not-found,no-redef]
         ArtifactRef,
@@ -277,6 +282,7 @@ FIELDS = set(REQ) | {
     "spec_acceptance",
     "parent_task_ref",
     "children",
+    "issue_series",
 }
 type Meta = dict[str, Any]
 type Task = tuple[Path, Meta, str]
@@ -3254,6 +3260,47 @@ def mutate_sqlite(
     return None
 
 
+def issue_series_state_digest(tasks: list[Task]) -> str:
+    """Bind a plan receipt to the stable, local task graph it inspected."""
+    snapshot = [
+        {
+            "depends_on": meta.get("depends_on", []),
+            "id": meta["id"],
+            "parent_task_ref": meta.get("parent_task_ref", ""),
+            "status": meta["status"],
+            "task_revision": meta["task_revision"],
+        }
+        for _path, meta, _body in sorted(tasks, key=lambda task: str(task[1]["id"]))
+    ]
+    encoded = json.dumps(snapshot, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    return "sha256:" + hashlib.sha256(encoded).hexdigest()
+
+
+def load_issue_series_plan(path: Path, tasks: list[Task]) -> str:
+    """Validate one offline issue-series plan without changing local authority."""
+    try:
+        info = path.lstat()
+        if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode) or info.st_size > 200_000:
+            raise RuntimeError("issue-series manifest must be a bounded regular file")
+        return plan_issue_series(
+            path,
+            expected_product_slug=str(project_binding()["product_repository"]),
+            existing_task_ids=(str(meta["id"]) for _path, meta, _body in tasks),
+            existing_issue_series_identities=(
+                meta.get("issue_series") for _path, meta, _body in tasks
+            ),
+            current_state_digest=issue_series_state_digest(tasks),
+        )
+    except (OSError, IssueSeriesPlanError) as error:
+        raise RuntimeError(f"invalid issue-series manifest: {error}") from error
+
+
+def cmd_issue_series_plan(args: argparse.Namespace) -> None:
+    """Print a deterministic local planning receipt; never publish or mutate."""
+    receipt = load_issue_series_plan(Path(args.manifest), all_tasks())
+    print(receipt)
+
+
 def cmd_render_status(*, check: bool) -> None:
     """Render STATUS.md or fail if its checked-in form is stale."""
     if not project_settings()["status_view"]:
@@ -4340,6 +4387,10 @@ def main() -> int:
     role.add_argument("--assignment-id", required=True)
     item = commands.add_parser("snapshot")
     item.add_argument("--task")
+    item = commands.add_parser("issue-series")
+    issue_series_actions = item.add_subparsers(dest="issue_series_action", required=True)
+    issue_series_plan = issue_series_actions.add_parser("plan")
+    issue_series_plan.add_argument("--manifest", type=Path, required=True)
     commands.add_parser("board")
     commands.add_parser("metrics")
     item = commands.add_parser("checkpoint")
@@ -4527,6 +4578,11 @@ def main() -> int:
     if args.cmd == "directive":
         cmd_directive(args)
         return 0
+    if args.cmd == "issue-series":
+        if args.issue_series_action == "plan":
+            cmd_issue_series_plan(args)
+            return 0
+        raise RuntimeError("unsupported issue-series action")
     return dispatch_bound_command(args)
 
 
