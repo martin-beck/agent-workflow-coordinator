@@ -85,6 +85,12 @@ class IssueSeriesPlanCoreTests(unittest.TestCase):
         with self.assertRaisesRegex(IssueSeriesPlanError, "not valid JSON"):
             self.plan(malformed)
 
+    def test_semantically_invalid_manifest_cannot_be_planned(self) -> None:
+        value = manifest()
+        value["schema_version"] = 2
+        with self.assertRaisesRegex(IssueSeriesPlanError, "schema_version"):
+            self.plan(self.write_manifest(value))
+
     def test_manifest_transport_and_receipt_inputs_are_bounded(self) -> None:
         directory = Path(self.temporary.name) / "directory"
         directory.mkdir()
