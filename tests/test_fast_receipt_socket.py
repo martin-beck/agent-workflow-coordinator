@@ -683,11 +683,68 @@ class FastReceiptSocketTests(unittest.TestCase):
             self.assertTrue(_safe_socket(self.path))
         self.assertFalse(self.path.exists())
 
+    def test_stale_socket_identity_swap_aborts_recovery(self) -> None:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as stale:
+            stale.bind(str(self.path))
+            self.path.chmod(0o600)
+        original_lstat = Path.lstat
+        target_calls = 0
+
+        def changed_identity(path: Path) -> os.stat_result:
+            nonlocal target_calls
+            result = original_lstat(path)
+            if path == self.path:
+                target_calls += 1
+                if target_calls == 3:
+                    fields = list(result)
+                    fields[1] += 1
+                    return os.stat_result(fields)
+            return result
+
+        with (
+            patch.object(Path, "lstat", changed_identity),
+            self.assertRaisesRegex(RuntimeError, "identity changed"),
+            socket_service(self.core),
+        ):
+            pass
+        self.assertTrue(self.path.exists())
+        self.path.unlink()
+
+    def test_private_bind_verification_failure_stops_writer(self) -> None:
+        with (
+            patch("tools.fast_receipt_socket._safe_socket", return_value=False),
+            self.assertRaisesRegex(RuntimeError, "did not bind privately"),
+            socket_service(self.core),
+        ):
+            pass
+        self.assertFalse(
+            any(
+                thread.name == "fast-receipt-writer" and thread.is_alive()
+                for thread in threading.enumerate()
+            )
+        )
+        if self.path.exists():
+            self.path.unlink()
+
     def test_active_service_cannot_be_replaced(self) -> None:
         with socket_service(self.core):
             with self.assertRaisesRegex(RuntimeError, "already active"), socket_service(self.core):
                 pass
             self.assertTrue(_safe_socket(self.path))
+
+    def test_shutdown_preserves_replaced_socket_identity(self) -> None:
+        replacement = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            with socket_service(self.core):
+                self.path.unlink()
+                replacement.bind(str(self.path))
+                self.path.chmod(0o600)
+                replacement_identity = self.path.lstat().st_ino
+            self.assertEqual(replacement_identity, self.path.lstat().st_ino)
+        finally:
+            replacement.close()
+            if self.path.exists():
+                self.path.unlink()
 
     def test_unknown_receipt_and_malformed_protocol_do_not_write_intents(self) -> None:
         with socket_service(self.core):
@@ -847,6 +904,95 @@ class FastReceiptSocketTests(unittest.TestCase):
                 self.assertEqual(1, self._intent_count())
         finally:
             for peer in stalled:
+                peer.close()
+
+    def test_pending_peer_eof_and_deadline_are_closed_without_stalling_service(self) -> None:
+        peer = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            with socket_service(self.core):
+                peer.settimeout(2)
+                peer.connect(str(self.path))
+                peer.shutdown(socket.SHUT_WR)
+                self.assertEqual(b"", peer.recv(1))
+                tick = 0.0
+
+                def advancing_monotonic() -> float:
+                    nonlocal tick
+                    tick += 2.0
+                    return tick
+
+                with (
+                    patch("tools.fast_receipt_socket.time.monotonic", advancing_monotonic),
+                    socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as stalled,
+                ):
+                    stalled.settimeout(2)
+                    stalled.connect(str(self.path))
+                    stalled.sendall(b"{")
+                    with contextlib.suppress(ConnectionResetError):
+                        self.assertEqual(b"", stalled.recv(1))
+                with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as good:
+                    good.settimeout(2)
+                    good.connect(str(self.path))
+                    good.sendall(
+                        json.dumps(
+                            {
+                                "protocol": 1,
+                                "action": "heartbeat",
+                                "task": "AR-0120",
+                                "owner": "worker-a",
+                                "expected_revision": 2,
+                                "lease_minutes": 20,
+                                "key": "after-pending-cleanup",
+                            }
+                        ).encode()
+                        + b"\n"
+                    )
+                    reply = json.loads(_read_line(good, 4096))
+                    self.assertEqual("queued-local", reply["ok"]["phase"])
+        finally:
+            peer.close()
+
+    def test_receipt_slot_exhaustion_closes_extra_peer_without_enqueue(self) -> None:
+        entered = queue.Queue()
+        release = threading.Event()
+
+        def block_handle(_core: object, peer: socket.socket, *_args: object) -> None:
+            with peer:
+                entered.put(None)
+                self.assertTrue(release.wait(2))
+
+        request = json.dumps(
+            {
+                "protocol": 1,
+                "action": "heartbeat",
+                "task": "AR-0120",
+                "owner": "worker-a",
+                "expected_revision": 2,
+                "lease_minutes": 20,
+                "key": "receipt-slot-test",
+            }
+        ).encode() + b"\n"
+        admitted: list[socket.socket] = []
+        try:
+            with socket_service(self.core), patch(
+                "tools.fast_receipt_socket._handle", side_effect=block_handle
+            ):
+                for _ in range(32):
+                    peer = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                    peer.connect(str(self.path))
+                    peer.sendall(request)
+                    admitted.append(peer)
+                for _ in range(32):
+                    entered.get(timeout=2)
+                with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as rejected:
+                    rejected.settimeout(2)
+                    rejected.connect(str(self.path))
+                    rejected.sendall(request)
+                    self.assertEqual(b"", rejected.recv(1))
+                self.assertEqual(0, self._intent_count())
+        finally:
+            release.set()
+            for peer in admitted:
                 peer.close()
 
     def test_split_frame_is_accepted_and_oversize_frame_does_not_stall_service(self) -> None:
