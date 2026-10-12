@@ -1178,8 +1178,11 @@ class SQLiteStorageTest(unittest.TestCase):
                     "schema_version": 1,
                     "spec_ref": "spec.json",
                     "spec_revision": 1,
-                    "acceptance_predicates": [{"id": "predicate", "description": "pass"}],
-                    "definition_of_done": ["pass"],
+                    "acceptance_predicates": [
+                        {"id": "predicate-a", "description": "pass"},
+                        {"id": "predicate-b", "description": "pass"},
+                    ],
+                    "definition_of_done": ["pass both predicates"],
                     "inputs": [{"id": "input", "description": "input"}],
                     "outputs": [{"id": "output", "description": "output"}],
                     "allowed_tools": ["source.read"],
@@ -1189,8 +1192,8 @@ class SQLiteStorageTest(unittest.TestCase):
                 }
             )
         )
-        (self.root / "candidate.txt").write_text("candidate", encoding="utf-8")
-        (self.root / "evidence.txt").write_text("evidence", encoding="utf-8")
+        (self.root / "candidate.txt").write_text("candidate a", encoding="utf-8")
+        (self.root / "evidence.txt").write_text("evidence a", encoding="utf-8")
 
         def digest(name: str) -> str:
             return "sha256:" + hashlib.sha256((self.root / name).read_bytes()).hexdigest()
@@ -1226,7 +1229,7 @@ class SQLiteStorageTest(unittest.TestCase):
                 evidence_class="contract-test",
                 evidence_ref="evidence.txt",
                 evidence_digest=digest("evidence.txt"),
-                predicate="predicate",
+                predicate="predicate-a",
                 candidate_ref="candidate.txt",
                 candidate_digest=digest("candidate.txt"),
                 reopen=False,
@@ -1237,15 +1240,49 @@ class SQLiteStorageTest(unittest.TestCase):
                     argparse.Namespace(**{**vars(accept), "expected_revision": 2}), "accept"
                 )
             CORE.mutate(accept, "accept")
+            (self.root / "candidate.txt").write_text("candidate b", encoding="utf-8")
+            (self.root / "evidence.txt").write_text("evidence b", encoding="utf-8")
+            reopened = argparse.Namespace(
+                **{
+                    **vars(accept),
+                    "expected_revision": 4,
+                    "predicate": "predicate-b",
+                    "candidate_digest": digest("candidate.txt"),
+                    "evidence_digest": digest("evidence.txt"),
+                    "reopen": True,
+                }
+            )
+            CORE.mutate(reopened, "accept")
+            current = CORE.all_tasks()[0][1]
+            self.assertEqual([], CORE.evidence_ledger_errors(self.root, current))
+            (self.root / "candidate.txt").write_text("tampered", encoding="utf-8")
+            self.assertIn(
+                "evidence ledger candidate artifact digest is invalid",
+                CORE.evidence_ledger_errors(self.root, current),
+            )
+            (self.root / "candidate.txt").write_text("candidate b", encoding="utf-8")
+            CORE.mutate(
+                argparse.Namespace(
+                    **{
+                        **vars(reopened),
+                        "expected_revision": 5,
+                        "predicate": "predicate-a",
+                        "reopen": False,
+                    }
+                ),
+                "accept",
+            )
             CORE.mutate(
                 argparse.Namespace(task="AR-0001", owner="worker", status="done", note="done"),
                 "release",
             )
         final = CORE.all_tasks()[0][1]
         self.assertEqual(
-            ("done", 5, "P0"), (final["status"], final["task_revision"], final["priority"])
+            ("done", 7, "P0"), (final["status"], final["task_revision"], final["priority"])
         )
-        self.assertEqual("pass", final["evidence_ledger"]["steps"][0]["status"])
+        self.assertEqual(
+            ["pass", "pass"], [step["status"] for step in final["evidence_ledger"]["steps"]]
+        )
         self.assertIn("updated", (self.tasks / "AR-0001-test.md").read_text())
 
     def test_sqlite_gate_persists_and_exports_human_session_metadata(self) -> None:

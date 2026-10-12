@@ -2670,7 +2670,12 @@ def apply_accept(  # noqa: C901
             )
         if "spec_ref" not in meta or "spec_revision" not in meta:
             raise RuntimeError("predicate acceptance requires a bound task spec")
-        errors = task_spec_errors(ROOT, meta, policy)
+        # A re-open may replace an artifact in place.  Validate the task spec
+        # before transitioning the ledger, but defer ledger validation until
+        # after prior passing rows have been made historical.
+        preflight_meta = dict(meta)
+        preflight_meta.pop("evidence_ledger", None)
+        errors = task_spec_errors(ROOT, preflight_meta, policy)
         if errors:
             raise RuntimeError("predicate acceptance task spec is unavailable")
         import json

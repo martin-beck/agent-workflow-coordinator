@@ -533,16 +533,42 @@ def evidence_ledger_errors(  # noqa: C901
             seen.add(predicate)
         if step.get("status") not in {"pass", "stale"}:
             errors.append("evidence ledger step status is invalid")
-        if _artifact_digest(root, step.get("candidate_ref")) != step.get("candidate_digest"):
-            errors.append("evidence ledger step candidate artifact digest is invalid")
-        if step.get("status") == "pass" and (
+        is_current = step.get("status") == "pass"
+        if not isinstance(step.get("candidate_ref"), str) or not EVIDENCE_REF.fullmatch(
+            step["candidate_ref"]
+        ):
+            errors.append("evidence ledger step candidate ref is invalid")
+        if not isinstance(step.get("candidate_digest"), str) or not DIGEST.fullmatch(
+            step["candidate_digest"]
+        ):
+            errors.append("evidence ledger step candidate digest is invalid")
+        if is_current and (
             step.get("candidate_ref") != candidate_ref
             or step.get("candidate_digest") != candidate_digest
         ):
             errors.append("evidence ledger passing step candidate does not match ledger")
+        if is_current and _artifact_digest(root, step.get("candidate_ref")) != step.get(
+            "candidate_digest"
+        ):
+            errors.append("evidence ledger step candidate artifact digest is invalid")
+        if not is_current and (
+            step.get("candidate_ref") == candidate_ref
+            and step.get("candidate_digest") == candidate_digest
+        ):
+            errors.append("evidence ledger stale step candidate matches ledger")
         if step.get("evidence_class") not in selected.classes:
             errors.append("evidence ledger evidence class is unknown")
-        if _artifact_digest(root, step.get("evidence_ref")) != step.get("evidence_digest"):
+        if not isinstance(step.get("evidence_ref"), str) or not EVIDENCE_REF.fullmatch(
+            step["evidence_ref"]
+        ):
+            errors.append("evidence ledger evidence ref is invalid")
+        if not isinstance(step.get("evidence_digest"), str) or not DIGEST.fullmatch(
+            step["evidence_digest"]
+        ):
+            errors.append("evidence ledger evidence digest is invalid")
+        if is_current and _artifact_digest(root, step.get("evidence_ref")) != step.get(
+            "evidence_digest"
+        ):
             errors.append("evidence ledger evidence artifact digest is invalid")
         revision = step.get("recorded_task_revision")
         # The accept transition validates before its shared mutation wrapper
