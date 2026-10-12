@@ -13,7 +13,7 @@ from typing import Any
 
 type Meta = dict[str, Any]
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 MAX_RECORDS = 32
 TASK = re.compile(r"^AR-[0-9]{4}$")
 DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
@@ -61,7 +61,24 @@ def _generated(path: str) -> bool:
     ) or name.endswith((".generated", ".gen.py", ".pb.go", ".min.js"))
 
 
-def _status_entries(raw: bytes) -> list[Meta]:
+def _content_digest(worktree: Path, path: str) -> str:
+    """Hash a present worktree path without retaining its contents."""
+    target = worktree / path
+    if not target.exists() and not target.is_symlink():
+        return ""
+    result = subprocess.run(  # noqa: S603
+        ["git", "-C", str(worktree), "hash-object", "--no-filters", "--", path],  # noqa: S607
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    value = result.stdout.strip()
+    if result.returncode or not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", value):
+        raise RuntimeError("change-drift could not fingerprint a changed path")
+    return value
+
+
+def _status_entries(raw: bytes, worktree: Path | None = None) -> list[Meta]:
     """Parse porcelain v1 -z without interpreting hostile filenames as text lines."""
     fields = raw.split(b"\0")
     entries: list[Meta] = []
@@ -87,6 +104,7 @@ def _status_entries(raw: bytes) -> list[Meta]:
                 "previous_path": previous_path,
                 "status": status,
                 "generated": _generated(path),
+                "content_digest": _content_digest(worktree, path) if worktree else "",
             }
         )
     return sorted(
@@ -113,35 +131,95 @@ def observe(worktree: Path) -> Meta:
         raise RuntimeError("change-drift observation requires a Git worktree")
     return {
         "head": head.stdout.strip() if head.returncode == 0 else "",
-        "entries": _status_entries(status.stdout),
+        "entries": _status_entries(status.stdout, root),
     }
 
 
-def _record(kind: str, task: str, revision: int, recorded_at: str, payload: Meta) -> Meta:
+def _record(
+    kind: str,
+    task: str,
+    revision: int,
+    recorded_at: str,
+    payload: Meta,
+    previous_digest: str = "",
+) -> Meta:
     if kind not in KINDS or not TASK.fullmatch(task) or revision < 1 or not recorded_at:
         raise ValueError("invalid change-drift record identity")
+    if previous_digest and not DIGEST.fullmatch(previous_digest):
+        raise ValueError("invalid change-drift predecessor")
     identity = {
         "schema_version": SCHEMA_VERSION,
         "kind": kind,
         "task": task,
         "task_revision": revision,
         "payload": payload,
+        "previous_digest": previous_digest,
     }
     return {**identity, "recorded_at": recorded_at, "digest": digest(identity)}
 
 
-def baseline(task: str, revision: int, recorded_at: str, worktree: Path, scope: list[str]) -> Meta:
+def baseline(
+    task: str,
+    revision: int,
+    recorded_at: str,
+    worktree: Path,
+    scope: list[str],
+    previous_digest: str = "",
+) -> Meta:
     return _record(
         "baseline",
         task,
         revision,
         recorded_at,
         {**observe(worktree), "scope": normalize_scope(scope)},
+        previous_digest,
     )
 
 
 def _entry_key(entry: Meta) -> tuple[str, str]:
     return str(entry["path"]), str(entry["previous_path"])
+
+
+def _head_entries(worktree: Path, before: str, after: str) -> list[Meta]:
+    """Return committed tree changes, retaining Git's rename pairing."""
+    if before == after:
+        return []
+    result = subprocess.run(  # noqa: S603
+        ["git", "-C", str(worktree), "diff", "--name-status", "-z", "-M", before, after],  # noqa: S607
+        check=False,
+        capture_output=True,
+    )
+    if result.returncode:
+        raise RuntimeError("change-drift could not compare committed work")
+    fields = result.stdout.split(b"\0")
+    entries: list[Meta] = []
+    index = 0
+    while index < len(fields) - 1:
+        status_field = fields[index]
+        index += 1
+        if not status_field:
+            break
+        status = status_field.decode("ascii", "strict")
+        if not status or index >= len(fields) - 1:
+            raise ValueError("Git returned malformed committed change status")
+        previous_path = ""
+        if status[:1] in {"R", "C"}:
+            previous_path = fields[index].decode("utf-8", "surrogateescape")
+            index += 1
+        path = fields[index].decode("utf-8", "surrogateescape")
+        index += 1
+        if not safe_path(path) or (previous_path and not safe_path(previous_path)):
+            raise ValueError("Git returned an unsafe committed changed path")
+        entries.append(
+            {
+                "path": path,
+                "previous_path": previous_path,
+                "status": status[:1] + " ",
+                "generated": _generated(path),
+                "content_digest": _content_digest(worktree, path),
+            }
+        )
+    return sorted(entries, key=lambda item: (*_entry_key(item), str(item["status"])))
 
 
 def delta(
@@ -151,6 +229,7 @@ def delta(
     worktree: Path,
     baseline_record: Meta,
     scope: list[str],
+    previous_digest: str | None = None,
 ) -> Meta:
     current = observe(worktree)
     before = {_entry_key(entry): entry for entry in baseline_record["payload"]["entries"]}
@@ -166,8 +245,34 @@ def delta(
             "in_scope" if all(_inside(path, scope) for path in paths) else "out_of_scope"
         )
         changed.append({**entry, "classification": classification, "material": True})
+    baseline_paths = {
+        str(entry["path"]): str(entry["content_digest"])
+        for entry in baseline_record["payload"]["entries"]
+    }
+    for entry in _head_entries(
+        worktree, str(baseline_record["payload"]["head"]), str(current["head"])
+    ):
+        if baseline_paths.get(str(entry["path"])) == entry["content_digest"]:
+            continue
+        if _entry_key(entry) in {_entry_key(item) for item in changed}:
+            continue
+        paths = [str(entry["path"])] + (
+            [str(entry["previous_path"])] if entry["previous_path"] else []
+        )
+        classification = (
+            "in_scope" if all(_inside(path, scope) for path in paths) else "out_of_scope"
+        )
+        changed.append({**entry, "classification": classification, "material": True})
+    changed.sort(key=lambda item: (*_entry_key(item), str(item["status"])))
     payload = {"baseline_digest": baseline_record["digest"], **current, "entries": changed}
-    return _record("delta", task, revision, recorded_at, payload)
+    return _record(
+        "delta",
+        task,
+        revision,
+        recorded_at,
+        payload,
+        baseline_record["digest"] if previous_digest is None else previous_digest,
+    )
 
 
 def explain(
@@ -178,6 +283,7 @@ def explain(
     paths: list[str],
     reason: str,
     generated: bool,
+    previous_digest: str | None = None,
 ) -> Meta:
     if (
         not DIGEST.fullmatch(delta_digest)
@@ -199,11 +305,17 @@ def explain(
             "reason": reason,
             "generated": generated,
         },
+        delta_digest if previous_digest is None else previous_digest,
     )
 
 
 def rescope(
-    task: str, revision: int, recorded_at: str, baseline_digest: str, scope: list[str]
+    task: str,
+    revision: int,
+    recorded_at: str,
+    baseline_digest: str,
+    scope: list[str],
+    previous_digest: str | None = None,
 ) -> Meta:
     if not DIGEST.fullmatch(baseline_digest):
         raise ValueError("invalid change-drift baseline digest")
@@ -213,6 +325,7 @@ def rescope(
         revision,
         recorded_at,
         {"baseline_digest": baseline_digest, "scope": normalize_scope(scope)},
+        baseline_digest if previous_digest is None else previous_digest,
     )
 
 
@@ -224,11 +337,13 @@ def validate(record: object) -> None:  # noqa: C901
         "task_revision",
         "recorded_at",
         "payload",
+        "previous_digest",
         "digest",
     }:
         raise ValueError("change-drift record fields are not exact")
     identity = {
-        key: record[key] for key in ("schema_version", "kind", "task", "task_revision", "payload")
+        key: record[key]
+        for key in ("schema_version", "kind", "task", "task_revision", "payload", "previous_digest")
     }
     if (
         record.get("schema_version") != SCHEMA_VERSION
@@ -238,6 +353,8 @@ def validate(record: object) -> None:  # noqa: C901
         or int(record["task_revision"]) < 1
         or not isinstance(record.get("recorded_at"), str)
         or not record["recorded_at"]
+        or not isinstance(record.get("previous_digest"), str)
+        or (record["previous_digest"] and not DIGEST.fullmatch(record["previous_digest"]))
         or record.get("digest") != digest(identity)
     ):
         raise ValueError("invalid change-drift record identity")
@@ -291,7 +408,7 @@ def _validate_observation(  # noqa: C901
     entries = payload.get("entries")
     if not isinstance(entries, list) or len(entries) > 4096:
         raise ValueError("invalid change-drift observation entries")
-    expected_entry = {"path", "previous_path", "status", "generated"}
+    expected_entry = {"path", "previous_path", "status", "generated", "content_digest"}
     if classified:
         expected_entry |= {"classification", "material"}
     for entry in entries:
@@ -304,6 +421,11 @@ def _validate_observation(  # noqa: C901
             or not isinstance(entry.get("status"), str)
             or len(str(entry["status"])) != 2
             or type(entry.get("generated")) is not bool
+            or not isinstance(entry.get("content_digest"), str)
+            or (
+                entry["content_digest"]
+                and not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", entry["content_digest"])
+            )
             or (classified and entry.get("classification") not in CLASSIFICATIONS)
             or (classified and type(entry.get("material")) is not bool)
         ):
@@ -318,14 +440,51 @@ def _validate_observation(  # noqa: C901
             raise ValueError("invalid change-drift baseline payload") from error
 
 
-def records(meta: Meta) -> list[Meta]:
+def records(meta: Meta) -> list[Meta]:  # noqa: C901
     value = meta.get("change_drift", [])
     if not isinstance(value, list) or len(value) > MAX_RECORDS:
         raise ValueError("invalid change-drift history")
+    previous_digest = ""
+    previous_revision = 0
+    active_baseline: Meta | None = None
+    active_delta: Meta | None = None
     for record in value:
         validate(record)
         if record["task"] != meta.get("id"):
             raise ValueError("change-drift record task differs from task")
+        if record["previous_digest"] != previous_digest:
+            raise ValueError("change-drift history is not linked")
+        if record["task_revision"] <= previous_revision:
+            raise ValueError("change-drift history revisions are not increasing")
+        kind = record["kind"]
+        payload = record["payload"]
+        if kind == "baseline":
+            if active_delta is not None and unresolved(value[: value.index(record)]):
+                raise ValueError("change-drift baseline bypasses unresolved work")
+            active_baseline, active_delta = record, None
+        elif kind == "rescope":
+            if (
+                active_baseline is None
+                or active_delta is not None
+                or payload["baseline_digest"] != active_baseline["digest"]
+            ):
+                raise ValueError("change-drift re-scope is not linked to the active baseline")
+        elif kind == "delta":
+            if (
+                active_baseline is None
+                or active_delta is not None
+                or payload["baseline_digest"] != active_baseline["digest"]
+            ):
+                raise ValueError("change-drift delta is not linked to the active baseline")
+            active_delta = record
+        else:
+            if active_delta is None or payload["delta_digest"] != active_delta["digest"]:
+                raise ValueError("change-drift explanation is not linked to the active delta")
+            material = {entry["path"]: entry for entry in active_delta["payload"]["entries"]}
+            if not set(payload["paths"]).issubset(material):
+                raise ValueError("change-drift explanation names unrelated paths")
+        previous_digest = record["digest"]
+        previous_revision = record["task_revision"]
     return value
 
 
@@ -359,3 +518,16 @@ def unresolved(records_value: list[Meta]) -> list[Meta]:
         for entry in current["payload"]["entries"]
         if entry["material"] and entry["path"] not in explained
     ]
+
+
+def completion_error(records_value: list[Meta]) -> str | None:
+    """Return the fail-closed reason when a recorded cycle cannot complete."""
+    if not records_value:
+        return None
+    records({"id": records_value[0]["task"], "change_drift": records_value})
+    current = records_value[-1]
+    if current["kind"] != "delta" and current["kind"] != "explain":
+        return "CHANGE_DRIFT_DELTA_REQUIRED: active baseline requires a post-work delta"
+    if unresolved(records_value):
+        return "CHANGE_DRIFT_UNEXPLAINED"
+    return None

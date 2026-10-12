@@ -2390,8 +2390,11 @@ def require_done_admission(
             raise RuntimeError(hierarchy_error)
     try:
         history = change_drift.records(meta)
-        if history and change_drift.latest(history, "delta") is None:
-            raise RuntimeError("CHANGE_DRIFT_DELTA_REQUIRED: baseline requires a post-work delta")
+        drift_error = change_drift.completion_error(history)
+        if drift_error == "CHANGE_DRIFT_UNEXPLAINED":
+            drift_error = None
+        if drift_error:
+            raise RuntimeError(drift_error)
         outstanding = change_drift.unresolved(history)
     except ValueError as error:
         raise RuntimeError(f"change-drift record is invalid: {error}") from error
@@ -2409,6 +2412,75 @@ def _change_drift_worktree(meta: Meta) -> Path:
     return Path(str(config()["projects_root"])).resolve() / key
 
 
+def _change_drift_baseline(
+    args: argparse.Namespace, revision: int, history: list[Meta], worktree: Path
+) -> tuple[Meta, list[Meta]]:
+    if history and change_drift.completion_error(history) is not None:
+        raise RuntimeError("change-drift baseline requires completion of the active cycle")
+    record = change_drift.baseline(args.task, revision, now(), worktree, args.scope_path)
+    return record, []
+
+
+def _change_drift_delta(
+    args: argparse.Namespace, revision: int, history: list[Meta], worktree: Path
+) -> tuple[Meta, list[Meta]]:
+    base = change_drift.latest(history, "baseline")
+    if base is None or history[-1]["kind"] not in {"baseline", "rescope"}:
+        raise RuntimeError("change-drift delta requires a baseline")
+    return (
+        change_drift.delta(
+            args.task,
+            revision,
+            now(),
+            worktree,
+            base,
+            change_drift.active_scope(history, base),
+            history[-1]["digest"],
+        ),
+        history,
+    )
+
+
+def _change_drift_explain(
+    args: argparse.Namespace, revision: int, history: list[Meta], _worktree: Path
+) -> tuple[Meta, list[Meta]]:
+    current = change_drift.latest(history, "delta")
+    if current is None:
+        raise RuntimeError("change-drift explanation requires a delta")
+    return (
+        change_drift.explain(
+            args.task,
+            revision,
+            now(),
+            current["digest"],
+            args.path,
+            args.reason,
+            args.generated,
+            history[-1]["digest"],
+        ),
+        history,
+    )
+
+
+def _change_drift_rescope(
+    args: argparse.Namespace, revision: int, history: list[Meta], _worktree: Path
+) -> tuple[Meta, list[Meta]]:
+    base = change_drift.latest(history, "baseline")
+    if base is None or history[-1]["kind"] not in {"baseline", "rescope"}:
+        raise RuntimeError("change-drift re-scope requires a baseline")
+    return (
+        change_drift.rescope(
+            args.task,
+            revision,
+            now(),
+            base["digest"],
+            args.scope_path,
+            history[-1]["digest"],
+        ),
+        history,
+    )
+
+
 def apply_change_drift(args: argparse.Namespace, meta: Meta) -> str:
     """Append one revision-fenced observation, exception, or scope record."""
     if meta.get("owner") != args.owner or meta.get("status") != "in_progress":
@@ -2419,37 +2491,19 @@ def apply_change_drift(args: argparse.Namespace, meta: Meta) -> str:
         )
     history = change_drift.records(meta)
     revision = int(meta["task_revision"]) + 1
-    action = args.change_drift_action
-    if action == "baseline":
-        record = change_drift.baseline(
-            args.task, revision, now(), _change_drift_worktree(meta), args.scope_path
-        )
-    elif action == "delta":
-        base = change_drift.latest(history, "baseline")
-        if base is None:
-            raise RuntimeError("change-drift delta requires a baseline")
-        record = change_drift.delta(
-            args.task,
-            revision,
-            now(),
-            _change_drift_worktree(meta),
-            base,
-            change_drift.active_scope(history, base),
-        )
-    elif action == "explain":
-        current = change_drift.latest(history, "delta")
-        if current is None:
-            raise RuntimeError("change-drift explanation requires a delta")
-        record = change_drift.explain(
-            args.task, revision, now(), current["digest"], args.path, args.reason, args.generated
-        )
-    else:
-        base = change_drift.latest(history, "baseline")
-        if base is None:
-            raise RuntimeError("change-drift re-scope requires a baseline")
-        record = change_drift.rescope(args.task, revision, now(), base["digest"], args.scope_path)
-    meta["change_drift"] = [*history, record][-change_drift.MAX_RECORDS :]
-    return f"Recorded change-drift {action} {record['digest']}."
+    builders = {
+        "baseline": _change_drift_baseline,
+        "delta": _change_drift_delta,
+        "explain": _change_drift_explain,
+        "rescope": _change_drift_rescope,
+    }
+    record, history = builders[args.change_drift_action](
+        args, revision, history, _change_drift_worktree(meta)
+    )
+    if len(history) >= change_drift.MAX_RECORDS:
+        raise RuntimeError("change-drift active cycle reached its bounded record limit")
+    meta["change_drift"] = [*history, record]
+    return f"Recorded change-drift {args.change_drift_action} {record['digest']}."
 
 
 def require_release_admission(
