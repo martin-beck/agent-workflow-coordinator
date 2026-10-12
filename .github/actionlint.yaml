@@ -1,3 +1,4 @@
 self-hosted-runner:
   labels:
     - agent-workflow-coordinator-ci
+    - agent-workflow-coordinator-formal-stress

@@ -26,16 +26,6 @@ jobs:
     if: github.ref == 'refs/heads/main'
     runs-on: [self-hosted, Linux, X64, agent-workflow-coordinator-formal-stress]
     timeout-minutes: 1440
-    env:
-      TLC_TIER: full-exhaustive
-      TLC_CGROUP_MODE: required
-      TLC_HEAP: 48g
-      TLC_MEMORY_MAX: 64G
-      TLC_SWAP_MAX: 64G
-      TLC_BUDGET_SECONDS: "86400"
-      TLC_WORK_ROOT: ${{ runner.temp }}/formal-stress-workspaces
-      TLC_DIAGNOSTICS_DIR: ${{ runner.temp }}/formal-stress-diagnostics
-      TLC_ATTESTATION_PATH: ${{ runner.temp }}/formal-stress-diagnostics/formal-attestation.json
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -60,6 +50,16 @@ jobs:
           command -v systemd-run
       - name: Run exploratory full-exhaustive stress
         shell: bash
+        env:
+          TLC_TIER: full-exhaustive
+          TLC_CGROUP_MODE: required
+          TLC_HEAP: 48g
+          TLC_MEMORY_MAX: 64G
+          TLC_SWAP_MAX: 64G
+          TLC_BUDGET_SECONDS: "86400"
+          TLC_WORK_ROOT: ${{ runner.temp }}/formal-stress-workspaces
+          TLC_DIAGNOSTICS_DIR: ${{ runner.temp }}/formal-stress-diagnostics
+          TLC_ATTESTATION_PATH: ${{ runner.temp }}/formal-stress-diagnostics/formal-attestation.json
         run: |
           formal/handoffctl/verify.sh --tier full-exhaustive \
             --diagnostic-queue "${RUNNER_TEMP}/formal-stress-queue" \
