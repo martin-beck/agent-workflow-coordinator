@@ -14,7 +14,7 @@ from argparse import Namespace
 from contextlib import AbstractContextManager
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import cast
+from typing import Any, cast
 from unittest.mock import MagicMock, patch
 
 from tools import issue_series_service as service
@@ -401,3 +401,176 @@ class IssueSeriesServiceCoverageTests(unittest.TestCase):
                 "ambiguous",
                 service._live_issue_series_publication(REPOSITORY, 42, DIGEST, "body").status,
             )
+
+    def test_bounded_manifests_and_receipts_reject_symlinks_and_oversized_inputs(self) -> None:
+        manifest = self.root / "series.json"
+        manifest.write_text("{}", encoding="utf-8")
+        tasks: list[Task] = []
+        with patch.object(
+            service,
+            "project_binding",
+            return_value={"product_repository": REPOSITORY},
+            create=True,
+        ):
+            manifest.write_bytes(b"x" * 200_001)
+            with self.assertRaisesRegex(RuntimeError, "bounded regular file"):
+                service.load_issue_series_plan(manifest, tasks)
+            manifest.unlink()
+            manifest.symlink_to(self.root / "missing-target")
+            with self.assertRaisesRegex(RuntimeError, "bounded regular file"):
+                service.load_issue_series_plan(manifest, tasks)
+
+        directory = self.root / "issue-series-publications"
+        directory.mkdir()
+        receipt = directory / ("a" * 64 + ".json")
+        receipt.write_bytes(b"x" * 10_001)
+        with (
+            patch.object(service, "ROOT", self.root, create=True),
+            patch.object(service, "git_issue_series_receipts", return_value=[]),
+            self.assertRaisesRegex(RuntimeError, "bounded regular file"),
+        ):
+            service.git_issue_series_publication_receipts([])
+
+    def test_git_receipt_rejects_membership_and_digest_mismatch(self) -> None:
+        manifest = self.root / "issue-series" / "series.json"
+        manifest.parent.mkdir()
+        manifest.write_text("{}", encoding="utf-8")
+        receipt = {
+            "task_ids": ["AR-1"],
+            "manifest_digest": DIGEST,
+            "series_identity": {"repository": REPOSITORY, "issue_number": 42},
+        }
+        member: Meta = {
+            "id": "AR-2",
+            "issue_series": {"manifest_digest": DIGEST},
+        }
+        with (
+            patch.object(service, "ROOT", self.root, create=True),
+            patch.object(
+                service,
+                "project_binding",
+                return_value={"product_repository": REPOSITORY},
+                create=True,
+            ),
+            patch.object(
+                service, "plan_issue_series", return_value=json.dumps(receipt), create=True
+            ),
+            self.assertRaisesRegex(RuntimeError, "membership does not match"),
+        ):
+            service._load_git_issue_series_receipt("issue-series/series.json", [member])
+        member["id"] = "AR-1"
+        member["issue_series"] = {"manifest_digest": "sha256:" + "b" * 64}
+        with (
+            patch.object(service, "ROOT", self.root, create=True),
+            patch.object(
+                service,
+                "project_binding",
+                return_value={"product_repository": REPOSITORY},
+                create=True,
+            ),
+            patch.object(
+                service, "plan_issue_series", return_value=json.dumps(receipt), create=True
+            ),
+            self.assertRaisesRegex(RuntimeError, "digest does not match"),
+        ):
+            service._load_git_issue_series_receipt("issue-series/series.json", [member])
+
+    def test_sqlite_and_git_publication_record_paths_preserve_authority_boundary(self) -> None:
+        key = publication_key(REPOSITORY, 42, DIGEST)
+        record: Meta = {"publication_key": key, "manifest_digest": DIGEST, "status": "ambiguous"}
+        backend = MagicMock()
+        backend.load_tasks.return_value = []
+        with (
+            patch.object(service, "SQLiteBackend", type(backend), create=True),
+            patch.object(service, "storage_backend", return_value=backend, create=True),
+            patch.object(service, "mutating_sqlite_backend", return_value=backend, create=True),
+            patch.object(service, "write_sqlite_projections", create=True) as projections,
+        ):
+            service._record_issue_series_publication(REPOSITORY, 42, record)
+            service._record_issue_series_publication(REPOSITORY, 42, record, resolve=True)
+        backend.record_issue_series_publication.assert_called_once_with(REPOSITORY, 42, record)
+        backend.resolve_issue_series_publication.assert_called_once_with(REPOSITORY, 42, record)
+        self.assertEqual(2, projections.call_count)
+
+        with (
+            patch.object(service, "storage_backend", return_value=object(), create=True),
+            patch.object(service, "_git_record_issue_series_publication") as reserve,
+            patch.object(service, "_git_resolve_issue_series_publication") as resolve,
+        ):
+            service._record_issue_series_publication(REPOSITORY, 42, record)
+            service._record_issue_series_publication(REPOSITORY, 42, record, resolve=True)
+        reserve.assert_called_once_with(record)
+        resolve.assert_called_once_with(record)
+
+    def test_create_git_series_restores_only_before_a_durable_commit(self) -> None:
+        task_path = self.root / "tasks" / "AR-1.md"
+        task_path.parent.mkdir()
+        task_path.write_text("before", encoding="utf-8")
+        created: list[Task] = [(task_path, {"id": "AR-1"}, "body")]
+        receipt: Meta = {
+            "series_identity": {"repository": REPOSITORY, "issue_number": 42},
+            "manifest": {"members": []},
+        }
+
+        def write_task(path: Path, _meta: Meta, body: str) -> None:
+            path.write_text(body, encoding="utf-8")
+
+        common = {
+            "ROOT": self.root,
+            "issue_series_manifest_path": lambda _receipt: (
+                self.root / "issue-series" / "series.json"
+            ),
+            "write_task": write_task,
+            "all_tasks": lambda: created,
+            "project_settings": dict,
+            "rendered_task_views": lambda _tasks: {},
+            "write_rendered_task_views": lambda _views: None,
+            "require_project_settings_unchanged": lambda _settings: None,
+            "require_policy_unchanged": lambda _root, _policy: None,
+            "mutation_global_errors": lambda _tasks: [],
+            "generated_view_errors": lambda _tasks, **_kwargs: [],
+            "introduced_content_errors": lambda _before: [],
+            "generated_paths": list,
+            "changed_paths": lambda _before, **_kwargs: [],
+        }
+        with (
+            patch.multiple(service, create=True, **cast(Any, common)),
+            self.patch_projection_writes(),
+            patch.object(service, "commit", return_value=False, create=True),
+            patch.object(service, "restore_paths", create=True) as restore,
+            self.assertRaisesRegex(RuntimeError, "produced no commit"),
+        ):
+            service.create_git_issue_series(receipt, created, cast(EvidencePolicy, object()))
+        restore.assert_called_once()
+
+        with (
+            patch.multiple(service, create=True, **cast(Any, common)),
+            self.patch_projection_writes(),
+            patch.object(service, "commit", return_value=True, create=True),
+            patch.object(
+                service, "push_replica", side_effect=RuntimeError("push failed"), create=True
+            ),
+            patch.object(service, "restore_paths", create=True) as restore,
+            self.assertRaisesRegex(RuntimeError, "push failed"),
+        ):
+            service.create_git_issue_series(receipt, created, cast(EvidencePolicy, object()))
+        restore.assert_not_called()
+
+    def test_live_failures_and_uninstalled_dispatch_are_explicit(self) -> None:
+        key = publication_key(REPOSITORY, 42, DIGEST)
+        for diagnostic, status in (
+            ("HTTP 401", "deferred_unauthorized"),
+            ("issue closed", "deferred_closed"),
+            ("HTTP 404", "deferred_moved"),
+            ("HTTP 409", "deferred_conflict"),
+            ("network reset", "deferred_unavailable"),
+        ):
+            with self.subTest(diagnostic=diagnostic):
+                self.assertEqual(
+                    status, service._live_publication_failure(diagnostic, key, DIGEST).status
+                )
+        with patch.object(service, "_CORE", None):
+            with self.assertRaisesRegex(RuntimeError, "not installed"):
+                service._core_value("cmd_issue_series_plan")
+            with self.assertRaisesRegex(RuntimeError, "not installed"):
+                service._refresh()
