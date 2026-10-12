@@ -14,6 +14,7 @@ import re
 import runpy
 import subprocess
 import sys
+import time
 import unittest
 from pathlib import Path
 from typing import Any, cast
@@ -1022,7 +1023,7 @@ class FormalEvidenceTests(unittest.TestCase):
         self.assertIn("TIER_BUDGET_SECONDS=300", verify)
         self.assertIn("TIER_BUDGET_SECONDS=900", verify)
         self.assertIn("aggregate verifier budget exhausted (including admission)", verify)
-        self.assertIn("--elapsed-seconds", verify)
+        self.assertIn("--started-epoch", verify)
         self.assertIn("--budget-seconds", verify)
         self.assertIn("TIER_BUDGET_SECONDS", attest)
         self.assertIn("verifier_budget", attest)
@@ -1142,8 +1143,8 @@ class FormalEvidenceTests(unittest.TestCase):
                     "HandoffctlBinding",
                     "--budget-seconds",
                     "600",
-                    "--elapsed-seconds",
-                    "0",
+                    "--started-epoch",
+                    str(int(time.time())),
                 ],
             ),
             mock.patch.object(sys, "stderr", stderr),

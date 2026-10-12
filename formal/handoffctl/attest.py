@@ -154,7 +154,7 @@ def main() -> int:
     parser.add_argument("--models", nargs="+", required=True)
     parser.add_argument("--manifest", type=Path, required=True)
     parser.add_argument("--budget-seconds", type=int, required=True)
-    parser.add_argument("--elapsed-seconds", type=int, required=True)
+    parser.add_argument("--started-epoch", type=int, required=True)
     parser.add_argument(
         "--execution-classification",
         choices=("canonical", "diagnostic-private-admission"),
@@ -166,10 +166,6 @@ def main() -> int:
         default="success",
     )
     args = parser.parse_args()
-    try:
-        validate_verifier_budget(args.tier, args.budget_seconds, args.elapsed_seconds)
-    except ValueError as error:
-        parser.error(str(error))
     if args.status != "success":
         parser.error("failed or incomplete formal runs cannot produce a success attestation")
     boundary = os.environ.get("TLC_CGROUP_MODE", "required")
@@ -228,6 +224,12 @@ def main() -> int:
         swap_max = effective_bound("TLC_SWAP_MAX", "3G", boundary)
     except ValueError as error:
         parser.error(str(error))
+    completed_epoch = int(time.time())
+    elapsed_seconds = completed_epoch - args.started_epoch
+    try:
+        validate_verifier_budget(args.tier, args.budget_seconds, elapsed_seconds)
+    except ValueError as error:
+        parser.error(str(error))
     result = {
         "schema_version": 1,
         "profile": args.tier,
@@ -245,7 +247,7 @@ def main() -> int:
         "canonical_publication_evidence": args.execution_classification == "canonical",
         "verifier_budget": {
             "declared_seconds": args.budget_seconds,
-            "elapsed_seconds": args.elapsed_seconds,
+            "elapsed_seconds": elapsed_seconds,
             "scope": "end-to-end including verifier download, admission, models, and attestation",
         },
         "resource_bounds": {
@@ -261,7 +263,7 @@ def main() -> int:
         "outcomes": outcomes,
         "state_counts": dict.fromkeys(args.models),
         "status": "success",
-        "timestamp_epoch": int(time.time()),
+        "timestamp_epoch": completed_epoch,
         "freshness_seconds": 0,
         "non_claims": [
             f"{args.tier} is non-exhaustive and cannot support full formal claims"

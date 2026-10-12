@@ -99,18 +99,19 @@ tracked binding.
 
 ## Normal user and agent loop
 
-Development merge review identity is defined in
-[`DEVELOPMENT_REVIEW_POLICY.md`](DEVELOPMENT_REVIEW_POLICY.md). The required
-technical review remains independent, while a same-account GitHub approval is
-acceptable for development-only integration. Verified releases retain their
-separate release and provenance gates.
+Local reproducible functional and privacy evidence is sufficient for normal
+development integration and release. External signatures, authentication,
+GitHub approval, and independent review may supplement that evidence but are
+not lifecycle, merge, or release prerequisites; see
+[`DEVELOPMENT_REVIEW_POLICY.md`](DEVELOPMENT_REVIEW_POLICY.md).
 
 1. Read the project's development policy, complete snapshot, selected task and plan.
 2. Claim one dependency-ready open task with a stable unique owner.
 3. Run every state-changing product, Git, review or publication command through `run`.
 4. Record each material result immediately; heartbeat before lease expiry.
 5. After interruption, inspect revisions, commits, refs, processes and CI before retrying.
-6. For `done`, record reviewed task-spec acceptance at the exact current revision.
+6. For `done`, record locally verifiable task-spec acceptance at the exact
+   current revision; supplementary review is optional.
 7. Release to `done`, `open`, or `blocked`; reconcile and run the live doctor.
 
 ```sh

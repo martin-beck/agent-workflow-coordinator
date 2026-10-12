@@ -72,8 +72,11 @@ trap 'rm -rf -- "${TEMP_DIR}" "${SLICE_DIR}"' EXIT
 readonly JAR="${TEMP_DIR}/tla2tools.jar"
 readonly URL="https://github.com/tlaplus/tlaplus/releases/download/v${TLA_VERSION}/tla2tools.jar"
 
-curl --fail --location --retry 3 --show-error --silent --output "${JAR}" "${URL}"
-printf '%s  %s\n' "${TLA_SHA256}" "${JAR}" | sha256sum --check --strict
+timeout --foreground --signal=TERM --kill-after=5s "$(remaining_seconds)" \
+    curl --fail --location --retry 3 --show-error --silent --output "${JAR}" "${URL}"
+timeout --foreground --signal=TERM --kill-after=5s "$(remaining_seconds)" \
+    bash -c 'printf "%s  %s\\n" "$1" "$2" | sha256sum --check --strict' \
+    -- "${TLA_SHA256}" "${JAR}"
 
 run_model() {
     local model="$1"
@@ -158,10 +161,6 @@ else
     done
     run_model HandoffctlRecovery
 fi
-readonly ELAPSED_SECONDS="$(elapsed_seconds)"
-if (( ELAPSED_SECONDS > DECLARED_BUDGET_SECONDS )); then
-    echo "${TIER} aggregate verifier budget exhausted before attestation" >&2
-    exit 124
-fi
-python3 "${SPEC_DIR}/attest.py" --tier "${TIER}" --output "${ATTESTATION}" --jar "${JAR}" --manifest "${MANIFEST}" --execution-classification "${EXECUTION_CLASSIFICATION}" --budget-seconds "${DECLARED_BUDGET_SECONDS}" --elapsed-seconds "${ELAPSED_SECONDS}" \
+timeout --foreground --signal=TERM --kill-after=5s "$(remaining_seconds)" \
+    python3 "${SPEC_DIR}/attest.py" --tier "${TIER}" --output "${ATTESTATION}" --jar "${JAR}" --manifest "${MANIFEST}" --execution-classification "${EXECUTION_CLASSIFICATION}" --budget-seconds "${DECLARED_BUDGET_SECONDS}" --started-epoch "${START_EPOCH_SECONDS}" \
     --models $(if [[ "${TIER}" == "portable-smoke" ]]; then echo HandoffctlBinding; elif [[ "${TIER}" == "pr-fast" ]]; then echo HandoffctlFast HandoffctlReceiptsFast HandoffctlPublicationFast HandoffctlObservation OracleInteractionGates; elif [[ "${TIER}" == "pr-publication" ]]; then echo HandoffctlBinding HandoffctlLocks HandoffctlRun HandoffctlStorage HandoffctlReceipts HandoffctlPublication HandoffctlObservation HandoffctlPR HandoffctlRecovery; else printf 'HandoffctlBinding HandoffctlLocks HandoffctlRun HandoffctlStorage HandoffctlReceipts HandoffctlPublication HandoffctlObservation '; (cd "${SPEC_DIR}" && python3 -c 'from slices import OPERATIONS; print(*(f"HandoffctlSlice-{operation}" for operation in OPERATIONS))'); echo HandoffctlRecovery; fi)
