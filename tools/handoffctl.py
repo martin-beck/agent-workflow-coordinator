@@ -2643,9 +2643,155 @@ def require_promotion_preflight(kind: str) -> None:
         raise RuntimeError("promotion requires a clean state repository")
 
 
-def apply_accept(  # noqa: C901
-    args: argparse.Namespace, meta: Meta, policy: EvidencePolicy | None
+def _predicate_acceptance_inputs(args: argparse.Namespace) -> tuple[str, str, str, bool] | None:
+    """Return a complete predicate request, rejecting partial predicate arguments."""
+    predicate = getattr(args, "predicate", None)
+    candidate_ref = getattr(args, "candidate_ref", None)
+    candidate_digest = getattr(args, "candidate_digest", None)
+    reopen = bool(getattr(args, "reopen", False))
+    if predicate is None and candidate_ref is None and candidate_digest is None and not reopen:
+        return None
+    if not all(
+        isinstance(value, str) and value for value in (predicate, candidate_ref, candidate_digest)
+    ):
+        raise RuntimeError(
+            "predicate acceptance requires predicate, candidate ref, and candidate digest"
+        )
+    return cast(tuple[str, str, str, bool], (predicate, candidate_ref, candidate_digest, reopen))
+
+
+def _validate_predicate_spec(meta: Meta, policy: EvidencePolicy | None, predicate: str) -> None:
+    """Require a valid bound spec and a predicate declared by that exact spec."""
+    if "spec_ref" not in meta or "spec_revision" not in meta:
+        raise RuntimeError("predicate acceptance requires a bound task spec")
+    preflight_meta = dict(meta)
+    preflight_meta.pop("evidence_ledger", None)
+    if task_spec_errors(ROOT, preflight_meta, policy):
+        raise RuntimeError("predicate acceptance task spec is unavailable")
+    spec = json.loads((ROOT / str(meta["spec_ref"])).read_text(encoding="utf-8"))
+    predicates = {item["id"] for item in spec["acceptance_predicates"]}
+    if predicate not in predicates:
+        raise RuntimeError("predicate acceptance names an unknown predicate")
+
+
+def _predicate_ledger(meta: Meta, candidate_ref: str, candidate_digest: str) -> Meta:
+    """Load or initialize the ledger without accepting an unstructured value."""
+    ledger = meta.get("evidence_ledger")
+    if ledger is None:
+        return {"candidate_ref": candidate_ref, "candidate_digest": candidate_digest, "steps": []}
+    if not isinstance(ledger, dict):
+        raise RuntimeError("predicate evidence ledger is malformed")
+    return ledger
+
+
+def _candidate_changed(ledger: Meta, candidate_ref: str, candidate_digest: str) -> bool:
+    """Determine whether the recorded candidate binding is being replaced."""
+    return (
+        ledger.get("candidate_ref") != candidate_ref
+        or ledger.get("candidate_digest") != candidate_digest
+    )
+
+
+def _historical_steps(existing_steps: object) -> object:
+    """Retain every historical row while marking passing rows stale."""
+    if not isinstance(existing_steps, list):
+        return existing_steps
+    history: list[object] = []
+    for existing_step in existing_steps:
+        if not isinstance(existing_step, dict):
+            history.append(existing_step)
+            continue
+        historical = dict(existing_step)
+        if historical.get("status") == "pass":
+            historical["status"] = "stale"
+        history.append(historical)
+    return history
+
+
+def _validate_predicate_ledger(
+    meta: Meta,
+    ledger: Meta,
+    policy: EvidencePolicy | None,
+    candidate_ref: str,
+    candidate_digest: str,
+    changed_candidate: bool,
+) -> None:
+    """Validate current evidence, or its complete prospective historical form."""
+    if not changed_candidate:
+        errors = evidence_ledger_errors(ROOT, meta, policy)
+    else:
+        prospective_ledger = dict(ledger)
+        prospective_ledger.update(
+            candidate_ref=candidate_ref,
+            candidate_digest=candidate_digest,
+            steps=_historical_steps(ledger.get("steps")),
+        )
+        prospective_meta = dict(meta, evidence_ledger=prospective_ledger)
+        errors = evidence_ledger_errors(ROOT, prospective_meta, policy)
+    if errors:
+        raise RuntimeError("predicate evidence is invalid: " + "; ".join(errors))
+
+
+def _record_predicate_step(
+    args: argparse.Namespace,
+    meta: Meta,
+    ledger: Meta,
+    predicate: str,
+    candidate_ref: str,
+    candidate_digest: str,
+    changed_candidate: bool,
+) -> None:
+    """Replace one predicate row after preserving and validating its history."""
+    existing_steps = ledger.get("steps")
+    steps = [dict(item) for item in existing_steps] if isinstance(existing_steps, list) else []
+    if changed_candidate:
+        for recorded_step in steps:
+            if recorded_step.get("status") == "pass":
+                recorded_step["status"] = "stale"
+        ledger["candidate_ref"] = candidate_ref
+        ledger["candidate_digest"] = candidate_digest
+    step: Meta = {
+        "predicate_id": predicate,
+        "status": "pass",
+        "candidate_ref": candidate_ref,
+        "candidate_digest": candidate_digest,
+        "evidence_class": args.evidence_class,
+        "evidence_ref": args.evidence_ref,
+        "evidence_digest": args.evidence_digest,
+        "recorded_task_revision": int(meta["task_revision"]) + 1,
+    }
+    ledger["steps"] = [item for item in steps if item.get("predicate_id") != predicate] + [step]
+    meta["evidence_ledger"] = ledger
+
+
+def _apply_predicate_acceptance(
+    args: argparse.Namespace,
+    meta: Meta,
+    policy: EvidencePolicy | None,
+    inputs: tuple[str, str, str, bool],
 ) -> str:
+    """Record a predicate result while enforcing ledger candidate binding."""
+    predicate, candidate_ref, candidate_digest, reopen = inputs
+    _validate_predicate_spec(meta, policy, predicate)
+    ledger = _predicate_ledger(meta, candidate_ref, candidate_digest)
+    changed_candidate = _candidate_changed(ledger, candidate_ref, candidate_digest)
+    if changed_candidate and not reopen:
+        raise RuntimeError("candidate changed; reopen predicate evidence before recording")
+    if reopen and not changed_candidate:
+        raise RuntimeError("reopen requires a different candidate")
+    _validate_predicate_ledger(
+        meta, ledger, policy, candidate_ref, candidate_digest, changed_candidate
+    )
+    _record_predicate_step(
+        args, meta, ledger, predicate, candidate_ref, candidate_digest, changed_candidate
+    )
+    errors = evidence_ledger_errors(ROOT, meta, policy)
+    if errors:
+        raise RuntimeError("predicate evidence is invalid: " + "; ".join(errors))
+    return str(args.note)
+
+
+def apply_accept(args: argparse.Namespace, meta: Meta, policy: EvidencePolicy | None) -> str:
     """Record one owner's exact-revision assertion against the referenced spec."""
     if meta.get("owner") != args.owner:
         raise RuntimeError(f"{args.task} is owned by {meta.get('owner') or 'nobody'}")
@@ -2656,110 +2802,8 @@ def apply_accept(  # noqa: C901
         raise RuntimeError(
             f"stale revision: expected {args.expected_revision}, current {meta['task_revision']}"
         )
-    predicate = getattr(args, "predicate", None)
-    candidate_ref = getattr(args, "candidate_ref", None)
-    candidate_digest = getattr(args, "candidate_digest", None)
-    reopen = bool(getattr(args, "reopen", False))
-    if predicate is not None or candidate_ref is not None or candidate_digest is not None or reopen:
-        if not all(
-            isinstance(value, str) and value
-            for value in (predicate, candidate_ref, candidate_digest)
-        ):
-            raise RuntimeError(
-                "predicate acceptance requires predicate, candidate ref, and candidate digest"
-            )
-        if "spec_ref" not in meta or "spec_revision" not in meta:
-            raise RuntimeError("predicate acceptance requires a bound task spec")
-        # A re-open may replace an artifact in place.  Validate the task spec
-        # before transitioning the ledger, but defer ledger validation until
-        # after prior passing rows have been made historical.
-        preflight_meta = dict(meta)
-        preflight_meta.pop("evidence_ledger", None)
-        errors = task_spec_errors(ROOT, preflight_meta, policy)
-        if errors:
-            raise RuntimeError("predicate acceptance task spec is unavailable")
-        import json
-
-        spec = json.loads((ROOT / str(meta["spec_ref"])).read_text(encoding="utf-8"))
-        predicates = {item["id"] for item in spec["acceptance_predicates"]}
-        if predicate not in predicates:
-            raise RuntimeError("predicate acceptance names an unknown predicate")
-        ledger = meta.get("evidence_ledger")
-        if ledger is None:
-            ledger = {
-                "candidate_ref": candidate_ref,
-                "candidate_digest": candidate_digest,
-                "steps": [],
-            }
-        if not isinstance(ledger, dict):
-            raise RuntimeError("predicate evidence ledger is malformed")
-        changed_candidate = (
-            ledger.get("candidate_ref") != candidate_ref
-            or ledger.get("candidate_digest") != candidate_digest
-        )
-        if changed_candidate and not reopen:
-            raise RuntimeError("candidate changed; reopen predicate evidence before recording")
-        if reopen and not changed_candidate:
-            raise RuntimeError("reopen requires a different candidate")
-        existing_steps = ledger.get("steps")
-        if changed_candidate:
-            # An artifact may be replaced in place before its evidence is
-            # reopened.  Validate a prospective historical ledger first: it
-            # retains every persisted row, turns only passing rows stale, and
-            # binds the new candidate.  This permits the legitimate in-place
-            # replacement while refusing to silently discard malformed rows.
-            historical_steps: list[object] = []
-            if isinstance(existing_steps, list):
-                for existing_step in existing_steps:
-                    if not isinstance(existing_step, dict):
-                        historical_steps.append(existing_step)
-                        continue
-                    historical = dict(existing_step)
-                    if historical.get("status") == "pass":
-                        historical["status"] = "stale"
-                    historical_steps.append(historical)
-            prospective_ledger = dict(ledger)
-            prospective_ledger.update(
-                candidate_ref=candidate_ref,
-                candidate_digest=candidate_digest,
-                steps=historical_steps if isinstance(existing_steps, list) else existing_steps,
-            )
-            prospective_meta = dict(meta)
-            prospective_meta["evidence_ledger"] = prospective_ledger
-            errors = evidence_ledger_errors(ROOT, prospective_meta, policy)
-            if errors:
-                raise RuntimeError("predicate evidence is invalid: " + "; ".join(errors))
-        else:
-            errors = evidence_ledger_errors(ROOT, meta, policy)
-            if errors:
-                raise RuntimeError("predicate evidence is invalid: " + "; ".join(errors))
-        # The validation above established both list shape and row shape before
-        # copying any persisted rows.  Do not filter this list: each retained
-        # historical entry is authority data.
-        steps = [dict(step) for step in existing_steps] if isinstance(existing_steps, list) else []
-        if changed_candidate:
-            for recorded_step in steps:
-                if recorded_step.get("status") == "pass":
-                    recorded_step["status"] = "stale"
-            ledger["candidate_ref"] = candidate_ref
-            ledger["candidate_digest"] = candidate_digest
-        step: Meta = {
-            "predicate_id": predicate,
-            "status": "pass",
-            "candidate_ref": candidate_ref,
-            "candidate_digest": candidate_digest,
-            "evidence_class": args.evidence_class,
-            "evidence_ref": args.evidence_ref,
-            "evidence_digest": args.evidence_digest,
-            "recorded_task_revision": int(meta["task_revision"]) + 1,
-        }
-        steps = [item for item in steps if item.get("predicate_id") != predicate]
-        ledger["steps"] = [*steps, step]
-        meta["evidence_ledger"] = ledger
-        errors = evidence_ledger_errors(ROOT, meta, policy)
-        if errors:
-            raise RuntimeError("predicate evidence is invalid: " + "; ".join(errors))
-        return str(args.note)
+    if predicate_inputs := _predicate_acceptance_inputs(args):
+        return _apply_predicate_acceptance(args, meta, policy, predicate_inputs)
     acceptance: Meta = {
         "status": "pass",
         "evidence_class": args.evidence_class,
