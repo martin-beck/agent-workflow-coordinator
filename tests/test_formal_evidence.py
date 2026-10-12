@@ -1004,6 +1004,8 @@ class FormalEvidenceTests(unittest.TestCase):
         self.assertIn("runner-produced outcome manifest", attest)
         self.assertIn('effective_bound("TLC_MEMORY_MAX", "3G", boundary)', attest)
         self.assertIn('effective_bound("TLC_SWAP_MAX", "3G", boundary)', attest)
+        self.assertIn('export TLC_MEMORY_MAX="${TLC_MEMORY_MAX:-3G}"', verify)
+        self.assertIn('export TLC_SWAP_MAX="${TLC_SWAP_MAX:-3G}"', verify)
 
     def test_workflow_separates_fork_pr_publication_and_weekly_tiers(self) -> None:
         workflow = (ROOT / ".github" / "workflows" / "verify.yml").read_text()

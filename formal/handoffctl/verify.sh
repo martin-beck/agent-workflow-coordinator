@@ -25,6 +25,12 @@ fi
 readonly EXECUTION_CLASSIFICATION
 readonly ATTESTATION="${TLC_ATTESTATION_PATH:-${TMPDIR:-/tmp}/handoffctl-${TIER}-attestation.json}"
 
+# The runner and receipt must describe the same effective resource contract.
+# Workflows normally provide these values, but a direct local invocation must
+# remain self-contained rather than completing TLC and failing at attestation.
+export TLC_MEMORY_MAX="${TLC_MEMORY_MAX:-3G}"
+export TLC_SWAP_MAX="${TLC_SWAP_MAX:-3G}"
+
 readonly TLA_VERSION=1.7.4
 readonly TLA_SHA256=936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88
 readonly SPEC_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
