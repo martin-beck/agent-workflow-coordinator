@@ -1285,6 +1285,83 @@ class SQLiteStorageTest(unittest.TestCase):
         )
         self.assertIn("updated", (self.tasks / "AR-0001-test.md").read_text())
 
+    def test_predicate_reopen_rejects_malformed_sqlite_ledger_before_persisting(self) -> None:
+        self.configure_core(backend="sqlite")
+        task_path, task_meta, task_body = task("AR-0001", status="in_progress")
+        task_meta.update(
+            owner="worker",
+            claim_expires="2099-01-01T00:00:00+00:00",
+            spec_ref="spec.json",
+            spec_revision=1,
+        )
+        (self.root / "spec.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "spec_ref": "spec.json",
+                    "spec_revision": 1,
+                    "acceptance_predicates": [
+                        {"id": "predicate-a", "description": "pass"},
+                        {"id": "predicate-b", "description": "pass"},
+                    ],
+                    "definition_of_done": ["pass both predicates"],
+                    "inputs": [{"id": "input", "description": "input"}],
+                    "outputs": [{"id": "output", "description": "output"}],
+                    "allowed_tools": ["source.read"],
+                    "forbidden_tools": [],
+                    "required_evidence_classes": ["contract-test"],
+                    "gates": [{"id": "gate", "description": "pass"}],
+                }
+            ),
+            encoding="utf-8",
+        )
+        (self.root / "candidate.txt").write_text("candidate a", encoding="utf-8")
+        (self.root / "evidence.txt").write_text("evidence a", encoding="utf-8")
+
+        def digest(name: str) -> str:
+            return "sha256:" + hashlib.sha256((self.root / name).read_bytes()).hexdigest()
+
+        old_candidate_digest = digest("candidate.txt")
+        old_evidence_digest = digest("evidence.txt")
+        task_meta["evidence_ledger"] = {
+            "candidate_ref": "candidate.txt",
+            "candidate_digest": old_candidate_digest,
+            "steps": [
+                {
+                    "predicate_id": "predicate-a",
+                    "status": "pass",
+                    "candidate_ref": "candidate.txt",
+                    "candidate_digest": old_candidate_digest,
+                    "evidence_class": "contract-test",
+                    "evidence_ref": "evidence.txt",
+                    "evidence_digest": old_evidence_digest,
+                    "recorded_task_revision": 1,
+                },
+                "malformed historical row",
+            ],
+        }
+        backend = self.create([(task_path, task_meta, task_body)])
+        (self.root / "candidate.txt").write_text("candidate b", encoding="utf-8")
+        (self.root / "evidence.txt").write_text("evidence b", encoding="utf-8")
+        reopen = argparse.Namespace(
+            task="AR-0001",
+            owner="worker",
+            expected_revision=1,
+            evidence_class="contract-test",
+            evidence_ref="evidence.txt",
+            evidence_digest=digest("evidence.txt"),
+            predicate="predicate-b",
+            candidate_ref="candidate.txt",
+            candidate_digest=digest("candidate.txt"),
+            reopen=True,
+            note="candidate b",
+        )
+        with self.assertRaisesRegex(RuntimeError, "evidence ledger step is incomplete or unknown"):
+            CORE.mutate(reopen, "accept")
+        persisted = backend.load_tasks()[0][1]
+        self.assertEqual(1, persisted["task_revision"])
+        self.assertEqual("malformed historical row", persisted["evidence_ledger"]["steps"][1])
+
     def test_sqlite_gate_persists_and_exports_human_session_metadata(self) -> None:
         self.configure_core(backend="sqlite")
         task_path, task_meta, task_body = task("AR-0001")

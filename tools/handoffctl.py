@@ -2701,7 +2701,42 @@ def apply_accept(  # noqa: C901
             raise RuntimeError("candidate changed; reopen predicate evidence before recording")
         if reopen and not changed_candidate:
             raise RuntimeError("reopen requires a different candidate")
-        steps = [dict(step) for step in ledger.get("steps", []) if isinstance(step, dict)]
+        existing_steps = ledger.get("steps")
+        if changed_candidate:
+            # An artifact may be replaced in place before its evidence is
+            # reopened.  Validate a prospective historical ledger first: it
+            # retains every persisted row, turns only passing rows stale, and
+            # binds the new candidate.  This permits the legitimate in-place
+            # replacement while refusing to silently discard malformed rows.
+            historical_steps: list[object] = []
+            if isinstance(existing_steps, list):
+                for existing_step in existing_steps:
+                    if not isinstance(existing_step, dict):
+                        historical_steps.append(existing_step)
+                        continue
+                    historical = dict(existing_step)
+                    if historical.get("status") == "pass":
+                        historical["status"] = "stale"
+                    historical_steps.append(historical)
+            prospective_ledger = dict(ledger)
+            prospective_ledger.update(
+                candidate_ref=candidate_ref,
+                candidate_digest=candidate_digest,
+                steps=historical_steps if isinstance(existing_steps, list) else existing_steps,
+            )
+            prospective_meta = dict(meta)
+            prospective_meta["evidence_ledger"] = prospective_ledger
+            errors = evidence_ledger_errors(ROOT, prospective_meta, policy)
+            if errors:
+                raise RuntimeError("predicate evidence is invalid: " + "; ".join(errors))
+        else:
+            errors = evidence_ledger_errors(ROOT, meta, policy)
+            if errors:
+                raise RuntimeError("predicate evidence is invalid: " + "; ".join(errors))
+        # The validation above established both list shape and row shape before
+        # copying any persisted rows.  Do not filter this list: each retained
+        # historical entry is authority data.
+        steps = [dict(step) for step in existing_steps] if isinstance(existing_steps, list) else []
         if changed_candidate:
             for step in steps:
                 if step.get("status") == "pass":
