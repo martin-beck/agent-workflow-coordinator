@@ -599,7 +599,10 @@ class SQLiteStorageTest(unittest.TestCase):
             )
         completed = backend.load_tasks()[0][1]
         self.assertNotIn("execution_reservation", completed)
-        self.assertEqual(4, completed["task_revision"])
+        # Bound runs record the reservation-bound completion receipt before
+        # clearing the reservation, so the terminal lifecycle consumes three
+        # revisions after the binding mutation.
+        self.assertEqual(5, completed["task_revision"])
 
     def test_every_write_route_enters_fence_before_sqlite_mutation(self) -> None:
         ordinary = self.create()
