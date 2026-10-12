@@ -3,7 +3,6 @@ name: Formal
 "on":
   push:
     branches: [main]
-  pull_request:
   workflow_dispatch:
 
 permissions:
@@ -18,12 +17,10 @@ concurrency:
 
 jobs:
   formal-trusted:
-    # Never run untrusted fork code on the local constrained runner. The
-    # portable Verify signal still covers that case, while this exact-head
-    # receipt is available for repository pull requests and main candidates.
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-    # Hosted CI is advisory evidence only, never an external progression gate.
-    continue-on-error: true
+    # This runner is reserved for the protected main ref. Pull-request code is
+    # exercised only on disposable runners by Verify; a local formal receipt
+    # remains the progression evidence when hosted capacity is unavailable.
+    if: github.ref == 'refs/heads/main'
     runs-on: [self-hosted, Linux, X64, agent-workflow-coordinator-ci]
     timeout-minutes: 15
     env:
@@ -33,7 +30,7 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 0
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ github.sha }}
       - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961
         with:
           distribution: temurin

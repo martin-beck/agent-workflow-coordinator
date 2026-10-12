@@ -26,7 +26,6 @@ jobs:
     if: github.ref == 'refs/heads/main'
     runs-on: [self-hosted, Linux, X64, agent-workflow-coordinator-formal-stress]
     timeout-minutes: 1440
-    continue-on-error: true
     env:
       TLC_TIER: full-exhaustive
       TLC_CGROUP_MODE: required

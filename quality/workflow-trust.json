@@ -8,7 +8,13 @@
   },
   "runners": {
     "disposable": ["ubuntu-24.04"],
-    "trusted": ["self-hosted", "Linux", "X64", "agent-workflow-coordinator-ci"],
+    "trusted": [
+      "self-hosted",
+      "Linux",
+      "X64",
+      "agent-workflow-coordinator-ci",
+      "agent-workflow-coordinator-formal-stress"
+    ],
     "persistent": ["persistent-linux"]
   },
   "protected_branches": ["main"],
