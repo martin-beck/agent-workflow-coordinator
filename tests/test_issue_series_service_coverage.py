@@ -7,32 +7,45 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import unittest
 from argparse import Namespace
+from contextlib import AbstractContextManager
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from typing import cast
 from unittest.mock import MagicMock, patch
 
 from tools import issue_series_service as service
+from tools.issue_series_publish import PublicationOutcome, publication_key
+from tools.sqlite_storage import SQLiteBackend
+from tools.task_spec import EvidencePolicy
 
 REPOSITORY = "github.com/owner/product"
 DIGEST = "sha256:" + "a" * 64
+
+type Meta = dict[str, object]
+type Task = tuple[Path, Meta, str]
+
+
+def record_commit(commits: list[str], message: str) -> bool:
+    """Record a simulated commit while preserving the service's success signal."""
+    commits.append(message)
+    return True
 
 
 class ProjectionBackend:
     """Small durable-backend stand-in that exposes only projection reads."""
 
-    def __init__(
-        self, series: list[dict[str, object]], publications: list[dict[str, object]]
-    ) -> None:
+    def __init__(self, series: list[Meta], publications: list[Meta]) -> None:
         self.series = series
         self.publications = publications
 
-    def load_issue_series(self) -> list[dict[str, object]]:
+    def load_issue_series(self) -> list[Meta]:
         return self.series
 
-    def load_issue_series_publications(self) -> list[dict[str, object]]:
+    def load_issue_series_publications(self) -> list[Meta]:
         return self.publications
 
     def create_issue_series(self, *_args: object, **_kwargs: object) -> None:
@@ -58,20 +71,25 @@ class IssueSeriesServiceCoverageTests(unittest.TestCase):
         replacement.start()
         self.addCleanup(replacement.stop)
 
-    def patch_projection_writes(self) -> patch:
+    def patch_projection_writes(self) -> AbstractContextManager[object]:
         def atomic(path: Path, value: str) -> None:
             path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
             path.write_text(value, encoding="utf-8")
 
         return patch.object(service, "atomic", side_effect=atomic, create=True)
 
+    def assert_outcome(self, outcome: PublicationOutcome | None) -> PublicationOutcome:
+        self.assertIsNotNone(outcome)
+        assert outcome is not None
+        return outcome
+
     def test_sqlite_projections_replace_stale_files_and_are_normalized(self) -> None:
-        receipt = {
+        receipt: Meta = {
             "series_identity": {"repository": REPOSITORY, "issue_number": 42},
             "manifest": {"schema_version": 1, "members": []},
         }
         key = "b" * 64
-        publication = {"publication_key": key, "status": "published"}
+        publication: Meta = {"publication_key": key, "status": "published"}
         backend = ProjectionBackend([receipt], [publication])
         stale_series = self.root / "issue-series" / "stale.json"
         stale_publication = self.root / "issue-series-publications" / ("c" * 64 + ".json")
@@ -80,8 +98,11 @@ class IssueSeriesServiceCoverageTests(unittest.TestCase):
         stale_series.write_text("stale", encoding="utf-8")
         stale_publication.write_text("stale", encoding="utf-8")
         with patch.object(service, "ROOT", self.root, create=True), self.patch_projection_writes():
-            series_paths = service.write_sqlite_issue_series_projections(backend)  # type: ignore[arg-type]
-            publication_paths = service.write_sqlite_issue_series_publication_projections(backend)  # type: ignore[arg-type]
+            sqlite_backend = cast(SQLiteBackend, backend)
+            series_paths = service.write_sqlite_issue_series_projections(sqlite_backend)
+            publication_paths = service.write_sqlite_issue_series_publication_projections(
+                sqlite_backend
+            )
         self.assertEqual(1, len(series_paths))
         self.assertEqual(1, len(publication_paths))
         self.assertFalse(stale_series.exists())
@@ -92,7 +113,9 @@ class IssueSeriesServiceCoverageTests(unittest.TestCase):
     def test_plan_and_git_receipts_reject_unsafe_or_unlinked_projections(self) -> None:
         manifest = self.root / "series.json"
         manifest.write_text("{}", encoding="utf-8")
-        tasks = [(Path("task"), {"id": "AR-1", "status": "open", "task_revision": 1}, "")]
+        tasks: list[Task] = [
+            (Path("task"), {"id": "AR-1", "status": "open", "task_revision": 1}, "")
+        ]
         with (
             patch.object(
                 service,
@@ -102,25 +125,25 @@ class IssueSeriesServiceCoverageTests(unittest.TestCase):
             ),
             self.assertRaisesRegex(RuntimeError, "invalid issue-series manifest"),
         ):
-            service.load_issue_series_plan(self.root / "missing.json", tasks)  # type: ignore[arg-type]
+            service.load_issue_series_plan(self.root / "missing.json", tasks)
         with (
             patch.object(service, "ROOT", self.root, create=True),
             self.assertRaisesRegex(RuntimeError, "outside the local series directory"),
         ):
-            service._load_git_issue_series_receipt("../series.json", [])  # type: ignore[arg-type]
-        invalid = [(Path("task"), {"id": "AR-1", "issue_series": "wrong"}, "")]
+            service._load_git_issue_series_receipt("../series.json", [])
+        invalid: list[Task] = [(Path("task"), {"id": "AR-1", "issue_series": "wrong"}, "")]
         with self.assertRaisesRegex(RuntimeError, "invalid issue-series linkage"):
-            service.git_issue_series_receipts(invalid)  # type: ignore[arg-type]
+            service.git_issue_series_receipts(invalid)
 
     def test_git_publication_receipts_require_a_matching_local_series(self) -> None:
         directory = self.root / "issue-series-publications"
         directory.mkdir()
-        key = service.publication_key(REPOSITORY, 42, DIGEST)
+        key = publication_key(REPOSITORY, 42, DIGEST)
         (directory / f"{key}.json").write_text(
             json.dumps({"publication_key": key, "manifest_digest": DIGEST, "status": "published"}),
             encoding="utf-8",
         )
-        series = [
+        series: list[Meta] = [
             {
                 "series_identity": {"repository": REPOSITORY, "issue_number": 42},
                 "manifest_digest": DIGEST,
@@ -180,24 +203,24 @@ class IssueSeriesServiceCoverageTests(unittest.TestCase):
             patch.object(
                 service,
                 "commit",
-                side_effect=lambda message, _paths: commits.append(message) or True,
+                side_effect=lambda message, _paths: record_commit(commits, message),
                 create=True,
             ),
             patch.object(service, "push_replica", create=True),
         ):
-            service._git_record_issue_series_publication(record)  # type: ignore[arg-type]
-            service._git_record_issue_series_publication(record)  # type: ignore[arg-type]
-            service._git_resolve_issue_series_publication(final)  # type: ignore[arg-type]
-            service._git_resolve_issue_series_publication(final)  # type: ignore[arg-type]
+            service._git_record_issue_series_publication(record)
+            service._git_record_issue_series_publication(record)
+            service._git_resolve_issue_series_publication(final)
+            service._git_resolve_issue_series_publication(final)
             with self.assertRaisesRegex(RuntimeError, "already final"):
-                service._git_resolve_issue_series_publication({**final, "comment_id": "10"})  # type: ignore[arg-type]
+                service._git_resolve_issue_series_publication({**final, "comment_id": "10"})
         self.assertEqual(2, len(commits))
 
     def test_live_transport_fails_closed_and_recovers_a_prior_marker(self) -> None:
-        key = service.publication_key(REPOSITORY, 42, DIGEST)
-        with patch.object(service.shutil, "which", return_value=None):
+        key = publication_key(REPOSITORY, 42, DIGEST)
+        with patch.object(shutil, "which", return_value=None):
             unavailable = service._live_existing_issue_series_comment(REPOSITORY, 42, key, DIGEST)
-        self.assertEqual("deferred_unavailable", unavailable.status)
+        self.assertEqual("deferred_unavailable", self.assert_outcome(unavailable).status)
         config = self.root / "config.json"
         config.write_text(json.dumps({"github_repository": "other/project"}), encoding="utf-8")
         with (
@@ -210,14 +233,15 @@ class IssueSeriesServiceCoverageTests(unittest.TestCase):
         self.assertEqual("deferred_wrong_identity", outcome.status)
         found = subprocess.CompletedProcess([], 0, "77\n", "")
         with (
-            patch.object(service.shutil, "which", return_value="gh"),
-            patch.object(service.subprocess, "run", return_value=found),
+            patch.object(shutil, "which", return_value="gh"),
+            patch.object(subprocess, "run", return_value=found),
         ):
             recovered = service._live_existing_issue_series_comment(REPOSITORY, 42, key, DIGEST)
+        recovered = self.assert_outcome(recovered)
         self.assertEqual(("already_published", "77"), (recovered.status, recovered.comment_id))
 
     def test_live_transport_and_receipt_helpers_reject_untrusted_states(self) -> None:
-        key = service.publication_key(REPOSITORY, 42, DIGEST)
+        key = publication_key(REPOSITORY, 42, DIGEST)
         with patch.object(service, "CONFIG", self.root / "missing", create=True):
             self.assertEqual(
                 "deferred_unavailable",
@@ -231,9 +255,9 @@ class IssueSeriesServiceCoverageTests(unittest.TestCase):
                 service, "config", return_value={"github_repository": "owner/product"}, create=True
             ),
             patch.object(service, "_live_existing_issue_series_comment", return_value=None),
-            patch.object(service.shutil, "which", return_value="gh"),
+            patch.object(shutil, "which", return_value="gh"),
             patch.object(
-                service.subprocess,
+                subprocess,
                 "run",
                 return_value=subprocess.CompletedProcess([], 1, "", "HTTP 409"),
             ),
@@ -243,12 +267,14 @@ class IssueSeriesServiceCoverageTests(unittest.TestCase):
                 service._live_issue_series_publication(REPOSITORY, 42, DIGEST, "body").status,
             )
         with (
-            patch.object(service.shutil, "which", return_value="gh"),
-            patch.object(service.subprocess, "run", side_effect=OSError("unavailable")),
+            patch.object(shutil, "which", return_value="gh"),
+            patch.object(subprocess, "run", side_effect=OSError("unavailable")),
         ):
             self.assertEqual(
                 "deferred_timeout",
-                service._live_existing_issue_series_comment(REPOSITORY, 42, key, DIGEST).status,
+                self.assert_outcome(
+                    service._live_existing_issue_series_comment(REPOSITORY, 42, key, DIGEST)
+                ).status,
             )
         with patch.object(service, "ROOT", self.root, create=True):
             with self.assertRaisesRegex(RuntimeError, "invalid issue-series publication key"):
@@ -282,7 +308,7 @@ class IssueSeriesServiceCoverageTests(unittest.TestCase):
             patch.object(service, "push_replica", create=True),
             self.assertRaisesRegex(RuntimeError, "produced no commit"),
         ):
-            service._git_record_issue_series_publication(record)  # type: ignore[arg-type]
+            service._git_record_issue_series_publication(record)
         path = self.root / "issue-series-publications" / f"{key}.json"
         path.write_text(json.dumps(record), encoding="utf-8")
         with (
@@ -291,7 +317,7 @@ class IssueSeriesServiceCoverageTests(unittest.TestCase):
         ):
             service._git_resolve_issue_series_publication(
                 {**record, "manifest_digest": "sha256:" + "b" * 64}
-            )  # type: ignore[arg-type]
+            )
 
     def test_command_and_persistence_failures_preserve_fail_closed_outcomes(self) -> None:
         with (
@@ -315,7 +341,7 @@ class IssueSeriesServiceCoverageTests(unittest.TestCase):
             patch.object(service, "StorageCommittedError", RuntimeError, create=True),
             self.assertRaisesRegex(RuntimeError, "SQLITE_COMMITTED_EXPORT_FAILED"),
         ):
-            service.create_sqlite_issue_series(receipt, [], object())  # type: ignore[arg-type]
+            service.create_sqlite_issue_series(receipt, [], cast(EvidencePolicy, object()))
         with (
             patch.object(service, "locked", return_value=MagicMock(), create=True),
             patch.object(
@@ -336,34 +362,37 @@ class IssueSeriesServiceCoverageTests(unittest.TestCase):
             patch.object(service, "commit", return_value=True, create=True),
             patch.object(service, "push_replica", create=True),
         ):
-            service._git_record_issue_series_publication(record)  # type: ignore[arg-type]
+            service._git_record_issue_series_publication(record)
             with self.assertRaisesRegex(RuntimeError, "conflicts"):
                 service._git_record_issue_series_publication(
                     {**record, "status": "deferred_timeout"}
-                )  # type: ignore[arg-type]
+                )
             missing = {"publication_key": "a" * 64, "manifest_digest": DIGEST}
             with self.assertRaisesRegex(RuntimeError, "reservation is missing"):
-                service._git_resolve_issue_series_publication(missing)  # type: ignore[arg-type]
+                service._git_resolve_issue_series_publication(missing)
         config = self.root / "config.json"
         config.write_text("{}", encoding="utf-8")
-        common = {
-            "CONFIG": config,
-            "config": lambda: {"github_repository": "owner/product"},
-            "_live_existing_issue_series_comment": lambda *_args: None,
-        }
         with (
-            patch.multiple(service, create=True, **common),
-            patch.object(service.shutil, "which", return_value=None),
+            patch.object(service, "CONFIG", config, create=True),
+            patch.object(
+                service, "config", return_value={"github_repository": "owner/product"}, create=True
+            ),
+            patch.object(service, "_live_existing_issue_series_comment", return_value=None),
+            patch.object(shutil, "which", return_value=None),
         ):
             self.assertEqual(
                 "deferred_unavailable",
                 service._live_issue_series_publication(REPOSITORY, 42, DIGEST, "body").status,
             )
         with (
-            patch.multiple(service, create=True, **common),
-            patch.object(service.shutil, "which", return_value="gh"),
+            patch.object(service, "CONFIG", config, create=True),
             patch.object(
-                service.subprocess,
+                service, "config", return_value={"github_repository": "owner/product"}, create=True
+            ),
+            patch.object(service, "_live_existing_issue_series_comment", return_value=None),
+            patch.object(shutil, "which", return_value="gh"),
+            patch.object(
+                subprocess,
                 "run",
                 return_value=subprocess.CompletedProcess([], 0, "not-a-number", ""),
             ),
