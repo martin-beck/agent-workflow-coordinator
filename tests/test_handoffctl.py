@@ -136,6 +136,22 @@ def racing_issue_series_create(
         outcomes.put(("accepted", "created"))
 
 
+def racing_real_issue_series_create(
+    root_value: str, manifest_value: str, expected_digest: str, start: Any, outcomes: Any
+) -> None:
+    """Race the production Git commit/push path against one local bare remote."""
+    configure_child(root_value)
+    start.wait(10)
+    try:
+        CORE.cmd_issue_series_create(
+            argparse.Namespace(manifest=Path(manifest_value), expected_state_digest=expected_digest)
+        )
+    except RuntimeError as error:
+        outcomes.put(("rejected", str(error)))
+    else:
+        outcomes.put(("accepted", "created"))
+
+
 def concurrent_observation_ticket(root_value: str, start: Any, outcomes: Any) -> None:
     """Reserve an advisory scan ticket from one shared fixture across processes."""
     configure_child(root_value)
@@ -4920,6 +4936,51 @@ class HandoffTest(unittest.TestCase):
         created = {meta["id"] for _path, meta, _body in CORE.all_tasks()}
         self.assertEqual({"AR-0001", "AR-9000", "AR-9001"}, created)
         self.assertEqual(1, len(list((self.root / "issue-series").glob("*.json"))))
+
+    def test_sixteen_processes_commit_one_issue_series_to_a_real_remote(self) -> None:
+        self.make_task()
+        manifest = self.issue_series_manifest()
+        CORE.RUNTIME.mkdir(exist_ok=True)
+        CORE.CONFIG.write_text(json.dumps({"push_enabled": True}))
+        run_git(["git", "init", "-q", "--initial-branch=main", str(self.root)])
+        run_git(["git", "-C", str(self.root), "config", "user.name", "Series Fixture"])
+        run_git(["git", "-C", str(self.root), "config", "user.email", "series@example.invalid"])
+        run_git(["git", "-C", str(self.root), "add", "."])
+        run_git(["git", "-C", str(self.root), "commit", "-qm", "series baseline"])
+        remote_directory = TemporaryDirectory()
+        self.addCleanup(remote_directory.cleanup)
+        remote = Path(remote_directory.name) / "state.git"
+        run_git(["git", "init", "--bare", "-q", "--initial-branch=main", str(remote)])
+        run_git(["git", "-C", str(self.root), "remote", "add", "origin", str(remote)])
+        run_git(["git", "-C", str(self.root), "push", "origin", "HEAD:refs/heads/main"])
+        digest = CORE.issue_series_state_digest(CORE.all_tasks())
+        context = multiprocessing.get_context("fork")
+        start, outcomes = context.Event(), context.Queue()
+        workers = [
+            context.Process(
+                target=racing_real_issue_series_create,
+                args=(str(self.root), str(manifest), digest, start, outcomes),
+            )
+            for _ in range(16)
+        ]
+        for worker in workers:
+            worker.start()
+        start.set()
+        results = [outcomes.get(timeout=30) for _ in workers]
+        for worker in workers:
+            worker.join(30)
+            self.assertEqual(0, worker.exitcode)
+        self.assertEqual(1, sum(result[0] == "accepted" for result in results), results)
+        self.assertEqual(
+            {"AR-0001", "AR-9000", "AR-9001"}, {item[1]["id"] for item in CORE.all_tasks()}
+        )
+        self.assertEqual(
+            "", CORE.run(["git", "-C", str(self.root), "status", "--porcelain"]).stdout
+        )
+        self.assertEqual(
+            CORE.run(["git", "-C", str(self.root), "rev-parse", "HEAD"]).stdout,
+            CORE.run(["git", "-C", str(self.root), "rev-parse", "origin/main"]).stdout,
+        )
 
 
 if __name__ == "__main__":
