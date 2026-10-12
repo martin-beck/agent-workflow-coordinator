@@ -3374,7 +3374,76 @@ def cmd_issue_series_plan(args: argparse.Namespace) -> None:
     print(receipt)
 
 
-def cmd_issue_series_create(args: argparse.Namespace) -> None:  # noqa: C901
+def create_sqlite_issue_series(receipt: Meta, created: list[Task], policy: EvidencePolicy) -> None:
+    """Commit one preflighted series in SQLite before exporting disposable projections."""
+    backend = mutating_sqlite_backend()
+    backend.create_issue_series(
+        receipt,
+        created,
+        expected_state_digest=str(receipt["current_state_digest"]),
+        recorded_at=now(),
+    )
+    try:
+        write_sqlite_projections(backend.load_tasks(), already_locked=True, policy=policy)
+    except Exception as error:
+        identity = cast(Meta, receipt["series_identity"])
+        raise StorageCommittedError(
+            "SQLITE_COMMITTED_EXPORT_FAILED: issue-series="
+            f"{identity['repository']}#{identity['issue_number']}; {error}"
+        ) from error
+
+
+def create_git_issue_series(receipt: Meta, created: list[Task], policy: EvidencePolicy) -> None:
+    """Write, validate, and commit one preflighted Git-authoritative issue series."""
+    manifest_path = issue_series_manifest_path(receipt)
+    before: dict[Path, str | None] = {
+        path: path.read_text() if path.exists() else None for path, _meta, _body in created
+    }
+    before[manifest_path] = None
+    before.update({path: path.read_text() if path.exists() else None for path in generated_paths()})
+    committed = False
+    try:
+        atomic(manifest_path, json.dumps(receipt["manifest"], indent=2, sort_keys=True) + "\n")
+        for path, meta, body in created:
+            write_task(path, meta, body)
+        view_tasks = all_tasks()
+        settings = project_settings()
+        views = rendered_task_views(view_tasks)
+        before.update(
+            {
+                path: path.read_text() if path.exists() else None
+                for path in views
+                if path not in before
+            }
+        )
+        write_rendered_task_views(views)
+        require_project_settings_unchanged(settings)
+        require_policy_unchanged(ROOT, policy)
+        errors = mutation_global_errors(view_tasks)
+        errors.extend(
+            generated_view_errors(view_tasks, rendered_snapshot=(view_tasks, views, settings))
+        )
+        errors.extend(introduced_content_errors(before))
+        if errors:
+            raise RuntimeError(
+                "issue-series mutation validation failed:\n" + "\n".join(sorted(set(errors)))
+            )
+        identity = cast(Meta, receipt["series_identity"])
+        committed = commit(
+            f"chore(state): create issue series {identity['repository']}"
+            f"#{identity['issue_number']}",
+            changed_paths(before, include_deleted=True),
+        )
+        if not committed:
+            raise RuntimeError("issue-series create produced no commit")
+        push_replica()
+    except Exception:
+        if not committed:
+            restore_paths(before)
+        raise
+
+
+def cmd_issue_series_create(args: argparse.Namespace) -> None:
     """Atomically create one locally validated series through selected local authority."""
     with locked(phase="issue_series_create"):
         selected_backend = str(backend_selection()["backend"])
@@ -3383,88 +3452,26 @@ def cmd_issue_series_create(args: argparse.Namespace) -> None:  # noqa: C901
         if selected_backend == "git":
             sync_replica_before_write()
         tasks = all_tasks()
-        receipt_text = load_issue_series_plan(Path(args.manifest), tasks)
-        receipt = cast(Meta, json.loads(receipt_text))
+        receipt = cast(Meta, json.loads(load_issue_series_plan(Path(args.manifest), tasks)))
         if args.expected_state_digest != receipt["current_state_digest"]:
             raise RuntimeError("STALE_STATE: re-run issue-series plan before create")
         manifest_path = issue_series_manifest_path(receipt)
         if manifest_path.exists():
             raise RuntimeError("issue-series manifest identity already exists")
         created = issue_series_tasks(receipt, manifest_path)
-        candidate = [*tasks, *created]
         policy = policy_snapshot(None)
         errors = [
             error
             for path, meta, _body in created
             for error in basic_task_errors(path, meta, policy)
         ]
-        errors.extend(mutation_global_errors(candidate))
+        errors.extend(mutation_global_errors([*tasks, *created]))
         if errors:
             raise RuntimeError("issue-series preflight failed:\n" + "\n".join(sorted(set(errors))))
         if selected_backend == "sqlite":
-            backend = mutating_sqlite_backend()
-            backend.create_issue_series(
-                receipt,
-                created,
-                expected_state_digest=str(args.expected_state_digest),
-                recorded_at=now(),
-            )
-            try:
-                write_sqlite_projections(backend.load_tasks(), already_locked=True, policy=policy)
-            except Exception as error:
-                identity = cast(Meta, receipt["series_identity"])
-                raise StorageCommittedError(
-                    "SQLITE_COMMITTED_EXPORT_FAILED: issue-series="
-                    f"{identity['repository']}#{identity['issue_number']}; "
-                    f"{error}"
-                ) from error
-            return
-        before: dict[Path, str | None] = {
-            path: path.read_text() if path.exists() else None for path, _meta, _body in created
-        }
-        before[manifest_path] = None
-        before.update(
-            {path: path.read_text() if path.exists() else None for path in generated_paths()}
-        )
-        committed = False
-        try:
-            atomic(manifest_path, json.dumps(receipt["manifest"], indent=2, sort_keys=True) + "\n")
-            for path, meta, body in created:
-                write_task(path, meta, body)
-            view_tasks = all_tasks()
-            settings = project_settings()
-            views = rendered_task_views(view_tasks)
-            before.update(
-                {
-                    path: path.read_text() if path.exists() else None
-                    for path in views
-                    if path not in before
-                }
-            )
-            write_rendered_task_views(views)
-            require_project_settings_unchanged(settings)
-            require_policy_unchanged(ROOT, policy)
-            errors = mutation_global_errors(view_tasks)
-            errors.extend(
-                generated_view_errors(view_tasks, rendered_snapshot=(view_tasks, views, settings))
-            )
-            errors.extend(introduced_content_errors(before))
-            if errors:
-                raise RuntimeError(
-                    "issue-series mutation validation failed:\n" + "\n".join(sorted(set(errors)))
-                )
-            committed = commit(
-                f"chore(state): create issue series {receipt['series_identity']['repository']}"
-                f"#{receipt['series_identity']['issue_number']}",
-                changed_paths(before, include_deleted=True),
-            )
-            if not committed:
-                raise RuntimeError("issue-series create produced no commit")
-            push_replica()
-        except Exception:
-            if not committed:
-                restore_paths(before)
-            raise
+            create_sqlite_issue_series(receipt, created, policy)
+        else:
+            create_git_issue_series(receipt, created, policy)
 
 
 def issue_series_manifest_path(receipt: Meta) -> Path:
