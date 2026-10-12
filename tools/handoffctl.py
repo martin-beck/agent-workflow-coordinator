@@ -4725,6 +4725,17 @@ def append_execution_intent(task_id: str, envelope: Meta) -> Meta | None:  # noq
         with locked(phase="execution_envelope_intent"):
             if backend_selection()["backend"] != "git":
                 raise RuntimeError("BACKEND_CHANGED: retry execution envelope intent")
+            for _path, meta, _body in all_tasks():
+                other_task_id = str(meta["id"])
+                if other_task_id == task_id:
+                    continue
+                if any(
+                    record["execution_id"] == envelope["execution_id"]
+                    for record in load_execution_records(ROOT, other_task_id)
+                ):
+                    raise RuntimeError(
+                        "execution identity is already bound to another task history"
+                    )
             records = load_execution_records(ROOT, task_id)
             matching = [
                 record for record in records if record["execution_id"] == envelope["execution_id"]

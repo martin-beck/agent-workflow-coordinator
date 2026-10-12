@@ -3416,6 +3416,8 @@ class HandoffTest(unittest.TestCase):
             "created_at": "2026-10-12T12:00:00+00:00",
         }
         self.assertIsNone(CORE.append_execution_intent("AR-0001", intent))
+        with self.assertRaisesRegex(RuntimeError, "another task history"):
+            CORE.append_execution_intent("AR-0002", {**intent, "task": "AR-0002"})
         with self.assertRaisesRegex(RuntimeError, "EXECUTION_UNCERTAIN"):
             CORE.append_execution_intent("AR-0001", intent)
         result = {
