@@ -21,6 +21,10 @@ RETIRED_DESTINATIONS = ("formal/handoffctl/HandoffctlPR.cfg",)
 SOURCE_FILES: tuple[tuple[str, str], ...] = (
     ("tools/handoffctl", "tools/handoffctl"),
     ("tools/handoffctl.py", "tools/handoffctl.py"),
+    ("tools/issue_series_service.py", "tools/issue_series_service.py"),
+    ("tools/issue_series.py", "tools/issue_series.py"),
+    ("tools/issue_series_plan.py", "tools/issue_series_plan.py"),
+    ("tools/issue_series_publish.py", "tools/issue_series_publish.py"),
     ("tools/execution_envelope.py", "tools/execution_envelope.py"),
     ("tools/execution_receipt.py", "tools/execution_receipt.py"),
     ("tools/fast_receipts.py", "tools/fast_receipts.py"),
@@ -87,6 +91,7 @@ SOURCE_FILES: tuple[tuple[str, str], ...] = (
     ("tools/formal_receipt.py", "tools/formal_receipt.py"),
     ("tools/vendor.py", "tools/handoffctl_vendor.py"),
     ("tests/test_handoffctl.py", "tests/test_handoffctl.py"),
+    ("tests/test_issue_series_handoffctl.py", "tests/test_issue_series_handoffctl.py"),
     ("tests/test_concise_titles.py", "tests/test_concise_titles.py"),
     ("tests/test_execution_envelope.py", "tests/test_execution_envelope.py"),
     ("tests/test_execution_sandbox.py", "tests/test_execution_sandbox.py"),
