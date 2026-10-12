@@ -280,3 +280,20 @@ arguments; there is no verifier environment override. The resulting attestation 
 `diagnostic-private-admission`, sets `canonical_publication_evidence` to false, and states that it
 cannot support publication or release claims. Hosted and checked-in workflows omit these flags and
 therefore retain the canonical shared admission path and fail-closed publication semantics.
+
+## Candidate-bound formal jobs
+
+`tools/formal_job_receipts.py` separates long-running formal execution from
+coordinator authority. A short SQLite transaction records a `started` job bound
+to the exact candidate object ID, tier-contract digest, and resource class.
+Beginning a run writes a fenced execution token and releases the database before
+the executor is called. Completion, failure, cancellation, recovery, and
+supersession are separate atomic transitions. A replacement candidate
+supersedes any active job in that scope, and a late worker cannot write a
+terminal result because it lacks the current revision and execution token.
+
+Only a zero-exit `completed` receipt whose candidate and tier digest exactly
+match the consumer's current inputs is usable as formal evidence. `failed`,
+`cancelled`, `superseded`, incomplete, and mismatched receipts are explicitly
+not evidence. The receipt store is local operational state; it uses no
+coordinator task lease, external authentication, signature, or review gate.
