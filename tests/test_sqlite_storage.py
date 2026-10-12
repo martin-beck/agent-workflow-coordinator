@@ -32,6 +32,7 @@ from tools.sqlite_storage import (
     create_database,
     require_local_filesystem,
 )
+from tools.task_spec import evidence_ledger_errors
 
 ROOT = Path(__file__).resolve().parent.parent
 TOOLS = ROOT / "tools"
@@ -1254,11 +1255,11 @@ class SQLiteStorageTest(unittest.TestCase):
             )
             CORE.mutate(reopened, "accept")
             current = CORE.all_tasks()[0][1]
-            self.assertEqual([], CORE.evidence_ledger_errors(self.root, current))
+            self.assertEqual([], evidence_ledger_errors(self.root, current))
             (self.root / "candidate.txt").write_text("tampered", encoding="utf-8")
             self.assertIn(
                 "evidence ledger candidate artifact digest is invalid",
-                CORE.evidence_ledger_errors(self.root, current),
+                evidence_ledger_errors(self.root, current),
             )
             (self.root / "candidate.txt").write_text("candidate b", encoding="utf-8")
             CORE.mutate(

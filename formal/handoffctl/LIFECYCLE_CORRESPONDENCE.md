@@ -26,7 +26,8 @@ phase changes. Consequently no TLA+ action or default vocabulary changes; the
 existing rejection/stuttering invariants remain authoritative.
 
 The correspondence inventory is exercised by `tests/test_task_spec.py`,
-`tests/test_handoffctl.py`, and `tests/test_sqlite_storage.py`, including
+`tests/test_handoffctl.py`, `tests/test_predicate_evidence_ledger.py`, and
+`tests/test_sqlite_storage.py`, including
 policy identity races, failed Git mutation restoration, and interrupted
 Git-to-SQLite migration before authority selection changes.
 
