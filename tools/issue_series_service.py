@@ -9,6 +9,7 @@ service and is vendored alongside the CLI.
 from __future__ import annotations
 
 import contextlib
+from contextvars import ContextVar
 from functools import wraps
 from typing import Any
 
@@ -648,36 +649,45 @@ def issue_series_tasks(receipt: Meta, manifest_path: Path) -> list[Task]:
 
 
 _CORE: dict[str, Any] | None = None
+_ACTIVE_CORE: ContextVar[dict[str, Any] | None] = ContextVar(
+    "issue_series_active_core", default=None
+)
 _LOCAL_FUNCTIONS = {
     name
     for name, value in tuple(globals().items())
     if callable(value) and getattr(value, "__module__", None) == __name__
 }
-_PROTECTED = _LOCAL_FUNCTIONS | {"_CORE", "_LOCAL_FUNCTIONS", "_PROTECTED"}
+_PROTECTED = _LOCAL_FUNCTIONS | {"_ACTIVE_CORE", "_CORE", "_LOCAL_FUNCTIONS", "_PROTECTED"}
 
 
 def _refresh() -> None:
     """Expose current handoffctl dependencies, including test-time replacements."""
-    if _CORE is None:
+    core = _ACTIVE_CORE.get() or _CORE
+    if core is None:
         raise RuntimeError("issue-series service is not installed")
-    for name, value in _CORE.items():
+    for name, value in core.items():
         if not name.startswith("__") and name not in _PROTECTED:
             globals()[name] = value
 
 
-def _delegate(implementation: Any) -> Any:
+def _delegate(implementation: Any, core: dict[str, Any]) -> Any:
     @wraps(implementation)
     def call(*args: Any, **kwargs: Any) -> Any:
-        _refresh()
-        return implementation(*args, **kwargs)
+        context_marker = _ACTIVE_CORE.set(core)
+        try:
+            _refresh()
+            return implementation(*args, **kwargs)
+        finally:
+            _ACTIVE_CORE.reset(context_marker)
 
     return call
 
 
 def _core_value(name: str) -> Any:
-    if _CORE is None:
+    core = _ACTIVE_CORE.get() or _CORE
+    if core is None:
         raise RuntimeError("issue-series service is not installed")
-    return _CORE[name]
+    return core[name]
 
 
 def install(core: dict[str, Any]) -> dict[str, Any]:
@@ -685,7 +695,9 @@ def install(core: dict[str, Any]) -> dict[str, Any]:
     global _CORE
     _CORE = core
     _refresh()
-    exported = {name: _delegate(globals()[name]) for name in sorted(_LOCAL_FUNCTIONS)}
+    exported = {
+        name: _delegate(globals()[name], core) for name in sorted(_LOCAL_FUNCTIONS)
+    }
     exported.update(
         {
             "DryRunTransport": DryRunTransport,
