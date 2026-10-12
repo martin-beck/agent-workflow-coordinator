@@ -4,6 +4,7 @@
 """SQLite backend conformance, fault and real multiprocess tests."""
 
 import argparse
+import hashlib
 import importlib.util
 import json
 import multiprocessing
@@ -31,6 +32,7 @@ from tools.sqlite_storage import (
     create_database,
     require_local_filesystem,
 )
+from tools.task_spec import evidence_ledger_errors
 
 ROOT = Path(__file__).resolve().parent.parent
 TOOLS = ROOT / "tools"
@@ -1177,8 +1179,11 @@ class SQLiteStorageTest(unittest.TestCase):
                     "schema_version": 1,
                     "spec_ref": "spec.json",
                     "spec_revision": 1,
-                    "acceptance_predicates": [{"id": "predicate", "description": "pass"}],
-                    "definition_of_done": ["pass"],
+                    "acceptance_predicates": [
+                        {"id": "predicate-a", "description": "pass"},
+                        {"id": "predicate-b", "description": "pass"},
+                    ],
+                    "definition_of_done": ["pass both predicates"],
                     "inputs": [{"id": "input", "description": "input"}],
                     "outputs": [{"id": "output", "description": "output"}],
                     "allowed_tools": ["source.read"],
@@ -1188,6 +1193,12 @@ class SQLiteStorageTest(unittest.TestCase):
                 }
             )
         )
+        (self.root / "candidate.txt").write_text("candidate a", encoding="utf-8")
+        (self.root / "evidence.txt").write_text("evidence a", encoding="utf-8")
+
+        def digest(name: str) -> str:
+            return "sha256:" + hashlib.sha256((self.root / name).read_bytes()).hexdigest()
+
         CORE.export_sqlite_projections()
         with patch.object(CORE, "push_replica"):
             CORE.mutate(
@@ -1217,8 +1228,12 @@ class SQLiteStorageTest(unittest.TestCase):
                 owner="worker",
                 expected_revision=3,
                 evidence_class="contract-test",
-                evidence_ref="awq/evidence/AR-0001",
-                evidence_digest="sha256:" + "c" * 64,
+                evidence_ref="evidence.txt",
+                evidence_digest=digest("evidence.txt"),
+                predicate="predicate-a",
+                candidate_ref="candidate.txt",
+                candidate_digest=digest("candidate.txt"),
+                reopen=False,
                 note="accepted",
             )
             with self.assertRaisesRegex(RuntimeError, "stale revision"):
@@ -1226,16 +1241,127 @@ class SQLiteStorageTest(unittest.TestCase):
                     argparse.Namespace(**{**vars(accept), "expected_revision": 2}), "accept"
                 )
             CORE.mutate(accept, "accept")
+            (self.root / "candidate.txt").write_text("candidate b", encoding="utf-8")
+            (self.root / "evidence.txt").write_text("evidence b", encoding="utf-8")
+            reopened = argparse.Namespace(
+                **{
+                    **vars(accept),
+                    "expected_revision": 4,
+                    "predicate": "predicate-b",
+                    "candidate_digest": digest("candidate.txt"),
+                    "evidence_digest": digest("evidence.txt"),
+                    "reopen": True,
+                }
+            )
+            CORE.mutate(reopened, "accept")
+            current = CORE.all_tasks()[0][1]
+            self.assertEqual([], evidence_ledger_errors(self.root, current))
+            (self.root / "candidate.txt").write_text("tampered", encoding="utf-8")
+            self.assertIn(
+                "evidence ledger candidate artifact digest is invalid",
+                evidence_ledger_errors(self.root, current),
+            )
+            (self.root / "candidate.txt").write_text("candidate b", encoding="utf-8")
+            CORE.mutate(
+                argparse.Namespace(
+                    **{
+                        **vars(reopened),
+                        "expected_revision": 5,
+                        "predicate": "predicate-a",
+                        "reopen": False,
+                    }
+                ),
+                "accept",
+            )
             CORE.mutate(
                 argparse.Namespace(task="AR-0001", owner="worker", status="done", note="done"),
                 "release",
             )
         final = CORE.all_tasks()[0][1]
         self.assertEqual(
-            ("done", 5, "P0"), (final["status"], final["task_revision"], final["priority"])
+            ("done", 7, "P0"), (final["status"], final["task_revision"], final["priority"])
         )
-        self.assertEqual("pass", final["spec_acceptance"]["status"])
+        self.assertEqual(
+            ["pass", "pass"], [step["status"] for step in final["evidence_ledger"]["steps"]]
+        )
         self.assertIn("updated", (self.tasks / "AR-0001-test.md").read_text())
+
+    def test_predicate_reopen_rejects_malformed_sqlite_ledger_before_persisting(self) -> None:
+        self.configure_core(backend="sqlite")
+        task_path, task_meta, task_body = task("AR-0001", status="in_progress")
+        task_meta.update(
+            owner="worker",
+            claim_expires="2099-01-01T00:00:00+00:00",
+            spec_ref="spec.json",
+            spec_revision=1,
+        )
+        (self.root / "spec.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "spec_ref": "spec.json",
+                    "spec_revision": 1,
+                    "acceptance_predicates": [
+                        {"id": "predicate-a", "description": "pass"},
+                        {"id": "predicate-b", "description": "pass"},
+                    ],
+                    "definition_of_done": ["pass both predicates"],
+                    "inputs": [{"id": "input", "description": "input"}],
+                    "outputs": [{"id": "output", "description": "output"}],
+                    "allowed_tools": ["source.read"],
+                    "forbidden_tools": [],
+                    "required_evidence_classes": ["contract-test"],
+                    "gates": [{"id": "gate", "description": "pass"}],
+                }
+            ),
+            encoding="utf-8",
+        )
+        (self.root / "candidate.txt").write_text("candidate a", encoding="utf-8")
+        (self.root / "evidence.txt").write_text("evidence a", encoding="utf-8")
+
+        def digest(name: str) -> str:
+            return "sha256:" + hashlib.sha256((self.root / name).read_bytes()).hexdigest()
+
+        old_candidate_digest = digest("candidate.txt")
+        old_evidence_digest = digest("evidence.txt")
+        task_meta["evidence_ledger"] = {
+            "candidate_ref": "candidate.txt",
+            "candidate_digest": old_candidate_digest,
+            "steps": [
+                {
+                    "predicate_id": "predicate-a",
+                    "status": "pass",
+                    "candidate_ref": "candidate.txt",
+                    "candidate_digest": old_candidate_digest,
+                    "evidence_class": "contract-test",
+                    "evidence_ref": "evidence.txt",
+                    "evidence_digest": old_evidence_digest,
+                    "recorded_task_revision": 1,
+                },
+                "malformed historical row",
+            ],
+        }
+        backend = self.create([(task_path, task_meta, task_body)])
+        (self.root / "candidate.txt").write_text("candidate b", encoding="utf-8")
+        (self.root / "evidence.txt").write_text("evidence b", encoding="utf-8")
+        reopen = argparse.Namespace(
+            task="AR-0001",
+            owner="worker",
+            expected_revision=1,
+            evidence_class="contract-test",
+            evidence_ref="evidence.txt",
+            evidence_digest=digest("evidence.txt"),
+            predicate="predicate-b",
+            candidate_ref="candidate.txt",
+            candidate_digest=digest("candidate.txt"),
+            reopen=True,
+            note="candidate b",
+        )
+        with self.assertRaisesRegex(RuntimeError, "evidence ledger step is incomplete or unknown"):
+            CORE.mutate(reopen, "accept")
+        persisted = backend.load_tasks()[0][1]
+        self.assertEqual(1, persisted["task_revision"])
+        self.assertEqual("malformed historical row", persisted["evidence_ledger"]["steps"][1])
 
     def test_sqlite_gate_persists_and_exports_human_session_metadata(self) -> None:
         self.configure_core(backend="sqlite")

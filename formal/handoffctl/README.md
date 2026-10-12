@@ -7,7 +7,7 @@ the Python implementation, not a replacement implementation.
 ## Evidence classification
 
 [`../evidence.json`](../evidence.json) records the structured formal-evidence contract required by
-Agent Workflow Quality v0.24.0. It classifies these eight TLC runs as bounded-model evidence and
+Agent Workflow Quality v0.24.0. It classifies these tracked TLC runs as bounded-model evidence and
 records the largest finite process, task, actor, project, worktree, and revision domains used by
 their checked configurations. Each `.cfg` file remains authoritative for the exact bound of its
 model.
@@ -168,6 +168,15 @@ and timeout is terminal. It is an abstraction of the resident socket cache;
 it does not claim operating-system event delivery or implementation refinement.
 [`OBSERVATION_CORRESPONDENCE.md`](OBSERVATION_CORRESPONDENCE.md) maps the
 abstraction to focused implementation evidence and records those limits.
+
+HandoffctlPredicateLedger.tla checks predicate-aware `accept`: exact
+candidate ref/digest binding, revision and owner fencing, explicit candidate
+reopen, stale-history conversion, and done admission only after complete
+current-candidate predicate evidence. It explores two workers, two predicates,
+and the complete two-reference by two-digest candidate identity cross-product,
+including same-ref/changed-digest and different-ref/same-digest transitions;
+it is a bounded abstraction, not
+implementation-refinement evidence.
 
 `HandoffctlStorage.tla` checks both selected backends, transaction mutual exclusion, one accepted
 revision increment per process, prepared SQLite authority before selector switch, eventual command

@@ -68,6 +68,7 @@ if __package__:
         gate_errors,
         transition_allowed,
     )
+    from .predicate_ledger import apply_predicate_acceptance, predicate_acceptance_inputs
     from .rollback_records import (
         append_record,
         build_record,
@@ -101,6 +102,7 @@ if __package__:
         EvidencePolicy,
         done_admission_error,
         evidence_policy,
+        next_unmet_predicate,
         require_policy_unchanged,
         task_spec_errors,
         task_spec_policy_errors,
@@ -150,6 +152,10 @@ else:  # pragma: no cover - direct script execution
         gate_errors,
         transition_allowed,
     )
+    from predicate_ledger import (  # type: ignore[import-not-found,no-redef]
+        apply_predicate_acceptance,
+        predicate_acceptance_inputs,
+    )
     from rollback_records import (  # type: ignore[import-not-found,no-redef]
         append_record,
         build_record,
@@ -183,6 +189,7 @@ else:  # pragma: no cover - direct script execution
         EvidencePolicy,
         done_admission_error,
         evidence_policy,
+        next_unmet_predicate,
         require_policy_unchanged,
         task_spec_errors,
         task_spec_policy_errors,
@@ -280,6 +287,7 @@ FIELDS = set(REQ) | {
     "spec_ref",
     "spec_revision",
     "spec_acceptance",
+    "evidence_ledger",
     "execution_envelope_ref",
     "execution_envelope_revision",
     "execution_envelope_task_revision",
@@ -2649,6 +2657,8 @@ def apply_accept(args: argparse.Namespace, meta: Meta, policy: EvidencePolicy | 
         raise RuntimeError(
             f"stale revision: expected {args.expected_revision}, current {meta['task_revision']}"
         )
+    if predicate_inputs := predicate_acceptance_inputs(args):
+        return apply_predicate_acceptance(ROOT, args, meta, policy, predicate_inputs)
     acceptance: Meta = {
         "status": "pass",
         "evidence_class": args.evidence_class,
@@ -3627,6 +3637,12 @@ def print_snapshot_under_lock(task_id: str | None, sqlite: bool) -> None:
         if record is None:
             raise RuntimeError(f"no session snapshot for {task_id}")
         validate_session_record(record)
+        task = next((meta for _, meta, _ in all_tasks() if meta.get("id") == task_id), None)
+        if task is None:
+            raise RuntimeError(f"unknown task {task_id}")
+        next_step = next_unmet_predicate(ROOT, task)
+        if next_step is not None:
+            print("NEXT_UNMET_STEP=" + next_step)
         print("SESSION_SNAPSHOT=" + json.dumps(record, sort_keys=True, separators=(",", ":")))
 
 
@@ -4820,6 +4836,10 @@ def main() -> int:
     item.add_argument("--evidence-class", required=True)
     item.add_argument("--evidence-ref", required=True)
     item.add_argument("--evidence-digest", required=True)
+    item.add_argument("--predicate")
+    item.add_argument("--candidate-ref")
+    item.add_argument("--candidate-digest")
+    item.add_argument("--reopen", action="store_true")
     item.add_argument("--note", required=True)
     item = commands.add_parser("bind-spec")
     item.add_argument("task")

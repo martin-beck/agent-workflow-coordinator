@@ -58,6 +58,7 @@ SOURCE_FILES: tuple[tuple[str, str], ...] = (
     ("tools/git_backup.py", "tools/git_backup.py"),
     ("tools/lifecycle_session.py", "tools/lifecycle_session.py"),
     ("tools/oracle_lifecycle.py", "tools/oracle_lifecycle.py"),
+    ("tools/predicate_ledger.py", "tools/predicate_ledger.py"),
     ("tools/sqlite_storage.py", "tools/sqlite_storage.py"),
     ("tools/lifecycle_trace.py", "tools/lifecycle_trace.py"),
     ("tools/lock_domain.py", "tools/lock_domain.py"),
@@ -91,6 +92,7 @@ SOURCE_FILES: tuple[tuple[str, str], ...] = (
     ("tools/formal_receipt.py", "tools/formal_receipt.py"),
     ("tools/vendor.py", "tools/handoffctl_vendor.py"),
     ("tests/test_handoffctl.py", "tests/test_handoffctl.py"),
+    ("tests/test_predicate_evidence_ledger.py", "tests/test_predicate_evidence_ledger.py"),
     ("tests/test_issue_series_handoffctl.py", "tests/test_issue_series_handoffctl.py"),
     ("tests/test_concise_titles.py", "tests/test_concise_titles.py"),
     ("tests/test_execution_envelope.py", "tests/test_execution_envelope.py"),
@@ -184,6 +186,14 @@ SOURCE_FILES: tuple[tuple[str, str], ...] = (
     (
         "formal/handoffctl/HandoffctlObservation.tla",
         "formal/handoffctl/HandoffctlObservation.tla",
+    ),
+    (
+        "formal/handoffctl/HandoffctlPredicateLedger.cfg",
+        "formal/handoffctl/HandoffctlPredicateLedger.cfg",
+    ),
+    (
+        "formal/handoffctl/HandoffctlPredicateLedger.tla",
+        "formal/handoffctl/HandoffctlPredicateLedger.tla",
     ),
     (
         "formal/handoffctl/OBSERVATION_CORRESPONDENCE.md",

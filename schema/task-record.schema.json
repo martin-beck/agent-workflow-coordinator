@@ -81,6 +81,16 @@
         "spec_ref": {"type": "string"},
         "spec_revision": {"type": "integer", "minimum": 1},
         "spec_acceptance": {},
+        "evidence_ledger": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["candidate_ref", "candidate_digest", "steps"],
+            "properties": {
+                "candidate_ref": {"type": "string"},
+                "candidate_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+                "steps": {"type": "array"}
+            }
+        },
         "execution_envelope_ref": {"type": "string"},
         "execution_envelope_revision": {"type": "integer", "minimum": 1},
         "execution_envelope_task_revision": {"type": "integer", "minimum": 1},
