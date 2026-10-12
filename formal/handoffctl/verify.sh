@@ -63,7 +63,9 @@ export TLC_SWAP_MAX="${TLC_SWAP_MAX:-3G}"
 readonly TLA_VERSION=1.7.4
 readonly TLA_SHA256=936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88
 readonly SPEC_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-readonly TEMP_DIR="$(mktemp -d)"
+readonly WORK_ROOT="${TLC_WORK_ROOT:-${TMPDIR:-/tmp}/agent-workflow-coordinator-tlc}"
+mkdir --mode=700 --parents "${WORK_ROOT}"
+readonly TEMP_DIR="$(mktemp -d "${WORK_ROOT}/handoffctl-${TIER}.XXXXXX")"
 readonly SLICE_DIR="${SPEC_DIR}/.tlc-slices-$$"
 readonly MANIFEST="${TEMP_DIR}/outcomes.manifest"
 : > "${MANIFEST}"
@@ -110,6 +112,9 @@ run_model() {
         --model "${model_path}" \
         --config "${config}" \
         --metadir "${TEMP_DIR}/${model}-states" \
+        --workspace "${TEMP_DIR}" \
+        --storage-max "${TLC_STORAGE_MAX:-2G}" \
+        --storage-reserve "${TLC_STORAGE_RESERVE:-256M}" \
         --timeout-seconds "${remaining}" \
         "${RUNNER_ADMISSION_ARGS[@]}"
     printf "%s success\n" "${model}" >> "${MANIFEST}"

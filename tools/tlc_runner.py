@@ -20,6 +20,8 @@ DEFAULT_WORKERS = 2
 DEFAULT_HEAP = "2048m"
 DEFAULT_MEMORY_MAX = "3G"
 DEFAULT_SWAP_MAX = "3G"
+DEFAULT_STORAGE_MAX = "2G"
+DEFAULT_STORAGE_RESERVE = "256M"
 DEFAULT_ADMISSION_LOCK = "/tmp/agent-workflow-coordinator-tlc-admission.lock"  # noqa: S108
 
 
@@ -94,6 +96,7 @@ def build_command(
     model: Path,
     config: Path,
     metadir: Path,
+    workspace: Path | None = None,
     workers: int = DEFAULT_WORKERS,
     heap: str = DEFAULT_HEAP,
     memory_max: str = DEFAULT_MEMORY_MAX,
@@ -112,9 +115,12 @@ def build_command(
         raise AdmissionError("memory and swap limits must be non-zero")
     if heap_bytes >= _memory_bytes(memory_max):
         raise AdmissionError("JVM heap must be below the cgroup memory limit")
+    workspace_path = (workspace or metadir.parent).resolve()
     java = [
         "java",
         f"-Xmx{heap}",
+        f"-Djava.io.tmpdir={workspace_path}",
+        f"-Duser.dir={workspace_path}",
         "-XX:+UseSerialGC",
         "-XX:MaxMetaspaceSize=256m",
         "-XX:CompressedClassSpaceSize=128m",
@@ -190,6 +196,41 @@ def _memory_bytes(value: str) -> int:
     if suffix not in units:
         raise AdmissionError("memory limit must use an M or G suffix")
     return _positive_int(value[:-1], "memory limit") * units[suffix]
+
+
+def _storage_bytes(value: str) -> int:
+    """Parse a positive storage quantity using the same binary units as memory."""
+    return _memory_bytes(value)
+
+
+def _available_bytes(directory: Path) -> int:
+    try:
+        return os.statvfs(directory).f_bavail * os.statvfs(directory).f_frsize
+    except OSError as error:
+        raise AdmissionError(f"cannot inspect workspace capacity: {directory}") from error
+
+
+def _directory_bytes(directory: Path) -> int:
+    """Return allocated bytes below one private TLC workspace."""
+    total = 0
+    try:
+        for path in directory.rglob("*"):
+            if path.is_file():
+                total += path.stat().st_blocks * 512
+    except OSError as error:
+        raise AdmissionError(f"cannot inspect workspace usage: {directory}") from error
+    return total
+
+
+def _prepare_workspace(workspace: Path, metadir: Path, storage_reserve: int) -> None:
+    workspace.mkdir(mode=0o700, parents=True, exist_ok=True)
+    try:
+        metadir.resolve().relative_to(workspace.resolve())
+    except ValueError as error:
+        raise AdmissionError("metadir must be inside the private TLC workspace") from error
+    metadir.mkdir(mode=0o700, parents=True, exist_ok=True)
+    if _available_bytes(workspace) < storage_reserve:
+        raise AdmissionError("insufficient workspace capacity before TLC admission")
 
 
 def _cgroup_v2_directory(proc_root: Path = Path("/proc")) -> tuple[Path, Path]:
@@ -283,6 +324,11 @@ def run(args: argparse.Namespace) -> int:
     """Queue, admit, execute, and durably classify one TLC model."""
     queue = Path(args.queue).resolve()
     queue.mkdir(mode=0o700, parents=True, exist_ok=True)
+    workspace = Path(getattr(args, "workspace", Path(args.metadir).parent)).resolve()
+    metadir = Path(args.metadir).resolve()
+    storage_max = _storage_bytes(getattr(args, "storage_max", DEFAULT_STORAGE_MAX))
+    storage_reserve = _storage_bytes(getattr(args, "storage_reserve", DEFAULT_STORAGE_RESERVE))
+    _prepare_workspace(workspace, metadir, storage_reserve)
     _prune_stale(queue)
     job = queue / f"{os.getpid()}-{uuid.uuid4().hex}.job.json"
     outcome = job.with_name(job.name.replace(".job.json", ".outcome.json"))
@@ -296,6 +342,9 @@ def run(args: argparse.Namespace) -> int:
         "heap": args.heap,
         "memory_max": args.memory_max,
         "swap_max": args.swap_max,
+        "workspace": str(workspace),
+        "storage_max": getattr(args, "storage_max", DEFAULT_STORAGE_MAX),
+        "storage_reserve": getattr(args, "storage_reserve", DEFAULT_STORAGE_RESERVE),
     }
     job.write_text(json.dumps(record, sort_keys=True) + "\n")
     try:
@@ -303,7 +352,8 @@ def run(args: argparse.Namespace) -> int:
             jar=Path(args.jar),
             model=Path(args.model),
             config=Path(args.config),
-            metadir=Path(args.metadir),
+            metadir=metadir,
+            workspace=workspace,
             workers=args.workers,
             heap=args.heap,
             memory_max=args.memory_max,
@@ -317,10 +367,30 @@ def run(args: argparse.Namespace) -> int:
             fcntl.flock(lock, fcntl.LOCK_EX)
             record["state"] = "running"
             job.write_text(json.dumps(record, sort_keys=True) + "\n")
-            exit_code = subprocess.run(command, check=False).returncode  # noqa: S603
-            record.update({"ended": time.time(), "state": "completed", "exit_code": exit_code})
+            process = subprocess.Popen(command)  # noqa: S603
+            classification = "completed"
+            while process.poll() is None:
+                if _directory_bytes(workspace) > storage_max:
+                    process.terminate()
+                    try:
+                        process.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        process.kill()
+                        process.wait()
+                    classification = "storage-exhausted"
+                    break
+                time.sleep(0.1)
+            exit_code = process.returncode
+            record.update(
+                {
+                    "ended": time.time(),
+                    "state": classification,
+                    "exit_code": exit_code,
+                    "workspace_bytes": _directory_bytes(workspace),
+                }
+            )
             outcome.write_text(json.dumps(record, sort_keys=True) + "\n")
-            return exit_code
+            return 75 if classification == "storage-exhausted" else exit_code
     except KeyboardInterrupt:
         record.update({"ended": time.time(), "state": "canceled", "exit_code": 130})
         outcome.write_text(json.dumps(record, sort_keys=True) + "\n")
@@ -342,6 +412,11 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--config", required=True)
     result.add_argument("--metadir", required=True)
     result.add_argument(
+        "--workspace",
+        default=os.environ.get("TLC_WORKSPACE", ".tlc-work"),
+        help="private per-run workspace containing TLC state and temporary modules",
+    )
+    result.add_argument(
         "--queue",
         default=os.environ.get("TLC_ADMISSION_QUEUE", "/tmp/agent-workflow-coordinator-tlc"),  # noqa: S108
     )
@@ -358,6 +433,13 @@ def parser() -> argparse.ArgumentParser:
         "--memory-max", default=os.environ.get("TLC_MEMORY_MAX", DEFAULT_MEMORY_MAX)
     )
     result.add_argument("--swap-max", default=os.environ.get("TLC_SWAP_MAX", DEFAULT_SWAP_MAX))
+    result.add_argument(
+        "--storage-max", default=os.environ.get("TLC_STORAGE_MAX", DEFAULT_STORAGE_MAX)
+    )
+    result.add_argument(
+        "--storage-reserve",
+        default=os.environ.get("TLC_STORAGE_RESERVE", DEFAULT_STORAGE_RESERVE),
+    )
     result.add_argument("--cpu-quota", default=os.environ.get("TLC_CPU_QUOTA", "200%"))
     result.add_argument("--tasks-max", type=int, default=int(os.environ.get("TLC_TASKS_MAX", "64")))
     result.add_argument(
