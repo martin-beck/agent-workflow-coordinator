@@ -42,7 +42,7 @@ EXPECTED_MODELS = {
         "HandoffctlReceipts",
         "HandoffctlPublication",
         "HandoffctlObservation",
-        "HandoffctlPR",
+        "HandoffctlLiveness",
         "HandoffctlRecovery",
     },
     "full-exhaustive": {
@@ -58,7 +58,7 @@ EXPECTED_MODELS = {
     },
 }
 MODEL_SOURCE = {
-    "HandoffctlPR": "Handoffctl",
+    "HandoffctlLiveness": "Handoffctl",
     "HandoffctlFast": "HandoffctlBinding",
     "HandoffctlReceiptsFast": "HandoffctlReceipts",
     "HandoffctlPublicationFast": "HandoffctlPublication",
@@ -207,6 +207,7 @@ def main() -> int:
             "formal/handoffctl/verify.sh",
             "tools/tlc_runner.py",
             "formal/handoffctl/attest.py",
+            "formal/handoffctl/LIVENESS_COVERAGE.json",
             "formal/handoffctl/slices.py",
             "formal/evidence.json",
             "formal/tier-evidence.json",

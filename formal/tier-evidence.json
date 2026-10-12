@@ -24,10 +24,10 @@
         "HandoffctlReceipts",
         "HandoffctlPublication",
         "HandoffctlObservation",
-        "HandoffctlPR",
+        "HandoffctlLiveness",
         "HandoffctlRecovery"
       ],
-      "claims": "reduced bounded release qualification for this declared model set; neither refinement evidence nor the full two-process lifecycle cross-product, and no full formal or release attestation"
+      "claims": "reduced bounded release qualification for this declared model set; HandoffctlLiveness is a documented one-process abstraction with complete lifecycle safety invariants and EventualCompletion; neither refinement evidence nor the full two-process lifecycle cross-product, and no full formal or release attestation"
     },
     "full-exhaustive": {
       "exhaustive": true,
