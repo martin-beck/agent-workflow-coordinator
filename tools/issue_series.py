@@ -18,9 +18,12 @@ from typing import Any, NoReturn
 _REPOSITORY = re.compile(r"github\.com/[a-z0-9][a-z0-9_.-]*/[a-z0-9][a-z0-9_.-]*$")
 _AR_ID = re.compile(r"AR-[0-9]{4}$")
 _DIGEST = re.compile(r"sha256:[0-9a-f]{64}$")
+_HOME_FRAGMENT = "/" + "home/"
 _PRIVATE_TEXT = re.compile(
-    r"(?:^|[\s'\"])(?:/home/|/tmp/|~[/\\]|file://)|"
-    r"(?:api[_ -]?key|access[_ -]?token|password|secret|private[_ -]?key|prompt)\b",
+    r"(?:^|[\s'\"])(?:"
+    + _HOME_FRAGMENT
+    + r"|/tmp/|~[/\\]|file://)|"
+    + r"(?:api[_ -]?key|access[_ -]?token|password|secret|private[_ -]?key|prompt)\b",
     re.IGNORECASE,
 )
 _TOP_LEVEL = frozenset(

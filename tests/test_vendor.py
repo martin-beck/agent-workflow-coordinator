@@ -707,6 +707,13 @@ exec "$@"
         commit = "c" * 40
         tree = "d" * 40
 
+        oversized = [
+            f"{source_name} -> {destination_name}"
+            for source_name, destination_name in VENDOR.SOURCE_FILES
+            if (ROOT / source_name).stat().st_size > 200_000
+        ]
+        self.assertEqual([], oversized)
+
         def payload(_source: Path, _commit: str, source_name: str) -> tuple[bytes, int]:
             path = ROOT / source_name
             return path.read_bytes(), path.stat().st_mode & 0o777
