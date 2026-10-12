@@ -75,6 +75,7 @@ jobs:
           TLC_MEMORY_MAX: 3G
           TLC_SWAP_MAX: 3G
           TLC_BUDGET_SECONDS: "900"
+          TLC_WORK_ROOT: ${{ runner.temp }}/formal-workspaces
           TLC_ATTESTATION_PATH: ${{ runner.temp }}/formal-attestation.json
         run: formal/handoffctl/verify.sh --tier "$TLC_TIER"
       - name: Validate local exact-head bounded receipt
