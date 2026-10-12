@@ -995,6 +995,23 @@ CREATE TABLE migrations(sequence INTEGER PRIMARY KEY AUTOINCREMENT, source_backe
  finalized INTEGER NOT NULL DEFAULT 0 CHECK(finalized IN (0,1))) STRICT;
 CREATE TABLE checkpoints(name TEXT PRIMARY KEY, revision INTEGER NOT NULL,
  recorded_at TEXT NOT NULL) STRICT;
+CREATE TABLE issue_series(
+ repository TEXT NOT NULL,
+ issue_number INTEGER NOT NULL CHECK(issue_number > 0),
+ manifest_json TEXT NOT NULL CHECK(json_valid(manifest_json)),
+ manifest_digest TEXT NOT NULL CHECK(length(manifest_digest)=71),
+ PRIMARY KEY(repository, issue_number)
+) STRICT;
+CREATE TABLE issue_series_members(
+ repository TEXT NOT NULL,
+ issue_number INTEGER NOT NULL,
+ task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+ member_id TEXT NOT NULL,
+ PRIMARY KEY(repository, issue_number, task_id),
+ UNIQUE(repository, issue_number, member_id),
+ FOREIGN KEY(repository, issue_number)
+   REFERENCES issue_series(repository, issue_number) ON DELETE CASCADE
+) STRICT;
 """
 
 
