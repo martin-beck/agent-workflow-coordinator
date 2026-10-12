@@ -19,6 +19,10 @@ class PredicateLedgerFormalModelTests(unittest.TestCase):
         for fragment in (
             "candidateRef",
             "candidateDigest",
+            "CandidateIdentity(ref, digest)",
+            "ref \\in Refs",
+            "digest \\in Digests",
+            "CandidateChangeKind(p)",
             "AcceptEnabled(p)",
             "CandidateChanged(p) /\\ requestedReopen[p]",
             "RequestedCandidateHasNoStaleHistory(p)",
@@ -35,6 +39,12 @@ class PredicateLedgerFormalModelTests(unittest.TestCase):
         verifier = (FORMAL / "verify.sh").read_text(encoding="utf-8")
         tiers = json.loads((ROOT / "formal/tier-evidence.json").read_text(encoding="utf-8"))
         self.assertIn('Processes = {"p1", "p2"}', config)
+        for invariant in (
+            "RefOnlyCandidateChangeRequiresReopen",
+            "DigestOnlyCandidateChangeRequiresReopen",
+            "RefAndDigestCandidateChangeRequiresReopen",
+        ):
+            self.assertIn(invariant, config)
         self.assertIn("run_model HandoffctlPredicateLedger", verifier)
         self.assertIn(
             "HandoffctlPredicateLedger",

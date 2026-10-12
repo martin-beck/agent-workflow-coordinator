@@ -71,12 +71,15 @@ records SHA-256 hashes of `Handoffctl.tla` and `Handoffctl.cfg` with each trace.
 
 `HandoffctlPredicateLedger.tla` is the bounded model for the predicate-aware
 form of `accept`. It keeps `candidateRef` and `candidateDigest` as separate
-state variables and admits only coherent ref/digest pairs in its finite
-domain. Each accepted predicate row carries that exact pair; a row with either
+state variables. Its finite candidate domain is the complete `Refs × Digests`
+cross-product: a reference can retain its name while its artifact digest
+changes, and two distinct references can identify identical artifact content.
+Each accepted predicate row carries that exact pair; a row with either
 a different reference or a different digest cannot be live evidence for the
 current candidate.
 
-The model uses two workers, two predicates, two candidate pairs, current and
+The model uses two workers, two predicates, four candidate identities (the
+full two-reference by two-digest cross-product), current and
 stale expected revisions, valid and invalid evidence, and both settings of
 `--reopen`. `AcceptEnabled` maps to
 `predicate_ledger.apply_predicate_acceptance` after bound-spec and evidence
@@ -85,7 +88,10 @@ shared active-owner and revision-CAS checks. `Accept` preserves `status` and
 `owner`, advances `revision` once, and writes a passing row bound to the
 requested pair.
 
-`CandidateChanged` is admitted only with `requestedReopen`.
+`CandidateChanged` is admitted only with `requestedReopen`. The separate
+`ref_only`, `digest_only`, and `ref_and_digest` change kinds are checked as
+invariants, so both same-ref/changed-digest and different-ref/same-digest
+counterexamples are included rather than excluded by the bounded domain.
 `MarkPassesStale` is the bounded representation of `_historical_steps`: on a
 candidate transition it retains well-formed historical rows and changes old
 passing rows to `stale` before recording the new pass. The runtime first

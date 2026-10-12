@@ -173,7 +173,9 @@ HandoffctlPredicateLedger.tla checks predicate-aware `accept`: exact
 candidate ref/digest binding, revision and owner fencing, explicit candidate
 reopen, stale-history conversion, and done admission only after complete
 current-candidate predicate evidence. It explores two workers, two predicates,
-and two candidate pairs; it is a bounded abstraction, not
+and the complete two-reference by two-digest candidate identity cross-product,
+including same-ref/changed-digest and different-ref/same-digest transitions;
+it is a bounded abstraction, not
 implementation-refinement evidence.
 
 `HandoffctlStorage.tla` checks both selected backends, transaction mutual exclusion, one accepted

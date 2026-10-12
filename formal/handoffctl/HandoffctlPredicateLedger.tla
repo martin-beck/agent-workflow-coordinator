@@ -7,10 +7,12 @@ EXTENDS FiniteSets, Naturals, Sequences, TLC
 Bounded contract for predicate-aware `handoffctl accept`.
 
 `candidateRef` and `candidateDigest` are deliberately independent state
-variables.  The finite PairCoherent relation represents the runtime's exact
-candidate ref/digest pair.  A process supplies one fixed request; TLC explores
-both owners, current/stale revisions, both candidate pairs, both predicates,
-valid/invalid evidence, and the presence or absence of explicit --reopen.
+variables. The finite candidate domain is their complete Cartesian product:
+the same reference may name a changed artifact digest, and different
+references may name identical artifact content. A process supplies one fixed
+request; TLC explores both owners, current/stale revisions, all candidate
+identities, both predicates, valid/invalid evidence, and the presence or
+absence of explicit --reopen.
 *******************************************************************************)
 
 CONSTANTS Processes, Actors, Predicates, NoActor, NoRef, NoDigest
@@ -25,6 +27,7 @@ VARIABLES
     retiredEvidence,
     candidateChanges,
     lastCandidateChangeWasReopen,
+    lastCandidateChangeKind,
     pc,
     action,
     requestedActor,
@@ -43,10 +46,13 @@ Actions == {"accept", "release_done"}
 Phases == {"ready", "done"}
 Results == {"pending", "accepted", "rejected"}
 
-PairCoherent(ref, digest) ==
-    \/ /\ ref = NoRef /\ digest = NoDigest
-    \/ /\ ref = "ref-a" /\ digest = "digest-a"
-    \/ /\ ref = "ref-b" /\ digest = "digest-b"
+NoCandidate(ref, digest) ==
+    /\ ref = NoRef
+    /\ digest = NoDigest
+
+CandidateIdentity(ref, digest) ==
+    /\ ref \in Refs
+    /\ digest \in Digests
 
 CandidateMatches(ref, digest) ==
     /\ ref = candidateRef
@@ -58,8 +64,8 @@ EvidenceId(row) ==
 Row ==
     [predicate : Predicates, status : StepStatuses, ref : Refs, digest : Digests]
 
-InitialPassingRow ==
-    [predicate |-> "predicate-a", status |-> "pass", ref |-> "ref-a", digest |-> "digest-a"]
+InitialPassingRow(ref, digest) ==
+    [predicate |-> "predicate-a", status |-> "pass", ref |-> ref, digest |-> digest]
 
 RowsFor(predicate) ==
     {ledger[i] : i \in {j \in 1..Len(ledger) : ledger[j].predicate = predicate}}
@@ -69,7 +75,7 @@ LiveRowsFor(predicate) ==
 
 LedgerCoherent ==
     /\ \A i \in 1..Len(ledger): ledger[i] \in Row
-    /\ \A i \in 1..Len(ledger): PairCoherent(ledger[i].ref, ledger[i].digest)
+    /\ \A i \in 1..Len(ledger): CandidateIdentity(ledger[i].ref, ledger[i].digest)
     /\ \A i \in 1..Len(ledger):
           ledger[i].status = "pass" => CandidateMatches(ledger[i].ref, ledger[i].digest)
     /\ \A i \in 1..Len(ledger):
@@ -105,6 +111,13 @@ CandidateChanged(p) ==
     /\ candidateRef # NoRef
     /\ ~CandidateMatches(requestedRef[p], requestedDigest[p])
 
+CandidateChangeKind(p) ==
+    IF requestedRef[p] # candidateRef /\ requestedDigest[p] = candidateDigest
+    THEN "ref_only"
+    ELSE IF requestedRef[p] = candidateRef /\ requestedDigest[p] # candidateDigest
+         THEN "digest_only"
+         ELSE "ref_and_digest"
+
 RequestedCandidateHasNoStaleHistory(p) ==
     \A i \in 1..Len(ledger):
         ledger[i].status # "stale" \/
@@ -132,7 +145,7 @@ NextLedger(p) ==
 
 vars ==
     <<status, owner, revision, candidateRef, candidateDigest, ledger, retiredEvidence,
-      candidateChanges, lastCandidateChangeWasReopen, pc, action, requestedActor,
+      candidateChanges, lastCandidateChangeWasReopen, lastCandidateChangeKind, pc, action, requestedActor,
       expectedRevision, requestedPredicate, requestedRef, requestedDigest,
       requestedReopen, evidenceValid, result>>
 
@@ -143,14 +156,14 @@ Init ==
     /\ \/ /\ candidateRef = NoRef
           /\ candidateDigest = NoDigest
           /\ ledger = <<>>
-       \/ /\ candidateRef = "ref-a"
-          /\ candidateDigest = "digest-a"
-          /\ ledger = <<InitialPassingRow>>
+       \/ /\ CandidateIdentity(candidateRef, candidateDigest)
+          /\ ledger = <<InitialPassingRow(candidateRef, candidateDigest)>>
     /\ LedgerCoherent
     /\ retiredEvidence = {EvidenceId(ledger[i]) :
           i \in {j \in 1..Len(ledger) : ledger[j].status = "stale"}}
     /\ candidateChanges = 0
     /\ lastCandidateChangeWasReopen = TRUE
+    /\ lastCandidateChangeKind = "none"
     /\ pc = [p \in Processes |-> "ready"]
     /\ action \in [Processes -> Actions]
     /\ requestedActor \in [Processes -> Actors]
@@ -158,7 +171,7 @@ Init ==
     /\ requestedPredicate \in [Processes -> Predicates]
     /\ requestedRef \in [Processes -> Refs]
     /\ requestedDigest \in [Processes -> Digests]
-    /\ \A p \in Processes: PairCoherent(requestedRef[p], requestedDigest[p])
+    /\ \A p \in Processes: CandidateIdentity(requestedRef[p], requestedDigest[p])
     /\ requestedReopen \in [Processes -> BOOLEAN]
     /\ evidenceValid \in [Processes -> BOOLEAN]
     /\ result = [p \in Processes |-> "pending"]
@@ -178,6 +191,8 @@ Accept(p) ==
     /\ candidateChanges' = IF CandidateChanged(p) THEN candidateChanges + 1 ELSE candidateChanges
     /\ lastCandidateChangeWasReopen' =
          IF CandidateChanged(p) THEN requestedReopen[p] ELSE lastCandidateChangeWasReopen
+    /\ lastCandidateChangeKind' =
+         IF CandidateChanged(p) THEN CandidateChangeKind(p) ELSE lastCandidateChangeKind
     /\ result' = [result EXCEPT ![p] = "accepted"]
     /\ pc' = [pc EXCEPT ![p] = "done"]
     /\ UNCHANGED <<action, requestedActor, expectedRevision, requestedPredicate,
@@ -192,7 +207,7 @@ ReleaseDone(p) ==
     /\ result' = [result EXCEPT ![p] = "accepted"]
     /\ pc' = [pc EXCEPT ![p] = "done"]
     /\ UNCHANGED <<candidateRef, candidateDigest, ledger, retiredEvidence, candidateChanges,
-                   lastCandidateChangeWasReopen, action, requestedActor, expectedRevision,
+                   lastCandidateChangeWasReopen, lastCandidateChangeKind, action, requestedActor, expectedRevision,
                    requestedPredicate, requestedRef, requestedDigest, requestedReopen,
                    evidenceValid>>
 
@@ -203,7 +218,7 @@ Reject(p) ==
     /\ result' = [result EXCEPT ![p] = "rejected"]
     /\ pc' = [pc EXCEPT ![p] = "done"]
     /\ UNCHANGED <<status, owner, revision, candidateRef, candidateDigest, ledger,
-                   retiredEvidence, candidateChanges, lastCandidateChangeWasReopen, action,
+                   retiredEvidence, candidateChanges, lastCandidateChangeWasReopen, lastCandidateChangeKind, action,
                    requestedActor, expectedRevision, requestedPredicate, requestedRef,
                    requestedDigest, requestedReopen, evidenceValid>>
 
@@ -225,6 +240,7 @@ TypeOK ==
     /\ retiredEvidence \subseteq [predicate : Predicates, ref : Refs, digest : Digests]
     /\ candidateChanges \in Nat
     /\ lastCandidateChangeWasReopen \in BOOLEAN
+    /\ lastCandidateChangeKind \in {"none", "ref_only", "digest_only", "ref_and_digest"}
     /\ pc \in [Processes -> Phases]
     /\ action \in [Processes -> Actions]
     /\ requestedActor \in [Processes -> Actors]
@@ -237,11 +253,20 @@ TypeOK ==
     /\ result \in [Processes -> Results]
 
 CandidateBinding ==
-    /\ PairCoherent(candidateRef, candidateDigest)
+    /\ NoCandidate(candidateRef, candidateDigest) \/ CandidateIdentity(candidateRef, candidateDigest)
     /\ LedgerCoherent
 
 ExplicitReopenOnCandidateChange ==
     candidateChanges > 0 => lastCandidateChangeWasReopen
+
+RefOnlyCandidateChangeRequiresReopen ==
+    lastCandidateChangeKind = "ref_only" => lastCandidateChangeWasReopen
+
+DigestOnlyCandidateChangeRequiresReopen ==
+    lastCandidateChangeKind = "digest_only" => lastCandidateChangeWasReopen
+
+RefAndDigestCandidateChangeRequiresReopen ==
+    lastCandidateChangeKind = "ref_and_digest" => lastCandidateChangeWasReopen
 
 StaleEvidenceIsHistorical ==
     \A i \in 1..Len(ledger): ledger[i].status = "stale" =>
