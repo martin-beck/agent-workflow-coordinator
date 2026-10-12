@@ -4807,6 +4807,25 @@ class HandoffTest(unittest.TestCase):
         self.assertFalse(list((self.root / "issue-series").glob("*.json")))
         self.assertEqual(before, {path: path.read_text() for path in before})
 
+    def test_issue_series_create_restores_every_write_when_commit_fails(self) -> None:
+        self.make_task()
+        manifest = self.issue_series_manifest()
+        args = argparse.Namespace(
+            manifest=manifest,
+            expected_state_digest=CORE.issue_series_state_digest(CORE.all_tasks()),
+        )
+        before = {path: path.read_text() for path in (self.root / "tasks").glob("*.md")}
+        before[self.root / "CURRENT.md"] = (self.root / "CURRENT.md").read_text()
+        before[self.root / "STATUS.md"] = (self.root / "STATUS.md").read_text()
+        with (
+            patch.object(CORE, "commit", side_effect=RuntimeError("injected commit failure")),
+            self.assertRaisesRegex(RuntimeError, "injected commit failure"),
+        ):
+            CORE.cmd_issue_series_create(args)
+        self.assertEqual({"AR-0001"}, {meta["id"] for _path, meta, _body in CORE.all_tasks()})
+        self.assertFalse(list((self.root / "issue-series").glob("*.json")))
+        self.assertEqual(before, {path: path.read_text() for path in before})
+
 
 if __name__ == "__main__":
     unittest.main()
