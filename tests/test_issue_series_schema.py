@@ -9,7 +9,7 @@ import copy
 import json
 import unittest
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 import jsonschema
 
@@ -56,6 +56,9 @@ def task_record() -> dict[str, Any]:
 
 
 class IssueSeriesSchemaTests(unittest.TestCase):
+    manifest_validator: ClassVar[Any]
+    task_validator: ClassVar[Any]
+
     @classmethod
     def setUpClass(cls) -> None:
         cls.manifest_validator = jsonschema.Draft202012Validator(

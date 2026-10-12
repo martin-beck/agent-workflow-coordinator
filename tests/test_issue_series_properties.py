@@ -6,10 +6,9 @@
 from __future__ import annotations
 
 import json
+import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
-
-import pytest
 
 from tools.issue_series import IssueSeriesValidationError, parse_manifest
 from tools.issue_series_plan import plan_issue_series
@@ -54,44 +53,45 @@ def manifest(seed: int, size: int) -> dict[str, object]:
     }
 
 
-@pytest.mark.parametrize("seed", range(16))
-@pytest.mark.parametrize("size", range(2, 9))
-def test_generated_dags_preserve_finalizer_closure_and_canonical_receipts(
-    seed: int, size: int
-) -> None:
-    value = manifest(seed, size)
-    parsed = parse_manifest(value)
-    assert {edge.id for edge in parsed.members[-1].depends_on} == {
-        member.id for member in parsed.members[:-1]
-    }
-    with TemporaryDirectory() as directory:
-        path = Path(directory) / "series.json"
-        path.write_text(json.dumps(value))
-        receipt = json.loads(
-            plan_issue_series(
-                path,
-                expected_product_slug="example/coordinator",
-                existing_task_ids=(),
-                existing_issue_series_identities=(),
-                current_state_digest="sha256:" + "0" * 64,
-            )
-        )
-    assert receipt["task_ids"] == [member.id for member in parsed.members]
-    assert receipt["manifest"]["finalizer"] == parsed.finalizer
+class IssueSeriesPropertyTests(unittest.TestCase):
+    def test_generated_dags_preserve_finalizer_closure_and_canonical_receipts(self) -> None:
+        for seed in range(16):
+            for size in range(2, 9):
+                with self.subTest(seed=seed, size=size):
+                    value = manifest(seed, size)
+                    parsed = parse_manifest(value)
+                    self.assertEqual(
+                        {edge.id for edge in parsed.members[-1].depends_on},
+                        {member.id for member in parsed.members[:-1]},
+                    )
+                    with TemporaryDirectory() as directory:
+                        path = Path(directory) / "series.json"
+                        path.write_text(json.dumps(value))
+                        receipt = json.loads(
+                            plan_issue_series(
+                                path,
+                                expected_product_slug="example/coordinator",
+                                existing_task_ids=(),
+                                existing_issue_series_identities=(),
+                                current_state_digest="sha256:" + "0" * 64,
+                            )
+                        )
+                    self.assertEqual(receipt["task_ids"], [member.id for member in parsed.members])
+                    self.assertEqual(receipt["manifest"]["finalizer"], parsed.finalizer)
 
-
-@pytest.mark.parametrize("mutation", ("duplicate", "private", "long-title", "cycle"))
-def test_hostile_mutations_are_rejected_for_every_generated_shape(mutation: str) -> None:
-    value = manifest(7, 4)
-    members = value["members"]
-    assert isinstance(members, list)
-    if mutation == "duplicate":
-        members[1]["id"] = members[0]["id"]
-    elif mutation == "private":
-        members[0]["scope"] = "Read /" + "home/private"
-    elif mutation == "long-title":
-        members[0]["short_title"] = "This title has five words"
-    else:
-        members[0]["depends_on"] = [{"id": members[-1]["id"], "rationale": "cycle"}]
-    with pytest.raises(IssueSeriesValidationError):
-        parse_manifest(value)
+    def test_hostile_mutations_are_rejected_for_every_generated_shape(self) -> None:
+        for mutation in ("duplicate", "private", "long-title", "cycle"):
+            with self.subTest(mutation=mutation):
+                value = manifest(7, 4)
+                members = value["members"]
+                assert isinstance(members, list)
+                if mutation == "duplicate":
+                    members[1]["id"] = members[0]["id"]
+                elif mutation == "private":
+                    members[0]["scope"] = "Read /" + "home/private"
+                elif mutation == "long-title":
+                    members[0]["short_title"] = "This title has five words"
+                else:
+                    members[0]["depends_on"] = [{"id": members[-1]["id"], "rationale": "cycle"}]
+                with self.assertRaises(IssueSeriesValidationError):
+                    parse_manifest(value)
