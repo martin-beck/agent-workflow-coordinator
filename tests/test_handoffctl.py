@@ -4722,6 +4722,62 @@ class HandoffTest(unittest.TestCase):
                 [],
             )
 
+    def issue_series_manifest(self) -> Path:
+        path = self.root / "series.json"
+        path.write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "repository": "github.com/owner/product",
+                    "issue": {
+                        "number": 42,
+                        "url": "https://github.com/owner/product/issues/42",
+                    },
+                    "issue_digest": "sha256:" + "a" * 64,
+                    "members": [
+                        {
+                            "id": "AR-9000",
+                            "scope": "Create local series records",
+                            "acceptance": "Focused local tests pass",
+                            "ownership": "Coordinator core",
+                            "depends_on": [],
+                        },
+                        {
+                            "id": "AR-9001",
+                            "scope": "Qualify local series records",
+                            "acceptance": "Local graph checks pass",
+                            "ownership": "Coordinator core",
+                            "depends_on": [{"id": "AR-9000", "rationale": "needs records"}],
+                        },
+                    ],
+                    "finalizer": "AR-9001",
+                }
+            )
+        )
+        return path
+
+    def test_issue_series_create_is_atomic_and_stale_fenced(self) -> None:
+        self.make_task()
+        manifest = self.issue_series_manifest()
+        digest = CORE.issue_series_state_digest(CORE.all_tasks())
+        args = argparse.Namespace(manifest=manifest, expected_state_digest=digest)
+        stale = argparse.Namespace(manifest=manifest, expected_state_digest="sha256:" + "b" * 64)
+        with self.assertRaisesRegex(RuntimeError, "STALE_STATE"):
+            CORE.cmd_issue_series_create(stale)
+        self.assertEqual({"AR-0001"}, {meta["id"] for _path, meta, _body in CORE.all_tasks()})
+        with patch.object(CORE, "commit", return_value=True) as commit:
+            CORE.cmd_issue_series_create(args)
+        created = {meta["id"]: meta for _path, meta, _body in CORE.all_tasks()}
+        self.assertEqual({"AR-0001", "AR-9000", "AR-9001"}, set(created))
+        self.assertEqual("AR-9001", created["AR-9000"]["parent_task_ref"])
+        self.assertEqual(["AR-9000"], created["AR-9001"]["children"])
+        self.assertEqual(1, len(list((self.root / "issue-series").glob("*.json"))))
+        commit.assert_called_once()
+        before = (self.root / "CURRENT.md").read_text()
+        with self.assertRaisesRegex(RuntimeError, "identifiers already exist"):
+            CORE.cmd_issue_series_create(args)
+        self.assertEqual(before, (self.root / "CURRENT.md").read_text())
+
 
 if __name__ == "__main__":
     unittest.main()
