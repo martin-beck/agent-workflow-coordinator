@@ -3301,6 +3301,64 @@ def cmd_issue_series_plan(args: argparse.Namespace) -> None:
     print(receipt)
 
 
+def issue_series_manifest_path(receipt: Meta) -> Path:
+    """Return one bounded deterministic local manifest name for a validated receipt."""
+    identity = cast(Meta, receipt["series_identity"])
+    repository = str(identity["repository"])
+    number = int(identity["issue_number"])
+    stem = hashlib.sha256(f"{repository}#{number}".encode()).hexdigest()[:24]
+    return ROOT / "issue-series" / f"{stem}.json"
+
+
+def issue_series_tasks(receipt: Meta, manifest_path: Path) -> list[Task]:
+    """Derive every planned task and hierarchy edge before any Git write occurs."""
+    manifest = cast(Meta, receipt["manifest"])
+    finalizer = str(manifest["finalizer"])
+    manifest_digest = str(receipt["manifest_digest"])
+    members = cast(list[Meta], manifest["members"])
+    child_ids = [str(member["id"]) for member in members if str(member["id"]) != finalizer]
+    generated: list[Task] = []
+    created_at = now()
+    for member in members:
+        task_id = str(member["id"])
+        dependencies = [str(edge["id"]) for edge in cast(list[Meta], member["depends_on"])]
+        meta: Meta = {
+            "schema_version": 1,
+            "id": task_id,
+            "title": str(member["scope"]),
+            "status": "planned",
+            "priority": "P1",
+            "summary": str(member["scope"]),
+            "next_action": "Implement the bounded scope and record local acceptance evidence.",
+            "task_revision": 1,
+            "updated_at": created_at,
+            "owner": "",
+            "claim_expires": "",
+            "checkpoint_commit": "",
+            "depends_on": dependencies,
+            "parent_task_ref": "" if task_id == finalizer else finalizer,
+            "children": child_ids if task_id == finalizer else [],
+            "issue_series": {
+                "manifest_ref": str(manifest_path.relative_to(ROOT)),
+                "manifest_digest": manifest_digest,
+                "member_id": task_id,
+            },
+        }
+        body = (
+            "\n\n".join(
+                (
+                    "Issue-series member created from a locally validated manifest.",
+                    f"Scope: {member['scope']}",
+                    f"Acceptance: {member['acceptance']}",
+                    f"Ownership hint: {member['ownership']}",
+                )
+            )
+            + "\n"
+        )
+        generated.append((TASKS / f"{task_id}.md", meta, body))
+    return generated
+
+
 def cmd_render_status(*, check: bool) -> None:
     """Render STATUS.md or fail if its checked-in form is stale."""
     if not project_settings()["status_view"]:
