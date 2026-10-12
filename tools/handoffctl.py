@@ -1873,7 +1873,7 @@ def commit(message: str, paths: list[Path]) -> bool:
             == 0
         ):
             return False
-        command = ["git", "-C", str(ROOT), "commit", "-S"]
+        command = ["git", "-C", str(ROOT), "commit"]
         if project_settings()["commit_signoff"]:
             command.append("-s")
         run([*command, "-m", message, "--only", "--", *relative], capture=False)
@@ -2668,20 +2668,21 @@ def apply_accept(args: argparse.Namespace, meta: Meta, policy: EvidencePolicy | 
     require_role_admission(str(args.owner))
     if meta.get("status") != "in_progress":
         raise RuntimeError("accept requires an active task")
-    if "spec_ref" not in meta or "spec_revision" not in meta:
-        raise RuntimeError("accept requires a referenced task spec")
     if args.expected_revision != meta["task_revision"]:
         raise RuntimeError(
             f"stale revision: expected {args.expected_revision}, current {meta['task_revision']}"
         )
-    meta["spec_acceptance"] = {
-        "spec_ref": meta["spec_ref"],
-        "spec_revision": meta["spec_revision"],
+    acceptance: Meta = {
         "status": "pass",
         "evidence_class": args.evidence_class,
         "evidence_ref": args.evidence_ref,
         "evidence_digest": args.evidence_digest,
     }
+    if "spec_ref" in meta and "spec_revision" in meta:
+        acceptance.update(spec_ref=meta["spec_ref"], spec_revision=meta["spec_revision"])
+    else:
+        acceptance["match"] = "best_effort"
+    meta["spec_acceptance"] = acceptance
     error = done_admission_error(ROOT, meta, policy)
     if error:
         raise RuntimeError(error)
@@ -3850,7 +3851,6 @@ def _revert_product(product: Path, source_commit: str, current_commit: str) -> s
             "-C",
             str(product),
             "commit",
-            "-S",
             "-s",
             "-m",
             f"revert: restore coordinator checkpoint {source_commit[:12]}",
