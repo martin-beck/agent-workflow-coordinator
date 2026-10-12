@@ -331,10 +331,10 @@ class IssueSeriesHandoffTest(unittest.TestCase):
 
         class Backend:
             def load_issue_series(self) -> list[dict[str, object]]:
-                return [receipt]
+                return cast(list[dict[str, object]], [receipt])
 
             def load_issue_series_publications(self) -> list[dict[str, object]]:
-                return [publication]
+                return cast(list[dict[str, object]], [publication])
 
         stale_manifest = self.root / "issue-series" / "stale.json"
         stale_manifest.parent.mkdir()
