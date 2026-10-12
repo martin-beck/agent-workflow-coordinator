@@ -435,7 +435,11 @@ class SQLiteStorageTest(unittest.TestCase):
 
     def test_bind_worktree_uses_the_same_live_owner_and_identity_fence(self) -> None:
         active = task("AR-0001", status="in_progress")
-        active[1].update(owner="worker-a", claim_expires="2099-01-01T00:00:00+00:00")
+        active[1].update(
+            owner="worker-a",
+            claim_expires="2099-01-01T00:00:00+00:00",
+            worktree_key="worker-one",
+        )
         conflict = task("AR-0002", status="in_progress")
         conflict[1].update(
             owner="worker-b",
