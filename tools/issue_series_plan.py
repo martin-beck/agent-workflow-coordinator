@@ -12,7 +12,14 @@ from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import NoReturn
 
-from tools.issue_series import IssueSeriesManifest, IssueSeriesValidationError, parse_manifest
+try:
+    from .issue_series import IssueSeriesManifest, IssueSeriesValidationError, parse_manifest
+except ImportError:  # Executed as a vendored top-level handoffctl helper.
+    from issue_series import (  # type: ignore[import-not-found,no-redef]
+        IssueSeriesManifest,
+        IssueSeriesValidationError,
+        parse_manifest,
+    )
 
 _DIGEST = re.compile(r"sha256:[0-9a-f]{64}$")
 _SLUG = re.compile(r"[a-z0-9][a-z0-9_.-]*/[a-z0-9][a-z0-9_.-]*$")

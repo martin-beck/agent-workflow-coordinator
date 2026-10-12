@@ -707,6 +707,13 @@ exec "$@"
         commit = "c" * 40
         tree = "d" * 40
 
+        oversized = [
+            f"{source_name} -> {destination_name}"
+            for source_name, destination_name in VENDOR.SOURCE_FILES
+            if (ROOT / source_name).stat().st_size > 200_000
+        ]
+        self.assertEqual([], oversized)
+
         def payload(_source: Path, _commit: str, source_name: str) -> tuple[bytes, int]:
             path = ROOT / source_name
             return path.read_bytes(), path.stat().st_mode & 0o777
@@ -747,6 +754,13 @@ exec "$@"
                 runtime_spec.loader.exec_module(runtime)
             runtime.ROOT = self.target
             self.assertEqual([], runtime.privacy_errors())
+            oversized_file = self.target / "oversized-fixture.txt"
+            oversized_file.write_text("x" * 200_001, encoding="utf-8")
+            self.assertEqual(
+                ["oversized-fixture.txt: state file exceeds 200 KiB"],
+                runtime.privacy_errors(),
+            )
+            oversized_file.unlink()
             leaked = self.target / "leaked-fixture.txt"
             leaked.write_text("11111111-1111-4111-8111-111111111111\n", encoding="utf-8")
             self.assertEqual(["leaked-fixture.txt: session-like UUID"], runtime.privacy_errors())
