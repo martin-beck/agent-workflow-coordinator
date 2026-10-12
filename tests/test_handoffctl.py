@@ -152,6 +152,22 @@ def racing_real_issue_series_create(
         outcomes.put(("accepted", "created"))
 
 
+def racing_sqlite_issue_series_create(
+    root_value: str, manifest_value: str, expected_digest: str, start: Any, outcomes: Any
+) -> None:
+    """Race SQLite's authoritative whole-series transaction from separate processes."""
+    configure_child(root_value)
+    start.wait(10)
+    try:
+        CORE.cmd_issue_series_create(
+            argparse.Namespace(manifest=Path(manifest_value), expected_state_digest=expected_digest)
+        )
+    except RuntimeError as error:
+        outcomes.put(("rejected", str(error)))
+    else:
+        outcomes.put(("accepted", "created"))
+
+
 def concurrent_observation_ticket(root_value: str, start: Any, outcomes: Any) -> None:
     """Reserve an advisory scan ticket from one shared fixture across processes."""
     configure_child(root_value)
@@ -4980,6 +4996,59 @@ class HandoffTest(unittest.TestCase):
         self.assertEqual(
             CORE.run(["git", "-C", str(self.root), "rev-parse", "HEAD"]).stdout,
             CORE.run(["git", "-C", str(self.root), "rev-parse", "origin/main"]).stdout,
+        )
+
+    def test_sixteen_processes_commit_one_issue_series_to_sqlite(self) -> None:
+        self.make_task()
+        CORE.DATABASE.parent.mkdir()
+        CORE.create_database(
+            CORE.DATABASE,
+            CORE.project_binding(),
+            CORE.git_tasks(),
+            imported_at="2026-10-12T00:00:00+00:00",
+            source_backend="git",
+            source_checkpoint="a" * 40,
+        )
+        CORE.BACKEND_CONFIG.write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "project_id": project_uuid("1"),
+                    "backend": "sqlite",
+                }
+            )
+        )
+        manifest = self.issue_series_manifest()
+        digest = CORE.issue_series_state_digest(CORE.all_tasks())
+        context = multiprocessing.get_context("fork")
+        start, outcomes = context.Event(), context.Queue()
+        workers = [
+            context.Process(
+                target=racing_sqlite_issue_series_create,
+                args=(str(self.root), str(manifest), digest, start, outcomes),
+            )
+            for _ in range(16)
+        ]
+        for worker in workers:
+            worker.start()
+        start.set()
+        results = [outcomes.get(timeout=30) for _ in workers]
+        for worker in workers:
+            worker.join(30)
+            self.assertEqual(0, worker.exitcode)
+        self.assertEqual(1, sum(result[0] == "accepted" for result in results), results)
+        connection = sqlite3.connect(CORE.DATABASE)
+        try:
+            self.assertEqual(
+                1, connection.execute("SELECT count(*) FROM issue_series").fetchone()[0]
+            )
+            self.assertEqual(
+                2, connection.execute("SELECT count(*) FROM issue_series_members").fetchone()[0]
+            )
+        finally:
+            connection.close()
+        self.assertEqual(
+            {"AR-0001", "AR-9000", "AR-9001"}, {item[1]["id"] for item in CORE.all_tasks()}
         )
 
 
