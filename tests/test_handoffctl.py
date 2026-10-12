@@ -116,6 +116,26 @@ def concurrent_reconcile(root_value: str, start: Any) -> None:
         CORE.reconcile(do_commit=False)
 
 
+def racing_issue_series_create(
+    root_value: str, manifest_value: str, expected_digest: str, start: Any, outcomes: Any
+) -> None:
+    """Race one issue identity through independent local coordinator processes."""
+    configure_child(root_value)
+    CORE.coordinator_lock_path = lambda: CORE.LOCK
+    CORE.sync_replica_before_write = lambda: None
+    CORE.push_replica = lambda: None
+    CORE.commit = lambda *_args, **_kwargs: True
+    start.wait(10)
+    try:
+        CORE.cmd_issue_series_create(
+            argparse.Namespace(manifest=Path(manifest_value), expected_state_digest=expected_digest)
+        )
+    except RuntimeError as error:
+        outcomes.put(("rejected", str(error)))
+    else:
+        outcomes.put(("accepted", "created"))
+
+
 def concurrent_observation_ticket(root_value: str, start: Any, outcomes: Any) -> None:
     """Reserve an advisory scan ticket from one shared fixture across processes."""
     configure_child(root_value)
@@ -4874,6 +4894,32 @@ class HandoffTest(unittest.TestCase):
         finally:
             connection.close()
         self.assertTrue(list((self.root / "issue-series").glob("*.json")))
+
+    def test_sixteen_processes_serialize_one_issue_series_create(self) -> None:
+        self.make_task()
+        manifest = self.issue_series_manifest()
+        digest = CORE.issue_series_state_digest(CORE.all_tasks())
+        context = multiprocessing.get_context("fork")
+        start, outcomes = context.Event(), context.Queue()
+        workers = [
+            context.Process(
+                target=racing_issue_series_create,
+                args=(str(self.root), str(manifest), digest, start, outcomes),
+            )
+            for _ in range(16)
+        ]
+        for worker in workers:
+            worker.start()
+        start.set()
+        results = [outcomes.get(timeout=20) for _ in workers]
+        for worker in workers:
+            worker.join(20)
+            self.assertEqual(0, worker.exitcode)
+        self.assertEqual(1, sum(result[0] == "accepted" for result in results), results)
+        self.assertTrue(all(result[0] in {"accepted", "rejected"} for result in results))
+        created = {meta["id"] for _path, meta, _body in CORE.all_tasks()}
+        self.assertEqual({"AR-0001", "AR-9000", "AR-9001"}, created)
+        self.assertEqual(1, len(list((self.root / "issue-series").glob("*.json"))))
 
 
 if __name__ == "__main__":
