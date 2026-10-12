@@ -9,6 +9,7 @@ import tempfile
 import threading
 import unittest
 from pathlib import Path
+from typing import cast
 
 from tools.formal_job_receipts import FormalJobError, FormalJobStore, tier_contract_digest
 
@@ -37,7 +38,7 @@ class FormalJobReceiptTests(unittest.TestCase):
         started = self.start()
         completed = self.store.execute(
             str(started["job_id"]),
-            expected_revision=int(started["revision"]),
+            expected_revision=cast(int, started["revision"]),
             runner=lambda: (0, "tlc-passed"),
         )
         self.assertEqual("completed", completed["state"])
@@ -66,7 +67,7 @@ class FormalJobReceiptTests(unittest.TestCase):
                 result.update(
                     self.store.execute(
                         str(started["job_id"]),
-                        expected_revision=int(started["revision"]),
+                        expected_revision=cast(int, started["revision"]),
                         runner=runner,
                     )
                 )
@@ -87,7 +88,7 @@ class FormalJobReceiptTests(unittest.TestCase):
     def test_recovery_fences_restarted_worker_and_stale_completion(self) -> None:
         started = self.start()
         running = self.store.begin(
-            str(started["job_id"]), expected_revision=int(started["revision"])
+            str(started["job_id"]), expected_revision=cast(int, started["revision"])
         )
         recovered = self.store.recover(
             str(started["job_id"]), expected_revision=int(running["revision"])
