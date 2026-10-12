@@ -891,7 +891,7 @@ class FormalEvidenceTests(unittest.TestCase):
         runner = (FORMAL_ROOT / "verify.sh").read_text(encoding="utf-8")
         invoked = set(re.findall(r"^\s*run_model\s+(\w+)(?:\s+\w+)?\s*$", runner, re.MULTILINE))
 
-        self.assertEqual(models - {"Handoffctl"}, invoked)
+        self.assertEqual(models - {"Handoffctl", "HandoffctlPR"}, invoked)
         operations = {
             "promote",
             "resume",
@@ -1012,6 +1012,9 @@ class FormalEvidenceTests(unittest.TestCase):
         self.assertIn("EventualCompletion", liveness_config)
         self.assertIn("SpecBindingIsMonotonic", liveness_config)
         self.assertIn("PartialWorktreeKeyIsPreserved", liveness_config)
+        legacy_bootstrap = (FORMAL_ROOT / "HandoffctlPR.cfg").read_text()
+        self.assertIn("Compatibility bootstrap", legacy_bootstrap)
+        self.assertNotIn("HandoffctlPR", manifest["profiles"]["pr-publication"]["models"])
         attest = (ROOT / "formal" / "handoffctl" / "attest.py").read_text(encoding="utf-8")
         self.assertIn("state_counts", attest)
         self.assertIn("state_counts are unavailable", attest)

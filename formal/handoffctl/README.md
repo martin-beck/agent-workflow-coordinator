@@ -222,6 +222,11 @@ independent-process races. The reduced configuration retains every lifecycle
 safety invariant and `EventualCompletion`. This is a bounded coverage argument,
 not refinement evidence or the complete two-process lifecycle cross-product,
 and cannot produce full formal or release evidence.
+
+`HandoffctlPR.cfg` is a source-only compatibility bootstrap for snapshots
+created before AR-0101. It is deliberately excluded from every tier. An old
+vendored updater needs it for one sync that installs the new updater; the new
+updater removes the bootstrap on its next atomic sync.
 `verify.sh --tier full-exhaustive` runs every full focused configuration plus
 the complete two-process lifecycle domain as fifteen disjoint immutable-
 operation slices. Each slice fixes one process's request operation and leaves

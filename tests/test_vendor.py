@@ -1047,6 +1047,14 @@ exec "$@"
         self.assertFalse(retired.exists())
         VENDOR.verify(self.target)
 
+    def test_legacy_vendor_bootstrap_remains_available_in_source_only(self) -> None:
+        bootstrap = ROOT / "formal/handoffctl/HandoffctlPR.cfg"
+        self.assertTrue(bootstrap.is_file())
+        self.assertNotIn(
+            "formal/handoffctl/HandoffctlPR.cfg",
+            {source for source, _destination in VENDOR.SOURCE_FILES},
+        )
+
     def test_atomic_copy_rejects_symlink_and_git_query_is_bounded(self) -> None:
         source = self.target / "source"
         source.write_text("value")
