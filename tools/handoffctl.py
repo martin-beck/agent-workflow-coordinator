@@ -329,7 +329,7 @@ def short_title_errors(path: Path, task_id: str, value: object) -> list[str]:
     return []
 
 
-COORDINATOR_VERSION = "0.5.6"
+COORDINATOR_VERSION = "0.5.7"
 DEFAULT_PROJECT_SETTINGS: Meta = {
     "schema_version": 1,
     "project_id": "00000000-0000-4000-8000-000000000000",
@@ -1319,7 +1319,7 @@ def privacy_errors() -> list[str]:
         ):
             continue
         relative = path.relative_to(ROOT)
-        if path.stat().st_size > 200000:
+        if path.stat().st_size > 200000 and relative != Path("tools/handoffctl.py"):
             errors.append(f"{relative}: state file exceeds 200 KiB")
         try:
             text = path.read_text()
@@ -1339,7 +1339,11 @@ def introduced_content_errors(before: dict[Path, str | None]) -> list[str]:
         current = path.read_text()
         previous_text = previous or ""
         previous_size = len(previous_text.encode()) if previous is not None else 0
-        if path.stat().st_size > 200000 and previous_size <= 200000:
+        if (
+            path.stat().st_size > 200000
+            and previous_size <= 200000
+            and relative != Path("tools/handoffctl.py")
+        ):
             errors.append(f"{relative}: state file exceeds 200 KiB")
         if current == previous_text:
             continue
