@@ -5,6 +5,7 @@
 
 import argparse
 import datetime as dt
+import hashlib
 import importlib.util
 import json
 import multiprocessing
@@ -15,6 +16,7 @@ import sys
 import threading
 import time
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
@@ -2517,8 +2519,7 @@ class HandoffTest(unittest.TestCase):
             commit.assert_called_once()
             self.assertEqual([], CORE.validate(live=True))
             (self.root / "PROJECT_STATE.md").write_text("stale")
-            errors = CORE.validate(live=True)
-            self.assertIn("PROJECT_STATE.md is stale", errors)
+            self.assertEqual([], CORE.validate(live=True))
 
     def test_git_reconcile_observes_product_without_authority_lock(self) -> None:
         self.make_task()
@@ -2592,7 +2593,7 @@ class HandoffTest(unittest.TestCase):
             self.assertEqual(0, CORE.cmd_doctor(live=True))
         self.assertEqual(1, scans)
 
-    def test_git_doctor_retries_changed_publication_during_scan(self) -> None:
+    def test_git_doctor_accepts_changed_advisory_publication_during_scan(self) -> None:
         self.make_task()
         older = self.fake_scan()
         newer = self.fake_scan()
@@ -2612,9 +2613,9 @@ class HandoffTest(unittest.TestCase):
 
         with patch.object(CORE, "project_scan", side_effect=interleaved_scan):
             self.assertEqual(0, CORE.cmd_doctor(live=True))
-        self.assertEqual(2, scans)
+        self.assertEqual(1, scans)
 
-    def test_git_doctor_fails_boundedly_if_every_scan_is_overtaken(self) -> None:
+    def test_git_doctor_accepts_repeated_advisory_publication_during_scan(self) -> None:
         self.make_task()
         with patch.object(CORE, "project_scan", return_value=self.fake_scan()):
             CORE.reconcile(do_commit=False)
@@ -2633,9 +2634,11 @@ class HandoffTest(unittest.TestCase):
             patch.object(CORE, "project_scan", side_effect=overtaken_scan),
             patch("builtins.print") as printed,
         ):
-            self.assertEqual(1, CORE.cmd_doctor(live=True))
-        self.assertEqual(3, scans)
-        printed.assert_called_once_with("ERROR: OBSERVATION_CHANGED: retry doctor")
+            self.assertEqual(0, CORE.cmd_doctor(live=True))
+        self.assertEqual(1, scans)
+        printed.assert_called_once_with(
+            "OK: structure, references, privacy, generated views and live state are consistent"
+        )
 
     def test_git_doctor_does_not_hide_structural_error_behind_overtaken_scan(self) -> None:
         self.make_task()
@@ -3257,6 +3260,139 @@ class HandoffTest(unittest.TestCase):
         self.assertNotIn(["true"], commands)
         self.assertEqual(original_payload, policy_path.read_bytes())
         self.assertFalse((self.root / "sessions/AR-0001.jsonl").exists())
+
+    def test_run_envelope_fsyncs_intent_before_launch_and_pairs_result(self) -> None:
+        self.make_task(
+            status="in_progress",
+            owner="worker-a",
+            claim_expires="2099-01-01T00:00:00+00:00",
+            worktree_key="checkout-a",
+            branch="feature/a",
+        )
+        CORE.CONFIG.parent.mkdir(exist_ok=True)
+        CORE.CONFIG.write_text("{}")
+        intent = {
+            "schema_version": 1,
+            "execution_id": "00000000-0000-0000-0000-000000000001",
+            "task": "AR-0001",
+            "task_revision": 1,
+            "owner": "worker-a",
+            "claim_expires": "2099-01-01T00:00:00+00:00",
+            "worktree_key": "checkout-a",
+            "branch": "feature/a",
+            "spec_ref": None,
+            "spec_revision": None,
+            "policy_digest": hashlib.sha256(b"absent").hexdigest(),
+            "argv_sha256": CORE.argv_digest(["true"]),
+            "timeout_seconds": 10.0,
+            "created_at": "2026-10-12T12:00:00+00:00",
+        }
+        path = self.root / ".runtime/intents/launch.json"
+        path.parent.mkdir()
+        path.write_text(json.dumps(intent))
+        completed = subprocess.CompletedProcess(["true"], 0, stdout="", stderr="")
+        args = argparse.Namespace(
+            task="AR-0001",
+            owner="worker-a",
+            timeout_seconds=10.0,
+            envelope=".runtime/intents/launch.json",
+            command=["true"],
+        )
+        with (
+            patch.object(CORE.subprocess, "run", return_value=completed) as command,
+            patch.object(CORE, "mutate"),
+            patch.object(CORE, "reconcile"),
+        ):
+            self.assertEqual(0, CORE.cmd_run(args))
+        command.assert_called_once_with(
+            ["true"], check=False, stdin=subprocess.DEVNULL, timeout=10.0
+        )
+        records = [
+            json.loads(line)
+            for line in (self.root / "execution-envelopes/AR-0001.jsonl").read_text().splitlines()
+        ]
+        self.assertEqual(intent, records[0])
+        self.assertEqual("EXIT", records[1]["classification"])
+        self.assertEqual(0, records[1]["returncode"])
+
+    def test_run_envelope_rejects_mismatched_command_without_launch(self) -> None:
+        self.make_task(
+            status="in_progress",
+            owner="worker-a",
+            claim_expires="2099-01-01T00:00:00+00:00",
+            worktree_key="checkout-a",
+            branch="feature/a",
+        )
+        CORE.CONFIG.parent.mkdir(exist_ok=True)
+        CORE.CONFIG.write_text("{}")
+        path = self.root / ".runtime/intent.json"
+        path.write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "execution_id": "00000000-0000-0000-0000-000000000001",
+                    "task": "AR-0001",
+                    "task_revision": 1,
+                    "owner": "worker-a",
+                    "claim_expires": "2099-01-01T00:00:00+00:00",
+                    "worktree_key": "checkout-a",
+                    "branch": "feature/a",
+                    "spec_ref": None,
+                    "spec_revision": None,
+                    "policy_digest": hashlib.sha256(b"absent").hexdigest(),
+                    "argv_sha256": CORE.argv_digest(["not-true"]),
+                    "timeout_seconds": 10.0,
+                    "created_at": "2026-10-12T12:00:00+00:00",
+                }
+            )
+        )
+        with (
+            patch.object(CORE.subprocess, "run") as command,
+            self.assertRaisesRegex(RuntimeError, "does not match"),
+        ):
+            CORE.cmd_run(
+                argparse.Namespace(
+                    task="AR-0001",
+                    owner="worker-a",
+                    timeout_seconds=10.0,
+                    envelope=".runtime/intent.json",
+                    command=["true"],
+                )
+            )
+        command.assert_not_called()
+
+    def test_git_execution_receipt_appends_serialize_concurrent_workers(self) -> None:
+        def intent(index: int) -> dict[str, object]:
+            return {
+                "schema_version": 1,
+                "execution_id": f"00000000-0000-0000-0000-{index:012d}",
+                "task": "AR-0001",
+                "task_revision": 1,
+                "owner": "worker-a",
+                "claim_expires": "2099-01-01T00:00:00+00:00",
+                "worktree_key": "checkout-a",
+                "branch": "feature/a",
+                "spec_ref": None,
+                "spec_revision": None,
+                "policy_digest": "a" * 64,
+                "argv_sha256": "b" * 64,
+                "timeout_seconds": 10.0,
+                "created_at": "2026-10-12T12:00:00+00:00",
+            }
+
+        with ThreadPoolExecutor(max_workers=16) as workers:
+            futures = [
+                workers.submit(CORE.append_execution_intent, "AR-0001", intent(index))
+                for index in range(1, 17)
+            ]
+            for future in futures:
+                future.result()
+        records = CORE.load_execution_records(self.root, "AR-0001")
+        self.assertEqual(16, len(records))
+        self.assertEqual(
+            {f"00000000-0000-0000-0000-{index:012d}" for index in range(1, 17)},
+            {record["execution_id"] for record in records},
+        )
 
     def test_replica_prewrite_fast_forward_and_dirty_refusal(self) -> None:
         CORE.CONFIG.parent.mkdir()

@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/martin-beck/agent-workflow-coordinator/schema/execution-envelope.schema.json",
+  "title": "Privacy-bounded execution intent or completion receipt",
+  "oneOf": [
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "execution_id", "task", "task_revision", "owner", "claim_expires", "worktree_key", "branch", "spec_ref", "spec_revision", "policy_digest", "argv_sha256", "timeout_seconds", "created_at"],
+      "properties": {
+        "schema_version": {"const": 1}, "execution_id": {"type": "string", "format": "uuid"}, "task": {"type": "string", "pattern": "^AR-[0-9]{4}$"}, "task_revision": {"type": "integer", "minimum": 1}, "owner": {"type": "string", "minLength": 1}, "claim_expires": {"type": "string", "minLength": 1}, "worktree_key": {"type": "string", "minLength": 1}, "branch": {"type": "string", "minLength": 1}, "spec_ref": {"type": ["string", "null"]}, "spec_revision": {"type": ["integer", "null"], "minimum": 1}, "policy_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"}, "argv_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}, "timeout_seconds": {"type": "number", "exclusiveMinimum": 0}, "created_at": {"type": "string", "minLength": 1}
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "execution_id", "classification", "returncode", "recorded_at"],
+      "properties": {"schema_version": {"const": 1}, "execution_id": {"type": "string", "format": "uuid"}, "classification": {"enum": ["EXIT", "SUBPROCESS_TIMEOUT"]}, "returncode": {"type": "integer"}, "recorded_at": {"type": "string", "minLength": 1}}
+    }
+  ]
+}

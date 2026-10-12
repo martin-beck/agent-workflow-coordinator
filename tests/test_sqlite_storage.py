@@ -4,6 +4,7 @@
 """SQLite backend conformance, fault and real multiprocess tests."""
 
 import argparse
+import hashlib
 import importlib.util
 import json
 import multiprocessing
@@ -90,7 +91,7 @@ def _commit_then_crash_before_projection(database: str, tasks_root: str) -> None
 
 
 def task(
-    task_id: str, *, status: str = "open", revision: int = 1
+    task_id: str, *, status: str = "open", revision: int = 1, **changes: object
 ) -> tuple[Path, dict[str, Any], str]:
     meta = {
         "schema_version": 1,
@@ -110,6 +111,7 @@ def task(
         "plan": "",
         "depends_on": [],
     }
+    meta.update(changes)
     return Path(f"{task_id}-test.md"), meta, "# Test\n"
 
 
@@ -1360,6 +1362,47 @@ class SQLiteStorageTest(unittest.TestCase):
         with patch("builtins.print"):
             CORE.cmd_snapshot("AR-0001")
         connection.close()
+
+    def test_sqlite_run_envelope_records_paired_receipts(self) -> None:
+        self.configure_core(backend="sqlite")
+        self.create([task("AR-0001", worktree_key="checkout-a", branch="feature/a")])
+        CORE.export_sqlite_projections()
+        CORE.mutate(argparse.Namespace(task="AR-0001", owner="worker", lease_minutes=10), "claim")
+        meta = CORE.all_tasks()[0][1]
+        intent = {
+            "schema_version": 1,
+            "execution_id": "00000000-0000-0000-0000-000000000001",
+            "task": "AR-0001",
+            "task_revision": meta["task_revision"],
+            "owner": "worker",
+            "claim_expires": meta["claim_expires"],
+            "worktree_key": "checkout-a",
+            "branch": "feature/a",
+            "spec_ref": None,
+            "spec_revision": None,
+            "policy_digest": hashlib.sha256(b"absent").hexdigest(),
+            "argv_sha256": CORE.argv_digest(["/bin/true"]),
+            "timeout_seconds": 5.0,
+            "created_at": "2026-10-12T12:00:00+00:00",
+        }
+        CORE.RUNTIME.mkdir(exist_ok=True)
+        (CORE.RUNTIME / "intent.json").write_text(json.dumps(intent))
+        with patch.object(CORE, "reconcile", return_value=True):
+            self.assertEqual(
+                0,
+                CORE.cmd_run(
+                    argparse.Namespace(
+                        task="AR-0001",
+                        owner="worker",
+                        timeout_seconds=5.0,
+                        envelope=".runtime/intent.json",
+                        command=["/bin/true"],
+                    )
+                ),
+            )
+        backend = SQLiteBackend(self.database, BINDING, self.tasks)
+        self.assertEqual([intent], backend.load_execution_envelopes())
+        self.assertEqual("EXIT", backend.load_execution_results()[0]["classification"])
 
     def test_sqlite_session_record_reader_rejects_corrupt_rows(self) -> None:
         self.configure_core(backend="sqlite")

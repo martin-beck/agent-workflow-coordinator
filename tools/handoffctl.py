@@ -56,6 +56,24 @@ if __package__:
         latest_directives,
         validate_directive,
     )
+    from .execution_envelope import (
+        ExecutionEnvelopeError,
+        argv_digest,
+        validate_envelope,
+        validate_result,
+    )
+    from .execution_envelope import (
+        append_record as append_execution_record,
+    )
+    from .execution_envelope import (
+        canonical_json as canonical_execution_json,
+    )
+    from .execution_envelope import (
+        load_records as load_execution_records,
+    )
+    from .execution_envelope import (
+        record_path as execution_record_path,
+    )
     from .hierarchy import hierarchy_errors, open_child_error
     from .issue_series import parse_manifest
     from .issue_series_plan import IssueSeriesPlanError, plan_issue_series
@@ -141,6 +159,24 @@ else:  # pragma: no cover - direct script execution
         directive_path,
         latest_directives,
         validate_directive,
+    )
+    from execution_envelope import (  # type: ignore[import-not-found,no-redef]
+        ExecutionEnvelopeError,
+        argv_digest,
+        validate_envelope,
+        validate_result,
+    )
+    from execution_envelope import (
+        append_record as append_execution_record,
+    )
+    from execution_envelope import (
+        canonical_json as canonical_execution_json,
+    )
+    from execution_envelope import (
+        load_records as load_execution_records,
+    )
+    from execution_envelope import (
+        record_path as execution_record_path,
     )
     from hierarchy import (  # type: ignore[import-not-found,no-redef]
         hierarchy_errors,
@@ -1763,6 +1799,45 @@ def directive_validation_errors() -> list[str]:
     return []
 
 
+def git_execution_receipts(tasks: list[Task]) -> tuple[list[Meta], list[Meta]]:
+    """Load tracked Git intent/result histories without retaining command contents."""
+    intents: list[Meta] = []
+    results: list[Meta] = []
+    for _path, meta, _body in tasks:
+        for record in load_execution_records(ROOT, str(meta["id"])):
+            if "task" in record:
+                intents.append(record)
+            else:
+                results.append(record)
+    return intents, results
+
+
+def execution_envelope_validation_errors(tasks: list[Task]) -> list[str]:
+    """Ensure every persisted completion has a same-history immutable intent."""
+    try:
+        backend = storage_backend()
+        if isinstance(backend, SQLiteBackend):
+            intents = backend.load_execution_envelopes()
+            results = backend.load_execution_results()
+        else:
+            intents, results = git_execution_receipts(tasks)
+        intent_ids = {str(item["execution_id"]) for item in intents}
+        if len(intent_ids) != len(intents):
+            return ["execution receipt validation failed: duplicate intent identity"]
+        result_ids: set[str] = set()
+        for result in results:
+            validate_result(result)
+            identity = str(result["execution_id"])
+            if identity not in intent_ids:
+                return ["execution receipt validation failed: result lacks intent"]
+            if identity in result_ids:
+                return ["execution receipt validation failed: duplicate result identity"]
+            result_ids.add(identity)
+    except (OSError, ValueError, RuntimeError) as error:
+        return [f"execution receipt validation failed: {error}"]
+    return []
+
+
 def validate(
     *, live: bool = False, policy: EvidencePolicy | None = None, live_state: State | None = None
 ) -> list[str]:
@@ -1798,6 +1873,7 @@ def validate(
     errors.extend(rollback_validation_errors())
     errors.extend(session_validation_errors())
     errors.extend(directive_validation_errors())
+    errors.extend(execution_envelope_validation_errors(tasks))
     errors.extend(privacy_errors())
     if live:
         # Hosted run/worktree observations can change after reconciliation.
@@ -2190,6 +2266,34 @@ def write_checkpoint_projections(checkpoint_records: list[Meta]) -> list[Path]:
     return [checkpoint_path(ROOT, task_id) for task_id in by_task]
 
 
+def write_execution_envelope_projections(backend: SQLiteBackend) -> list[Path]:
+    """Render deterministic Git replicas of SQLite execution receipts."""
+    intents = backend.load_execution_envelopes()
+    results = {str(item["execution_id"]): item for item in backend.load_execution_results()}
+    by_task: dict[str, list[Meta]] = {}
+    for intent in intents:
+        task_id = str(intent["task"])
+        records = by_task.setdefault(task_id, [])
+        records.append(intent)
+        outcome = results.pop(str(intent["execution_id"]), None)
+        if outcome is not None:
+            records.append(outcome)
+    if results:
+        raise RuntimeError("SQLite execution result lacks an immutable intent")
+    root = ROOT / "execution-envelopes"
+    expected = {execution_record_path(ROOT, task_id) for task_id in by_task}
+    for task_id, records in by_task.items():
+        atomic(
+            execution_record_path(ROOT, task_id),
+            "".join(canonical_execution_json(record) + "\n" for record in records),
+        )
+    if root.exists():
+        for path in root.glob("AR-*.jsonl"):
+            if path not in expected:
+                path.unlink()
+    return sorted(expected)
+
+
 def write_sqlite_issue_series_projections(backend: SQLiteBackend) -> list[Path]:
     """Export authoritative SQLite issue-series manifests as Git projections."""
     issue_series_root = ROOT / "issue-series"
@@ -2262,6 +2366,11 @@ def write_sqlite_projections(
         session_paths = write_session_projections(session_records)
         checkpoint_records = backend.load_checkpoint_records()
         checkpoint_paths = write_checkpoint_projections(checkpoint_records)
+        execution_envelope_paths = (
+            write_execution_envelope_projections(backend)
+            if isinstance(backend, SQLiteBackend)
+            else []
+        )
         return [
             *[path for path, _, _ in tasks],
             *views,
@@ -2269,6 +2378,7 @@ def write_sqlite_projections(
             *issue_series_publication_paths,
             *session_paths,
             *checkpoint_paths,
+            *execution_envelope_paths,
         ]
 
 
@@ -2296,6 +2406,9 @@ def reconcile_sqlite(*, do_commit: bool, push: bool, policy: EvidencePolicy | No
     before: dict[Path, str | None] = {path: path.read_text() for path in TASKS.glob("AR-*.md")}
     before.update({path: path.read_text() for path in (ROOT / "sessions").glob("AR-*.jsonl")})
     before.update({path: path.read_text() for path in (ROOT / "checkpoints").glob("AR-*.jsonl")})
+    before.update(
+        {path: path.read_text() for path in (ROOT / "execution-envelopes").glob("AR-*.jsonl")}
+    )
     before.update({path: path.read_text() if path.exists() else None for path in generated_paths()})
     state = refresh_sqlite_live_state()
     paths = export_sqlite_projections(selected_policy)
@@ -4533,7 +4646,83 @@ def append_command_result(
     )
 
 
-def cmd_run(args: argparse.Namespace) -> int:
+def load_execution_envelope(
+    path_value: str,
+    meta: Meta,
+    policy: EvidencePolicy,
+    argv: list[str],
+    timeout: float,
+) -> Meta:
+    """Load one caller-provided, state-bound immutable execution intent.
+
+    The envelope is intentionally an opt-in contract: it lets a caller obtain a
+    durable launch receipt without placing raw argv, environment, output, or a
+    working directory in the state repository.
+    """
+    requested = Path(path_value)
+    if (
+        requested.is_absolute()
+        or ".." in requested.parts
+        or not requested.parts
+        or requested.parts[0] != ".runtime"
+    ):
+        raise RuntimeError("execution envelope path must be runtime-relative")
+    path = (ROOT / requested).resolve()
+    if not inside(path, ROOT) or path.suffix != ".json":
+        raise RuntimeError("execution envelope path is invalid")
+    try:
+        info = path.lstat()
+        if not stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode) or info.st_size > 16_384:
+            raise RuntimeError("execution envelope has unsafe identity or size")
+        value = json.loads(path.read_text(encoding="utf-8"))
+        envelope = validate_envelope(value)
+    except (OSError, json.JSONDecodeError, ExecutionEnvelopeError) as error:
+        raise RuntimeError(f"execution envelope is invalid: {error}") from error
+    expected = {
+        "task": meta["id"],
+        "task_revision": meta["task_revision"],
+        "owner": meta["owner"],
+        "claim_expires": meta["claim_expires"],
+        "worktree_key": meta.get("worktree_key", ""),
+        "branch": meta.get("branch", ""),
+        "spec_ref": meta.get("spec_ref"),
+        "spec_revision": meta.get("spec_revision"),
+        "policy_digest": hashlib.sha256(policy.digest.encode()).hexdigest(),
+        "argv_sha256": argv_digest(argv),
+        "timeout_seconds": timeout,
+    }
+    if any(envelope[key] != value for key, value in expected.items()):
+        raise RuntimeError("execution envelope does not match the live task binding")
+    return envelope
+
+
+def append_execution_intent(task_id: str, envelope: Meta) -> None:
+    """Persist a launch receipt before a wrapped subprocess can begin."""
+    if backend_selection()["backend"] == "git":
+        # JSONL projection is rewritten atomically to fsync all prior entries.
+        # Serialize the read/append/replace sequence so independent workers
+        # cannot erase one another's receipts between their preflights.
+        with locked(phase="execution_envelope_intent"):
+            if backend_selection()["backend"] != "git":
+                raise RuntimeError("BACKEND_CHANGED: retry execution envelope intent")
+            append_execution_record(ROOT, task_id, envelope)
+        return
+    mutating_sqlite_backend().record_execution_envelope(envelope)
+
+
+def append_execution_result(task_id: str, result: Meta) -> None:
+    """Persist the paired completion receipt before any state follow-up."""
+    if backend_selection()["backend"] == "git":
+        with locked(phase="execution_envelope_result"):
+            if backend_selection()["backend"] != "git":
+                raise RuntimeError("BACKEND_CHANGED: retry execution envelope result")
+            append_execution_record(ROOT, task_id, result)
+        return
+    del task_id
+    mutating_sqlite_backend().record_execution_result(result)
+
+
+def cmd_run(args: argparse.Namespace) -> int:  # noqa: C901
     if not args.command:
         raise RuntimeError("missing command")
     if backend_selection()["backend"] == "git":
@@ -4541,11 +4730,17 @@ def cmd_run(args: argparse.Namespace) -> int:
     policy = require_active_owner(args.task, args.owner)
     # Never execute or consume untracked caller input. Scripts and data must be
     # named by argv or a stable file, whose content digest can be recorded too.
-    command_hash = hashlib.sha256("\0".join(args.command).encode()).hexdigest()
+    command_hash = argv_digest(args.command)
     timeout = float(getattr(args, "timeout_seconds", COMMAND_TIMEOUT_SECONDS))
     if timeout <= 0:
         raise RuntimeError("command timeout must be positive")
+    envelope = None
+    if getattr(args, "envelope", None):
+        _, meta, _ = locate(args.task)
+        envelope = load_execution_envelope(args.envelope, meta, policy, args.command, timeout)
     require_policy_unchanged(ROOT, policy)
+    if envelope is not None:
+        append_execution_intent(args.task, envelope)
     timed_out = False
     try:
         proc = subprocess.run(args.command, check=False, stdin=subprocess.DEVNULL, timeout=timeout)
@@ -4561,6 +4756,17 @@ def cmd_run(args: argparse.Namespace) -> int:
         returncode,
         timed_out,
     )
+    if envelope is not None:
+        append_execution_result(
+            args.task,
+            {
+                "schema_version": 1,
+                "execution_id": envelope["execution_id"],
+                "classification": "SUBPROCESS_TIMEOUT" if timed_out else "EXIT",
+                "returncode": returncode,
+                "recorded_at": now(),
+            },
+        )
     note = (
         f"Recorded command timeout; classification=SUBPROCESS_TIMEOUT; "
         f"deadline={timeout:.1f}s; command argv SHA-256 {command_hash}."
@@ -4642,6 +4848,8 @@ def cmd_init(args: argparse.Namespace) -> None:
                 source_backend="initial",
                 source_checkpoint="uncommitted-init",
                 command_results=legacy_command_results(),
+                execution_envelopes=git_execution_receipts(initial_tasks)[0],
+                execution_results=git_execution_receipts(initial_tasks)[1],
                 issue_series=git_issue_series_receipts(initial_tasks),
                 issue_series_publications=git_issue_series_publication_receipts(initial_tasks),
             )
@@ -4673,6 +4881,7 @@ def cmd_migrate(args: argparse.Namespace) -> None:  # noqa: C901
             command_results = legacy_command_results()
             session_records = storage_backend().load_session_records()
             checkpoint_records = storage_backend().load_checkpoint_records()
+            execution_envelopes, execution_results = git_execution_receipts(tasks)
             errors = validate(live=False, policy=policy)
             if errors:
                 raise RuntimeError("migration preflight failed:\n" + "\n".join(errors))
@@ -4690,6 +4899,8 @@ def cmd_migrate(args: argparse.Namespace) -> None:  # noqa: C901
                     command_results=command_results,
                     session_records=session_records,
                     checkpoint_records=checkpoint_records,
+                    execution_envelopes=execution_envelopes,
+                    execution_results=execution_results,
                     issue_series=issue_series,
                     issue_series_publications=git_issue_series_publication_receipts(tasks),
                 )
@@ -4700,9 +4911,15 @@ def cmd_migrate(args: argparse.Namespace) -> None:  # noqa: C901
                 imported_checkpoints = SQLiteBackend(
                     DATABASE, binding, TASKS
                 ).load_checkpoint_records()
+                imported_envelopes = SQLiteBackend(
+                    DATABASE, binding, TASKS
+                ).load_execution_envelopes()
+                imported_results = SQLiteBackend(DATABASE, binding, TASKS).load_execution_results()
                 if (
                     imported_sessions != session_records
                     or imported_checkpoints != checkpoint_records
+                    or imported_envelopes != execution_envelopes
+                    or imported_results != execution_results
                 ):
                     raise RuntimeError("record migration equivalence check failed")
                 require_policy_unchanged(ROOT, policy)
@@ -5201,6 +5418,7 @@ def main() -> int:  # noqa: C901
     item.add_argument("task")
     item.add_argument("--owner", required=True)
     item.add_argument("--timeout-seconds", type=float, default=COMMAND_TIMEOUT_SECONDS)
+    item.add_argument("--envelope", help="runtime-relative immutable execution intent JSON")
     item.add_argument("command", nargs=argparse.REMAINDER)
     args = parser.parse_args()
     if args.cmd == "init":
