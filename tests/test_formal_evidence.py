@@ -1090,9 +1090,11 @@ class FormalEvidenceTests(unittest.TestCase):
         self.assertIn("HandoffctlLiveness", tier_models)
         self.assertTrue(mapping["non_claims"])
 
-    def test_workflow_separates_fork_pr_publication_and_weekly_tiers(self) -> None:
+    def test_workflow_separates_bounded_validation_from_advisory_stress(self) -> None:
         workflow = (ROOT / ".github" / "workflows" / "verify.yml").read_text()
         formal = (ROOT / ".github" / "workflows" / "formal.yml").read_text()
+        stress = (ROOT / ".github" / "workflows" / "formal-stress.yml").read_text()
+        verify = (FORMAL_ROOT / "verify.sh").read_text()
         self.assertIn(
             "github.event.pull_request.head.repo.full_name != github.repository", workflow
         )
@@ -1109,32 +1111,24 @@ class FormalEvidenceTests(unittest.TestCase):
         self.assertIn("tools/lifecycle_trace.py", workflow)
         self.assertIn("push:", formal)
         self.assertIn("workflow_dispatch:", formal)
+        self.assertNotIn("schedule:", formal)
+        self.assertNotIn("full-exhaustive", formal)
+        self.assertNotIn("full-exhaustive", workflow)
         manual_dispatch = formal[
-            formal.index("  workflow_dispatch:\n") : formal.index("  schedule:\n")
+            formal.index("  workflow_dispatch:\n") : formal.index("permissions:")
         ]
         self.assertIn("      tier:\n", manual_dispatch)
         self.assertIn("        type: choice\n", manual_dispatch)
         self.assertEqual(
             re.findall(r"^          - (.+)$", manual_dispatch, re.MULTILINE),
-            ["pr-fast", "pr-publication", "full-exhaustive"],
+            ["pr-fast", "pr-publication"],
         )
-        self.assertIn(
-            "TLC_TIER: ${{ github.event_name == 'schedule' && 'full-exhaustive' || "
-            "inputs.tier || 'pr-fast' }}",
-            formal,
-        )
-        self.assertIn(
-            "timeout-minutes: ${{ (github.event_name == 'schedule' || "
-            "inputs.tier == 'full-exhaustive') && 1440 || inputs.tier == "
-            "'pr-publication' && 15 || 5 }}",
-            formal,
-        )
-        self.assertIn("continue-on-error:", formal)
-        self.assertIn("schedule:", formal)
+        self.assertIn("TLC_TIER: ${{ inputs.tier || 'pr-fast' }}", formal)
+        self.assertIn("timeout-minutes: ${{ inputs.tier == 'pr-publication' && 15 || 5 }}", formal)
         self.assertIn("if: github.ref == 'refs/heads/main'", formal)
         self.assertIn("runs-on: [self-hosted, Linux, X64, agent-workflow-coordinator-ci]", formal)
         formal_step = formal[
-            formal.index("      - name: Run required formal tier\n") : formal.index(
+            formal.index("      - name: Run bounded formal tier\n") : formal.index(
                 "      - name: Publish exact-head tier attestation\n"
             )
         ]
@@ -1146,40 +1140,40 @@ class FormalEvidenceTests(unittest.TestCase):
             "TLC_BUDGET_SECONDS",
         ):
             self.assertIn(resource_setting, formal_step)
-        full_tier_condition = (
-            "(github.event_name == 'schedule' || inputs.tier == 'full-exhaustive')"
-        )
-        for resource_setting, full_value, fast_value in (
-            ("TLC_HEAP", "48g", "2048m"),
-            ("TLC_MEMORY_MAX", "64G", "3G"),
-            ("TLC_SWAP_MAX", "64G", "3G"),
-        ):
-            resource_expression = (
-                f"{resource_setting}: ${{{{ {full_tier_condition} && "
-                f"'{full_value}' || '{fast_value}' }}}}"
-            )
-            self.assertIn(
-                resource_expression,
-                formal_step,
-            )
         self.assertIn("cancel-in-progress: false", formal)
         self.assertNotIn("queue:", formal)
-        self.assertIn("'full-exhaustive' || 'pr-fast'", formal)
         self.assertIn("effective limits from inside its", formal)
         self.assertIn("command -v systemd-run", formal)
         self.assertIn("MemTotal", formal)
         self.assertIn("/proc/self/cgroup", formal)
         self.assertIn("/proc/self/mountinfo", formal)
         self.assertNotIn("needs.scope.outputs.release_sensitive", formal_step)
-        budget_expression = formal[
-            formal.index("TLC_BUDGET_SECONDS:") : formal.index(
-                "\n", formal.index("TLC_BUDGET_SECONDS:")
-            )
-        ]
-        self.assertIn("inputs.tier == 'full-exhaustive'", budget_expression)
-        self.assertIn("'86400'", budget_expression)
-        self.assertIn("'900'", budget_expression)
-        self.assertIn("'300'", budget_expression)
+        self.assertIn(
+            "TLC_BUDGET_SECONDS: ${{ inputs.tier == 'pr-publication' && '900' || '300' }}", formal
+        )
+        self.assertIn("schedule:", stress)
+        self.assertIn("workflow_dispatch:", stress)
+        self.assertIn("retry_note:", stress)
+        self.assertIn("advisory-formal-stress-${{ github.ref }}", stress)
+        self.assertIn("agent-workflow-coordinator-formal-stress", stress)
+        self.assertIn("continue-on-error: true", stress)
+        self.assertIn("TLC_TIER: full-exhaustive", stress)
+        self.assertIn("TLC_DIAGNOSTICS_DIR", stress)
+        self.assertIn("--diagnostic-queue", stress)
+        self.assertIn("--diagnostic-admission-lock", stress)
+        self.assertIn("if: always()", stress)
+        self.assertIn("exploratory-formal-stress-", stress)
+        self.assertIn("timeout-minutes: 1440", stress)
+        self.assertIn("TLC_HEAP: 48g", stress)
+        self.assertIn("TLC_MEMORY_MAX: 64G", stress)
+        self.assertIn("TLC_SWAP_MAX: 64G", stress)
+        self.assertIn(
+            "partial, interrupted, and failed stress runs are exploratory diagnostics only", verify
+        )
+        self.assertIn("exploratory-receipt.json", verify)
+        self.assertIn(
+            "TLC_DIAGNOSTICS_DIR is reserved for exploratory full-exhaustive runs", verify
+        )
         self.assertNotIn("DCO certification", workflow)
 
     def test_attestation_rejects_failed_formal_outcomes(self) -> None:

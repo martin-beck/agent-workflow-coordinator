@@ -5,8 +5,6 @@ name: Verify
     branches: [main]
   pull_request:
   workflow_dispatch:
-  schedule:
-    - cron: "17 3 * * 0"
 
 permissions:
   contents: read
@@ -75,12 +73,11 @@ jobs:
     needs: [awq, scope]
     if: ${{ github.event_name != 'pull_request' || needs.scope.outputs.formal_changed == 'true' || needs.scope.outputs.release_sensitive == 'true' }}
     runs-on: ubuntu-24.04
-    # Weekly scheduled verification is the only exhaustive tier. Pushes,
-    # manual dispatches, and same-repository PRs stay bounded for publication.
-    timeout-minutes: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && 30 || github.event_name == 'schedule' && 360 || 30 }}
-    continue-on-error: ${{ github.event_name == 'schedule' }}
+    # Full-exhaustive work is isolated in formal-stress.yml. Verify remains a
+    # bounded minute-scale path for every trigger.
+    timeout-minutes: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && 30 || 30 }}
     env:
-      TLC_TIER: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && 'portable-smoke' || github.event_name == 'schedule' && 'full-exhaustive' || 'pr-fast' }}
+      TLC_TIER: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && 'portable-smoke' || 'pr-fast' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:

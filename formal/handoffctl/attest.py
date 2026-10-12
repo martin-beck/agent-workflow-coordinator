@@ -280,8 +280,8 @@ def main() -> int:
             ),
             *(
                 [
-                    "full-exhaustive is scheduled/manual advisory evidence and cannot block "
-                    "normal progression until AR-0102"
+                    "full-exhaustive is contained exploratory evidence and cannot block "
+                    "normal progression, acceptance, merge, or release"
                 ]
                 if args.tier == "full-exhaustive"
                 else []

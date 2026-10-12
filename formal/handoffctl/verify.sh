@@ -9,6 +9,10 @@ if [[ "${1:-}" != "--tier" || ( "${2:-}" != "portable-smoke" && "${2:-}" != "pr-
 fi
 readonly TIER="$2"
 shift 2
+if [[ -n "${TLC_DIAGNOSTICS_DIR:-}" && "${TIER}" != "full-exhaustive" ]]; then
+    echo "TLC_DIAGNOSTICS_DIR is reserved for exploratory full-exhaustive runs" >&2
+    exit 64
+fi
 EXECUTION_CLASSIFICATION=canonical
 RUNNER_ADMISSION_ARGS=()
 if [[ "$#" -eq 4 && "$1" == "--diagnostic-queue" && "$3" == "--diagnostic-admission-lock" ]]; then
@@ -69,7 +73,40 @@ readonly TEMP_DIR="$(mktemp -d "${WORK_ROOT}/handoffctl-${TIER}.XXXXXX")"
 readonly SLICE_DIR="${SPEC_DIR}/.tlc-slices-$$"
 readonly MANIFEST="${TEMP_DIR}/outcomes.manifest"
 : > "${MANIFEST}"
-trap 'rm -rf -- "${TEMP_DIR}" "${SLICE_DIR}"' EXIT
+preserve_diagnostics() {
+    local exit_status="$?"
+    local diagnostic_dir="${TLC_DIAGNOSTICS_DIR:-}"
+    if [[ -n "${diagnostic_dir}" ]]; then
+        mkdir --mode=700 --parents "${diagnostic_dir}"
+        cp -- "${MANIFEST}" "${diagnostic_dir}/outcomes.manifest" 2>/dev/null || true
+        if [[ -n "${RUNNER_ADMISSION_ARGS[*]}" ]]; then
+            cp -- "${RUNNER_ADMISSION_ARGS[1]}"/*.outcome.json "${diagnostic_dir}/" 2>/dev/null || true
+        fi
+        python3 - "${diagnostic_dir}/exploratory-receipt.json" "${TIER}" "${exit_status}" <<'PY'
+import json
+import sys
+
+output, tier, status = sys.argv[1:]
+with open(output, "w", encoding="utf-8") as handle:
+    json.dump(
+        {
+            "schema_version": 1,
+            "classification": "exploratory",
+            "profile": tier,
+            "complete": status == "0",
+            "exit_status": int(status),
+            "non_claim": "partial, interrupted, and failed stress runs are exploratory diagnostics only",
+        },
+        handle,
+        indent=2,
+        sort_keys=True,
+    )
+    handle.write("\n")
+PY
+    fi
+    rm -rf -- "${TEMP_DIR}" "${SLICE_DIR}"
+}
+trap preserve_diagnostics EXIT
 
 readonly JAR="${TEMP_DIR}/tla2tools.jar"
 readonly URL="https://github.com/tlaplus/tlaplus/releases/download/v${TLA_VERSION}/tla2tools.jar"

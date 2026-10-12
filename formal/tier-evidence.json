@@ -57,7 +57,7 @@
         "HandoffctlSlice-release_done",
         "HandoffctlRecovery"
       ],
-      "claims": "scheduled/manual advisory bounded model checking until AR-0102; all tracked configurations and the two-process lifecycle aggregate are checked through the exhaustive union of disjoint immutable-operation slices"
+      "claims": "scheduled/manual advisory exploratory contained bounded model checking; all tracked configurations and the two-process lifecycle aggregate are checked through the exhaustive union of disjoint immutable-operation slices"
     }
   },
   "required_full_inputs": [
@@ -72,7 +72,7 @@
     "portable-smoke does not prove exhaustive model coverage",
     "pr-publication does not prove the full two-process lifecycle cross-product",
     "pr-publication is not refinement evidence",
-    "full-exhaustive is advisory and cannot block normal progression until AR-0102",
+    "full-exhaustive is exploratory supplementary evidence and cannot block normal progression, acceptance, merge, or release",
     "portable address-space limits are not equivalent to cgroup RSS or swap accounting",
     "neither tier proves implementation correspondence"
   ]
