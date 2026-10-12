@@ -1110,6 +1110,7 @@ class FormalEvidenceTests(unittest.TestCase):
             self.assertIn(release_path, workflow)
         self.assertIn("tools/lifecycle_trace.py", workflow)
         self.assertIn("push:", formal)
+        self.assertIn("pull_request:", formal)
         self.assertIn("workflow_dispatch:", formal)
         self.assertNotIn("schedule:", formal)
         self.assertNotIn("full-exhaustive", formal)
@@ -1117,15 +1118,11 @@ class FormalEvidenceTests(unittest.TestCase):
         manual_dispatch = formal[
             formal.index("  workflow_dispatch:\n") : formal.index("permissions:")
         ]
-        self.assertIn("      tier:\n", manual_dispatch)
-        self.assertIn("        type: choice\n", manual_dispatch)
-        self.assertEqual(
-            re.findall(r"^          - (.+)$", manual_dispatch, re.MULTILINE),
-            ["pr-fast", "pr-publication"],
-        )
-        self.assertIn("TLC_TIER: ${{ inputs.tier || 'pr-fast' }}", formal)
-        self.assertIn("timeout-minutes: ${{ inputs.tier == 'pr-publication' && 15 || 5 }}", formal)
-        self.assertIn("if: github.ref == 'refs/heads/main'", formal)
+        self.assertNotIn("inputs:", manual_dispatch)
+        self.assertIn("TLC_TIER: pr-publication", formal)
+        self.assertIn("timeout-minutes: 15", formal)
+        self.assertIn("github.event.pull_request.head.repo.full_name == github.repository", formal)
+        self.assertIn("continue-on-error: true", formal)
         self.assertIn("runs-on: [self-hosted, Linux, X64, agent-workflow-coordinator-ci]", formal)
         formal_step = formal[
             formal.index("      - name: Run bounded formal tier\n") : formal.index(
@@ -1148,9 +1145,11 @@ class FormalEvidenceTests(unittest.TestCase):
         self.assertIn("/proc/self/cgroup", formal)
         self.assertIn("/proc/self/mountinfo", formal)
         self.assertNotIn("needs.scope.outputs.release_sensitive", formal_step)
-        self.assertIn(
-            "TLC_BUDGET_SECONDS: ${{ inputs.tier == 'pr-publication' && '900' || '300' }}", formal
-        )
+        self.assertIn('TLC_BUDGET_SECONDS: "900"', formal)
+        self.assertIn("ref: ${{ github.event.pull_request.head.sha || github.sha }}", formal)
+        self.assertIn("Validate local exact-head bounded receipt", formal)
+        self.assertIn("tools/formal_receipt.py", formal)
+        self.assertIn("--tier pr-publication", formal)
         self.assertIn("schedule:", stress)
         self.assertIn("workflow_dispatch:", stress)
         self.assertIn("retry_note:", stress)

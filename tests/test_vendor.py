@@ -197,6 +197,8 @@ class VendorTest(unittest.TestCase):
             "formal/oracle/OracleInteractionGates.cfg",
             "formal/oracle/OracleInteractionGates.tla",
             "tools/tlc_runner.py",
+            "tools/formal_receipt.py",
+            "tests/test_formal_receipt.py",
         }
         self.assertTrue(expected.issubset(sources))
 
@@ -628,7 +630,9 @@ exec "$@"
                 "--config",
                 str(self.target / "Model.cfg"),
                 "--metadir",
-                str(self.target / "states"),
+                str(self.target / ".tlc-work" / "states"),
+                "--workspace",
+                str(self.target / ".tlc-work"),
                 "--queue",
                 str(self.target / "queue"),
                 "--admission-lock",
