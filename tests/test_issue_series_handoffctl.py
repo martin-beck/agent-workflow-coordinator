@@ -164,7 +164,7 @@ class IssueSeriesHandoffTest(unittest.TestCase):
             expected_manifest_digest=series[0]["manifest_digest"],
             transport="mock",
             mock_status="published",
-            mock_comment_id="comment-42",
+            mock_comment_id="42",
         )
         with patch.object(CORE, "commit", return_value=True) as commit:
             CORE.cmd_issue_series_publish(args)
@@ -172,7 +172,7 @@ class IssueSeriesHandoffTest(unittest.TestCase):
         self.assertEqual(1, len(records))
         recorded = json.loads(records[0].read_text())
         self.assertEqual("published", recorded["status"])
-        self.assertEqual("comment-42", recorded["comment_id"])
+        self.assertEqual("42", recorded["comment_id"])
         self.assertEqual(
             before,
             [

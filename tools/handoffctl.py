@@ -875,6 +875,30 @@ def locked(
             trace_lock_metric(*metric)
 
 
+@contextlib.contextmanager
+def issue_series_publication_locked(key: str) -> Iterator[None]:
+    """Serialize one optional remote publication without occupying the state lock."""
+    path = coordinator_lock_path().parent / "issue-series-publications" / f"{key}.lock"
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        deadline = time.monotonic() + LOCK_TIMEOUT_SECONDS
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError as error:
+                if time.monotonic() >= deadline:
+                    raise LockTimeoutError(
+                        "LOCK_TIMEOUT acquiring issue-series publication lock"
+                    ) from error
+                time.sleep(LOCK_POLL_SECONDS)
+        yield
+    finally:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
+
+
 def trace_lock_metric(phase: str, mode: str, wait: float, hold: float | None) -> None:
     """Emit optional private, bounded lock timing without command or path data."""
     destination = os.environ.get("HANDOFFCTL_LOCK_TRACE")
@@ -3716,7 +3740,7 @@ def _live_issue_series_publication(
     return PublicationOutcome("published", key, digest, comment_id)
 
 
-def cmd_issue_series_publish(args: argparse.Namespace) -> None:
+def cmd_issue_series_publish(args: argparse.Namespace) -> None:  # noqa: C901
     """Record an optional local-first series projection outcome without changing task lifecycle."""
     with locked(phase="issue_series_publish"):
         repository = str(args.repository)
@@ -3741,30 +3765,47 @@ def cmd_issue_series_publish(args: argparse.Namespace) -> None:
                     }
                 )
             outcome = MockTransport(raw).publish(repository, issue_number, digest, markdown)
-        else:
+        if args.transport in {"dry-run", "mock"}:
+            record = _publication_record(outcome, markdown)
+            _record_issue_series_publication(repository, issue_number, record)
+            print(json.dumps(record, sort_keys=True))
+            return
+        existing = _existing_issue_series_publication(repository, issue_number, digest)
+        if existing is None:
+            reservation = _publication_record(
+                PublicationOutcome("ambiguous", key, digest), markdown
+            )
+            _record_issue_series_publication(repository, issue_number, reservation)
+        elif existing.get("status") in {"published", "already_published"}:
+            print(json.dumps(existing, sort_keys=True))
+            return
+    live_record: Meta | None = None
+    with issue_series_publication_locked(key):
+        with locked(phase="issue_series_publish_prepare"):
+            _issue_series_receipt(repository, issue_number, digest)
             existing = _existing_issue_series_publication(repository, issue_number, digest)
             if existing is not None and existing.get("status") in {
                 "published",
                 "already_published",
             }:
-                record = existing
+                live_record = existing
             else:
-                reservation = _publication_record(
-                    PublicationOutcome("ambiguous", key, digest), markdown
-                )
-                if existing is None:
-                    _record_issue_series_publication(repository, issue_number, reservation)
-                else:
+                if existing is not None and existing.get("status") != "ambiguous":
+                    reservation = _publication_record(
+                        PublicationOutcome("ambiguous", key, digest), markdown
+                    )
                     _record_issue_series_publication(
                         repository, issue_number, reservation, resolve=True
                     )
-                outcome = _live_issue_series_publication(repository, issue_number, digest, markdown)
-                record = _publication_record(outcome, markdown)
-                _record_issue_series_publication(repository, issue_number, record, resolve=True)
-        if args.transport in {"dry-run", "mock"}:
-            record = _publication_record(outcome, markdown)
-            _record_issue_series_publication(repository, issue_number, record)
-    print(json.dumps(record, sort_keys=True))
+        if live_record is None:
+            outcome = _live_issue_series_publication(repository, issue_number, digest, markdown)
+            live_record = _publication_record(outcome, markdown)
+            with locked(phase="issue_series_publish_resolve"):
+                _issue_series_receipt(repository, issue_number, digest)
+                _record_issue_series_publication(
+                    repository, issue_number, live_record, resolve=True
+                )
+    print(json.dumps(live_record, sort_keys=True))
 
 
 def issue_series_manifest_path(receipt: Meta) -> Path:
