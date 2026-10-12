@@ -154,6 +154,13 @@
 
 ## Unreleased
 
+## 0.5.4
+
+- Add local-first optional issue-series publication with typed, privacy-bounded
+  receipts, recovery markers, and Git/SQLite migration parity.
+- Permit locally evidenced best-effort acceptance when a task has no bound
+  formal spec; bound specs remain validated when present.
+
 - Restore the shared TLC runner and its focused tests to downstream vendor snapshots without
   overwriting downstream-owned formal models, attestations, or verification entry points.
 - Add an explicitly classified, exact-commit development sync path without weakening the existing
