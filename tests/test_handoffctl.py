@@ -4209,7 +4209,7 @@ class HandoffTest(unittest.TestCase):
             CORE.mutate(release, "release")
         self.assertEqual("done", CORE.locate("AR-0001")[1]["status"])
 
-    def test_accept_requires_active_task_with_referenced_spec(self) -> None:
+    def test_accept_allows_best_effort_evidence_without_referenced_spec(self) -> None:
         self.make_task(
             status="in_progress", owner="worker-a", claim_expires="2099-01-01T00:00:00+00:00"
         )
@@ -4222,8 +4222,12 @@ class HandoffTest(unittest.TestCase):
             evidence_digest="sha256:" + "a" * 64,
             note="accepted",
         )
-        with self.assertRaisesRegex(RuntimeError, "requires a referenced task spec"):
-            CORE.apply_accept(args, CORE.locate("AR-0001")[1], CORE.DEFAULT_EVIDENCE_POLICY)
+        meta = CORE.locate("AR-0001")[1]
+        note = CORE.apply_accept(args, meta, CORE.DEFAULT_EVIDENCE_POLICY)
+        self.assertEqual("accepted", note)
+        acceptance = meta["spec_acceptance"]
+        self.assertEqual("best_effort", acceptance["match"])
+        self.assertNotIn("spec_ref", acceptance)
 
     def test_policy_and_spec_failures_cover_every_read_only_preflight(self) -> None:
         self.make_task(

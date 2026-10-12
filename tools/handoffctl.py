@@ -2662,26 +2662,28 @@ def require_promotion_preflight(kind: str) -> None:
 
 
 def apply_accept(args: argparse.Namespace, meta: Meta, policy: EvidencePolicy | None) -> str:
-    """Record one owner's exact-revision assertion against the referenced spec."""
+    """Record local best-effort acceptance; a separate task spec is optional."""
     if meta.get("owner") != args.owner:
         raise RuntimeError(f"{args.task} is owned by {meta.get('owner') or 'nobody'}")
     require_role_admission(str(args.owner))
     if meta.get("status") != "in_progress":
         raise RuntimeError("accept requires an active task")
-    if "spec_ref" not in meta or "spec_revision" not in meta:
-        raise RuntimeError("accept requires a referenced task spec")
     if args.expected_revision != meta["task_revision"]:
         raise RuntimeError(
             f"stale revision: expected {args.expected_revision}, current {meta['task_revision']}"
         )
-    meta["spec_acceptance"] = {
-        "spec_ref": meta["spec_ref"],
-        "spec_revision": meta["spec_revision"],
+    acceptance: Meta = {
         "status": "pass",
         "evidence_class": args.evidence_class,
         "evidence_ref": args.evidence_ref,
         "evidence_digest": args.evidence_digest,
     }
+    if "spec_ref" in meta and "spec_revision" in meta:
+        acceptance["spec_ref"] = meta["spec_ref"]
+        acceptance["spec_revision"] = meta["spec_revision"]
+    else:
+        acceptance["match"] = "best_effort"
+    meta["spec_acceptance"] = acceptance
     error = done_admission_error(ROOT, meta, policy)
     if error:
         raise RuntimeError(error)

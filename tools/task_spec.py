@@ -476,19 +476,24 @@ def done_admission_error(  # noqa: C901
     if errors:
         return "done admission denied: " + "; ".join(errors)
     acceptance = meta.get("spec_acceptance")
+    has_spec = "spec_ref" in meta or "spec_revision" in meta
     required = {
-        "spec_ref",
-        "spec_revision",
         "status",
         "evidence_class",
         "evidence_ref",
         "evidence_digest",
     }
+    if has_spec:
+        required |= {"spec_ref", "spec_revision"}
+    else:
+        required.add("match")
     if not isinstance(acceptance, dict) or set(acceptance) != required:
         return "done admission denied: spec_acceptance is incomplete or unknown"
-    if acceptance["spec_ref"] != meta.get("spec_ref"):
+    if not has_spec and acceptance.get("match") != "best_effort":
+        return "done admission denied: acceptance match is not best_effort"
+    if has_spec and acceptance["spec_ref"] != meta.get("spec_ref"):
         return "done admission denied: acceptance spec_ref does not match task spec"
-    if acceptance["spec_revision"] != meta.get("spec_revision"):
+    if has_spec and acceptance["spec_revision"] != meta.get("spec_revision"):
         return "done admission denied: acceptance spec_revision does not match task spec"
     if acceptance["status"] != "pass":
         return "done admission denied: acceptance status is not pass"
