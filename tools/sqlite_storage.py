@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import sqlite3
@@ -939,6 +940,151 @@ class SQLiteBackend:
                 (task_id, owner, command_hash, returncode, classification, recorded_at),
             )
 
+    @staticmethod
+    def _issue_series_state_digest(tasks: Sequence[Task]) -> str:
+        snapshot = [
+            {
+                "depends_on": meta.get("depends_on", []),
+                "id": meta["id"],
+                "parent_task_ref": meta.get("parent_task_ref", ""),
+                "status": meta["status"],
+                "task_revision": meta["task_revision"],
+            }
+            for _path, meta, _body in sorted(tasks, key=lambda task: str(task[1]["id"]))
+        ]
+        encoded = json.dumps(snapshot, separators=(",", ":"), sort_keys=True).encode("utf-8")
+        return "sha256:" + hashlib.sha256(encoded).hexdigest()
+
+    @staticmethod
+    def _ensure_issue_series_schema(connection: sqlite3.Connection) -> None:
+        """Install the additive series tables for databases created before this feature."""
+        connection.executescript(ISSUE_SERIES_SCHEMA)
+
+    def load_issue_series(self) -> list[Meta]:
+        """Return authoritative local issue-series receipts in deterministic identity order."""
+        connection = self._connect(read_only=True)
+        try:
+            try:
+                rows = connection.execute(
+                    """SELECT repository, issue_number, manifest_json, manifest_digest
+                       FROM issue_series ORDER BY repository, issue_number"""
+                )
+            except sqlite3.OperationalError as error:
+                if "no such table" not in str(error).lower():
+                    raise
+                return []
+            records: list[Meta] = []
+            for row in rows:
+                try:
+                    manifest = json.loads(str(row["manifest_json"]))
+                except json.JSONDecodeError as error:
+                    raise StorageCorruptionError(
+                        "SQLITE_CORRUPT: invalid issue-series JSON"
+                    ) from error
+                if not isinstance(manifest, dict):
+                    raise StorageCorruptionError("SQLITE_CORRUPT: invalid issue-series manifest")
+                records.append(
+                    {
+                        "manifest": manifest,
+                        "manifest_digest": str(row["manifest_digest"]),
+                        "series_identity": {
+                            "repository": str(row["repository"]),
+                            "issue_number": int(row["issue_number"]),
+                        },
+                    }
+                )
+            return records
+        except sqlite3.Error as error:
+            raise _translate(error) from error
+        finally:
+            connection.close()
+
+    def create_issue_series(
+        self,
+        receipt: Meta,
+        created: Sequence[Task],
+        *,
+        expected_state_digest: str,
+        recorded_at: str,
+    ) -> None:
+        """Create a whole validated series in the same SQLite transaction and CAS fence."""
+        identity = cast(Meta, receipt["series_identity"])
+        repository = str(identity["repository"])
+        issue_number = int(identity["issue_number"])
+        manifest = cast(Meta, receipt["manifest"])
+        manifest_digest = str(receipt["manifest_digest"])
+        with self.transaction() as connection:
+            self._ensure_issue_series_schema(connection)
+            current = self._load(connection)
+            if self._issue_series_state_digest(current) != expected_state_digest:
+                raise RuntimeError("STALE_STATE: re-run issue-series plan before create")
+            if (
+                connection.execute(
+                    "SELECT 1 FROM issue_series WHERE repository=? AND issue_number=?",
+                    (repository, issue_number),
+                ).fetchone()
+                is not None
+            ):
+                raise RuntimeError("issue-series manifest identity already exists")
+            current_ids = {str(meta["id"]) for _path, meta, _body in current}
+            created_ids = [str(meta["id"]) for _path, meta, _body in created]
+            collisions = sorted(current_ids.intersection(created_ids))
+            if collisions:
+                raise RuntimeError(
+                    "issue-series identifiers already exist: " + ", ".join(collisions)
+                )
+            if len(created_ids) != len(set(created_ids)):
+                raise RuntimeError("issue-series contains duplicate task identifiers")
+            connection.execute(
+                """INSERT INTO issue_series(
+                       repository, issue_number, manifest_json, manifest_digest
+                   )
+                   VALUES (?, ?, ?, ?)""",
+                (
+                    repository,
+                    issue_number,
+                    json.dumps(manifest, sort_keys=True, separators=(",", ":")),
+                    manifest_digest,
+                ),
+            )
+            for filename, meta, body in created:
+                connection.execute(
+                    "INSERT INTO tasks VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        meta["id"],
+                        filename.name,
+                        json.dumps(meta, sort_keys=True),
+                        body,
+                        meta["task_revision"],
+                        meta["status"],
+                        meta.get("owner", ""),
+                        meta.get("claim_expires", ""),
+                        meta.get("branch", ""),
+                        meta.get("worktree_key", ""),
+                        meta["updated_at"],
+                    ),
+                )
+                connection.executemany(
+                    "INSERT INTO dependencies(task_id, dependency_id) VALUES (?, ?)",
+                    [(meta["id"], value) for value in meta.get("depends_on", [])],
+                )
+                connection.execute(
+                    """INSERT INTO events(task_id, revision, kind, recorded_at, note)
+                       VALUES (?, ?, 'issue-series-create', ?, ?)""",
+                    (
+                        meta["id"],
+                        meta["task_revision"],
+                        recorded_at,
+                        "Created from a locally validated issue-series manifest.",
+                    ),
+                )
+                linkage = cast(Meta, meta["issue_series"])
+                connection.execute(
+                    """INSERT INTO issue_series_members
+                       (repository, issue_number, task_id, member_id) VALUES (?, ?, ?, ?)""",
+                    (repository, issue_number, meta["id"], linkage["member_id"]),
+                )
+
     def retire(
         self,
         project: Callable[[list[Task]], None],
@@ -963,7 +1109,29 @@ class SQLiteBackend:
             connection.close()
 
 
-SCHEMA = """
+ISSUE_SERIES_SCHEMA = """
+CREATE TABLE IF NOT EXISTS issue_series(
+ repository TEXT NOT NULL,
+ issue_number INTEGER NOT NULL CHECK(issue_number > 0),
+ manifest_json TEXT NOT NULL CHECK(json_valid(manifest_json)),
+ manifest_digest TEXT NOT NULL CHECK(length(manifest_digest)=71),
+ PRIMARY KEY(repository, issue_number)
+) STRICT;
+CREATE TABLE IF NOT EXISTS issue_series_members(
+ repository TEXT NOT NULL,
+ issue_number INTEGER NOT NULL,
+ task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+ member_id TEXT NOT NULL,
+ PRIMARY KEY(repository, issue_number, task_id),
+ UNIQUE(repository, issue_number, member_id),
+ FOREIGN KEY(repository, issue_number)
+   REFERENCES issue_series(repository, issue_number) ON DELETE CASCADE
+) STRICT;
+"""
+
+
+SCHEMA = (
+    """
 CREATE TABLE metadata(key TEXT PRIMARY KEY, value TEXT NOT NULL) STRICT;
 CREATE TABLE tasks(
  id TEXT PRIMARY KEY CHECK(id GLOB 'AR-[0-9][0-9][0-9][0-9]'), filename TEXT NOT NULL UNIQUE,
@@ -995,24 +1163,9 @@ CREATE TABLE migrations(sequence INTEGER PRIMARY KEY AUTOINCREMENT, source_backe
  finalized INTEGER NOT NULL DEFAULT 0 CHECK(finalized IN (0,1))) STRICT;
 CREATE TABLE checkpoints(name TEXT PRIMARY KEY, revision INTEGER NOT NULL,
  recorded_at TEXT NOT NULL) STRICT;
-CREATE TABLE issue_series(
- repository TEXT NOT NULL,
- issue_number INTEGER NOT NULL CHECK(issue_number > 0),
- manifest_json TEXT NOT NULL CHECK(json_valid(manifest_json)),
- manifest_digest TEXT NOT NULL CHECK(length(manifest_digest)=71),
- PRIMARY KEY(repository, issue_number)
-) STRICT;
-CREATE TABLE issue_series_members(
- repository TEXT NOT NULL,
- issue_number INTEGER NOT NULL,
- task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
- member_id TEXT NOT NULL,
- PRIMARY KEY(repository, issue_number, task_id),
- UNIQUE(repository, issue_number, member_id),
- FOREIGN KEY(repository, issue_number)
-   REFERENCES issue_series(repository, issue_number) ON DELETE CASCADE
-) STRICT;
 """
+    + ISSUE_SERIES_SCHEMA
+)
 
 
 def create_database(
@@ -1026,6 +1179,7 @@ def create_database(
     command_results: Sequence[Meta] = (),
     session_records: Sequence[Meta] = (),
     checkpoint_records: Sequence[Meta] = (),
+    issue_series: Sequence[Meta] = (),
 ) -> None:
     """Build a complete database beside its final target and install atomically."""
     require_local_filesystem(path)
@@ -1083,6 +1237,31 @@ def create_database(
                         imported_at,
                         "Imported authoritative task record.",
                     ),
+                )
+            for receipt in issue_series:
+                identity = cast(Meta, receipt["series_identity"])
+                repository = str(identity["repository"])
+                issue_number = int(identity["issue_number"])
+                manifest = cast(Meta, receipt["manifest"])
+                connection.execute(
+                    """INSERT INTO issue_series(
+                           repository, issue_number, manifest_json, manifest_digest
+                       ) VALUES (?, ?, ?, ?)""",
+                    (
+                        repository,
+                        issue_number,
+                        json.dumps(manifest, sort_keys=True, separators=(",", ":")),
+                        str(receipt["manifest_digest"]),
+                    ),
+                )
+                connection.executemany(
+                    """INSERT INTO issue_series_members(
+                           repository, issue_number, task_id, member_id
+                       ) VALUES (?, ?, ?, ?)""",
+                    [
+                        (repository, issue_number, str(member_id), str(member_id))
+                        for member_id in receipt["task_ids"]
+                    ],
                 )
             connection.execute(
                 """INSERT INTO migrations(source_backend, source_checkpoint, imported_at)

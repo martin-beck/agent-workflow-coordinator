@@ -2152,6 +2152,23 @@ def write_checkpoint_projections(checkpoint_records: list[Meta]) -> list[Path]:
     return [checkpoint_path(ROOT, task_id) for task_id in by_task]
 
 
+def write_sqlite_issue_series_projections(backend: SQLiteBackend) -> list[Path]:
+    """Export authoritative SQLite issue-series manifests as Git projections."""
+    issue_series_root = ROOT / "issue-series"
+    issue_series_root.mkdir(mode=0o700, parents=True, exist_ok=True)
+    expected_series: set[Path] = set()
+    paths: list[Path] = []
+    for receipt in backend.load_issue_series():
+        path = issue_series_manifest_path(receipt)
+        expected_series.add(path.resolve())
+        atomic(path, json.dumps(receipt["manifest"], indent=2, sort_keys=True) + "\n")
+        paths.append(path)
+    for path in issue_series_root.glob("*.json"):
+        if path.resolve() not in expected_series:
+            path.unlink()
+    return paths
+
+
 def write_sqlite_projections(
     tasks: list[Task],
     *,
@@ -2170,11 +2187,16 @@ def write_sqlite_projections(
         views = rendered_task_views(tasks)
         for target, content in views.items():
             atomic(target, content)
+        backend = storage_backend()
+        issue_series_paths = (
+            write_sqlite_issue_series_projections(backend)
+            if isinstance(backend, SQLiteBackend)
+            else []
+        )
         require_policy_unchanged(ROOT, selected_policy)
         errors = validate(live=False, policy=selected_policy)
         if errors:
             raise RuntimeError("projection validation failed:\n" + "\n".join(errors))
-        backend = storage_backend()
         session_records = backend.load_session_records()
         session_paths = write_session_projections(session_records)
         checkpoint_records = backend.load_checkpoint_records()
@@ -2182,6 +2204,7 @@ def write_sqlite_projections(
         return [
             *[path for path, _, _ in tasks],
             *views,
+            *issue_series_paths,
             *session_paths,
             *checkpoint_paths,
         ]
@@ -3295,6 +3318,56 @@ def load_issue_series_plan(path: Path, tasks: list[Task]) -> str:
         raise RuntimeError(f"invalid issue-series manifest: {error}") from error
 
 
+def _load_git_issue_series_receipt(manifest_ref: str, members: list[Meta]) -> Meta:
+    """Load one bounded projection and prove its task linkage before authority migration."""
+    path = (ROOT / manifest_ref).resolve()
+    issue_root = (ROOT / "issue-series").resolve()
+    if path.parent != issue_root or path.suffix != ".json":
+        raise RuntimeError("issue-series manifest reference is outside the local series directory")
+    try:
+        info = path.lstat()
+        if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode) or info.st_size > 200_000:
+            raise RuntimeError("issue-series manifest must be a bounded regular file")
+        receipt = cast(
+            Meta,
+            json.loads(
+                plan_issue_series(
+                    path,
+                    expected_product_slug=str(project_binding()["product_repository"]),
+                    existing_task_ids=(),
+                    existing_issue_series_identities=(),
+                    current_state_digest="sha256:" + "0" * 64,
+                )
+            ),
+        )
+    except (OSError, IssueSeriesPlanError) as error:
+        raise RuntimeError(f"invalid issue-series manifest {manifest_ref}: {error}") from error
+    expected_ids = sorted(str(item) for item in receipt["task_ids"])
+    linked_ids = sorted(str(meta["id"]) for meta in members)
+    if linked_ids != expected_ids:
+        raise RuntimeError(f"issue-series membership does not match manifest {manifest_ref}")
+    digest = str(receipt["manifest_digest"])
+    if any(item.get("manifest_digest") != digest for item in members):
+        raise RuntimeError(f"issue-series digest does not match manifest {manifest_ref}")
+    return receipt
+
+
+def git_issue_series_receipts(tasks: list[Task]) -> list[Meta]:
+    """Reconstruct and validate authoritative local series records for SQLite import."""
+    linked: dict[str, list[Meta]] = {}
+    for _path, meta, _body in tasks:
+        linkage = meta.get("issue_series")
+        if linkage is None:
+            continue
+        if not isinstance(linkage, dict) or not isinstance(linkage.get("manifest_ref"), str):
+            raise RuntimeError(f"invalid issue-series linkage in {meta['id']}")
+        linked.setdefault(str(linkage["manifest_ref"]), []).append(meta)
+    return [
+        _load_git_issue_series_receipt(manifest_ref, members)
+        for manifest_ref, members in sorted(linked.items())
+    ]
+
+
 def cmd_issue_series_plan(args: argparse.Namespace) -> None:
     """Print a deterministic local planning receipt; never publish or mutate."""
     receipt = load_issue_series_plan(Path(args.manifest), all_tasks())
@@ -3302,15 +3375,13 @@ def cmd_issue_series_plan(args: argparse.Namespace) -> None:
 
 
 def cmd_issue_series_create(args: argparse.Namespace) -> None:  # noqa: C901
-    """Atomically create one locally validated series through Git authority."""
-    if backend_selection()["backend"] != "git":
-        raise RuntimeError(
-            "issue-series create requires Git authority until SQLite parity is available"
-        )
+    """Atomically create one locally validated series through selected local authority."""
     with locked(phase="issue_series_create"):
-        if backend_selection()["backend"] != "git":
+        selected_backend = str(backend_selection()["backend"])
+        if selected_backend not in {"git", "sqlite"}:
             raise RuntimeError("BACKEND_CHANGED: retry issue-series create")
-        sync_replica_before_write()
+        if selected_backend == "git":
+            sync_replica_before_write()
         tasks = all_tasks()
         receipt_text = load_issue_series_plan(Path(args.manifest), tasks)
         receipt = cast(Meta, json.loads(receipt_text))
@@ -3330,6 +3401,24 @@ def cmd_issue_series_create(args: argparse.Namespace) -> None:  # noqa: C901
         errors.extend(mutation_global_errors(candidate))
         if errors:
             raise RuntimeError("issue-series preflight failed:\n" + "\n".join(sorted(set(errors))))
+        if selected_backend == "sqlite":
+            backend = mutating_sqlite_backend()
+            backend.create_issue_series(
+                receipt,
+                created,
+                expected_state_digest=str(args.expected_state_digest),
+                recorded_at=now(),
+            )
+            try:
+                write_sqlite_projections(backend.load_tasks(), already_locked=True, policy=policy)
+            except Exception as error:
+                identity = cast(Meta, receipt["series_identity"])
+                raise StorageCommittedError(
+                    "SQLITE_COMMITTED_EXPORT_FAILED: issue-series="
+                    f"{identity['repository']}#{identity['issue_number']}; "
+                    f"{error}"
+                ) from error
+            return
         before: dict[Path, str | None] = {
             path: path.read_text() if path.exists() else None for path, _meta, _body in created
         }
@@ -4177,6 +4266,7 @@ def cmd_init(args: argparse.Namespace) -> None:
                 source_backend="initial",
                 source_checkpoint="uncommitted-init",
                 command_results=legacy_command_results(),
+                issue_series=git_issue_series_receipts(initial_tasks),
             )
             provision_sqlite_barrier()
         atomic(BACKEND_CONFIG, json.dumps(selection, indent=2, sort_keys=True) + "\n")
@@ -4202,6 +4292,7 @@ def cmd_migrate(args: argparse.Namespace) -> None:  # noqa: C901
         with locked():
             sync_replica_before_write()
             tasks = git_tasks()
+            issue_series = git_issue_series_receipts(tasks)
             command_results = legacy_command_results()
             session_records = storage_backend().load_session_records()
             checkpoint_records = storage_backend().load_checkpoint_records()
@@ -4222,6 +4313,7 @@ def cmd_migrate(args: argparse.Namespace) -> None:  # noqa: C901
                     command_results=command_results,
                     session_records=session_records,
                     checkpoint_records=checkpoint_records,
+                    issue_series=issue_series,
                 )
                 imported = SQLiteBackend(DATABASE, binding, TASKS).load_tasks()
                 if [(m, b) for _, m, b in tasks] != [(m, b) for _, m, b in imported]:

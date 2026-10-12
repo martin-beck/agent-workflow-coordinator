@@ -10,6 +10,7 @@ import json
 import multiprocessing
 import os
 import re
+import sqlite3
 import subprocess
 import sys
 import threading
@@ -4825,6 +4826,51 @@ class HandoffTest(unittest.TestCase):
         self.assertEqual({"AR-0001"}, {meta["id"] for _path, meta, _body in CORE.all_tasks()})
         self.assertFalse(list((self.root / "issue-series").glob("*.json")))
         self.assertEqual(before, {path: path.read_text() for path in before})
+
+    def test_issue_series_create_has_sqlite_authority_parity(self) -> None:
+        self.make_task()
+        CORE.DATABASE.parent.mkdir()
+        CORE.create_database(
+            CORE.DATABASE,
+            CORE.project_binding(),
+            CORE.git_tasks(),
+            imported_at="2026-10-12T00:00:00+00:00",
+            source_backend="git",
+            source_checkpoint="a" * 40,
+        )
+        CORE.BACKEND_CONFIG.write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "project_id": project_uuid("1"),
+                    "backend": "sqlite",
+                }
+            )
+        )
+        manifest = self.issue_series_manifest()
+        args = argparse.Namespace(
+            manifest=manifest,
+            expected_state_digest=CORE.issue_series_state_digest(CORE.all_tasks()),
+        )
+        CORE.cmd_issue_series_create(args)
+        created = {meta["id"]: meta for _path, meta, _body in CORE.all_tasks()}
+        self.assertEqual({"AR-0001", "AR-9000", "AR-9001"}, set(created))
+        backend = CORE.storage_backend()
+        self.assertEqual(1, len(backend.load_issue_series()))
+        connection = sqlite3.connect(CORE.DATABASE)
+        try:
+            self.assertEqual(
+                ["AR-9000", "AR-9001"],
+                [
+                    row[0]
+                    for row in connection.execute(
+                        "SELECT task_id FROM issue_series_members ORDER BY task_id"
+                    )
+                ],
+            )
+        finally:
+            connection.close()
+        self.assertTrue(list((self.root / "issue-series").glob("*.json")))
 
 
 if __name__ == "__main__":
