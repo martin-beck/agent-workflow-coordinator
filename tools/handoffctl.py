@@ -40,6 +40,7 @@ if not __package__:
 
 if __package__:
     from . import execution_envelope
+    from . import execution_receipt
     from .board_metrics import build_metrics
     from .board_metrics import encode as encode_metrics
     from .checkpoint_records import (
@@ -120,6 +121,7 @@ else:  # pragma: no cover - direct script execution
             raise RuntimeError("board metrics module is unavailable in this vendored bootstrap")
 
     import execution_envelope  # type: ignore[import-not-found,no-redef]
+    import execution_receipt  # type: ignore[import-not-found]
     from checkpoint_records import (  # type: ignore[import-not-found,no-redef]
         append_checkpoint,
         build_checkpoint,
@@ -285,6 +287,7 @@ FIELDS = set(REQ) | {
     "execution_envelope_digest",
     "execution_envelope",
     "execution_reservation",
+    "execution_result",
     "parent_task_ref",
     "children",
 }
@@ -442,12 +445,6 @@ def storage_backend() -> Backend:
 
 
 def mutating_sqlite_backend() -> SQLiteBackend:
-    """Return the barrier-aware writer, or an explicit legacy compatibility route.
-
-    Pre-marker installations remain usable as required by the compatibility
-    contract. They cannot start an upgrade; once provisioning exists, every
-    write goes through the durable fence factory below.
-    """
     if not all(
         path.exists()
         for path in (
@@ -624,20 +621,18 @@ def assert_project_binding(caller_cwd: Path | None = None) -> None:
 
 
 class RetryableCoordinatorError(RuntimeError):
-    """A coordinator contention or replica condition that must not block work."""
+    pass
 
 
 class LockTimeoutError(RetryableCoordinatorError):
-    """The coordinator lock could not be acquired within its bounded deadline."""
+    pass
 
 
 class LockOwnershipError(RuntimeError):
-    """A coordinator lock capability is missing, stale, or used incorrectly."""
+    pass
 
 
 class CoordinatorLockGuard:
-    """Capability proving that this process and thread hold one lock inode."""
-
     __slots__ = (
         "_active",
         "_exclusive",
@@ -671,7 +666,6 @@ class CoordinatorLockGuard:
         return self._path
 
     def assert_owned(self) -> None:
-        """Fail closed unless the original owner still holds the same inode."""
         if not self._active:
             raise LockOwnershipError("coordinator lock guard is inactive")
         if not self._exclusive:
@@ -699,27 +693,27 @@ class CoordinatorLockGuard:
 
 
 class SubprocessTimeoutError(RuntimeError):
-    """A Git/GitHub or coordinator command exceeded its bounded deadline."""
+    pass
 
 
 class RepairRequiredCoordinatorError(RuntimeError):
-    """Local durable state needs reconciliation before its operation can continue."""
+    pass
 
 
 class ReplicaDivergedError(RepairRequiredCoordinatorError):
-    """The state replica needs explicit reconciliation before a retry."""
+    pass
 
 
 class ExternalObservationError(RuntimeError):
-    """A bounded read-only external observation failed after retries."""
+    pass
 
 
 class PostCommandReconcileError(RuntimeError):
-    """A command result is durable, but its subsequent live reconciliation failed."""
+    pass
 
 
 class StorageCommittedError(RuntimeError):
-    """A SQLite transaction committed but its disposable projection failed."""
+    pass
 
 
 PRIVATE = (
@@ -1431,6 +1425,9 @@ def execution_metadata_errors(task_id: str, meta: Meta) -> list[str]:
     reservation = meta.get("execution_reservation")
     if reservation is not None and not valid_execution_reservation(reservation):
         errors.append(f"{task_id}: invalid execution_reservation")
+    result = meta.get("execution_result")
+    if result is not None and not valid_execution_result(result):
+        errors.append(f"{task_id}: invalid execution_result")
     if not valid_execution_envelope_binding(meta):
         errors.append(f"{task_id}: invalid execution envelope binding")
     return errors
@@ -1438,6 +1435,8 @@ def execution_metadata_errors(task_id: str, meta: Meta) -> list[str]:
 
 valid_execution_reservation = execution_envelope.valid_reservation
 valid_execution_envelope_binding = execution_envelope.valid_binding
+valid_execution_result = execution_receipt.valid
+execution_result_matches = execution_receipt.matches
 
 
 def live_execution_reservation(meta: Meta) -> Meta | None:
@@ -2900,8 +2899,25 @@ def apply_execution_finish(args: argparse.Namespace, meta: Meta) -> str:
     if reservation.get("owner") != args.owner:
         raise RuntimeError("execution reservation owner does not match")
     require_optional_revision(args, meta)
+    if not execution_result_matches(cast(Meta, reservation), meta.get("execution_result")):
+        raise RuntimeError("execution finish requires an exact durable result")
     meta.pop("execution_reservation", None)
     return str(args.note)
+
+
+def apply_execution_result(args: argparse.Namespace, meta: Meta) -> str:
+    reservation = meta.get("execution_reservation")
+    if not isinstance(reservation, dict) or reservation.get("execution_id") != args.execution_id:
+        raise RuntimeError("execution reservation no longer matches this command")
+    require_optional_revision(args, meta)
+    try:
+        result = execution_receipt.build(reservation, args)
+    except ValueError as error:
+        raise RuntimeError(str(error)) from error
+    if meta.get("execution_result") == result:
+        raise IdempotentMutationError(f"Execution result {args.execution_id} is already recorded.")
+    meta["execution_result"] = result
+    return f"Recorded execution result {args.execution_id}."
 
 
 def apply_recover_execution(args: argparse.Namespace, meta: Meta) -> str:
@@ -2913,12 +2929,10 @@ def apply_recover_execution(args: argparse.Namespace, meta: Meta) -> str:
     if live_execution_reservation(meta) is not None:
         raise RuntimeError("EXECUTION_IN_PROGRESS: execution reservation has not expired")
     require_claimed_worker_absent(meta)
-    # Command-result rows predate reservation identities. A same-owner and
-    # same-argv historical row cannot prove this reservation completed.
-    del valid_reservation
-    raise RuntimeError(
-        "EXECUTION_RESULT_UNKNOWN: reservation-specific completion evidence is unavailable"
-    )
+    if not execution_result_matches(valid_reservation, meta.get("execution_result")):
+        raise RuntimeError("EXECUTION_RESULT_UNKNOWN: reservation-specific completion evidence is unavailable")
+    meta.pop("execution_reservation", None)
+    return f"Recovered completed execution {valid_reservation['execution_id']}."
 
 
 def require_owned_change_admission(
@@ -3142,6 +3156,7 @@ def apply_transition(  # noqa: C901
         return transition()
     execution = {
         "execution-start": apply_execution_start,
+        "execution-result": apply_execution_result,
         "execution-finish": apply_execution_finish,
     }.get(kind)
     if execution is not None:
@@ -4195,7 +4210,6 @@ def append_command_result(
     returncode: int,
     timed_out: bool,
 ) -> None:
-    """Record through the selected backend before any fallible follow-up."""
     selected_backend = (
         mutating_sqlite_backend()
         if backend_selection()["backend"] == "sqlite"
@@ -4224,6 +4238,19 @@ def cmd_run(args: argparse.Namespace) -> int:
             execution_id,
             execution_revision,
         ) = _cmd_run_fenced(args)
+    if execution_id is not None:
+        result = argparse.Namespace(
+            task=args.task,
+            owner=args.owner,
+            expected_revision=execution_revision,
+            execution_id=execution_id,
+            classification="SUBPROCESS_TIMEOUT" if timed_out else "EXIT",
+            returncode=returncode,
+            recorded_at=now(),
+        )
+        mutate(result, "execution-result", policy)
+        _, recorded, _ = locate(args.task)
+        execution_revision = int(recorded["task_revision"])
     try:
         append_command_result(args.task, args.owner, command_hash, returncode, timed_out)
     except Exception as error:
@@ -4269,7 +4296,6 @@ def cmd_run(args: argparse.Namespace) -> int:
 def _cmd_run_fenced(
     args: argparse.Namespace,
 ) -> tuple[EvidencePolicy, str, float, bool, int, str | None, int | None]:
-    """Execute one command while its shared task-execution fence is held."""
     if backend_selection()["backend"] == "git":
         config()
     policy = require_active_owner(args.task, args.owner)

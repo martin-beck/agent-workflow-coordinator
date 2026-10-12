@@ -38,6 +38,8 @@ class ExecutionEnvelopeLifecycleTest(HandoffTest):
             scope_digest="sha256:" + "c" * 64,
             argv_digest="d" * 64,
         )
+        retry = argparse.Namespace(**vars(start))
+        retry.execution_id = "c" * 32
         self.assertIn("Reserved", CORE.apply_execution_start(start, meta))
         self.assertTrue(CORE.valid_execution_reservation(meta["execution_reservation"]))
         with self.assertRaisesRegex(RuntimeError, "EXECUTION_IN_PROGRESS"):
@@ -50,6 +52,16 @@ class ExecutionEnvelopeLifecycleTest(HandoffTest):
         )
         with self.assertRaisesRegex(RuntimeError, "EXECUTION_RECOVERY_REQUIRED"):
             CORE.apply_pause(pause, meta)
+        result = argparse.Namespace(
+            task="AR-0001",
+            owner="worker-a",
+            expected_revision=5,
+            execution_id="b" * 32,
+            classification="EXIT",
+            returncode=0,
+            recorded_at="2099-01-01T00:00:00+00:00",
+        )
+        self.assertIn("Recorded execution result", CORE.apply_execution_result(result, meta))
         finish = argparse.Namespace(
             task="AR-0001",
             owner="worker-a",
@@ -61,7 +73,7 @@ class ExecutionEnvelopeLifecycleTest(HandoffTest):
         self.assertNotIn("execution_reservation", meta)
         with self.assertRaisesRegex(RuntimeError, "no longer matches"):
             CORE.apply_execution_finish(finish, meta)
-        self.assertIn("Reserved", CORE.apply_execution_start(start, meta))
+        self.assertIn("Reserved", CORE.apply_execution_start(retry, meta))
         reservation = cast(dict[str, object], meta["execution_reservation"])
         reservation["expires_at"] = "2000-01-01T00:00:00+00:00"
         recover = argparse.Namespace(task="AR-0001", expected_revision=5, note="worker exited")
@@ -72,12 +84,20 @@ class ExecutionEnvelopeLifecycleTest(HandoffTest):
             CORE.apply_recover_execution(recover, meta)
         absent.assert_called_once_with(meta)
         self.assertIs(meta["execution_reservation"], reservation)
+        meta["execution_result"] = {
+            "execution_id": "c" * 32,
+            "owner": "worker-a",
+            "envelope_digest": "sha256:" + "a" * 64,
+            "argv_digest": "d" * 64,
+            "classification": "EXIT",
+            "returncode": 0,
+            "recorded_at": "2099-01-01T00:00:00+00:00",
+        }
         with (
             patch.object(CORE, "require_claimed_worker_absent"),
-            self.assertRaisesRegex(RuntimeError, "EXECUTION_RESULT_UNKNOWN"),
         ):
-            CORE.apply_recover_execution(recover, meta)
-        self.assertIs(meta["execution_reservation"], reservation)
+            self.assertIn("Recovered completed execution", CORE.apply_recover_execution(recover, meta))
+        self.assertNotIn("execution_reservation", meta)
 
         valid = {
             "execution_id": "a" * 32,
@@ -174,8 +194,8 @@ class ExecutionEnvelopeLifecycleTest(HandoffTest):
         CORE.apply_execution_start(args, meta)
         self.assertEqual("2099-01-01T00:00:00+00:00", meta["claim_expires"])
 
-    def test_sqlite_recovery_requires_exact_durable_result_evidence(self) -> None:
-        """SQLite recovery delegates its identity proof to the durable backend."""
+    def test_recovery_requires_exact_durable_result_evidence(self) -> None:
+        """Recovery releases only an expired reservation with its exact receipt."""
         reservation = {
             "execution_id": "a" * 32,
             "owner": "worker-a",
@@ -193,12 +213,20 @@ class ExecutionEnvelopeLifecycleTest(HandoffTest):
             self.assertRaisesRegex(RuntimeError, "EXECUTION_RESULT_UNKNOWN"),
         ):
             CORE.apply_recover_execution(recover, meta)
+        meta["execution_result"] = {
+            "execution_id": "a" * 32,
+            "owner": "worker-a",
+            "envelope_digest": "sha256:" + "b" * 64,
+            "argv_digest": "d" * 64,
+            "classification": "EXIT",
+            "returncode": 0,
+            "recorded_at": "2000-01-01T00:00:00+00:00",
+        }
         with (
             patch.object(CORE, "require_claimed_worker_absent"),
-            self.assertRaisesRegex(RuntimeError, "EXECUTION_RESULT_UNKNOWN"),
         ):
-            CORE.apply_recover_execution(recover, meta)
-        self.assertIn("execution_reservation", meta)
+            self.assertIn("Recovered completed execution", CORE.apply_recover_execution(recover, meta))
+        self.assertNotIn("execution_reservation", meta)
 
     def test_bound_envelope_validation_and_binding_errors(self) -> None:
         """Persisted envelope coherence and binding retries reject malformed state."""

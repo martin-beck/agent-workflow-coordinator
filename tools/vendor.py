@@ -22,6 +22,7 @@ SOURCE_FILES: tuple[tuple[str, str], ...] = (
     ("tools/handoffctl", "tools/handoffctl"),
     ("tools/handoffctl.py", "tools/handoffctl.py"),
     ("tools/execution_envelope.py", "tools/execution_envelope.py"),
+    ("tools/execution_receipt.py", "tools/execution_receipt.py"),
     ("tools/fast_receipts.py", "tools/fast_receipts.py"),
     ("tools/fast_observation.py", "tools/fast_observation.py"),
     ("tools/fast_receipt_worker.py", "tools/fast_receipt_worker.py"),
