@@ -3394,6 +3394,42 @@ class HandoffTest(unittest.TestCase):
             {record["execution_id"] for record in records},
         )
 
+    def test_git_execution_intent_replay_never_relaunches_and_rejects_cross_task_result(
+        self,
+    ) -> None:
+        self.make_task("AR-0001")
+        self.make_task("AR-0002")
+        intent = {
+            "schema_version": 1,
+            "execution_id": "00000000-0000-0000-0000-000000000001",
+            "task": "AR-0001",
+            "task_revision": 1,
+            "owner": "worker-a",
+            "claim_expires": "2099-01-01T00:00:00+00:00",
+            "worktree_key": "checkout-a",
+            "branch": "feature/a",
+            "spec_ref": None,
+            "spec_revision": None,
+            "policy_digest": "a" * 64,
+            "argv_sha256": "b" * 64,
+            "timeout_seconds": 10.0,
+            "created_at": "2026-10-12T12:00:00+00:00",
+        }
+        self.assertIsNone(CORE.append_execution_intent("AR-0001", intent))
+        with self.assertRaisesRegex(RuntimeError, "EXECUTION_UNCERTAIN"):
+            CORE.append_execution_intent("AR-0001", intent)
+        result = {
+            "schema_version": 1,
+            "execution_id": intent["execution_id"],
+            "classification": "EXIT",
+            "returncode": 7,
+            "recorded_at": "2026-10-12T12:01:00+00:00",
+        }
+        CORE.append_execution_result("AR-0001", result)
+        self.assertEqual(result, CORE.append_execution_intent("AR-0001", intent))
+        CORE.append_execution_record(self.root, "AR-0002", result)
+        self.assertIn("same-history", "\n".join(CORE.validate()))
+
     def test_replica_prewrite_fast_forward_and_dirty_refusal(self) -> None:
         CORE.CONFIG.parent.mkdir()
         CORE.CONFIG.write_text('{"push_enabled": true}')

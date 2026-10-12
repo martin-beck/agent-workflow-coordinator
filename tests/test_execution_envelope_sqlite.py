@@ -136,6 +136,12 @@ class ExecutionEnvelopeSQLiteTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "conflicts with durable record"):
             self.backend.record_execution_result(self.outcome(returncode=1))
 
+    def test_begin_is_single_launch_or_existing_terminal_result(self) -> None:
+        self.assertEqual((True, None), self.backend.begin_execution_envelope(self.envelope()))
+        self.assertEqual((False, None), self.backend.begin_execution_envelope(self.envelope()))
+        completed = self.backend.record_execution_result(self.outcome(returncode=9))
+        self.assertEqual((False, completed), self.backend.begin_execution_envelope(self.envelope()))
+
     def test_import_and_legacy_additive_upgrade_preserve_atomicity(self) -> None:
         imported = self.database.with_name("imported.sqlite3")
         create_database(

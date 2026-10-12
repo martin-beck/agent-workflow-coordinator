@@ -1812,27 +1812,47 @@ def git_execution_receipts(tasks: list[Task]) -> tuple[list[Meta], list[Meta]]:
     return intents, results
 
 
-def execution_envelope_validation_errors(tasks: list[Task]) -> list[str]:
+def execution_envelope_validation_errors(tasks: list[Task]) -> list[str]:  # noqa: C901
     """Ensure every persisted completion has a same-history immutable intent."""
     try:
         backend = storage_backend()
         if isinstance(backend, SQLiteBackend):
             intents = backend.load_execution_envelopes()
             results = backend.load_execution_results()
-        else:
-            intents, results = git_execution_receipts(tasks)
-        intent_ids = {str(item["execution_id"]) for item in intents}
-        if len(intent_ids) != len(intents):
-            return ["execution receipt validation failed: duplicate intent identity"]
-        result_ids: set[str] = set()
-        for result in results:
-            validate_result(result)
-            identity = str(result["execution_id"])
-            if identity not in intent_ids:
-                return ["execution receipt validation failed: result lacks intent"]
-            if identity in result_ids:
-                return ["execution receipt validation failed: duplicate result identity"]
-            result_ids.add(identity)
+            intent_ids = {str(item["execution_id"]) for item in intents}
+            if len(intent_ids) != len(intents):
+                return ["execution receipt validation failed: duplicate intent identity"]
+            result_ids: set[str] = set()
+            for result in results:
+                validate_result(result)
+                identity = str(result["execution_id"])
+                if identity not in intent_ids:
+                    return ["execution receipt validation failed: result lacks intent"]
+                if identity in result_ids:
+                    return ["execution receipt validation failed: duplicate result identity"]
+                result_ids.add(identity)
+            return []
+        global_intent_ids: set[str] = set()
+        for _path, meta, _body in tasks:
+            task_id = str(meta["id"])
+            records = load_execution_records(ROOT, task_id)
+            intent_ids = {str(item["execution_id"]) for item in records if "task" in item}
+            if len(intent_ids) != len([item for item in records if "task" in item]):
+                return ["execution receipt validation failed: duplicate intent identity"]
+            if global_intent_ids & intent_ids:
+                return [
+                    "execution receipt validation failed: intent identity crosses task histories"
+                ]
+            global_intent_ids.update(intent_ids)
+            result_ids: set[str] = set()
+            for result in (item for item in records if "task" not in item):
+                validate_result(result)
+                identity = str(result["execution_id"])
+                if identity not in intent_ids:
+                    return ["execution receipt validation failed: result lacks same-history intent"]
+                if identity in result_ids:
+                    return ["execution receipt validation failed: duplicate result identity"]
+                result_ids.add(identity)
     except (OSError, ValueError, RuntimeError) as error:
         return [f"execution receipt validation failed: {error}"]
     return []
@@ -4696,8 +4716,8 @@ def load_execution_envelope(
     return envelope
 
 
-def append_execution_intent(task_id: str, envelope: Meta) -> None:
-    """Persist a launch receipt before a wrapped subprocess can begin."""
+def append_execution_intent(task_id: str, envelope: Meta) -> Meta | None:  # noqa: C901
+    """Reserve one launch, returning its prior terminal result on safe replay."""
     if backend_selection()["backend"] == "git":
         # JSONL projection is rewritten atomically to fsync all prior entries.
         # Serialize the read/append/replace sequence so independent workers
@@ -4705,9 +4725,34 @@ def append_execution_intent(task_id: str, envelope: Meta) -> None:
         with locked(phase="execution_envelope_intent"):
             if backend_selection()["backend"] != "git":
                 raise RuntimeError("BACKEND_CHANGED: retry execution envelope intent")
+            records = load_execution_records(ROOT, task_id)
+            matching = [
+                record for record in records if record["execution_id"] == envelope["execution_id"]
+            ]
+            existing_intents = [record for record in matching if "task" in record]
+            existing_results = [record for record in matching if "task" not in record]
+            if len(existing_intents) > 1 or len(existing_results) > 1:
+                raise RuntimeError("execution envelope has duplicate durable receipts")
+            if existing_intents:
+                if canonical_execution_json(existing_intents[0]) != canonical_execution_json(
+                    envelope
+                ):
+                    raise RuntimeError("execution envelope conflicts with durable record")
+                if existing_results:
+                    return existing_results[0]
+                raise RuntimeError(
+                    "EXECUTION_UNCERTAIN: durable intent exists without a completion receipt"
+                )
+            if existing_results:
+                raise RuntimeError("execution result lacks a same-history durable intent")
             append_execution_record(ROOT, task_id, envelope)
-        return
-    mutating_sqlite_backend().record_execution_envelope(envelope)
+        return None
+    created, result = mutating_sqlite_backend().begin_execution_envelope(envelope)
+    if created:
+        return None
+    if result is not None:
+        return result
+    raise RuntimeError("EXECUTION_UNCERTAIN: durable intent exists without a completion receipt")
 
 
 def append_execution_result(task_id: str, result: Meta) -> None:
@@ -4716,6 +4761,14 @@ def append_execution_result(task_id: str, result: Meta) -> None:
         with locked(phase="execution_envelope_result"):
             if backend_selection()["backend"] != "git":
                 raise RuntimeError("BACKEND_CHANGED: retry execution envelope result")
+            records = load_execution_records(ROOT, task_id)
+            matching = [
+                record for record in records if record["execution_id"] == result["execution_id"]
+            ]
+            if len([record for record in matching if "task" in record]) != 1:
+                raise RuntimeError("execution result lacks a same-history durable intent")
+            if any("task" not in record for record in matching):
+                raise RuntimeError("execution result already has a durable completion receipt")
             append_execution_record(ROOT, task_id, result)
         return
     del task_id
@@ -4740,7 +4793,9 @@ def cmd_run(args: argparse.Namespace) -> int:  # noqa: C901
         envelope = load_execution_envelope(args.envelope, meta, policy, args.command, timeout)
     require_policy_unchanged(ROOT, policy)
     if envelope is not None:
-        append_execution_intent(args.task, envelope)
+        existing_result = append_execution_intent(args.task, envelope)
+        if existing_result is not None:
+            return int(existing_result["returncode"])
     timed_out = False
     try:
         proc = subprocess.run(args.command, check=False, stdin=subprocess.DEVNULL, timeout=timeout)

@@ -36,9 +36,7 @@ _SHA256_DIGEST = re.compile(r"sha256:[0-9a-f]{64}$")
 _PUBLICATION_KEY = re.compile(r"[0-9a-f]{64}$")
 _COMMENT_ID = re.compile(r"[1-9][0-9]{0,18}$")
 _BARE_SHA256 = re.compile(r"[0-9a-f]{64}$")
-_EXECUTION_ID = re.compile(
-    r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
-)
+_EXECUTION_ID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 _TASK_ID = re.compile(r"AR-[0-9]{4}$")
 _EXECUTION_RESULT_CLASSIFICATIONS = frozenset({"EXIT", "SUBPROCESS_TIMEOUT"})
 _PUBLICATION_STATUSES = frozenset(
@@ -1024,7 +1022,9 @@ class SQLiteBackend:
         task_id = envelope["task"]
         revision = envelope["task_revision"]
         if (
-            not isinstance(execution_id, str)
+            type(envelope["schema_version"]) is not int
+            or envelope["schema_version"] != 1
+            or not isinstance(execution_id, str)
             or not _EXECUTION_ID.fullmatch(execution_id)
             or not isinstance(task_id, str)
             or not _TASK_ID.fullmatch(task_id)
@@ -1091,7 +1091,8 @@ class SQLiteBackend:
         returncode = result["returncode"]
         recorded_at = result["recorded_at"]
         if (
-            result["schema_version"] != 1
+            type(result["schema_version"]) is not int
+            or result["schema_version"] != 1
             or not isinstance(execution_id, str)
             or not _EXECUTION_ID.fullmatch(execution_id)
             or not isinstance(classification, str)
@@ -1170,14 +1171,78 @@ class SQLiteBackend:
                        argv_sha256, timeout_seconds, created_at, envelope_json
                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
-                    normalized["execution_id"], normalized["task"], normalized["task_revision"],
-                    normalized["owner"], normalized["claim_expires"], normalized["worktree_key"],
-                    normalized["branch"], normalized["spec_ref"], normalized["spec_revision"],
-                    normalized["policy_digest"], normalized["argv_sha256"],
-                    normalized["timeout_seconds"], normalized["created_at"], canonical,
+                    normalized["execution_id"],
+                    normalized["task"],
+                    normalized["task_revision"],
+                    normalized["owner"],
+                    normalized["claim_expires"],
+                    normalized["worktree_key"],
+                    normalized["branch"],
+                    normalized["spec_ref"],
+                    normalized["spec_revision"],
+                    normalized["policy_digest"],
+                    normalized["argv_sha256"],
+                    normalized["timeout_seconds"],
+                    normalized["created_at"],
+                    canonical,
                 ),
             )
         return normalized
+
+    def begin_execution_envelope(self, envelope: Meta) -> tuple[bool, Meta | None]:
+        """Atomically reserve a launch, or return its existing terminal receipt.
+
+        A prior intent without a result is deliberately reported as uncertain:
+        replaying an arbitrary subprocess could duplicate an external effect.
+        """
+        normalized = self._normalize_execution_envelope(envelope)
+        canonical = json.dumps(normalized, sort_keys=True, separators=(",", ":"))
+        with self.transaction() as connection:
+            self._ensure_execution_envelope_schema(connection)
+            existing = connection.execute(
+                "SELECT envelope_json FROM execution_envelopes WHERE execution_id=?",
+                (normalized["execution_id"],),
+            ).fetchone()
+            if existing is None:
+                connection.execute(
+                    """INSERT INTO execution_envelopes(
+                           execution_id, task_id, task_revision, owner, claim_expires,
+                           worktree_key, branch, spec_ref, spec_revision, policy_digest,
+                           argv_sha256, timeout_seconds, created_at, envelope_json
+                       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        normalized["execution_id"],
+                        normalized["task"],
+                        normalized["task_revision"],
+                        normalized["owner"],
+                        normalized["claim_expires"],
+                        normalized["worktree_key"],
+                        normalized["branch"],
+                        normalized["spec_ref"],
+                        normalized["spec_revision"],
+                        normalized["policy_digest"],
+                        normalized["argv_sha256"],
+                        normalized["timeout_seconds"],
+                        normalized["created_at"],
+                        canonical,
+                    ),
+                )
+                return True, None
+            if str(existing["envelope_json"]) != canonical:
+                raise RuntimeError("execution envelope conflicts with durable record")
+            result = connection.execute(
+                "SELECT result_json FROM execution_results WHERE execution_id=?",
+                (normalized["execution_id"],),
+            ).fetchone()
+            if result is None:
+                return False, None
+            try:
+                value = json.loads(str(result["result_json"]))
+            except json.JSONDecodeError as error:
+                raise StorageCorruptionError("SQLITE_CORRUPT: invalid execution result") from error
+            if not isinstance(value, dict):
+                raise StorageCorruptionError("SQLITE_CORRUPT: invalid execution result")
+            return False, self._normalize_execution_result(cast(Meta, value))
 
     def load_execution_results(self, task_id: str | None = None) -> list[Meta]:
         """Load terminal outcomes in the same deterministic order as intent projection."""
@@ -1243,8 +1308,11 @@ class SQLiteBackend:
                        execution_id, classification, returncode, recorded_at, result_json
                    ) VALUES (?, ?, ?, ?, ?)""",
                 (
-                    normalized["execution_id"], normalized["classification"],
-                    normalized["returncode"], normalized["recorded_at"], canonical,
+                    normalized["execution_id"],
+                    normalized["classification"],
+                    normalized["returncode"],
+                    normalized["recorded_at"],
+                    canonical,
                 ),
             )
         return normalized
@@ -1885,11 +1953,19 @@ def create_database(  # noqa: C901
                            argv_sha256, timeout_seconds, created_at, envelope_json
                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (
-                        envelope["execution_id"], envelope["task"], envelope["task_revision"],
-                        envelope["owner"], envelope["claim_expires"], envelope["worktree_key"],
-                        envelope["branch"], envelope["spec_ref"], envelope["spec_revision"],
-                        envelope["policy_digest"], envelope["argv_sha256"],
-                        envelope["timeout_seconds"], envelope["created_at"],
+                        envelope["execution_id"],
+                        envelope["task"],
+                        envelope["task_revision"],
+                        envelope["owner"],
+                        envelope["claim_expires"],
+                        envelope["worktree_key"],
+                        envelope["branch"],
+                        envelope["spec_ref"],
+                        envelope["spec_revision"],
+                        envelope["policy_digest"],
+                        envelope["argv_sha256"],
+                        envelope["timeout_seconds"],
+                        envelope["created_at"],
                         json.dumps(envelope, sort_keys=True, separators=(",", ":")),
                     ),
                 )
@@ -1899,7 +1975,9 @@ def create_database(  # noqa: C901
                            execution_id, classification, returncode, recorded_at, result_json
                        ) VALUES (?, ?, ?, ?, ?)""",
                     (
-                        result["execution_id"], result["classification"], result["returncode"],
+                        result["execution_id"],
+                        result["classification"],
+                        result["returncode"],
                         result["recorded_at"],
                         json.dumps(result, sort_keys=True, separators=(",", ":")),
                     ),

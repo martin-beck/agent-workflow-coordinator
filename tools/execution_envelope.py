@@ -61,7 +61,7 @@ def validate_envelope(value: object) -> dict[str, Any]:  # noqa: C901
     if not isinstance(value, Mapping) or set(value) != _REQUIRED:
         raise ExecutionEnvelopeError("execution envelope fields are invalid")
     result = dict(value)
-    if result["schema_version"] != 1:
+    if type(result["schema_version"]) is not int or result["schema_version"] != 1:
         raise ExecutionEnvelopeError("execution envelope schema version is invalid")
     try:
         parsed = uuid.UUID(str(result["execution_id"]))
@@ -101,7 +101,7 @@ def validate_result(value: object) -> dict[str, Any]:
     if not isinstance(value, Mapping) or set(value) != _RESULT_REQUIRED:
         raise ExecutionEnvelopeError("execution result fields are invalid")
     result = dict(value)
-    if result["schema_version"] != 1:
+    if type(result["schema_version"]) is not int or result["schema_version"] != 1:
         raise ExecutionEnvelopeError("execution result schema version is invalid")
     try:
         parsed = uuid.UUID(str(result["execution_id"]))

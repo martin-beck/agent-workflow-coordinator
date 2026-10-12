@@ -68,6 +68,10 @@ class ExecutionEnvelopeTests(unittest.TestCase):
         self.assertEqual("EXIT", result["classification"])
         with self.assertRaisesRegex(ExecutionEnvelopeError, "classification"):
             validate_result({**result, "classification": "UNKNOWN"})
+        with self.assertRaisesRegex(ExecutionEnvelopeError, "schema version"):
+            validate_envelope(envelope(schema_version=True))
+        with self.assertRaisesRegex(ExecutionEnvelopeError, "schema version"):
+            validate_result({**result, "schema_version": True})
 
     def test_append_preserves_prior_intent_and_result(self) -> None:
         from pathlib import Path
