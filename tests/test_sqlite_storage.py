@@ -4,7 +4,6 @@
 """SQLite backend conformance, fault and real multiprocess tests."""
 
 import argparse
-import hashlib
 import importlib.util
 import json
 import multiprocessing
@@ -159,6 +158,29 @@ def revision_stress_worker(
         else:
             completed += 1
     outcomes.put(("done", task_id, completed))
+
+
+def execution_reservation_worker(
+    start: Any, outcomes: Any, execution_id: str, expected_revision: int
+) -> None:
+    """Race the real CLI transition from an independent SQLite process."""
+    start.wait(5)
+    arguments = argparse.Namespace(
+        task="AR-0001",
+        owner="worker-a",
+        expected_revision=expected_revision,
+        execution_id=execution_id,
+        execution_expires_at="2099-01-01T00:00:00+00:00",
+        command_class="test",
+        scope_digest="sha256:" + "a" * 64,
+        argv_digest="b" * 64,
+    )
+    try:
+        CORE.mutate(arguments, "execution-start")
+    except RuntimeError as error:
+        outcomes.put(("rejected", str(error)))
+    else:
+        outcomes.put(("accepted", execution_id))
 
 
 def sqlite_unblock_worker(start: Any, outcomes: Any) -> None:
@@ -440,7 +462,6 @@ class SQLiteStorageTest(unittest.TestCase):
         active[1].update(
             owner="worker-a",
             claim_expires="2099-01-01T00:00:00+00:00",
-            worktree_key="worker-one",
         )
         conflict = task("AR-0002", status="in_progress")
         conflict[1].update(
@@ -504,6 +525,81 @@ class SQLiteStorageTest(unittest.TestCase):
                 ),
                 "bind-worktree",
             )
+
+    def test_sqlite_preserves_a_bound_execution_envelope(self) -> None:
+        spec = json.loads(
+            (Path(__file__).resolve().parents[1] / "examples/task-specs/AR-0070.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        spec["spec_ref"] = "spec.json"
+        (self.root / "spec.json").write_text(json.dumps(spec) + "\n", encoding="utf-8")
+        active = task("AR-0001", status="in_progress")
+        active[1].update(
+            owner="worker-a",
+            claim_expires="2099-01-01T00:00:00+00:00",
+            spec_ref="spec.json",
+            spec_revision=1,
+            worktree_key="candidate-worker",
+            branch="feature/candidate-worker",
+        )
+        backend = self.create([active])
+        self.configure_core(backend="sqlite")
+        envelope_path = self.root / "envelopes"
+        envelope_path.mkdir()
+        payload = {
+            "schema_version": 1,
+            "envelope_id": "AR-0001-e1",
+            "envelope_revision": 1,
+            "task": "AR-0001",
+            "task_revision": 1,
+            "spec_ref": "spec.json",
+            "spec_revision": 1,
+            "outputs": [{"id": "implementation", "description": "Implement the bounded change."}],
+            "non_goals": ["No prompt-derived authorization."],
+            "path_scope": {"read": ["src"], "write": ["src"]},
+            "command_classes": {"test": {"allowed": True}},
+            "evidence": [{"id": "tests", "class": "contract-test", "required": True}],
+            "stop_conditions": [{"id": "scope", "kind": "deny"}],
+        }
+        (envelope_path / "AR-0001-e1.json").write_text(json.dumps(payload), encoding="utf-8")
+        CORE.mutate(
+            argparse.Namespace(
+                task="AR-0001",
+                owner="worker-a",
+                expected_revision=1,
+                envelope_ref="envelopes/AR-0001-e1.json",
+                envelope_revision=1,
+            ),
+            "bind-envelope",
+        )
+        bound = backend.load_tasks()[0][1]
+        self.assertEqual("envelopes/AR-0001-e1.json", bound["execution_envelope_ref"])
+        self.assertEqual(1, bound["execution_envelope_revision"])
+        self.assertEqual(1, bound["execution_envelope_task_revision"])
+        self.assertRegex(str(bound["execution_envelope_digest"]), r"^sha256:[0-9a-f]{64}$")
+        self.assertEqual("AR-0001-e1", bound["execution_envelope"]["envelope_id"])
+        projects = self.root / "products"
+        (projects / "candidate-worker" / "src").mkdir(parents=True)
+        CORE.CONFIG.parent.mkdir(exist_ok=True)
+        CORE.CONFIG.write_text(json.dumps({"projects_root": str(projects)}), encoding="utf-8")
+        with patch.object(CORE, "sandboxed_envelope_command", return_value=["/bin/true"]):
+            self.assertEqual(
+                0,
+                CORE.cmd_run(
+                    argparse.Namespace(
+                        task="AR-0001",
+                        owner="worker-a",
+                        timeout_seconds=5.0,
+                        command_class="test",
+                        scope_path=[],
+                        command=["/bin/true"],
+                    )
+                ),
+            )
+        completed = backend.load_tasks()[0][1]
+        self.assertNotIn("execution_reservation", completed)
+        self.assertEqual(4, completed["task_revision"])
 
     def test_every_write_route_enters_fence_before_sqlite_mutation(self) -> None:
         ordinary = self.create()
@@ -577,6 +673,73 @@ class SQLiteStorageTest(unittest.TestCase):
         self.assertEqual("in_progress", row["status"])
         self.assertIn(row["owner"], ("worker-a", "worker-b"))
 
+    def test_real_processes_cannot_double_reserve_bound_execution(self) -> None:
+        """A SQLite CAS admits one subprocess reservation before either can run."""
+        spec = json.loads(
+            (Path(__file__).resolve().parents[1] / "examples/task-specs/AR-0070.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        spec["spec_ref"] = "spec.json"
+        (self.root / "spec.json").write_text(json.dumps(spec) + "\n", encoding="utf-8")
+        envelope = {
+            "schema_version": 1,
+            "envelope_id": "AR-0001-e1",
+            "envelope_revision": 1,
+            "task": "AR-0001",
+            "task_revision": 1,
+            "spec_ref": "spec.json",
+            "spec_revision": 1,
+            "outputs": [{"id": "implementation", "description": "Implement the change."}],
+            "non_goals": ["No prompt-derived authorization."],
+            "path_scope": {"read": ["src"], "write": ["src"]},
+            "command_classes": {"test": {"allowed": True}},
+            "evidence": [{"id": "tests", "class": "contract-test", "required": True}],
+            "stop_conditions": [{"id": "scope", "kind": "deny"}],
+        }
+        (self.root / "envelopes").mkdir()
+        (self.root / "envelopes/AR-0001-e1.json").write_text(json.dumps(envelope), encoding="utf-8")
+        active = task("AR-0001", status="in_progress")
+        active[1].update(
+            owner="worker-a",
+            claim_expires="2099-01-01T00:00:00+00:00",
+            spec_ref="spec.json",
+            spec_revision=1,
+        )
+        backend = self.create([active])
+        self.configure_core(backend="sqlite")
+        CORE.mutate(
+            argparse.Namespace(
+                task="AR-0001",
+                owner="worker-a",
+                expected_revision=1,
+                envelope_ref="envelopes/AR-0001-e1.json",
+                envelope_revision=1,
+            ),
+            "bind-envelope",
+        )
+        context = multiprocessing.get_context("fork")
+        start, outcomes = context.Event(), context.Queue()
+        processes = [
+            context.Process(
+                target=execution_reservation_worker,
+                args=(start, outcomes, execution_id, 2),
+            )
+            for execution_id in ("1" * 32, "2" * 32)
+        ]
+        for process in processes:
+            process.start()
+        start.set()
+        results = [outcomes.get(timeout=10) for _ in processes]
+        for process in processes:
+            process.join(10)
+            self.assertEqual(0, process.exitcode)
+        self.assertEqual(1, sum(result[0] == "accepted" for result in results), results)
+        self.assertEqual(1, sum(result[0] == "rejected" for result in results), results)
+        reserved = backend.load_tasks()[0][1]
+        self.assertEqual(3, reserved["task_revision"])
+        self.assertIn(reserved["execution_reservation"]["execution_id"], {"1" * 32, "2" * 32})
+
     def test_high_frequency_same_and_different_task_writers_have_no_lost_updates(self) -> None:
         backend = self.create([task("AR-0001"), task("AR-0002")])
         context = multiprocessing.get_context("fork")
@@ -619,9 +782,14 @@ class SQLiteStorageTest(unittest.TestCase):
 
     def test_command_result_is_an_independent_durable_transaction(self) -> None:
         backend = self.create()
+        self.assertFalse(backend.has_command_result("AR-0001", "worker", "a" * 64))
         backend.append_command_result(
             "AR-0001", "worker", "a" * 64, 7, "EXIT", "2026-09-08T00:01:00+00:00"
         )
+        self.assertTrue(backend.has_command_result("AR-0001", "worker", "a" * 64))
+        self.assertFalse(backend.has_command_result("AR-0002", "worker", "a" * 64))
+        self.assertFalse(backend.has_command_result("AR-0001", "other-worker", "a" * 64))
+        self.assertFalse(backend.has_command_result("AR-0001", "worker", "b" * 64))
         connection = sqlite3.connect(self.database)
         self.assertEqual(
             (7, "EXIT"),
@@ -1363,47 +1531,6 @@ class SQLiteStorageTest(unittest.TestCase):
             CORE.cmd_snapshot("AR-0001")
         connection.close()
 
-    def test_sqlite_run_envelope_records_paired_receipts(self) -> None:
-        self.configure_core(backend="sqlite")
-        self.create([task("AR-0001", worktree_key="checkout-a", branch="feature/a")])
-        CORE.export_sqlite_projections()
-        CORE.mutate(argparse.Namespace(task="AR-0001", owner="worker", lease_minutes=10), "claim")
-        meta = CORE.all_tasks()[0][1]
-        intent = {
-            "schema_version": 1,
-            "execution_id": "00000000-0000-0000-0000-000000000001",
-            "task": "AR-0001",
-            "task_revision": meta["task_revision"],
-            "owner": "worker",
-            "claim_expires": meta["claim_expires"],
-            "worktree_key": "checkout-a",
-            "branch": "feature/a",
-            "spec_ref": None,
-            "spec_revision": None,
-            "policy_digest": hashlib.sha256(b"absent").hexdigest(),
-            "argv_sha256": CORE.argv_digest(["/bin/true"]),
-            "timeout_seconds": 5.0,
-            "created_at": "2026-10-12T12:00:00+00:00",
-        }
-        CORE.RUNTIME.mkdir(exist_ok=True)
-        (CORE.RUNTIME / "intent.json").write_text(json.dumps(intent))
-        with patch.object(CORE, "reconcile", return_value=True):
-            self.assertEqual(
-                0,
-                CORE.cmd_run(
-                    argparse.Namespace(
-                        task="AR-0001",
-                        owner="worker",
-                        timeout_seconds=5.0,
-                        envelope=".runtime/intent.json",
-                        command=["/bin/true"],
-                    )
-                ),
-            )
-        backend = SQLiteBackend(self.database, BINDING, self.tasks)
-        self.assertEqual([intent], backend.load_execution_envelopes())
-        self.assertEqual("EXIT", backend.load_execution_results()[0]["classification"])
-
     def test_sqlite_session_record_reader_rejects_corrupt_rows(self) -> None:
         self.configure_core(backend="sqlite")
         self.create()
@@ -1646,59 +1773,6 @@ class SQLiteStorageTest(unittest.TestCase):
         self.assertFalse(CORE.PROJECT_CONFIG.exists())
         self.assertFalse(CORE.BINDING.exists())
         self.assertFalse(CORE.BACKEND_CONFIG.exists())
-        self.assertFalse(self.database.exists())
-
-    def test_sqlite_init_rejects_cross_task_execution_receipt_history(self) -> None:
-        self.configure_core()
-        CORE.PROJECT_CONFIG.unlink()
-        CORE.BINDING.unlink()
-        CORE.BACKEND_CONFIG.unlink()
-        self.write_git_tasks([task("AR-0001"), task("AR-0002")])
-        intent = {
-            "schema_version": 1,
-            "execution_id": "00000000-0000-0000-0000-000000000001",
-            "task": "AR-0001",
-            "task_revision": 1,
-            "owner": "worker-a",
-            "claim_expires": "2099-01-01T00:00:00+00:00",
-            "worktree_key": "checkout-a",
-            "branch": "feature/a",
-            "spec_ref": None,
-            "spec_revision": None,
-            "policy_digest": "a" * 64,
-            "argv_sha256": "b" * 64,
-            "timeout_seconds": 10.0,
-            "created_at": "2026-10-12T12:00:00+00:00",
-        }
-        CORE.append_execution_record(self.root, "AR-0001", intent)
-        CORE.append_execution_record(
-            self.root,
-            "AR-0002",
-            {
-                "schema_version": 1,
-                "execution_id": intent["execution_id"],
-                "classification": "EXIT",
-                "returncode": 0,
-                "recorded_at": "2026-10-12T12:01:00+00:00",
-            },
-        )
-        args = argparse.Namespace(
-            state_repository="owner/state",
-            product_repository="owner/product",
-            project_name="test-project",
-            project_title="Test Project",
-            status_view=False,
-            commit_signoff=False,
-            backend="sqlite",
-        )
-        top = subprocess.CompletedProcess([], 0, str(self.root) + "\n", "")
-        with (
-            patch.object(CORE, "run", return_value=top),
-            patch.object(CORE, "git_repository_slug", return_value="owner/state"),
-            patch.object(CORE.Path, "cwd", return_value=self.root),
-            self.assertRaisesRegex(RuntimeError, "same-history"),
-        ):
-            CORE.cmd_init(args)
         self.assertFalse(self.database.exists())
 
     def test_reconcile_publication_is_optional_bounded_and_ordered(self) -> None:
