@@ -147,6 +147,29 @@ class IssueSeriesPublicationSQLiteTests(unittest.TestCase):
                 recorded_at="2026-10-12T02:00:00+00:00",
             )
 
+    def test_database_import_preserves_publication_receipt(self) -> None:
+        imported = self.database.with_name("imported.sqlite3")
+        series = {
+            "series_identity": {"repository": REPOSITORY, "issue_number": ISSUE_NUMBER},
+            "manifest": {"schema_version": 1},
+            "manifest_digest": DIGEST,
+            "task_ids": [],
+        }
+        create_database(
+            imported,
+            BINDING,
+            [task()],
+            imported_at="2026-10-12T01:00:00+00:00",
+            source_backend="git",
+            source_checkpoint="b" * 40,
+            issue_series=[series],
+            issue_series_publications=[self.receipt()],
+        )
+        backend = SQLiteBackend(imported, BINDING, self.tasks)
+        receipt = backend.load_issue_series_publications()[0]
+        self.assertEqual("published", receipt["status"])
+        self.assertEqual("1234", receipt["comment_id"])
+
     def test_legacy_schema_loads_empty_and_additive_upgrade_rolls_back(self) -> None:
         connection = sqlite3.connect(self.database, isolation_level=None)
         try:
