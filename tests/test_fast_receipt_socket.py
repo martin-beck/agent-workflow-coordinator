@@ -11,6 +11,7 @@ import os
 import queue
 import socket
 import sqlite3
+import struct
 import tempfile
 import threading
 import time
@@ -21,8 +22,10 @@ from typing import cast
 from unittest.mock import patch
 
 from tools.fast_receipt_socket import (
+    _TransportUnavailableError,
     _client_common_dir,
     _fast_request,
+    _handle,
     _read_line,
     _require_request,
     _safe_socket,
@@ -243,6 +246,86 @@ class FastReceiptSocketTests(unittest.TestCase):
                 ]
             )
         )
+
+    def test_client_rejects_invalid_and_terminal_socket_responses(self) -> None:
+        class ReplySocket:
+            def __init__(self, _family: int, _kind: int) -> None:
+                pass
+
+            def __enter__(self) -> "ReplySocket":
+                return self
+
+            def __exit__(self, *_args: object) -> None:
+                return None
+
+            def settimeout(self, _value: float) -> None:
+                return None
+
+            def connect(self, _path: str) -> None:
+                return None
+
+            def sendall(self, _data: bytes) -> None:
+                return None
+
+        with patch("tools.fast_receipt_socket._socket_path", return_value=self.path), patch(
+            "tools.fast_receipt_socket._safe_socket", return_value=True
+        ), patch("tools.fast_receipt_socket.socket.socket", ReplySocket):
+            with patch("tools.fast_receipt_socket._read_line", return_value=b"[]"):
+                with self.assertRaisesRegex(RuntimeError, "response is invalid"):
+                    try_socket_fast(self.argv)
+            with patch("tools.fast_receipt_socket._read_line", return_value=b'{"error":"denied"}'):
+                errors = io.StringIO()
+                with contextlib.redirect_stderr(errors):
+                    self.assertEqual(1, try_socket_fast(self.argv))
+                self.assertIn("denied", errors.getvalue())
+            with patch("tools.fast_receipt_socket._read_line", side_effect=ConnectionResetError):
+                self.assertIsNone(try_socket_fast(self.argv))
+
+    def test_handle_treats_unavailable_timeout_and_unauthorized_peers_as_non_authority(self) -> None:
+        class Peer:
+            def __init__(self, pid: int) -> None:
+                self.pid = pid
+                self.replies: list[bytes] = []
+
+            def __enter__(self) -> "Peer":
+                return self
+
+            def __exit__(self, *_args: object) -> None:
+                return None
+
+            def settimeout(self, _value: float) -> None:
+                return None
+
+            def getsockopt(self, *_args: object) -> bytes:
+                return struct.pack("3i", self.pid, os.geteuid(), 0)
+
+            def sendall(self, value: bytes) -> None:
+                self.replies.append(value)
+
+        for error in (_TransportUnavailableError("gone"), TimeoutError("late")):
+            peer = Peer(os.getpid())
+            _handle(
+                self.core,
+                peer,  # type: ignore[arg-type]
+                lambda _request: (_ for _ in ()).throw(error),
+                b'{"protocol":1,"action":"receipt","receipt_id":"x"}',
+            )
+            self.assertEqual([], peer.replies)
+        peer = Peer(0)
+        _handle(self.core, peer, lambda _request: {})  # type: ignore[arg-type]
+        self.assertIn("not authorized", b"".join(peer.replies).decode())
+
+    def test_fast_parser_rejects_duplicate_and_malformed_mutation_shapes(self) -> None:
+        cases = (
+            ["fast", "promote", "AR-0120", "--expected-revision", "2", "--note", "Open", "--note", "again"],
+            ["fast", "promote", "AR-0120", "--expected-revision", "2", "--note", "Open", "--bad", "x"],
+            ["fast", "update", "-AR-0120", "--owner", "worker-a", "--expected-revision", "2", "--priority", "P1", "--note", "n", "--key", "k"],
+            ["fast", "update", "AR-0120", "--owner", "worker-a", "--expected-revision", "bad", "--priority", "P1", "--note", "n", "--key", "k"],
+            ["fast", "observe", "--max-age-seconds", "-1"],
+        )
+        for argv in cases:
+            with self.subTest(argv=argv):
+                self.assertIsNone(_fast_request(argv))
         self.assertIsNone(
             _fast_request(
                 [
@@ -322,6 +405,20 @@ class FastReceiptSocketTests(unittest.TestCase):
                     "key": "worker-a:update:2",
                 }
             )
+
+    def test_wire_validator_rejects_each_action_specific_invalid_shape(self) -> None:
+        invalid = (
+            ({"protocol": 1, "action": "observe", "max_age_seconds": True}, "observation"),
+            ({"protocol": 1, "action": "claim", "task": "AR-0120"}, "claim request"),
+            ({"protocol": 1, "action": "claim", "task": "AR-0120", "owner": "o", "expected_revision": 2, "lease_minutes": 20, "key": "k", "worker_pid": 0, "worker_start_time": 1}, "claim request fields"),
+            ({"protocol": 1, "action": "promote", "task": "AR-0120"}, "promote request"),
+            ({"protocol": 1, "action": "promote", "task": "AR-0120", "expected_revision": 2, "note": "n", "key": True}, "promote request fields"),
+            ({"protocol": 1, "action": "update", "task": "AR-0120"}, "update request"),
+            ({"protocol": 1, "action": "update", "task": "AR-0120", "owner": "o", "expected_revision": True, "changes": {"priority": "P1"}, "note": "n", "key": "k"}, "update request fields"),
+        )
+        for request, message in invalid:
+            with self.subTest(request=request), self.assertRaisesRegex(RuntimeError, message):
+                _require_request(request)
         with self.assertRaisesRegex(RuntimeError, "update request fields"):
             _require_request(
                 {

@@ -84,6 +84,37 @@ class IssueSeriesPlanCoreTests(unittest.TestCase):
         with self.assertRaisesRegex(IssueSeriesPlanError, "not valid JSON"):
             self.plan(malformed)
 
+    def test_manifest_transport_and_receipt_inputs_are_bounded(self) -> None:
+        directory = Path(self.temporary.name) / "directory"
+        directory.mkdir()
+        with self.assertRaisesRegex(IssueSeriesPlanError, "not a file"):
+            self.plan(directory)
+        invalid_utf8 = Path(self.temporary.name) / "invalid-utf8.json"
+        invalid_utf8.write_bytes(b"\xff")
+        with self.assertRaisesRegex(IssueSeriesPlanError, "not UTF-8"):
+            self.plan(invalid_utf8)
+        path = self.write_manifest(manifest())
+        for digest in ("", "sha256:" + "A" * 64, "sha256:" + "a" * 63):
+            with self.subTest(digest=digest), self.assertRaisesRegex(
+                IssueSeriesPlanError, "current state digest"
+            ):
+                self.plan(path, current_state_digest=digest)
+        receipt = json.loads(self.plan(path, expected_product_slug="https://github.com/Example/Coordinator"))
+        self.assertEqual("github.com/example/coordinator", receipt["series_identity"]["repository"])
+
+    def test_malformed_existing_identity_cannot_authorize_duplicate_detection(self) -> None:
+        path = self.write_manifest(manifest())
+        self.assertIsInstance(
+            self.plan(
+                path,
+                existing_issue_series_identities=(
+                    {"repository": 42, "issue": {"number": 42}},
+                    {"repository": "github.com/example/coordinator", "issue": {"number": True}},
+                ),
+            ),
+            str,
+        )
+
     def test_wrong_product_repository_is_rejected(self) -> None:
         value = manifest()
         value["repository"] = "github.com/example/other"
