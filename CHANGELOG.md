@@ -154,6 +154,10 @@
 
 ## Unreleased
 
+## 0.5.7
+
+- Exempt the verified vendored runtime from the state-data size ceiling.
+
 ## 0.5.6
 
 - Include the issue-series publication runtime in the vendor allowlist.
