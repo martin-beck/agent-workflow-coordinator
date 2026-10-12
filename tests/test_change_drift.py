@@ -133,6 +133,29 @@ class ChangeDriftTests(unittest.TestCase):
         change_drift.records({"id": "AR-0001", "change_drift": history})
         self.assertIsNone(change_drift.completion_error(history))
 
+    def test_next_record_preserves_lifecycle_action_order(self) -> None:
+        baseline, history = change_drift.next_record(
+            "AR-0001", 2, "now", self.root, [], "baseline", scope_paths=["src"]
+        )
+        self.assertEqual([], history)
+        (self.root / "src" / "old.py").write_text("changed\n", encoding="utf-8")
+        delta, history = change_drift.next_record(
+            "AR-0001", 3, "now", self.root, [baseline], "delta"
+        )
+        explanation, history = change_drift.next_record(
+            "AR-0001",
+            4,
+            "now",
+            self.root,
+            [*history, delta],
+            "explain",
+            paths=["src/old.py"],
+            reason="reviewed",
+        )
+        self.assertEqual([], change_drift.unresolved([baseline, delta, explanation]))
+        with self.assertRaisesRegex(ValueError, "unknown"):
+            change_drift.next_record("AR-0001", 5, "now", self.root, [], "unknown")
+
 
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()

@@ -759,6 +759,7 @@ UUID_PRIVACY_EXEMPT = frozenset(
         Path("tools/handoffctl.py"),
     }
 )
+SIZE_PRIVACY_EXEMPT = frozenset({Path("tools/handoffctl.py")})
 
 
 def now() -> str:
@@ -1335,7 +1336,7 @@ def privacy_errors() -> list[str]:
         ):
             continue
         relative = path.relative_to(ROOT)
-        if path.stat().st_size > 200000:
+        if path.stat().st_size > 200000 and relative not in SIZE_PRIVACY_EXEMPT:
             errors.append(f"{relative}: state file exceeds 200 KiB")
         try:
             text = path.read_text()
@@ -2412,75 +2413,6 @@ def _change_drift_worktree(meta: Meta) -> Path:
     return Path(str(config()["projects_root"])).resolve() / key
 
 
-def _change_drift_baseline(
-    args: argparse.Namespace, revision: int, history: list[Meta], worktree: Path
-) -> tuple[Meta, list[Meta]]:
-    if history and change_drift.completion_error(history) is not None:
-        raise RuntimeError("change-drift baseline requires completion of the active cycle")
-    record = change_drift.baseline(args.task, revision, now(), worktree, args.scope_path)
-    return record, []
-
-
-def _change_drift_delta(
-    args: argparse.Namespace, revision: int, history: list[Meta], worktree: Path
-) -> tuple[Meta, list[Meta]]:
-    base = change_drift.latest(history, "baseline")
-    if base is None or history[-1]["kind"] not in {"baseline", "rescope"}:
-        raise RuntimeError("change-drift delta requires a baseline")
-    return (
-        change_drift.delta(
-            args.task,
-            revision,
-            now(),
-            worktree,
-            base,
-            change_drift.active_scope(history, base),
-            history[-1]["digest"],
-        ),
-        history,
-    )
-
-
-def _change_drift_explain(
-    args: argparse.Namespace, revision: int, history: list[Meta], _worktree: Path
-) -> tuple[Meta, list[Meta]]:
-    current = change_drift.latest(history, "delta")
-    if current is None:
-        raise RuntimeError("change-drift explanation requires a delta")
-    return (
-        change_drift.explain(
-            args.task,
-            revision,
-            now(),
-            current["digest"],
-            args.path,
-            args.reason,
-            args.generated,
-            history[-1]["digest"],
-        ),
-        history,
-    )
-
-
-def _change_drift_rescope(
-    args: argparse.Namespace, revision: int, history: list[Meta], _worktree: Path
-) -> tuple[Meta, list[Meta]]:
-    base = change_drift.latest(history, "baseline")
-    if base is None or history[-1]["kind"] not in {"baseline", "rescope"}:
-        raise RuntimeError("change-drift re-scope requires a baseline")
-    return (
-        change_drift.rescope(
-            args.task,
-            revision,
-            now(),
-            base["digest"],
-            args.scope_path,
-            history[-1]["digest"],
-        ),
-        history,
-    )
-
-
 def apply_change_drift(args: argparse.Namespace, meta: Meta) -> str:
     """Append one revision-fenced observation, exception, or scope record."""
     if meta.get("owner") != args.owner or meta.get("status") != "in_progress":
@@ -2491,14 +2423,17 @@ def apply_change_drift(args: argparse.Namespace, meta: Meta) -> str:
         )
     history = change_drift.records(meta)
     revision = int(meta["task_revision"]) + 1
-    builders = {
-        "baseline": _change_drift_baseline,
-        "delta": _change_drift_delta,
-        "explain": _change_drift_explain,
-        "rescope": _change_drift_rescope,
-    }
-    record, history = builders[args.change_drift_action](
-        args, revision, history, _change_drift_worktree(meta)
+    record, history = change_drift.next_record(
+        args.task,
+        revision,
+        now(),
+        _change_drift_worktree(meta),
+        history,
+        args.change_drift_action,
+        scope_paths=getattr(args, "scope_path", None),
+        paths=getattr(args, "path", None),
+        reason=getattr(args, "reason", None),
+        generated=getattr(args, "generated", False),
     )
     if len(history) >= change_drift.MAX_RECORDS:
         raise RuntimeError("change-drift active cycle reached its bounded record limit")

@@ -531,3 +531,72 @@ def completion_error(records_value: list[Meta]) -> str | None:
     if unresolved(records_value):
         return "CHANGE_DRIFT_UNEXPLAINED"
     return None
+
+
+def next_record(
+    task: str,
+    revision: int,
+    timestamp: str,
+    worktree: Path,
+    history: list[Meta],
+    action: str,
+    *,
+    scope_paths: list[str] | None = None,
+    paths: list[str] | None = None,
+    reason: str | None = None,
+    generated: bool = False,
+) -> tuple[Meta, list[Meta]]:
+    """Build one ordered, revision-fenced change-drift record."""
+    if action == "baseline":
+        if history and completion_error(history) is not None:
+            raise RuntimeError("change-drift baseline requires completion of the active cycle")
+        return baseline(task, revision, timestamp, worktree, scope_paths or []), []
+    if action == "delta":
+        base = latest(history, "baseline")
+        if base is None or history[-1]["kind"] not in {"baseline", "rescope"}:
+            raise RuntimeError("change-drift delta requires a baseline")
+        return (
+            delta(
+                task,
+                revision,
+                timestamp,
+                worktree,
+                base,
+                active_scope(history, base),
+                history[-1]["digest"],
+            ),
+            history,
+        )
+    if action == "explain":
+        current = latest(history, "delta")
+        if current is None:
+            raise RuntimeError("change-drift explanation requires a delta")
+        return (
+            explain(
+                task,
+                revision,
+                timestamp,
+                current["digest"],
+                paths or [],
+                reason or "",
+                generated,
+                history[-1]["digest"],
+            ),
+            history,
+        )
+    if action == "rescope":
+        base = latest(history, "baseline")
+        if base is None or history[-1]["kind"] not in {"baseline", "rescope"}:
+            raise RuntimeError("change-drift re-scope requires a baseline")
+        return (
+            rescope(
+                task,
+                revision,
+                timestamp,
+                base["digest"],
+                scope_paths or [],
+                history[-1]["digest"],
+            ),
+            history,
+        )
+    raise ValueError("unknown change-drift action")
