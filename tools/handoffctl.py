@@ -2396,8 +2396,8 @@ def require_done_admission(
         if drift_error:
             raise RuntimeError(drift_error)
         outstanding = change_drift.unresolved(history)
-    except ValueError as error:
-        raise RuntimeError(f"change-drift record is invalid: {error}") from error
+    except ValueError as exc:
+        raise RuntimeError(f"change-drift record is invalid: {exc}") from exc
     if outstanding:
         paths = ", ".join(str(entry["path"]) for entry in outstanding)
         raise RuntimeError(
