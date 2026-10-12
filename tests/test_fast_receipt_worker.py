@@ -1499,9 +1499,7 @@ class FastReceiptWorkerTests(unittest.TestCase):
             self.assertRaisesRegex(RuntimeError, "active state branch"),
         ):
             worker._require_active_branch_commit(core, oid)
-        with patch.object(
-            core, "run", return_value=subprocess.CompletedProcess([], 0, "")
-        ) as run:
+        with patch.object(core, "run", return_value=subprocess.CompletedProcess([], 0, "")) as run:
             worker._require_active_branch_commit(core, oid)
         self.assertEqual("merge-base", run.call_args.args[0][3])
         self.assertNotIn("verify-commit", run.call_args.args[0])

@@ -8,10 +8,22 @@ service and is vendored alongside the CLI.
 
 from __future__ import annotations
 
+import argparse
 import contextlib
+import fcntl
+import hashlib
+import json
+import os
+import re
+import shutil
+import stat
+import subprocess
+import time
+from collections.abc import Iterator
 from contextvars import ContextVar
 from functools import wraps
-from typing import Any
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, cast
 
 if __package__:
     from .issue_series import parse_manifest
@@ -24,15 +36,66 @@ if __package__:
         render_publication,
     )
 else:  # pragma: no cover - direct vendored execution
-    from issue_series import parse_manifest  # type: ignore[import-not-found]
-    from issue_series_plan import IssueSeriesPlanError, plan_issue_series  # type: ignore[import-not-found]
-    from issue_series_publish import (  # type: ignore[import-not-found]
+    from issue_series import parse_manifest  # type: ignore[import-not-found,no-redef]
+    from issue_series_plan import (  # type: ignore[import-not-found,no-redef]
+        IssueSeriesPlanError,
+        plan_issue_series,
+    )
+    from issue_series_publish import (  # type: ignore[import-not-found,no-redef]
         DryRunTransport,
         MockTransport,
         PublicationOutcome,
         publication_key,
         render_publication,
     )
+
+
+if TYPE_CHECKING:
+    # The service is installed after handoffctl has finished initializing.  Keep
+    # that runtime dependency injection explicit to static analyzers without
+    # importing handoffctl during its own module initialization.
+    from .handoffctl import (
+        CONFIG,
+        LOCK_POLL_SECONDS,
+        LOCK_TIMEOUT_SECONDS,
+        ROOT,
+        TASKS,
+        LockTimeoutError,
+        Meta,
+        StorageCommittedError,
+        Task,
+        all_tasks,
+        atomic,
+        backend_selection,
+        basic_task_errors,
+        changed_paths,
+        commit,
+        config,
+        coordinator_lock_path,
+        generated_paths,
+        generated_view_errors,
+        introduced_content_errors,
+        locked,
+        mutating_sqlite_backend,
+        mutation_global_errors,
+        now,
+        policy_snapshot,
+        project_binding,
+        project_settings,
+        push_replica,
+        rendered_task_views,
+        repository_slug,
+        require_project_settings_unchanged,
+        restore_paths,
+        storage_backend,
+        sync_replica_before_write,
+        write_rendered_task_views,
+        write_sqlite_projections,
+        write_task,
+    )
+    from .sqlite_storage import SQLiteBackend
+    from .task_spec import EvidencePolicy, require_policy_unchanged
+
 
 @contextlib.contextmanager
 def issue_series_publication_locked(key: str) -> Iterator[None]:
@@ -56,6 +119,7 @@ def issue_series_publication_locked(key: str) -> Iterator[None]:
     finally:
         fcntl.flock(fd, fcntl.LOCK_UN)
         os.close(fd)
+
 
 def write_sqlite_issue_series_projections(backend: SQLiteBackend) -> list[Path]:
     """Export authoritative SQLite issue-series manifests as Git projections."""
@@ -90,6 +154,7 @@ def write_sqlite_issue_series_publication_projections(backend: SQLiteBackend) ->
         if path.resolve() not in expected:
             path.unlink()
     return paths
+
 
 def issue_series_state_digest(tasks: list[Task]) -> str:
     """Bind a plan receipt to the stable, local task graph it inspected."""
@@ -447,10 +512,13 @@ def _live_existing_issue_series_comment(
 ) -> PublicationOutcome | None:
     """Find the sole prior marker comment, without retaining its hosted body."""
     marker = f"agent-workflow-issue-series:v1 digest={digest} key={key}"
+    gh_executable = shutil.which("gh")
+    if gh_executable is None:
+        return PublicationOutcome("deferred_unavailable", key, digest)
     try:
-        found = subprocess.run(
+        found = subprocess.run(  # noqa: S603 - resolved local executable
             [
-                "gh",
+                gh_executable,
                 "api",
                 "--paginate",
                 f"repos/{slug}/issues/{issue_number}/comments?per_page=100",
@@ -490,10 +558,13 @@ def _live_issue_series_publication(
     existing = _live_existing_issue_series_comment(slug, issue_number, key, digest)
     if existing is not None:
         return existing
+    gh_executable = shutil.which("gh")
+    if gh_executable is None:
+        return PublicationOutcome("deferred_unavailable", key, digest)
     try:
-        result = subprocess.run(
+        result = subprocess.run(  # noqa: S603 - resolved local executable
             [
-                "gh",
+                gh_executable,
                 "api",
                 "--method",
                 "POST",
@@ -647,7 +718,6 @@ def issue_series_tasks(receipt: Meta, manifest_path: Path) -> list[Task]:
     return generated
 
 
-
 _CORE: dict[str, Any] | None = None
 _ACTIVE_CORE: ContextVar[dict[str, Any] | None] = ContextVar(
     "issue_series_active_core", default=None
@@ -695,9 +765,7 @@ def install(core: dict[str, Any]) -> dict[str, Any]:
     global _CORE
     _CORE = core
     _refresh()
-    exported = {
-        name: _delegate(globals()[name], core) for name in sorted(_LOCAL_FUNCTIONS)
-    }
+    exported = {name: _delegate(globals()[name], core) for name in sorted(_LOCAL_FUNCTIONS)}
     exported.update(
         {
             "DryRunTransport": DryRunTransport,
@@ -728,7 +796,18 @@ def add_cli_parser(commands: Any) -> None:
     publish.add_argument("--transport", choices=("dry-run", "mock", "live"), required=True)
     publish.add_argument(
         "--mock-status",
-        choices=("published", "already_published", "unavailable", "unauthorized", "timeout", "conflict", "wrong_identity", "closed", "moved", "ambiguous"),
+        choices=(
+            "published",
+            "already_published",
+            "unavailable",
+            "unauthorized",
+            "timeout",
+            "conflict",
+            "wrong_identity",
+            "closed",
+            "moved",
+            "ambiguous",
+        ),
         default="published",
     )
     publish.add_argument("--mock-comment-id", default="mock-comment")

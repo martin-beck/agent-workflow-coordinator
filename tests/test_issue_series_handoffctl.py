@@ -16,7 +16,7 @@ from typing import Any, cast
 from unittest.mock import patch
 
 from fixture_ids import project_uuid
-from test_handoffctl import CORE, HandoffTest, SOURCE, configure_child, run_git
+from test_handoffctl import CORE, SOURCE, HandoffTest, configure_child, run_git
 
 
 def install_secondary_controller() -> None:
@@ -301,6 +301,20 @@ class IssueSeriesHandoffTest(unittest.TestCase):
                 )
         self.assertEqual("ambiguous", outcome.status)
         self.assertIsNone(outcome.comment_id)
+
+    def test_live_publication_defers_when_gh_is_unavailable(self) -> None:
+        digest = "sha256:" + "c" * 64
+        with patch.object(CORE, "CONFIG", self.root / "config.json"):
+            CORE.CONFIG.write_text(json.dumps({"github_repository": "owner/product"}))
+            with (
+                patch.object(CORE.shutil, "which", return_value=None),
+                patch.object(CORE.subprocess, "run") as run,
+            ):
+                outcome = CORE._live_issue_series_publication(
+                    "github.com/owner/product", 42, digest, "body"
+                )
+        self.assertEqual("deferred_unavailable", outcome.status)
+        run.assert_not_called()
 
     def test_live_publication_recovers_marker_before_posting(self) -> None:
         digest = "sha256:" + "b" * 64

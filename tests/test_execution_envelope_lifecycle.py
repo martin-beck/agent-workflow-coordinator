@@ -96,7 +96,9 @@ class ExecutionEnvelopeLifecycleTest(HandoffTest):
         with (
             patch.object(CORE, "require_claimed_worker_absent"),
         ):
-            self.assertIn("Recovered completed execution", CORE.apply_recover_execution(recover, meta))
+            self.assertIn(
+                "Recovered completed execution", CORE.apply_recover_execution(recover, meta)
+            )
         self.assertNotIn("execution_reservation", meta)
 
         valid = {
@@ -225,7 +227,9 @@ class ExecutionEnvelopeLifecycleTest(HandoffTest):
         with (
             patch.object(CORE, "require_claimed_worker_absent"),
         ):
-            self.assertIn("Recovered completed execution", CORE.apply_recover_execution(recover, meta))
+            self.assertIn(
+                "Recovered completed execution", CORE.apply_recover_execution(recover, meta)
+            )
         self.assertNotIn("execution_reservation", meta)
 
     def test_bound_envelope_validation_and_binding_errors(self) -> None:
