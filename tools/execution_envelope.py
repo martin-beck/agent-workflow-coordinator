@@ -69,7 +69,7 @@ def _paths(value: object, field: str, errors: list[str]) -> None:
 def _identity_errors(value: dict[str, Any]) -> list[str]:
     """Validate the stable envelope/task/spec identity fields."""
     result: list[str] = []
-    if value.get("schema_version") != 1:
+    if type(value.get("schema_version")) is not int or value.get("schema_version") != 1:
         result.append("envelope schema_version must be 1")
     envelope_id = value.get("envelope_id")
     task = value.get("task")

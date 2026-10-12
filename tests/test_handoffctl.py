@@ -37,7 +37,6 @@ SPEC.loader.exec_module(CORE)
 
 
 def hold_lock(lock_path: str, ready: Any, release: Any) -> None:
-    """Hold an exclusive lock in a separate process."""
     CORE.LOCK = Path(lock_path)
     CORE.RUNTIME = CORE.LOCK.parent
     CORE.ROOT = CORE.RUNTIME.parent

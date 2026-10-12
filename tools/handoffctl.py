@@ -2913,16 +2913,12 @@ def apply_recover_execution(args: argparse.Namespace, meta: Meta) -> str:
     if live_execution_reservation(meta) is not None:
         raise RuntimeError("EXECUTION_IN_PROGRESS: execution reservation has not expired")
     require_claimed_worker_absent(meta)
-    if not storage_backend().has_command_result(
-        str(getattr(args, "task", "")),
-        str(valid_reservation["owner"]),
-        str(valid_reservation["argv_digest"]),
-    ):
-        raise RuntimeError(
-            "EXECUTION_RESULT_UNKNOWN: recovery requires durable command-result evidence"
-        )
-    meta.pop("execution_reservation", None)
-    return str(args.note)
+    # Command-result rows predate reservation identities. A same-owner and
+    # same-argv historical row cannot prove this reservation completed.
+    del valid_reservation
+    raise RuntimeError(
+        "EXECUTION_RESULT_UNKNOWN: reservation-specific completion evidence is unavailable"
+    )
 
 
 def require_owned_change_admission(

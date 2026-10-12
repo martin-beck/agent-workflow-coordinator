@@ -9,7 +9,7 @@ import json
 import subprocess
 import unittest
 from typing import cast
-from unittest.mock import Mock, patch
+from unittest.mock import patch
 
 from test_handoffctl import CORE, HandoffTest
 
@@ -73,21 +73,11 @@ class ExecutionEnvelopeLifecycleTest(HandoffTest):
         absent.assert_called_once_with(meta)
         self.assertIs(meta["execution_reservation"], reservation)
         with (
-            patch.object(
-                CORE,
-                "legacy_command_results",
-                return_value=[
-                    {
-                        "task": "AR-0001",
-                        "owner": "worker-a",
-                        "argv_sha256": reservation["argv_digest"],
-                    }
-                ],
-            ),
             patch.object(CORE, "require_claimed_worker_absent"),
+            self.assertRaisesRegex(RuntimeError, "EXECUTION_RESULT_UNKNOWN"),
         ):
-            self.assertEqual("worker exited", CORE.apply_recover_execution(recover, meta))
-        self.assertNotIn("execution_reservation", meta)
+            CORE.apply_recover_execution(recover, meta)
+        self.assertIs(meta["execution_reservation"], reservation)
 
         valid = {
             "execution_id": "a" * 32,
@@ -197,23 +187,18 @@ class ExecutionEnvelopeLifecycleTest(HandoffTest):
             "expires_at": "2000-01-01T00:00:00+00:00",
         }
         recover = argparse.Namespace(task="AR-0001", expected_revision=5, note="recover")
-        backend = Mock()
-        backend.has_command_result.return_value = False
         meta: dict[str, object] = {"task_revision": 5, "execution_reservation": reservation}
         with (
-            patch.object(CORE, "storage_backend", return_value=backend),
             patch.object(CORE, "require_claimed_worker_absent"),
             self.assertRaisesRegex(RuntimeError, "EXECUTION_RESULT_UNKNOWN"),
         ):
             CORE.apply_recover_execution(recover, meta)
-        backend.has_command_result.assert_called_once_with("AR-0001", "worker-a", "d" * 64)
-        backend.has_command_result.return_value = True
         with (
-            patch.object(CORE, "storage_backend", return_value=backend),
             patch.object(CORE, "require_claimed_worker_absent"),
+            self.assertRaisesRegex(RuntimeError, "EXECUTION_RESULT_UNKNOWN"),
         ):
-            self.assertEqual("recover", CORE.apply_recover_execution(recover, meta))
-        self.assertNotIn("execution_reservation", meta)
+            CORE.apply_recover_execution(recover, meta)
+        self.assertIn("execution_reservation", meta)
 
     def test_bound_envelope_validation_and_binding_errors(self) -> None:
         """Persisted envelope coherence and binding retries reject malformed state."""
