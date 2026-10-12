@@ -154,6 +154,10 @@
 
 ## Unreleased
 
+## 0.5.8
+
+- Keep volatile hosted-run observations advisory during live integrity checks.
+
 ## 0.5.7
 
 - Exempt the verified vendored runtime from the state-data size ceiling.

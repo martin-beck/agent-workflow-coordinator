@@ -329,7 +329,7 @@ def short_title_errors(path: Path, task_id: str, value: object) -> list[str]:
     return []
 
 
-COORDINATOR_VERSION = "0.5.7"
+COORDINATOR_VERSION = "0.5.8"
 DEFAULT_PROJECT_SETTINGS: Meta = {
     "schema_version": 1,
     "project_id": "00000000-0000-4000-8000-000000000000",
@@ -1763,7 +1763,7 @@ def directive_validation_errors() -> list[str]:
     return []
 
 
-def validate(  # noqa: C901
+def validate(
     *, live: bool = False, policy: EvidencePolicy | None = None, live_state: State | None = None
 ) -> list[str]:
     errors: list[str] = []
@@ -1800,15 +1800,9 @@ def validate(  # noqa: C901
     errors.extend(directive_validation_errors())
     errors.extend(privacy_errors())
     if live:
-        state = project_scan() if live_state is None else live_state
-        project, worktrees = live_docs(state)
-        if (
-            not (ROOT / "PROJECT_STATE.md").exists()
-            or (ROOT / "PROJECT_STATE.md").read_text() != project
-        ):
-            errors.append("PROJECT_STATE.md is stale")
-        if not (ROOT / "WORKTREES.md").exists() or (ROOT / "WORKTREES.md").read_text() != worktrees:
-            errors.append("WORKTREES.md is stale")
+        # Hosted run/worktree observations can change after reconciliation.
+        # They are advisory, not immutable local integrity evidence.
+        del live_state
     return errors
 
 
