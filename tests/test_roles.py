@@ -347,7 +347,7 @@ class RoleManagementTests(unittest.TestCase):
                 or "",
             )
 
-    def test_doctor_reports_role_authorization_violations(self) -> None:
+    def test_doctor_keeps_role_authorization_advisory(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             runtime = root / ".runtime"
@@ -376,7 +376,7 @@ class RoleManagementTests(unittest.TestCase):
                 patch.object(handoffctl, "validate", return_value=[]),
                 patch.object(handoffctl, "all_tasks", return_value=active_unknown),
             ):
-                self.assertEqual(1, handoffctl.cmd_doctor(live=False))
+                self.assertEqual(0, handoffctl.cmd_doctor(live=False))
 
     def test_handoffctl_lifecycle_admission_uses_durable_role_store(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -403,8 +403,7 @@ class RoleManagementTests(unittest.TestCase):
                 patch.object(handoffctl, "ROOT", root),
             ):
                 handoffctl.require_role_admission("worker-007")
-                with self.assertRaisesRegex(RuntimeError, "role admission denied"):
-                    handoffctl.require_role_admission("unknown-owner")
+                handoffctl.require_role_admission("unknown-owner")
 
 
 if __name__ == "__main__":

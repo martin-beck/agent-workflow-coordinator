@@ -21,6 +21,12 @@ RETIRED_DESTINATIONS = ("formal/handoffctl/HandoffctlPR.cfg",)
 SOURCE_FILES: tuple[tuple[str, str], ...] = (
     ("tools/handoffctl", "tools/handoffctl"),
     ("tools/handoffctl.py", "tools/handoffctl.py"),
+    ("tools/issue_series_service.py", "tools/issue_series_service.py"),
+    ("tools/issue_series.py", "tools/issue_series.py"),
+    ("tools/issue_series_plan.py", "tools/issue_series_plan.py"),
+    ("tools/issue_series_publish.py", "tools/issue_series_publish.py"),
+    ("tools/execution_envelope.py", "tools/execution_envelope.py"),
+    ("tools/execution_receipt.py", "tools/execution_receipt.py"),
     ("tools/fast_receipts.py", "tools/fast_receipts.py"),
     ("tools/fast_observation.py", "tools/fast_observation.py"),
     ("tools/fast_receipt_worker.py", "tools/fast_receipt_worker.py"),
@@ -75,9 +81,6 @@ SOURCE_FILES: tuple[tuple[str, str], ...] = (
     ("tools/sqlite_backup.py", "tools/sqlite_backup.py"),
     ("tools/status_renderer.py", "tools/status_renderer.py"),
     ("tools/task_spec.py", "tools/task_spec.py"),
-    ("tools/issue_series.py", "tools/issue_series.py"),
-    ("tools/issue_series_plan.py", "tools/issue_series_plan.py"),
-    ("tools/issue_series_publish.py", "tools/issue_series_publish.py"),
     ("tools/upgrade_commands.py", "tools/upgrade_commands.py"),
     ("tools/upgrade_admission.py", "tools/upgrade_admission.py"),
     ("tools/upgrade_binding.py", "tools/upgrade_binding.py"),
@@ -88,12 +91,11 @@ SOURCE_FILES: tuple[tuple[str, str], ...] = (
     ("tools/formal_receipt.py", "tools/formal_receipt.py"),
     ("tools/vendor.py", "tools/handoffctl_vendor.py"),
     ("tests/test_handoffctl.py", "tests/test_handoffctl.py"),
+    ("tests/test_issue_series_handoffctl.py", "tests/test_issue_series_handoffctl.py"),
     ("tests/test_concise_titles.py", "tests/test_concise_titles.py"),
+    ("tests/test_execution_envelope.py", "tests/test_execution_envelope.py"),
+    ("tests/test_execution_sandbox.py", "tests/test_execution_sandbox.py"),
     ("tests/test_handoffctl_recovery.py", "tests/test_handoffctl_recovery.py"),
-    (
-        "tests/test_issue_series_handoffctl.py",
-        "tests/test_issue_series_handoffctl.py",
-    ),
     ("tests/test_fast_receipts.py", "tests/test_fast_receipts.py"),
     ("tests/test_fast_observation.py", "tests/test_fast_observation.py"),
     ("tests/test_fast_receipt_worker.py", "tests/test_fast_receipt_worker.py"),
@@ -138,10 +140,7 @@ SOURCE_FILES: tuple[tuple[str, str], ...] = (
         "schema/handoffctl-directive-record.schema.json",
     ),
     ("schema/task-record.schema.json", "schema/task-record.schema.json"),
-    (
-        "schema/issue-series-manifest.schema.json",
-        "schema/issue-series-manifest.schema.json",
-    ),
+    ("schema/execution-envelope.schema.json", "schema/execution-envelope.schema.json"),
     ("schema/role.schema.json", "schema/role.schema.json"),
     ("schema/role-registry.schema.json", "schema/role-registry.schema.json"),
     ("schema/role-assignment.schema.json", "schema/role-assignment.schema.json"),
@@ -177,6 +176,7 @@ SOURCE_FILES: tuple[tuple[str, str], ...] = (
     ("formal/handoffctl/HandoffctlBinding.cfg", "formal/handoffctl/HandoffctlBinding.cfg"),
     ("formal/handoffctl/HandoffctlBinding.tla", "formal/handoffctl/HandoffctlBinding.tla"),
     ("formal/handoffctl/HandoffctlFast.cfg", "formal/handoffctl/HandoffctlFast.cfg"),
+    ("formal/handoffctl/LIVENESS_COVERAGE.json", "formal/handoffctl/LIVENESS_COVERAGE.json"),
     (
         "formal/handoffctl/HandoffctlObservation.cfg",
         "formal/handoffctl/HandoffctlObservation.cfg",
@@ -192,7 +192,6 @@ SOURCE_FILES: tuple[tuple[str, str], ...] = (
     ("formal/handoffctl/HandoffctlLocks.cfg", "formal/handoffctl/HandoffctlLocks.cfg"),
     ("formal/handoffctl/HandoffctlLocks.tla", "formal/handoffctl/HandoffctlLocks.tla"),
     ("formal/handoffctl/HandoffctlLiveness.cfg", "formal/handoffctl/HandoffctlLiveness.cfg"),
-    ("formal/handoffctl/LIVENESS_COVERAGE.json", "formal/handoffctl/LIVENESS_COVERAGE.json"),
     ("formal/handoffctl/HandoffctlRecovery.cfg", "formal/handoffctl/HandoffctlRecovery.cfg"),
     ("formal/handoffctl/HandoffctlRecovery.tla", "formal/handoffctl/HandoffctlRecovery.tla"),
     ("formal/handoffctl/HandoffctlRun.cfg", "formal/handoffctl/HandoffctlRun.cfg"),
@@ -584,6 +583,8 @@ def verify_formal_lifecycle_alignment(target: Path) -> None:
             if item.startswith("release_")
             else "recover-expired"
             if item == "recover_expired"
+            else "recover-execution"
+            if item == "recover_execution"
             else item
         )
         for item in modeled

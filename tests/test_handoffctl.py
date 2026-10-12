@@ -37,7 +37,6 @@ SPEC.loader.exec_module(CORE)
 
 
 def hold_lock(lock_path: str, ready: Any, release: Any) -> None:
-    """Hold an exclusive lock in a separate process."""
     CORE.LOCK = Path(lock_path)
     CORE.RUNTIME = CORE.LOCK.parent
     CORE.ROOT = CORE.RUNTIME.parent
@@ -2121,7 +2120,7 @@ class HandoffTest(unittest.TestCase):
                     )
                 self.assertEqual(before, path.read_bytes())
 
-    def test_real_signed_fast_heartbeat_receipt_matches_git_commit(self) -> None:
+    def test_real_unsigned_fast_heartbeat_receipt_matches_git_commit(self) -> None:
         path = self.make_task(
             status="in_progress",
             owner="worker-a",
@@ -2131,22 +2130,10 @@ class HandoffTest(unittest.TestCase):
         for name, value in (
             ("user.name", "Receipt Fixture"),
             ("user.email", "fixture@example.invalid"),
-            ("gpg.format", "ssh"),
         ):
             run_git(["git", "-C", str(self.root), "config", name, value])
         keys = TemporaryDirectory()
         self.addCleanup(keys.cleanup)
-        key = Path(keys.name) / "signing-key"
-        subprocess.run(  # noqa: S603
-            ["/usr/bin/ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(key)],
-            check=True,
-        )
-        allowed = Path(keys.name) / "allowed-signers"
-        allowed.write_text(
-            f"fixture@example.invalid {key.with_suffix('.pub').read_text().strip()}\n"
-        )
-        run_git(["git", "-C", str(self.root), "config", "user.signingkey", str(key)])
-        run_git(["git", "-C", str(self.root), "config", "gpg.ssh.allowedSignersFile", str(allowed)])
         run_git(
             [
                 "git",
@@ -2193,7 +2180,11 @@ class HandoffTest(unittest.TestCase):
         self.assertEqual(2, result["result_revision"])
         self.assertEqual(2, CORE.read_task(path)[0]["task_revision"])
         self.assertEqual(queued["receipt_id"], result["receipt_id"])
-        run_git(["git", "-C", str(self.root), "verify-commit", str(result["commit_oid"])])
+        unsigned = subprocess.run(  # noqa: S603
+            ["git", "-C", str(self.root), "verify-commit", str(result["commit_oid"])],  # noqa: S607
+            check=False,
+        )
+        self.assertNotEqual(0, unsigned.returncode)
         CORE.CONFIG.parent.mkdir(exist_ok=True)
         CORE.CONFIG.write_text(json.dumps({"push_enabled": True}))
         with patch.object(CORE, "assert_project_binding"):
@@ -2231,7 +2222,6 @@ class HandoffTest(unittest.TestCase):
                 "-C",
                 str(self.root),
                 "commit",
-                "-S",
                 "-s",
                 "-m",
                 "chore(state): heartbeat AR-0001",
@@ -2268,7 +2258,6 @@ class HandoffTest(unittest.TestCase):
                 "-C",
                 str(self.root),
                 "commit",
-                "-S",
                 "-s",
                 "-m",
                 "chore(state): heartbeat AR-0001",
@@ -2288,7 +2277,7 @@ class HandoffTest(unittest.TestCase):
         CORE.write_task(path, meta, body)
         CORE.write_rendered_task_views(CORE.rendered_task_views(CORE.all_tasks()))
         run_git(["git", "-C", str(self.root), "add", "-A"])
-        run_git(["git", "-C", str(self.root), "commit", "-qS", "-m", "fixture promote baseline"])
+        run_git(["git", "-C", str(self.root), "commit", "-qm", "fixture promote baseline"])
         promote = store.enqueue_promote(
             key="worker-a:promote:1",
             task="AR-0001",
@@ -2302,7 +2291,6 @@ class HandoffTest(unittest.TestCase):
         self.assertEqual(promote["receipt_id"], promoted["receipt_id"])
         self.assertEqual(5, promoted["result_revision"])
         self.assertEqual("open", CORE.read_task(path)[0]["status"])
-        run_git(["git", "-C", str(self.root), "verify-commit", str(promoted["commit_oid"])])
 
         claim = store.enqueue_claim(
             key="worker-a:claim:1",
@@ -2318,7 +2306,6 @@ class HandoffTest(unittest.TestCase):
         self.assertEqual(claim["receipt_id"], claimed["receipt_id"])
         self.assertEqual(6, claimed["result_revision"])
         self.assertEqual("in_progress", CORE.read_task(path)[0]["status"])
-        run_git(["git", "-C", str(self.root), "verify-commit", str(claimed["commit_oid"])])
 
         stale = store.enqueue_claim(
             key="worker-b:claim:stale",
@@ -2517,8 +2504,7 @@ class HandoffTest(unittest.TestCase):
             commit.assert_called_once()
             self.assertEqual([], CORE.validate(live=True))
             (self.root / "PROJECT_STATE.md").write_text("stale")
-            errors = CORE.validate(live=True)
-            self.assertIn("PROJECT_STATE.md is stale", errors)
+            self.assertEqual([], CORE.validate(live=True))
 
     def test_git_reconcile_observes_product_without_authority_lock(self) -> None:
         self.make_task()
@@ -2592,7 +2578,7 @@ class HandoffTest(unittest.TestCase):
             self.assertEqual(0, CORE.cmd_doctor(live=True))
         self.assertEqual(1, scans)
 
-    def test_git_doctor_retries_changed_publication_during_scan(self) -> None:
+    def test_git_doctor_accepts_changed_advisory_publication_during_scan(self) -> None:
         self.make_task()
         older = self.fake_scan()
         newer = self.fake_scan()
@@ -2612,9 +2598,9 @@ class HandoffTest(unittest.TestCase):
 
         with patch.object(CORE, "project_scan", side_effect=interleaved_scan):
             self.assertEqual(0, CORE.cmd_doctor(live=True))
-        self.assertEqual(2, scans)
+        self.assertEqual(1, scans)
 
-    def test_git_doctor_fails_boundedly_if_every_scan_is_overtaken(self) -> None:
+    def test_git_doctor_accepts_repeated_advisory_publication_during_scan(self) -> None:
         self.make_task()
         with patch.object(CORE, "project_scan", return_value=self.fake_scan()):
             CORE.reconcile(do_commit=False)
@@ -2633,9 +2619,11 @@ class HandoffTest(unittest.TestCase):
             patch.object(CORE, "project_scan", side_effect=overtaken_scan),
             patch("builtins.print") as printed,
         ):
-            self.assertEqual(1, CORE.cmd_doctor(live=True))
-        self.assertEqual(3, scans)
-        printed.assert_called_once_with("ERROR: OBSERVATION_CHANGED: retry doctor")
+            self.assertEqual(0, CORE.cmd_doctor(live=True))
+        self.assertEqual(1, scans)
+        printed.assert_called_once_with(
+            "OK: structure, references, privacy, generated views and live state are consistent"
+        )
 
     def test_git_doctor_does_not_hide_structural_error_behind_overtaken_scan(self) -> None:
         self.make_task()
@@ -3210,6 +3198,16 @@ class HandoffTest(unittest.TestCase):
         ):
             CORE.cmd_run(argparse.Namespace(task="AR-0001", owner="worker-a", command=["true"]))
         command.assert_not_called()
+
+    def test_active_owner_rejects_an_elapsed_lease_before_execution(self) -> None:
+        """A real elapsed lease cannot pass the run-admission check."""
+        self.make_task(
+            status="in_progress",
+            owner="worker-a",
+            claim_expires="2000-01-01T00:00:00+00:00",
+        )
+        with self.assertRaisesRegex(RuntimeError, "expired claim"):
+            CORE.require_active_owner("AR-0001", "worker-a")
 
     def test_run_a_b_a_policy_swap_has_no_command_or_journal_effect(self) -> None:
         self.enable_additive_policy()

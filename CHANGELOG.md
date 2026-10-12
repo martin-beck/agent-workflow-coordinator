@@ -1,11 +1,18 @@
 # Changelog
 
-## 0.5.3 - 2026-10-12
+## 0.6.0 - 2026-10-12
 
-- Repair trusted-runner workflow isolation and declare the dedicated advisory
-  stress runner in the local trust policy.
-- Keep hosted workflows advisory to progression without allowing their own
-  configured executions to fail open.
+- Add revision-bound, durable execution envelopes for active tasks. They carry
+  immutable task/spec identity, declared command classes, bounded path scope,
+  evidence, and stop conditions; bound execution uses a private Bubblewrap
+  root when available and fails closed when it is not.
+- Add exact `execution-start`, `execution-finish`, and `recover-execution`
+  lifecycle paths. A durable execution fence is committed before a bound command
+  starts, blocks conflicting lifecycle changes, retains ambiguity after a
+  failed result/completion path, and requires verified recovery after expiry.
+- Cover Git two-clone and SQLite multi-process execution-fence contention, hostile
+  path/mount behavior, completion failures, and the corresponding bounded
+  execution-fence lifecycle model.
 
 ## 0.5.2 - 2026-10-11
 
@@ -153,29 +160,6 @@
   explicit, revision-bound decision batching.
 
 ## Unreleased
-
-## 0.5.8
-
-- Keep volatile hosted-run observations advisory during live integrity checks.
-
-## 0.5.7
-
-- Exempt the verified vendored runtime from the state-data size ceiling.
-
-## 0.5.6
-
-- Include the issue-series publication runtime in the vendor allowlist.
-
-## 0.5.5
-
-- Correct the vendored runtime version so release sync verifies the exact tag.
-
-## 0.5.4
-
-- Add local-first optional issue-series publication with typed, privacy-bounded
-  receipts, recovery markers, and Git/SQLite migration parity.
-- Permit locally evidenced best-effort acceptance when a task has no bound
-  formal spec; bound specs remain validated when present.
 
 - Restore the shared TLC runner and its focused tests to downstream vendor snapshots without
   overwriting downstream-owned formal models, attestations, or verification entry points.

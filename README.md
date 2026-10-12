@@ -110,7 +110,8 @@ repository.
 ```sh
 tools/handoffctl snapshot
 tools/handoffctl claim AR-0001 --owner worker-unique --lease-minutes 120
-tools/handoffctl run --owner worker-unique AR-0001 -- command arg
+tools/handoffctl run --owner worker-unique --command-class source-write --scope-path tools \
+  AR-0001 -- command arg
 tools/handoffctl update AR-0001 --owner worker-unique --expected-revision 2 \
   --note "Verified result and next action"
 tools/handoffctl accept AR-0001 --owner worker-unique --expected-revision 3 \
@@ -131,6 +132,15 @@ persists that identity, then only recovers after the same identity is absent.
 spec. It validates the spec reference, evidence class, reference and digest format;
 it does not independently prove the evidence contents or substitute for review.
 `release --status done` still rejects missing or invalid acceptance and open children.
+
+Projects can additionally bind an immutable execution envelope to a task. A bound task requires
+an allowed `--command-class` for `run`; mutation classes also require declared scope paths.
+`handoffctl preflight ... --json` explains the admission decision without executing a command.
+Bound commands receive a private Bubblewrap root, plus only the declared read/write worktree
+mounts. A revision-CAS execution fence is durably recorded before the command starts, so
+competing clones cannot both begin the same bound command; expired execution fences require verified
+worker-exit recovery. These boundaries must still be paired with ordinary worktree and platform
+isolation.
 
 ## Develop
 

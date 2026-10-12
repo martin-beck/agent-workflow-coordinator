@@ -41,6 +41,7 @@ authoritative revision, task status and owner unchanged.
 | `heartbeat` | `in_progress` | current owner, positive lease | lease renewed |
 | `update` | `in_progress` | current owner, exact revision | active fields updated |
 | `accept` | `in_progress`, referenced spec | current owner, exact revision, valid evidence metadata | spec acceptance recorded; lifecycle status unchanged |
+| `bind-envelope` | `in_progress`, referenced spec | current owner, exact revision, immutable matching envelope | envelope reference, revision, and digest recorded |
 | `release` | `in_progress` | current owner | chosen non-active state, owner and lease cleared |
 | `recover-expired` | expired `in_progress` | exact revision; a verified claim-time worker identity must now be absent unless a validated exact-current session exists; pre-identity records require explicit `--allow-legacy-without-identity` | `open`, ownership cleared; restores `next_action` only from an exact-current session snapshot |
 | `run` record | `in_progress`, unexpired | owner and current revision | bounded result recorded |
@@ -54,10 +55,27 @@ tests; the bounded model does not claim to prove evidence contents.
 `open`, `blocked`, and `done`.
 
 `run` checks runtime configuration and the live claim before executing outside the coordinator
-lock. Immediately after execution it fsyncs a privacy-safe local journal entry, then commits the
-task result before attempting live reconciliation. `HandoffctlRun.tla` proves that preflight
-rejection has no external effect and that task-record or post-reconciliation failure cannot erase
-journal evidence. Arbitrary command correctness remains outside the proof.
+lock. A bound run first records one revision-CAS execution fence; only that fence
+holder may start its external effect. Immediately after execution it fsyncs a privacy-safe local
+journal entry, then records the task result, clears the exact fence, and attempts live
+reconciliation. `HandoffctlRun.tla` proves that preflight rejection has no external effect, an
+effect requires a fence, and task-record, fence-completion, or post-reconciliation
+task-record, fence-completion, or post-reconciliation failure cannot erase journal evidence.
+After task recording or fence completion fails, expired-fence recovery may clear only the exact fence
+whose durable command-result evidence exists. A journal-write failure retains an execution-unknown
+fence that ordinary expiry recovery cannot clear. An operator must reconcile durable command-result
+evidence before resolving that ambiguity.
+Arbitrary command correctness remains outside the model.
+
+For a task with a bound execution envelope, `run` additionally requires a declared allowed command
+class and evaluates its declared scope paths before the external effect. This is a deterministic
+admission check, not a claim that the wrapped command respects its declaration. The concrete
+Git/SQLite tests cover envelope identity, private Bubblewrap mounts, two-clone contention, and
+recovery; the bounded run model abstracts the envelope to preflight readiness and its single live
+execution-fence slot. It models durable recovery evidence as a record with explicit `task_id`,
+`owner`, `argv_sha256`, and `execution_id` fields in either the Git or SQLite evidence backend;
+recovery requires the exact record for its reserved execution. It does not model evidence contents
+beyond that identity.
 
 The linearization point is the successful transition while the process holds the lock below Git's
 common directory. Every worktree of one local clone resolves the same lock path. Expected revisions
@@ -114,8 +132,9 @@ eventually recovered.
 
 The separate three-process lock model covers two readers plus one writer and two worktree
 identities resolving one repository-common lock.
-`HandoffctlRun.tla` covers preflight rejection, external execution, durable journaling, task-record
-failure, and post-reconciliation success or failure. The binding model covers the configured
+`HandoffctlRun.tla` covers preflight rejection, durable execution fence, external execution, durable
+journaling, task-record failure, fence-completion failure, and post-reconciliation success
+or failure. The binding model covers the configured
 project and one foreign caller, including rejection without mutation and fair progress. These are
 exhaustive proofs of the abstractions, not proofs of Linux, Git, Python, or the filesystem
 implementation.

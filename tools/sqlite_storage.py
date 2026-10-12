@@ -35,6 +35,10 @@ _FACTORY_SENTINEL = object()
 _SHA256_DIGEST = re.compile(r"sha256:[0-9a-f]{64}$")
 _PUBLICATION_KEY = re.compile(r"[0-9a-f]{64}$")
 _COMMENT_ID = re.compile(r"[1-9][0-9]{0,18}$")
+_BARE_SHA256 = re.compile(r"[0-9a-f]{64}$")
+_EXECUTION_ID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+_TASK_ID = re.compile(r"AR-[0-9]{4}$")
+_EXECUTION_RESULT_CLASSIFICATIONS = frozenset({"EXIT", "SUBPROCESS_TIMEOUT"})
 _PUBLICATION_STATUSES = frozenset(
     {
         "published",
@@ -484,6 +488,8 @@ class Backend(Protocol):
     def load_session_records(self, task_id: str | None = None) -> list[Meta]: ...
 
     def load_checkpoint_records(self, task_id: str | None = None) -> list[Meta]: ...
+
+    def has_command_result(self, task_id: str, owner: str, argv_sha256: str) -> bool: ...
 
     def append_command_result(
         self,
@@ -942,6 +948,21 @@ class SQLiteBackend:
                     (meta["id"], meta["task_revision"], at, "Recorded live worktree state."),
                 )
 
+    def has_command_result(self, task_id: str, owner: str, argv_sha256: str) -> bool:
+        """Check for exact command evidence without opening a writer transaction."""
+        connection = self._connect(read_only=True)
+        try:
+            row = connection.execute(
+                """SELECT 1 FROM command_results
+                   WHERE task_id=? AND owner=? AND argv_sha256=? LIMIT 1""",
+                (task_id, owner, argv_sha256),
+            ).fetchone()
+            return row is not None
+        except sqlite3.Error as error:
+            raise _translate(error) from error
+        finally:
+            connection.close()
+
     def append_command_result(
         self,
         task_id: str,
@@ -984,6 +1005,334 @@ class SQLiteBackend:
         # creation either commit together or roll back together.
         for statement in ISSUE_SERIES_STATEMENTS:
             connection.execute(statement)
+
+    @staticmethod
+    def _ensure_execution_envelope_schema(connection: sqlite3.Connection) -> None:
+        """Install immutable execution receipts without rewriting task state."""
+        # Keep every DDL statement inside the caller's transaction: a failed
+        # legacy upgrade must leave neither receipt table behind.
+        for statement in EXECUTION_ENVELOPE_STATEMENTS:
+            connection.execute(statement)
+
+    @staticmethod
+    def _normalize_execution_envelope(envelope: Meta) -> Meta:
+        """Return the exact privacy-safe intent shape accepted by durable storage."""
+        required = {
+            "schema_version",
+            "execution_id",
+            "task",
+            "task_revision",
+            "owner",
+            "claim_expires",
+            "worktree_key",
+            "branch",
+            "spec_ref",
+            "spec_revision",
+            "policy_digest",
+            "argv_sha256",
+            "timeout_seconds",
+            "created_at",
+        }
+        if set(envelope) != required:
+            raise ValueError("execution envelope has unexpected fields")
+        execution_id = envelope["execution_id"]
+        task_id = envelope["task"]
+        revision = envelope["task_revision"]
+        if (
+            type(envelope["schema_version"]) is not int
+            or envelope["schema_version"] != 1
+            or not isinstance(execution_id, str)
+            or not _EXECUTION_ID.fullmatch(execution_id)
+            or not isinstance(task_id, str)
+            or not _TASK_ID.fullmatch(task_id)
+            or isinstance(revision, bool)
+            or not isinstance(revision, int)
+            or revision < 1
+        ):
+            raise ValueError("execution envelope has invalid identity")
+        text_fields = ("owner", "claim_expires", "worktree_key", "branch", "created_at")
+        if any(
+            not isinstance(envelope[field], str)
+            or not envelope[field]
+            or "\n" in envelope[field]
+            or "\r" in envelope[field]
+            for field in text_fields
+        ):
+            raise ValueError("execution envelope has unsafe text field")
+        spec_ref = envelope["spec_ref"]
+        spec_revision = envelope["spec_revision"]
+        if (spec_ref is None) != (spec_revision is None):
+            raise ValueError("execution envelope has incomplete spec binding")
+        if spec_ref is not None and (
+            not isinstance(spec_ref, str)
+            or not spec_ref
+            or "\n" in spec_ref
+            or "\r" in spec_ref
+            or isinstance(spec_revision, bool)
+            or not isinstance(spec_revision, int)
+            or spec_revision < 1
+        ):
+            raise ValueError("execution envelope has invalid spec binding")
+        for field in ("policy_digest", "argv_sha256"):
+            value = envelope[field]
+            if not isinstance(value, str) or not _BARE_SHA256.fullmatch(value):
+                raise ValueError(f"execution envelope has invalid {field}")
+        timeout = envelope["timeout_seconds"]
+        if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or timeout <= 0:
+            raise ValueError("execution envelope has invalid timeout")
+        return {
+            "schema_version": 1,
+            "execution_id": execution_id,
+            "task": task_id,
+            "task_revision": revision,
+            "owner": envelope["owner"],
+            "claim_expires": envelope["claim_expires"],
+            "worktree_key": envelope["worktree_key"],
+            "branch": envelope["branch"],
+            "spec_ref": spec_ref,
+            "spec_revision": spec_revision,
+            "policy_digest": envelope["policy_digest"],
+            "argv_sha256": envelope["argv_sha256"],
+            "timeout_seconds": float(timeout),
+            "created_at": envelope["created_at"],
+        }
+
+    @staticmethod
+    def _normalize_execution_result(result: Meta) -> Meta:
+        """Return one terminal execution outcome; raw subprocess data is excluded."""
+        required = {"schema_version", "execution_id", "classification", "returncode", "recorded_at"}
+        if set(result) != required:
+            raise ValueError("execution result has unexpected fields")
+        execution_id = result["execution_id"]
+        classification = result["classification"]
+        returncode = result["returncode"]
+        recorded_at = result["recorded_at"]
+        if (
+            type(result["schema_version"]) is not int
+            or result["schema_version"] != 1
+            or not isinstance(execution_id, str)
+            or not _EXECUTION_ID.fullmatch(execution_id)
+            or not isinstance(classification, str)
+            or classification not in _EXECUTION_RESULT_CLASSIFICATIONS
+            or isinstance(returncode, bool)
+            or not isinstance(returncode, int)
+            or not isinstance(recorded_at, str)
+            or not recorded_at
+            or "\n" in recorded_at
+            or "\r" in recorded_at
+        ):
+            raise ValueError("execution result has invalid fields")
+        return {
+            "schema_version": 1,
+            "execution_id": execution_id,
+            "classification": classification,
+            "returncode": returncode,
+            "recorded_at": recorded_at,
+        }
+
+    def load_execution_envelopes(self, task_id: str | None = None) -> list[Meta]:
+        """Load immutable intent records in deterministic task/time/identity order."""
+        connection = self._connect(read_only=True)
+        try:
+            try:
+                rows = connection.execute(
+                    """SELECT envelope_json FROM execution_envelopes
+                       WHERE (? IS NULL OR task_id=?)
+                       ORDER BY task_id, created_at, execution_id""",
+                    (task_id, task_id),
+                )
+            except sqlite3.OperationalError as error:
+                if "no such table" not in str(error).lower():
+                    raise
+                return []
+            records: list[Meta] = []
+            for row in rows:
+                try:
+                    value = json.loads(str(row["envelope_json"]))
+                except json.JSONDecodeError as error:
+                    raise StorageCorruptionError(
+                        "SQLITE_CORRUPT: invalid execution envelope"
+                    ) from error
+                if not isinstance(value, dict):
+                    raise StorageCorruptionError("SQLITE_CORRUPT: invalid execution envelope")
+                try:
+                    records.append(self._normalize_execution_envelope(cast(Meta, value)))
+                except ValueError as error:
+                    raise StorageCorruptionError(
+                        "SQLITE_CORRUPT: invalid execution envelope"
+                    ) from error
+            return records
+        except sqlite3.Error as error:
+            raise _translate(error) from error
+        finally:
+            connection.close()
+
+    def record_execution_envelope(self, envelope: Meta) -> Meta:
+        """Durably record one exact intent; duplicate identities must be byte-equivalent."""
+        normalized = self._normalize_execution_envelope(envelope)
+        canonical = json.dumps(normalized, sort_keys=True, separators=(",", ":"))
+        with self.transaction() as connection:
+            self._ensure_execution_envelope_schema(connection)
+            existing = connection.execute(
+                "SELECT envelope_json FROM execution_envelopes WHERE execution_id=?",
+                (normalized["execution_id"],),
+            ).fetchone()
+            if existing is not None:
+                if str(existing["envelope_json"]) != canonical:
+                    raise RuntimeError("execution envelope conflicts with durable record")
+                return normalized
+            connection.execute(
+                """INSERT INTO execution_envelopes(
+                       execution_id, task_id, task_revision, owner, claim_expires,
+                       worktree_key, branch, spec_ref, spec_revision, policy_digest,
+                       argv_sha256, timeout_seconds, created_at, envelope_json
+                   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    normalized["execution_id"],
+                    normalized["task"],
+                    normalized["task_revision"],
+                    normalized["owner"],
+                    normalized["claim_expires"],
+                    normalized["worktree_key"],
+                    normalized["branch"],
+                    normalized["spec_ref"],
+                    normalized["spec_revision"],
+                    normalized["policy_digest"],
+                    normalized["argv_sha256"],
+                    normalized["timeout_seconds"],
+                    normalized["created_at"],
+                    canonical,
+                ),
+            )
+        return normalized
+
+    def begin_execution_envelope(self, envelope: Meta) -> tuple[bool, Meta | None]:
+        """Atomically reserve a launch, or return its existing terminal receipt.
+
+        A prior intent without a result is deliberately reported as uncertain:
+        replaying an arbitrary subprocess could duplicate an external effect.
+        """
+        normalized = self._normalize_execution_envelope(envelope)
+        canonical = json.dumps(normalized, sort_keys=True, separators=(",", ":"))
+        with self.transaction() as connection:
+            self._ensure_execution_envelope_schema(connection)
+            existing = connection.execute(
+                "SELECT envelope_json FROM execution_envelopes WHERE execution_id=?",
+                (normalized["execution_id"],),
+            ).fetchone()
+            if existing is None:
+                connection.execute(
+                    """INSERT INTO execution_envelopes(
+                           execution_id, task_id, task_revision, owner, claim_expires,
+                           worktree_key, branch, spec_ref, spec_revision, policy_digest,
+                           argv_sha256, timeout_seconds, created_at, envelope_json
+                       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        normalized["execution_id"],
+                        normalized["task"],
+                        normalized["task_revision"],
+                        normalized["owner"],
+                        normalized["claim_expires"],
+                        normalized["worktree_key"],
+                        normalized["branch"],
+                        normalized["spec_ref"],
+                        normalized["spec_revision"],
+                        normalized["policy_digest"],
+                        normalized["argv_sha256"],
+                        normalized["timeout_seconds"],
+                        normalized["created_at"],
+                        canonical,
+                    ),
+                )
+                return True, None
+            if str(existing["envelope_json"]) != canonical:
+                raise RuntimeError("execution envelope conflicts with durable record")
+            result = connection.execute(
+                "SELECT result_json FROM execution_results WHERE execution_id=?",
+                (normalized["execution_id"],),
+            ).fetchone()
+            if result is None:
+                return False, None
+            try:
+                value = json.loads(str(result["result_json"]))
+            except json.JSONDecodeError as error:
+                raise StorageCorruptionError("SQLITE_CORRUPT: invalid execution result") from error
+            if not isinstance(value, dict):
+                raise StorageCorruptionError("SQLITE_CORRUPT: invalid execution result")
+            return False, self._normalize_execution_result(cast(Meta, value))
+
+    def load_execution_results(self, task_id: str | None = None) -> list[Meta]:
+        """Load terminal outcomes in the same deterministic order as intent projection."""
+        connection = self._connect(read_only=True)
+        try:
+            try:
+                rows = connection.execute(
+                    """SELECT result_json FROM execution_results AS result
+                       JOIN execution_envelopes AS intent
+                         ON intent.execution_id=result.execution_id
+                       WHERE (? IS NULL OR intent.task_id=?)
+                       ORDER BY intent.task_id, intent.created_at, result.execution_id""",
+                    (task_id, task_id),
+                )
+            except sqlite3.OperationalError as error:
+                if "no such table" not in str(error).lower():
+                    raise
+                return []
+            records: list[Meta] = []
+            for row in rows:
+                try:
+                    value = json.loads(str(row["result_json"]))
+                except json.JSONDecodeError as error:
+                    raise StorageCorruptionError(
+                        "SQLITE_CORRUPT: invalid execution result"
+                    ) from error
+                if not isinstance(value, dict):
+                    raise StorageCorruptionError("SQLITE_CORRUPT: invalid execution result")
+                try:
+                    records.append(self._normalize_execution_result(cast(Meta, value)))
+                except ValueError as error:
+                    raise StorageCorruptionError(
+                        "SQLITE_CORRUPT: invalid execution result"
+                    ) from error
+            return records
+        except sqlite3.Error as error:
+            raise _translate(error) from error
+        finally:
+            connection.close()
+
+    def record_execution_result(self, result: Meta) -> Meta:
+        """Append one terminal outcome only after its durable execution intent exists."""
+        normalized = self._normalize_execution_result(result)
+        canonical = json.dumps(normalized, sort_keys=True, separators=(",", ":"))
+        with self.transaction() as connection:
+            self._ensure_execution_envelope_schema(connection)
+            intent = connection.execute(
+                "SELECT 1 FROM execution_envelopes WHERE execution_id=?",
+                (normalized["execution_id"],),
+            ).fetchone()
+            if intent is None:
+                raise RuntimeError("execution result lacks a durable intent")
+            existing = connection.execute(
+                "SELECT result_json FROM execution_results WHERE execution_id=?",
+                (normalized["execution_id"],),
+            ).fetchone()
+            if existing is not None:
+                if str(existing["result_json"]) != canonical:
+                    raise RuntimeError("execution result conflicts with durable record")
+                return normalized
+            connection.execute(
+                """INSERT INTO execution_results(
+                       execution_id, classification, returncode, recorded_at, result_json
+                   ) VALUES (?, ?, ?, ?, ?)""",
+                (
+                    normalized["execution_id"],
+                    normalized["classification"],
+                    normalized["returncode"],
+                    normalized["recorded_at"],
+                    canonical,
+                ),
+            )
+        return normalized
 
     def load_issue_series(self) -> list[Meta]:
         """Return authoritative local issue-series receipts in deterministic identity order."""
@@ -1415,6 +1764,31 @@ ISSUE_SERIES_STATEMENTS = (
 ISSUE_SERIES_SCHEMA = "\n".join(f"{statement};" for statement in ISSUE_SERIES_STATEMENTS)
 
 
+EXECUTION_ENVELOPE_STATEMENTS = (
+    """CREATE TABLE IF NOT EXISTS execution_envelopes(
+ execution_id TEXT PRIMARY KEY CHECK(length(execution_id)=36),
+ task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE RESTRICT,
+ task_revision INTEGER NOT NULL CHECK(task_revision >= 1),
+ owner TEXT NOT NULL, claim_expires TEXT NOT NULL, worktree_key TEXT NOT NULL,
+ branch TEXT NOT NULL, spec_ref TEXT, spec_revision INTEGER,
+ policy_digest TEXT NOT NULL CHECK(length(policy_digest)=64),
+ argv_sha256 TEXT NOT NULL CHECK(length(argv_sha256)=64),
+ timeout_seconds REAL NOT NULL CHECK(timeout_seconds > 0), created_at TEXT NOT NULL,
+ envelope_json TEXT NOT NULL CHECK(json_valid(envelope_json)),
+ CHECK((spec_ref IS NULL) = (spec_revision IS NULL))
+) STRICT""",
+    """CREATE TABLE IF NOT EXISTS execution_results(
+ execution_id TEXT PRIMARY KEY REFERENCES execution_envelopes(execution_id) ON DELETE RESTRICT,
+ classification TEXT NOT NULL CHECK(classification IN ('EXIT','SUBPROCESS_TIMEOUT')),
+ returncode INTEGER NOT NULL, recorded_at TEXT NOT NULL,
+ result_json TEXT NOT NULL CHECK(json_valid(result_json))
+) STRICT""",
+)
+EXECUTION_ENVELOPE_SCHEMA = "\n".join(
+    f"{statement};" for statement in EXECUTION_ENVELOPE_STATEMENTS
+)
+
+
 SCHEMA = (
     """
 CREATE TABLE metadata(key TEXT PRIMARY KEY, value TEXT NOT NULL) STRICT;
@@ -1450,6 +1824,7 @@ CREATE TABLE checkpoints(name TEXT PRIMARY KEY, revision INTEGER NOT NULL,
  recorded_at TEXT NOT NULL) STRICT;
 """
     + ISSUE_SERIES_SCHEMA
+    + EXECUTION_ENVELOPE_SCHEMA
 )
 
 
@@ -1466,6 +1841,8 @@ def create_database(  # noqa: C901
     checkpoint_records: Sequence[Meta] = (),
     issue_series: Sequence[Meta] = (),
     issue_series_publications: Sequence[Meta] = (),
+    execution_envelopes: Sequence[Meta] = (),
+    execution_results: Sequence[Meta] = (),
 ) -> None:
     """Build a complete database beside its final target and install atomically."""
     require_local_filesystem(path)
@@ -1565,6 +1942,61 @@ def create_database(  # noqa: C901
                         normalized["status"],
                         normalized["comment_id"],
                         normalized["recorded_at"],
+                    ),
+                )
+            normalized_envelopes = [
+                SQLiteBackend._normalize_execution_envelope(envelope)
+                for envelope in execution_envelopes
+            ]
+            normalized_results = [
+                SQLiteBackend._normalize_execution_result(result) for result in execution_results
+            ]
+            envelope_ids = {str(envelope["execution_id"]) for envelope in normalized_envelopes}
+            if len(envelope_ids) != len(normalized_envelopes):
+                raise ValueError("execution envelope import has duplicate identities")
+            if any(
+                str(result["execution_id"]) not in envelope_ids for result in normalized_results
+            ):
+                raise ValueError("execution result import lacks an execution intent")
+            if len({str(result["execution_id"]) for result in normalized_results}) != len(
+                normalized_results
+            ):
+                raise ValueError("execution result import has duplicate identities")
+            for envelope in normalized_envelopes:
+                connection.execute(
+                    """INSERT INTO execution_envelopes(
+                           execution_id, task_id, task_revision, owner, claim_expires,
+                           worktree_key, branch, spec_ref, spec_revision, policy_digest,
+                           argv_sha256, timeout_seconds, created_at, envelope_json
+                       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        envelope["execution_id"],
+                        envelope["task"],
+                        envelope["task_revision"],
+                        envelope["owner"],
+                        envelope["claim_expires"],
+                        envelope["worktree_key"],
+                        envelope["branch"],
+                        envelope["spec_ref"],
+                        envelope["spec_revision"],
+                        envelope["policy_digest"],
+                        envelope["argv_sha256"],
+                        envelope["timeout_seconds"],
+                        envelope["created_at"],
+                        json.dumps(envelope, sort_keys=True, separators=(",", ":")),
+                    ),
+                )
+            for result in normalized_results:
+                connection.execute(
+                    """INSERT INTO execution_results(
+                           execution_id, classification, returncode, recorded_at, result_json
+                       ) VALUES (?, ?, ?, ?, ?)""",
+                    (
+                        result["execution_id"],
+                        result["classification"],
+                        result["returncode"],
+                        result["recorded_at"],
+                        json.dumps(result, sort_keys=True, separators=(",", ":")),
                     ),
                 )
             connection.execute(

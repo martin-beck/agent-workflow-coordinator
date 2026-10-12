@@ -4,6 +4,7 @@
 """Issue-series integration and contention coverage for handoffctl."""
 
 import argparse
+import importlib.util
 import json
 import multiprocessing
 import sqlite3
@@ -15,7 +16,16 @@ from typing import Any, cast
 from unittest.mock import patch
 
 from fixture_ids import project_uuid
-from test_handoffctl import CORE, HandoffTest, configure_child, run_git
+from test_handoffctl import CORE, HandoffTest, SOURCE, configure_child, run_git
+
+
+def install_secondary_controller() -> None:
+    """Install another controller as discovery can do before forked workers run."""
+    spec = importlib.util.spec_from_file_location("handoffctl_issue_series_secondary", SOURCE)
+    if spec is None or spec.loader is None:
+        raise RuntimeError("cannot load secondary handoffctl controller")
+    secondary = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(secondary)
 
 
 def racing_issue_series_create(
@@ -468,6 +478,7 @@ class IssueSeriesHandoffTest(unittest.TestCase):
     def test_sixteen_processes_serialize_one_issue_series_create(self) -> None:
         self.make_task()
         manifest = self.issue_series_manifest()
+        install_secondary_controller()
         digest = CORE.issue_series_state_digest(CORE.all_tasks())
         context = multiprocessing.get_context("fork")
         start, outcomes = context.Event(), context.Queue()
@@ -490,6 +501,16 @@ class IssueSeriesHandoffTest(unittest.TestCase):
         created = {meta["id"] for _path, meta, _body in CORE.all_tasks()}
         self.assertEqual({"AR-0001", "AR-9000", "AR-9001"}, created)
         self.assertEqual(1, len(list((self.root / "issue-series").glob("*.json"))))
+
+    def test_cli_dispatch_keeps_the_calling_controller_after_another_import(self) -> None:
+        """The shared service must not route the first CLI through a later controller."""
+        install_secondary_controller()
+        args = argparse.Namespace(
+            cmd="issue-series", issue_series_action="plan", manifest=self.root / "plan.json"
+        )
+        with patch.object(CORE, "cmd_issue_series_plan") as primary:
+            self.assertTrue(CORE.issue_series_service.dispatch_cli(args, vars(CORE)))
+        primary.assert_called_once_with(args)
 
     def test_sixteen_processes_commit_one_issue_series_to_a_real_remote(self) -> None:
         self.make_task()
@@ -557,6 +578,7 @@ class IssueSeriesHandoffTest(unittest.TestCase):
             )
         )
         manifest = self.issue_series_manifest()
+        install_secondary_controller()
         digest = CORE.issue_series_state_digest(CORE.all_tasks())
         context = multiprocessing.get_context("fork")
         start, outcomes = context.Event(), context.Queue()
