@@ -791,16 +791,12 @@ UUID_PRIVACY_EXEMPT = frozenset(
         Path("coordinator.binding.json"),
         Path("coordinator.backend.json"),
         Path("tools/handoffctl.py"),
-        Path("tests/test_handoffctl.py"),
         Path("tests/test_sqlite_storage.py"),
     }
 )
 STATE_SIZE_EXEMPT = frozenset(
     {
         Path("tools/handoffctl.py"),
-        # The vendored end-to-end CLI conformance fixture is not authoritative
-        # project state, but is retained beside the runtime for downstream tests.
-        Path("tests/test_handoffctl.py"),
     }
 )
 
