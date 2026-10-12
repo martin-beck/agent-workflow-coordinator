@@ -172,6 +172,12 @@ def _cycle_errors(graph: Mapping[str, tuple[str, ...]]) -> list[str]:
 def _finalizer_errors(
     members: tuple[Member, ...], graph: Mapping[str, tuple[str, ...]], finalizer: str
 ) -> list[str]:
+    required = {member.id for member in members if member.id != finalizer}
+    direct = set(graph.get(finalizer, ()))
+    errors = [
+        f"finalizer {finalizer} must directly depend on {member_id}"
+        for member_id in sorted(required - direct)
+    ]
     reachable: set[str] = {finalizer}
     pending = [finalizer]
     while pending:
@@ -180,11 +186,12 @@ def _finalizer_errors(
             if dependency not in reachable:
                 reachable.add(dependency)
                 pending.append(dependency)
-    return [
+    errors.extend(
         f"{member.id} is orphaned from finalizer {finalizer}"
         for member in members
         if member.id not in reachable
-    ]
+    )
+    return errors
 
 
 def _graph_errors(members: tuple[Member, ...], finalizer: str) -> list[str]:

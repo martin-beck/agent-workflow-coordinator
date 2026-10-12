@@ -159,3 +159,17 @@ class IssueSeriesTests(unittest.TestCase):
         value = manifest()
         value["members"][0]["depends_on"] = [{"id": "AR-1000", "rationale": "self"}]
         self.assert_invalid(value, "depends on itself")
+
+    def test_finalizer_directly_depends_on_every_non_finalizer(self) -> None:
+        value = manifest()
+        value["members"].append(
+            {
+                "id": "AR-1002",
+                "scope": "Finish locally",
+                "acceptance": "The final local check passes",
+                "ownership": "Coordinator core",
+                "depends_on": [{"id": "AR-1001", "rationale": "finalize"}],
+            }
+        )
+        value["finalizer"] = "AR-1002"
+        self.assert_invalid(value, "must directly depend on AR-1000")
