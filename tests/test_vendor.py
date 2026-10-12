@@ -282,6 +282,13 @@ exec "$@"
         }
         expected_models = {
             "portable-smoke": {"HandoffctlBinding"},
+            "pr-fast": {
+                "HandoffctlFast",
+                "HandoffctlReceiptsFast",
+                "HandoffctlPublicationFast",
+                "HandoffctlObservation",
+                "OracleInteractionGates",
+            },
             "pr-publication": {
                 "HandoffctlBinding",
                 "HandoffctlLocks",
@@ -321,6 +328,14 @@ exec "$@"
             self.assertEqual("1" * 40, value["candidate_identity"]["commit"])
             self.assertEqual("diagnostic-private-admission", value["execution_classification"])
             self.assertFalse(value["canonical_publication_evidence"])
+            self.assertEqual(
+                {"portable-smoke": 600, "pr-fast": 300, "pr-publication": 900}[tier],
+                value["verifier_budget"]["declared_seconds"],
+            )
+            self.assertLessEqual(
+                value["verifier_budget"]["elapsed_seconds"],
+                value["verifier_budget"]["declared_seconds"],
+            )
             self.assertTrue(
                 any(
                     "cannot support release or publication claims" in item

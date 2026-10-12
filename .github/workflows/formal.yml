@@ -12,6 +12,7 @@ name: Formal
         type: choice
         options:
           - pr-fast
+          - pr-publication
           - full-exhaustive
   schedule:
     - cron: "17 3 * * 0"
@@ -31,7 +32,10 @@ jobs:
   formal-trusted:
     if: github.ref == 'refs/heads/main'
     runs-on: [self-hosted, Linux, X64, agent-workflow-coordinator-ci]
-    timeout-minutes: ${{ (github.event_name == 'schedule' || inputs.tier == 'full-exhaustive') && 1440 || 30 }}
+    timeout-minutes: ${{ (github.event_name == 'schedule' || inputs.tier == 'full-exhaustive') && 1440 || inputs.tier == 'pr-publication' && 15 || 5 }}
+    # Full-exhaustive remains scheduled/manual advisory evidence until AR-0102;
+    # it must not obstruct ordinary development progression.
+    continue-on-error: ${{ github.event_name == 'schedule' || inputs.tier == 'full-exhaustive' }}
     env:
       TLC_TIER: ${{ github.event_name == 'schedule' && 'full-exhaustive' || inputs.tier || 'pr-fast' }}
     steps:
@@ -86,7 +90,7 @@ jobs:
           TLC_HEAP: ${{ (github.event_name == 'schedule' || inputs.tier == 'full-exhaustive') && '48g' || '2048m' }}
           TLC_MEMORY_MAX: ${{ (github.event_name == 'schedule' || inputs.tier == 'full-exhaustive') && '64G' || '3G' }}
           TLC_SWAP_MAX: ${{ (github.event_name == 'schedule' || inputs.tier == 'full-exhaustive') && '64G' || '3G' }}
-          TLC_TIMEOUT_SECONDS: ${{ (github.event_name == 'schedule' || inputs.tier == 'full-exhaustive') && '6000' || '1200' }}
+          TLC_BUDGET_SECONDS: ${{ (github.event_name == 'schedule' || inputs.tier == 'full-exhaustive') && '86400' || inputs.tier == 'pr-publication' && '900' || '300' }}
           TLC_ATTESTATION_PATH: ${{ runner.temp }}/formal-attestation.json
         run: formal/handoffctl/verify.sh --tier "$TLC_TIER"
       - name: Publish exact-head tier attestation

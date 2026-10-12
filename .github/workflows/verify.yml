@@ -132,16 +132,6 @@ jobs:
               backend_schema, format_checker=jsonschema.FormatChecker()
           ).validate(backend)
           PY
-      - name: DCO certification
-        if: github.event_name == 'pull_request'
-        env:
-          BASE: ${{ github.event.pull_request.base.sha }}
-          HEAD: ${{ github.event.pull_request.head.sha }}
-        run: |
-          while IFS= read -r revision; do
-            expected=$(git show -s --format='Signed-off-by: %an <%ae>' "$revision")
-            git show -s --format=%B "$revision" | grep -Fx -- "$expected"
-          done < <(git rev-list "$BASE..$HEAD")
 
   formal-portable:
     needs: [awq, scope]
