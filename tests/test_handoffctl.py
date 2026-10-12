@@ -2120,7 +2120,7 @@ class HandoffTest(unittest.TestCase):
                     )
                 self.assertEqual(before, path.read_bytes())
 
-    def test_real_signed_fast_heartbeat_receipt_matches_git_commit(self) -> None:
+    def test_real_unsigned_fast_heartbeat_receipt_matches_git_commit(self) -> None:
         path = self.make_task(
             status="in_progress",
             owner="worker-a",
@@ -2130,22 +2130,10 @@ class HandoffTest(unittest.TestCase):
         for name, value in (
             ("user.name", "Receipt Fixture"),
             ("user.email", "fixture@example.invalid"),
-            ("gpg.format", "ssh"),
         ):
             run_git(["git", "-C", str(self.root), "config", name, value])
         keys = TemporaryDirectory()
         self.addCleanup(keys.cleanup)
-        key = Path(keys.name) / "signing-key"
-        subprocess.run(  # noqa: S603
-            ["/usr/bin/ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(key)],
-            check=True,
-        )
-        allowed = Path(keys.name) / "allowed-signers"
-        allowed.write_text(
-            f"fixture@example.invalid {key.with_suffix('.pub').read_text().strip()}\n"
-        )
-        run_git(["git", "-C", str(self.root), "config", "user.signingkey", str(key)])
-        run_git(["git", "-C", str(self.root), "config", "gpg.ssh.allowedSignersFile", str(allowed)])
         run_git(
             [
                 "git",
@@ -2192,7 +2180,11 @@ class HandoffTest(unittest.TestCase):
         self.assertEqual(2, result["result_revision"])
         self.assertEqual(2, CORE.read_task(path)[0]["task_revision"])
         self.assertEqual(queued["receipt_id"], result["receipt_id"])
-        run_git(["git", "-C", str(self.root), "verify-commit", str(result["commit_oid"])])
+        unsigned = subprocess.run(  # noqa: S603
+            ["git", "-C", str(self.root), "verify-commit", str(result["commit_oid"])],  # noqa: S607
+            check=False,
+        )
+        self.assertNotEqual(0, unsigned.returncode)
         CORE.CONFIG.parent.mkdir(exist_ok=True)
         CORE.CONFIG.write_text(json.dumps({"push_enabled": True}))
         with patch.object(CORE, "assert_project_binding"):
@@ -2230,7 +2222,6 @@ class HandoffTest(unittest.TestCase):
                 "-C",
                 str(self.root),
                 "commit",
-                "-S",
                 "-s",
                 "-m",
                 "chore(state): heartbeat AR-0001",
@@ -2267,7 +2258,6 @@ class HandoffTest(unittest.TestCase):
                 "-C",
                 str(self.root),
                 "commit",
-                "-S",
                 "-s",
                 "-m",
                 "chore(state): heartbeat AR-0001",
@@ -2287,7 +2277,7 @@ class HandoffTest(unittest.TestCase):
         CORE.write_task(path, meta, body)
         CORE.write_rendered_task_views(CORE.rendered_task_views(CORE.all_tasks()))
         run_git(["git", "-C", str(self.root), "add", "-A"])
-        run_git(["git", "-C", str(self.root), "commit", "-qS", "-m", "fixture promote baseline"])
+        run_git(["git", "-C", str(self.root), "commit", "-qm", "fixture promote baseline"])
         promote = store.enqueue_promote(
             key="worker-a:promote:1",
             task="AR-0001",
@@ -2301,7 +2291,6 @@ class HandoffTest(unittest.TestCase):
         self.assertEqual(promote["receipt_id"], promoted["receipt_id"])
         self.assertEqual(5, promoted["result_revision"])
         self.assertEqual("open", CORE.read_task(path)[0]["status"])
-        run_git(["git", "-C", str(self.root), "verify-commit", str(promoted["commit_oid"])])
 
         claim = store.enqueue_claim(
             key="worker-a:claim:1",
@@ -2317,7 +2306,6 @@ class HandoffTest(unittest.TestCase):
         self.assertEqual(claim["receipt_id"], claimed["receipt_id"])
         self.assertEqual(6, claimed["result_revision"])
         self.assertEqual("in_progress", CORE.read_task(path)[0]["status"])
-        run_git(["git", "-C", str(self.root), "verify-commit", str(claimed["commit_oid"])])
 
         stale = store.enqueue_claim(
             key="worker-b:claim:stale",

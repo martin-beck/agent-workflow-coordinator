@@ -367,13 +367,13 @@ class FastReceiptWorkerTests(unittest.TestCase):
         self.assertEqual("completed-local", result["phase"])
         self.assertEqual("b" * 40, result["commit_oid"])
 
-    def test_untrusted_commit_stays_ambiguous(self) -> None:
+    def test_unverifiable_commit_stays_ambiguous(self) -> None:
         self.enqueue()
         core = FakeCore(self.root, "success")
         with (
             patch(
                 "tools.fast_receipt_worker.verify_local_commit",
-                side_effect=RuntimeError("signature is not trusted"),
+                side_effect=RuntimeError("receipt commit is not on the active state branch"),
             ),
             patch("tools.fast_receipt_worker.find_receipt_commit", return_value="a" * 40),
         ):
@@ -411,7 +411,7 @@ class FastReceiptWorkerTests(unittest.TestCase):
         self.assertEqual(receipt_id, outcomes[0]["receipt_id"])
         self.assertEqual(0, core.calls)
 
-    def test_restart_recovers_exact_signed_commit_marker(self) -> None:
+    def test_restart_recovers_exact_active_branch_commit_marker(self) -> None:
         receipt_id = self.enqueue()
         self.store.claim_next()
         core = FakeCore(self.root, "success")
@@ -433,7 +433,7 @@ class FastReceiptWorkerTests(unittest.TestCase):
             patch("tools.fast_receipt_worker.find_receipt_commit", return_value="a" * 40),
             patch(
                 "tools.fast_receipt_worker.verify_local_commit",
-                side_effect=RuntimeError("signature is not trusted"),
+                side_effect=RuntimeError("receipt commit is not on the active state branch"),
             ),
         ):
             outcomes = recover_running(core, self.store)
@@ -839,7 +839,7 @@ class FastReceiptWorkerTests(unittest.TestCase):
             message = f"chore(state): {operation} AR-0120\n\nHandoffctl-Receipt: {receipt_id}\n"
             verifier = getattr(worker, f"_verify_{operation}_delta")
             with (
-                patch.object(worker, "_require_signed_branch_commit"),
+                patch.object(worker, "_require_active_branch_commit"),
                 patch.object(worker, "_git", return_value=message),
                 patch.object(verifier.__module__ and worker, verifier.__name__, return_value=2),
             ):
@@ -855,7 +855,7 @@ class FastReceiptWorkerTests(unittest.TestCase):
             "payload_json": "{}",
         }
         with (
-            patch.object(worker, "_require_signed_branch_commit"),
+            patch.object(worker, "_require_active_branch_commit"),
             patch.object(worker, "_git", return_value="chore(state): heartbeat AR-0120\n"),
             self.assertRaisesRegex(RuntimeError, "marker"),
         ):
@@ -872,7 +872,7 @@ class FastReceiptWorkerTests(unittest.TestCase):
             )
             with (
                 self.subTest(operation=operation),
-                patch.object(worker, "_require_signed_branch_commit"),
+                patch.object(worker, "_require_active_branch_commit"),
                 patch.object(
                     worker,
                     "_git",
@@ -1483,29 +1483,28 @@ class FastReceiptWorkerTests(unittest.TestCase):
             ):
                 worker._validated_intent(intent(payload, **fields))
 
-    def test_commit_provenance_and_dco_reject_untrusted_metadata(self) -> None:
+    def test_commit_branch_provenance_and_dco_reject_untrusted_metadata(self) -> None:
         core = FakeCore(self.root, "success")
         core.project_settings = lambda: {"commit_signoff": True}  # type: ignore[method-assign]
         oid = "a" * 40
         with self.assertRaisesRegex(RuntimeError, "invalid receipt commit oid"):
-            worker._require_signed_branch_commit(core, "not-an-oid")
+            worker._require_active_branch_commit(core, "not-an-oid")
         with (
             patch.object(core, "run", return_value=subprocess.CompletedProcess([], 1, "")),
-            self.assertRaisesRegex(RuntimeError, "signature is not trusted"),
-        ):
-            worker._require_signed_branch_commit(core, oid)
-        with (
-            patch.object(
-                core,
-                "run",
-                side_effect=[
-                    subprocess.CompletedProcess([], 0, ""),
-                    subprocess.CompletedProcess([], 1, ""),
-                ],
-            ),
             self.assertRaisesRegex(RuntimeError, "active state branch"),
         ):
-            worker._require_signed_branch_commit(core, oid)
+            worker._require_active_branch_commit(core, oid)
+        with (
+            patch.object(core, "run", return_value=subprocess.CompletedProcess([], 1, "")),
+            self.assertRaisesRegex(RuntimeError, "active state branch"),
+        ):
+            worker._require_active_branch_commit(core, oid)
+        with patch.object(
+            core, "run", return_value=subprocess.CompletedProcess([], 0, "")
+        ) as run:
+            worker._require_active_branch_commit(core, oid)
+        self.assertEqual("merge-base", run.call_args.args[0][3])
+        self.assertNotIn("verify-commit", run.call_args.args[0])
 
         receipt_id = "f" * 32
         intent = {
@@ -1518,7 +1517,7 @@ class FastReceiptWorkerTests(unittest.TestCase):
         for message in (subject, subject + "Signed-off-by: Pat <pat@example.test>\n" * 2):
             with (
                 self.subTest(message=message),
-                patch.object(worker, "_require_signed_branch_commit"),
+                patch.object(worker, "_require_active_branch_commit"),
                 patch.object(worker, "_verify_heartbeat_delta", return_value=2),
                 patch.object(worker, "_git", side_effect=[message, "Pat <pat@example.test>\n"]),
                 self.assertRaisesRegex(RuntimeError, "DCO does not match"),
