@@ -322,3 +322,15 @@ python3 tools/formal_receipt.py \
 Hosted CI can publish this receipt as advisory operational evidence, but it is
 not an authentication, signature, approval, review, merge, acceptance, or
 release gate.
+
+## Tier-migration qualification
+
+`tests/test_formal_tier_qualification.py` exercises the local end-to-end
+evidence boundary with controlled runner projections: exact candidate identity
+is rendered into a bounded receipt and then validated against the checked-out
+tree. It also verifies typed storage/admission and deadline remediation,
+noncanonical cancellable advisory-stress receipts, and the one-sync legacy
+`HandoffctlPR.cfg` vendor migration. These are deterministic boundary tests;
+the tier runners remain responsible for executing TLC itself. No hosted CI,
+external account, signature, or independent review is needed to reproduce or
+use this qualification evidence.
