@@ -154,6 +154,10 @@
 
 ## Unreleased
 
+## 0.5.5
+
+- Correct the vendored runtime version so release sync verifies the exact tag.
+
 ## 0.5.4
 
 - Add local-first optional issue-series publication with typed, privacy-bounded
