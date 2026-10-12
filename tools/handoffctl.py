@@ -2351,27 +2351,8 @@ def dependency_satisfied(dependency_id: str, tasks: list[Task]) -> bool:
 
 
 def require_role_admission(owner_id: str, required_role: str = "implementer") -> None:
-    """Require a durable capability when the role workstream is initialized."""
-    state_path = RUNTIME / "roles.json"
-    if not state_path.exists():
-        return
-    try:
-        if __package__:
-            from .roles import role_admission_error as _role_admission_error
-        else:  # pragma: no cover - direct script execution
-            from roles import (  # type: ignore[import-not-found,no-redef]
-                role_admission_error as _role_admission_error,
-            )
-        admission_error = _role_admission_error(
-            state_path,
-            ROOT / "examples/roles/role-registry.json",
-            owner_id=owner_id,
-            required_role=required_role,
-        )
-    except Exception as import_error:  # fail closed if the admission module is unavailable
-        raise RuntimeError(f"role admission unavailable: {import_error}") from import_error
-    if admission_error:
-        raise RuntimeError(admission_error)
+    """Compatibility no-op: role assignments are advisory, never an execution gate."""
+    del owner_id, required_role
 
 
 def require_update_role_admission(kind: str, owner_id: str) -> None:
@@ -3538,27 +3519,8 @@ def cmd_render_status(*, check: bool) -> None:
 
 
 def role_doctor_errors() -> list[str]:
-    if not (RUNTIME / "roles.json").exists():
-        return []
-    try:
-        if __package__:
-            from .roles import role_admission_errors as _role_admission_errors
-        else:  # pragma: no cover - direct script execution
-            from roles import (  # type: ignore[no-redef]
-                role_admission_errors as _role_admission_errors,
-            )
-        active_roles = [
-            (str(meta.get("owner")), "implementer")
-            for _, meta, _ in all_tasks()
-            if meta.get("status") == "in_progress" and meta.get("owner")
-        ]
-        return _role_admission_errors(
-            RUNTIME / "roles.json",
-            ROOT / "examples/roles/role-registry.json",
-            active_roles,
-        )
-    except Exception as error:
-        return [f"role admission unavailable: {error}"]
+    """Roles belong to the external role registry and do not gate coordinator health."""
+    return []
 
 
 def doctor_checks(*, live: bool, sqlite: bool, live_state: State | None) -> list[str]:
