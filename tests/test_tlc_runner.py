@@ -41,6 +41,8 @@ class TLCAdmissionTests(unittest.TestCase):
         self.assertIn("-workers", command)
         self.assertIn("2", command)
         self.assertIn("-Xmx2048m", command)
+        self.assertIn("-Djava.io.tmpdir=" + str(Path("states").parent.resolve()), command)
+        self.assertIn("-Duser.dir=" + str(Path("states").parent.resolve()), command)
         self.assertIn("-XX:+UseSerialGC", command)
         self.assertIn("-XX:MaxMetaspaceSize=256m", command)
         self.assertIn("-XX:CompressedClassSpaceSize=128m", command)
@@ -278,6 +280,23 @@ class TLCAdmissionTests(unittest.TestCase):
         )
         self.assertEqual(args.workers, 2)
         self.assertEqual(args.timeout_seconds, 1800)
+        self.assertEqual(args.storage_max, "2G")
+        self.assertEqual(args.storage_reserve, "256M")
+
+    def test_private_workspace_rejects_metadir_outside_its_boundary(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with self.assertRaisesRegex(AdmissionError, "inside the private TLC workspace"):
+                _runner._prepare_workspace(root / "workspace", root / "foreign", 1)
+
+    def test_preflight_rejects_insufficient_workspace_capacity(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory) / "workspace"
+            with (
+                patch.object(_runner, "_available_bytes", return_value=0),
+                self.assertRaisesRegex(AdmissionError, "insufficient workspace capacity"),
+            ):
+                _runner._prepare_workspace(workspace, workspace / "states", 1)
 
     def test_rejects_zero_memory_or_process_limits(self) -> None:
         for kwargs in (
@@ -333,8 +352,9 @@ class TLCAdmissionTests(unittest.TestCase):
             with (
                 patch.object(_runner, "DEFAULT_ADMISSION_LOCK", queue / "admission.lock"),
                 patch("tools.tlc_runner.shutil.which", return_value="/usr/bin/tool"),
-                patch("tools.tlc_runner.subprocess.run") as execute,
+                patch("tools.tlc_runner.subprocess.Popen") as execute,
             ):
+                execute.return_value.poll.side_effect = [None, 0]
                 execute.return_value.returncode = 0
                 self.assertEqual(run(args), 0)
                 execute.assert_called_once()
@@ -448,7 +468,7 @@ class TLCAdmissionTests(unittest.TestCase):
             )()
             with (
                 patch.object(_runner, "DEFAULT_ADMISSION_LOCK", queue / "admission.lock"),
-                patch("tools.tlc_runner.subprocess.run", side_effect=KeyboardInterrupt),
+                patch("tools.tlc_runner.subprocess.Popen", side_effect=KeyboardInterrupt),
                 self.assertRaises(KeyboardInterrupt),
             ):
                 run(args)
