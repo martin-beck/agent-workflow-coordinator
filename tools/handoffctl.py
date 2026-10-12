@@ -39,7 +39,7 @@ if not __package__:
         sys.path.insert(0, _SCRIPT_ROOT)
 
 if __package__:
-    from . import execution_envelope, execution_receipt
+    from . import change_drift, execution_envelope, execution_receipt
     from .board_metrics import build_metrics
     from .board_metrics import encode as encode_metrics
     from .checkpoint_records import (
@@ -108,6 +108,8 @@ if __package__:
         task_spec_policy_errors,
     )
 else:  # pragma: no cover - direct script execution
+    import change_drift  # type: ignore[import-not-found,no-redef]
+
     try:
         from board_metrics import build_metrics  # type: ignore[import-not-found,no-redef]  # noqa: I001
         from board_metrics import encode as encode_metrics  # type: ignore[no-redef]
@@ -245,6 +247,7 @@ LIFECYCLE_MUTATION_COMMANDS = (
     "recover-expired",
     "recover-execution",
     "update",
+    "change-drift",
 )
 
 
@@ -298,6 +301,7 @@ FIELDS = set(REQ) | {
     "parent_task_ref",
     "children",
     "issue_series",
+    "change_drift",
 }
 type Meta = dict[str, Any]
 type Task = tuple[Path, Meta, str]
@@ -1438,6 +1442,10 @@ def execution_metadata_errors(task_id: str, meta: Meta) -> list[str]:
         errors.append(f"{task_id}: invalid execution_result")
     if not valid_execution_envelope_binding(meta):
         errors.append(f"{task_id}: invalid execution envelope binding")
+    try:
+        change_drift.records(meta)
+    except ValueError as error:
+        errors.append(f"{task_id}: {error}")
     return errors
 
 
@@ -2380,6 +2388,68 @@ def require_done_admission(
         hierarchy_error = open_child_error(meta, tasks)
         if hierarchy_error:
             raise RuntimeError(hierarchy_error)
+    try:
+        history = change_drift.records(meta)
+        if history and change_drift.latest(history, "delta") is None:
+            raise RuntimeError("CHANGE_DRIFT_DELTA_REQUIRED: baseline requires a post-work delta")
+        outstanding = change_drift.unresolved(history)
+    except ValueError as error:
+        raise RuntimeError(f"change-drift record is invalid: {error}") from error
+    if outstanding:
+        paths = ", ".join(str(entry["path"]) for entry in outstanding)
+        raise RuntimeError(
+            f"CHANGE_DRIFT_UNEXPLAINED: material changed paths require explanation: {paths}"
+        )
+
+
+def _change_drift_worktree(meta: Meta) -> Path:
+    key = meta.get("worktree_key")
+    if not isinstance(key, str) or not key:
+        raise RuntimeError("change-drift requires a bound worktree")
+    return Path(str(config()["projects_root"])).resolve() / key
+
+
+def apply_change_drift(args: argparse.Namespace, meta: Meta) -> str:
+    """Append one revision-fenced observation, exception, or scope record."""
+    if meta.get("owner") != args.owner or meta.get("status") != "in_progress":
+        raise RuntimeError("change-drift requires the active task owner")
+    if args.expected_revision != meta["task_revision"]:
+        raise RuntimeError(
+            f"stale revision: expected {args.expected_revision}, current {meta['task_revision']}"
+        )
+    history = change_drift.records(meta)
+    revision = int(meta["task_revision"]) + 1
+    action = args.change_drift_action
+    if action == "baseline":
+        record = change_drift.baseline(
+            args.task, revision, now(), _change_drift_worktree(meta), args.scope_path
+        )
+    elif action == "delta":
+        base = change_drift.latest(history, "baseline")
+        if base is None:
+            raise RuntimeError("change-drift delta requires a baseline")
+        record = change_drift.delta(
+            args.task,
+            revision,
+            now(),
+            _change_drift_worktree(meta),
+            base,
+            change_drift.active_scope(history, base),
+        )
+    elif action == "explain":
+        current = change_drift.latest(history, "delta")
+        if current is None:
+            raise RuntimeError("change-drift explanation requires a delta")
+        record = change_drift.explain(
+            args.task, revision, now(), current["digest"], args.path, args.reason, args.generated
+        )
+    else:
+        base = change_drift.latest(history, "baseline")
+        if base is None:
+            raise RuntimeError("change-drift re-scope requires a baseline")
+        record = change_drift.rescope(args.task, revision, now(), base["digest"], args.scope_path)
+    meta["change_drift"] = [*history, record][-change_drift.MAX_RECORDS :]
+    return f"Recorded change-drift {action} {record['digest']}."
 
 
 def require_release_admission(
@@ -3132,6 +3202,8 @@ def apply_transition(  # noqa: C901
         return apply_recover_execution(args, meta)
     if kind == "gate":
         return apply_gate(args, meta)
+    if kind == "change-drift":
+        return apply_change_drift(args, meta)
     record_transition = {"checkpoint": apply_checkpoint, "rollback": apply_rollback}.get(kind)
     if record_transition is not None:
         return record_transition(args, meta)
@@ -4680,7 +4752,7 @@ def dispatch_bound_command(args: argparse.Namespace) -> int:
     return dispatch_bound_standard_command(args)
 
 
-def main() -> int:
+def main() -> int:  # noqa: C901
     parser = argparse.ArgumentParser()
     commands = parser.add_subparsers(dest="cmd", required=True)
     item = commands.add_parser("init")
@@ -4903,6 +4975,22 @@ def main() -> int:
     item.add_argument("--summary")
     item.add_argument("--next-action")
     item.add_argument("--note", required=True)
+    item = commands.add_parser("change-drift")
+    drift_commands = item.add_subparsers(dest="change_drift_action", required=True)
+    for action in ("baseline", "delta", "rescope"):
+        drift = drift_commands.add_parser(action)
+        drift.add_argument("task")
+        drift.add_argument("--owner", required=True)
+        drift.add_argument("--expected-revision", type=int, required=True)
+        if action in {"baseline", "rescope"}:
+            drift.add_argument("--scope-path", action="append", required=True)
+    drift = drift_commands.add_parser("explain")
+    drift.add_argument("task")
+    drift.add_argument("--owner", required=True)
+    drift.add_argument("--expected-revision", type=int, required=True)
+    drift.add_argument("--path", action="append", required=True)
+    drift.add_argument("--reason", required=True)
+    drift.add_argument("--generated", action="store_true")
     item = commands.add_parser("gate")
     item.add_argument("task")
     item.add_argument("--expected-revision", type=int, required=True)

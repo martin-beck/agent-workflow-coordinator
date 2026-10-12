@@ -144,6 +144,27 @@ spec and validates the metadata. It does not independently inspect or prove the
 evidence contents; project review and evidence-class obligations still apply.
 The `done` release gate remains fail closed when acceptance is missing or invalid.
 
+## Change-drift guard
+
+Use `change-drift baseline` before source work, then `change-drift delta` before completion.
+The baseline and delta preserve Git rename pairs and generated-file markers without touching the
+worktree. Every changed path remains material until it is explicitly explained; generated output is
+not silently exempt. `explain` and `rescope` require the active owner and exact task revision, so a
+concurrent lifecycle change cannot be overwritten.
+
+```sh
+tools/handoffctl change-drift baseline AR-0001 --owner worker-unique --expected-revision 2 \
+  --scope-path tools --scope-path tests
+tools/handoffctl change-drift delta AR-0001 --owner worker-unique --expected-revision 3
+tools/handoffctl change-drift explain AR-0001 --owner worker-unique --expected-revision 4 \
+  --path build/output.generated --generated --reason "Documented local build output"
+tools/handoffctl change-drift rescope AR-0001 --owner worker-unique --expected-revision 5 \
+  --scope-path tools --scope-path tests --scope-path docs
+```
+
+Both the Git task record and the SQLite task row carry the same bounded canonical history. A task
+cannot transition to `done` while its latest delta has material paths without matching explanations.
+
 An execution envelope is an optional, immutable, revision-bound task contract. Once bound, every
 `run` must declare an allowed command class and, for mutations, at least one allowed scope path.
 `preflight` gives a machine-readable explanation without changing state. The bound envelope is the

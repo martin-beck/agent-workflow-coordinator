@@ -125,6 +125,11 @@
                 "recorded_at": {"type": "string", "format": "date-time"}
             }
         },
+        "change_drift": {
+            "type": "array",
+            "maxItems": 32,
+            "items": {"type": "object"}
+        },
         "parent_task_ref": {
             "anyOf": [{"type": "string", "maxLength": 0}, {"$ref": "#/$defs/taskId"}]
         },
