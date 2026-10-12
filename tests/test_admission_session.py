@@ -149,6 +149,31 @@ class AdmissionSessionTests(unittest.TestCase):
             AdmissionSession(self.lease, stale, scope)
         self.assertEqual([], scope.events)
 
+    def test_session_rejects_missing_contract_objects_before_scope(self) -> None:
+        scope = _Scope()
+        cases = (
+            (object(), self.recheck, scope, "lease"),
+            (self.lease, object(), scope, "recheck"),
+            (self.lease, self.recheck, object(), "scope"),
+        )
+        for lease, recheck, candidate_scope, message in cases:
+            with self.subTest(message=message), self.assertRaisesRegex(
+                AdmissionLeaseError, message
+            ):
+                AdmissionSession(lease, recheck, candidate_scope)  # type: ignore[arg-type]
+        self.assertEqual([], scope.events)
+
+    def test_session_revalidates_tampered_recheck_before_store(self) -> None:
+        scope = _Scope()
+        session = AdmissionSession(self.lease, self.recheck, scope)
+        object.__setattr__(session.recheck, "revision", 2)
+        try:
+            with self.assertRaisesRegex(AdmissionLeaseError, "does not match"):
+                session.cas(_Store(), 1, self.record)
+        finally:
+            object.__setattr__(session.recheck, "revision", 1)
+        self.assertEqual([], scope.events)
+
     def test_failed_write_releases_scope(self) -> None:
         scope = _Scope()
         session = AdmissionSession(self.lease, self.recheck, scope)

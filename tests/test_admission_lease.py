@@ -9,7 +9,9 @@ import unittest
 
 from tools.admission_lease import (
     LOCK_ORDER,
+    AdmissionLease,
     AdmissionLeaseError,
+    AdmissionRecheck,
     LockOrder,
     lease_from_record,
     validate_recheck,
@@ -57,3 +59,34 @@ class AdmissionLeaseTests(unittest.TestCase):
                 lease_from_record(malformed)
         with self.assertRaisesRegex(AdmissionLeaseError, "fields"):
             lease_from_record({**self.record, "status": "held"})
+
+    def test_direct_lease_and_recheck_construction_reject_invalid_values(self) -> None:
+        for field, value in (("project_id", None), ("fencing_owner", ""), ("revision", 0)):
+            values = dict(self.record)
+            values[field] = value
+            with self.subTest(field=field), self.assertRaises(AdmissionLeaseError):
+                AdmissionLease(**values)  # type: ignore[arg-type]
+
+        lease = lease_from_record(self.record)
+        for field, value in (("project_id", "other"), ("revision", True)):
+            values = dict(self.record)
+            values[field] = value
+            with self.subTest(field=field), self.assertRaises(AdmissionLeaseError):
+                AdmissionRecheck(lease=lease, **values)  # type: ignore[arg-type]
+
+    def test_recheck_rejects_non_lease_and_each_invalid_identity_type(self) -> None:
+        with self.assertRaisesRegex(AdmissionLeaseError, "lease"):
+            validate_recheck(object(), **self.record)  # type: ignore[arg-type]
+        lease = lease_from_record(self.record)
+        for field, value in (
+            ("project_id", True),
+            ("authority_revision", 1),
+            ("fencing_token", None),
+            ("fencing_owner", ""),
+            ("durable_barrier_id", []),
+            ("revision", 0),
+        ):
+            values = dict(self.record)
+            values[field] = value
+            with self.subTest(field=field), self.assertRaises(AdmissionLeaseError):
+                validate_recheck(lease, **values)

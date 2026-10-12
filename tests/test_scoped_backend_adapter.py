@@ -264,6 +264,38 @@ class ScopedBackendAdapterTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "recheck failed"):
             adapter.verify_rollback_context({})
 
+    def test_backend_result_shapes_fail_closed_after_scope_release(self) -> None:
+        class BadResults(Backend):
+            def snapshot(self, _phase: str, _context: Mapping[str, object]) -> dict[str, object]:
+                return cast(dict[str, object], [])
+
+            def execute(self, _phase: str, _context: Mapping[str, object]) -> dict[str, object]:
+                return cast(dict[str, object], [])
+
+            def verify_rollback_context(self, _context: Mapping[str, object]) -> dict[str, object]:
+                return cast(dict[str, object], [])
+
+        scope = Scope()
+        adapter = ScopedBackendAdapter(BadResults(), scope)
+        with self.assertRaisesRegex(TypeError, "snapshot must be an object"):
+            adapter.snapshot("preflight", {})
+        with self.assertRaisesRegex(TypeError, "execution result must be an object"):
+            adapter.execute("reopen", {})
+        with self.assertRaisesRegex(TypeError, "object or null"):
+            adapter.verify_rollback_context({})
+        self.assertEqual(
+            ["context", "held", "released"] * 3,
+            scope.events,
+        )
+
+    def test_backend_execution_requires_explicit_non_mutating_result(self) -> None:
+        class MissingDeclarationBackend(Backend):
+            def execute(self, _phase: str, _context: Mapping[str, object]) -> dict[str, object]:
+                return {"status": "unknown"}
+
+        with self.assertRaisesRegex(TypeError, "non-mutating"):
+            ScopedBackendAdapter(MissingDeclarationBackend(), Scope()).execute("observe", {})
+
     def test_execute_rejects_authority_mutation_at_uncalled_boundary(self) -> None:
         class MutatingBackend(Backend):
             def execute(self, _phase: str, _context: Mapping[str, object]) -> dict[str, object]:
