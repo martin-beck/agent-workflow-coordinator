@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import argparse
 import hashlib
 import json
 import re
@@ -600,3 +601,59 @@ def next_record(
             history,
         )
     raise ValueError("unknown change-drift action")
+
+
+def bound_worktree(meta: Meta, projects_root: Path) -> Path:
+    """Resolve the task's declared worktree without accepting arbitrary paths."""
+    key = meta.get("worktree_key")
+    if not isinstance(key, str) or not key:
+        raise RuntimeError("change-drift requires a bound worktree")
+    return projects_root.resolve() / key
+
+
+def apply(args: argparse.Namespace, meta: Meta, projects_root: Path, timestamp: str) -> str:
+    """Apply the command boundary's owner/revision-fenced drift mutation."""
+    if meta.get("owner") != args.owner or meta.get("status") != "in_progress":
+        raise RuntimeError("change-drift requires the active task owner")
+    if args.expected_revision != meta["task_revision"]:
+        raise RuntimeError(
+            f"stale revision: expected {args.expected_revision}, current {meta['task_revision']}"
+        )
+    history = records(meta)
+    revision = int(meta["task_revision"]) + 1
+    record, history = next_record(
+        args.task,
+        revision,
+        timestamp,
+        bound_worktree(meta, projects_root),
+        history,
+        args.change_drift_action,
+        scope_paths=getattr(args, "scope_path", None),
+        paths=getattr(args, "path", None),
+        reason=getattr(args, "reason", None),
+        generated=getattr(args, "generated", False),
+    )
+    if len(history) >= MAX_RECORDS:
+        raise RuntimeError("change-drift active cycle reached its bounded record limit")
+    meta["change_drift"] = [*history, record]
+    return f"Recorded change-drift {args.change_drift_action} {record['digest']}."
+
+
+def add_command_parser(commands: Any) -> None:
+    """Register the complete bounded change-drift CLI grammar."""
+    item = commands.add_parser("change-drift")
+    drift_commands = item.add_subparsers(dest="change_drift_action", required=True)
+    for action in ("baseline", "delta", "rescope"):
+        drift = drift_commands.add_parser(action)
+        drift.add_argument("task")
+        drift.add_argument("--owner", required=True)
+        drift.add_argument("--expected-revision", type=int, required=True)
+        if action in {"baseline", "rescope"}:
+            drift.add_argument("--scope-path", action="append", required=True)
+    drift = drift_commands.add_parser("explain")
+    drift.add_argument("task")
+    drift.add_argument("--owner", required=True)
+    drift.add_argument("--expected-revision", type=int, required=True)
+    drift.add_argument("--path", action="append", required=True)
+    drift.add_argument("--reason", required=True)
+    drift.add_argument("--generated", action="store_true")
