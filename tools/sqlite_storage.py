@@ -958,7 +958,12 @@ class SQLiteBackend:
     @staticmethod
     def _ensure_issue_series_schema(connection: sqlite3.Connection) -> None:
         """Install the additive series tables for databases created before this feature."""
-        connection.executescript(ISSUE_SERIES_SCHEMA)
+        # sqlite3.executescript() commits an active transaction before running
+        # its script.  These individual DDL statements retain the enclosing
+        # BEGIN IMMEDIATE transaction, so a legacy-schema upgrade and series
+        # creation either commit together or roll back together.
+        for statement in ISSUE_SERIES_STATEMENTS:
+            connection.execute(statement)
 
     def load_issue_series(self) -> list[Meta]:
         """Return authoritative local issue-series receipts in deterministic identity order."""
@@ -1109,15 +1114,15 @@ class SQLiteBackend:
             connection.close()
 
 
-ISSUE_SERIES_SCHEMA = """
-CREATE TABLE IF NOT EXISTS issue_series(
+ISSUE_SERIES_STATEMENTS = (
+    """CREATE TABLE IF NOT EXISTS issue_series(
  repository TEXT NOT NULL,
  issue_number INTEGER NOT NULL CHECK(issue_number > 0),
  manifest_json TEXT NOT NULL CHECK(json_valid(manifest_json)),
  manifest_digest TEXT NOT NULL CHECK(length(manifest_digest)=71),
  PRIMARY KEY(repository, issue_number)
-) STRICT;
-CREATE TABLE IF NOT EXISTS issue_series_members(
+) STRICT""",
+    """CREATE TABLE IF NOT EXISTS issue_series_members(
  repository TEXT NOT NULL,
  issue_number INTEGER NOT NULL,
  task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
@@ -1126,8 +1131,9 @@ CREATE TABLE IF NOT EXISTS issue_series_members(
  UNIQUE(repository, issue_number, member_id),
  FOREIGN KEY(repository, issue_number)
    REFERENCES issue_series(repository, issue_number) ON DELETE CASCADE
-) STRICT;
-"""
+) STRICT""",
+)
+ISSUE_SERIES_SCHEMA = "\n".join(f"{statement};" for statement in ISSUE_SERIES_STATEMENTS)
 
 
 SCHEMA = (
