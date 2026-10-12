@@ -3041,7 +3041,7 @@ class HandoffTest(unittest.TestCase):
         with patch.object(CORE, "run", side_effect=changed_run):
             self.assertTrue(CORE.commit("test", [target]))
         commit_call = next(args for args in calls if "commit" in args)
-        self.assertIn("-S", commit_call)
+        self.assertNotIn("-S", commit_call)
         self.assertIn("-s", commit_call)
 
         self.assertIn("--only", commit_call)

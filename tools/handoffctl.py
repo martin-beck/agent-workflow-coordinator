@@ -1762,7 +1762,7 @@ def validate(  # noqa: C901
     return errors
 
 
-def commit(message: str, paths: list[Path]) -> bool:
+def commit(message: str, paths: list[Path], *, sign: bool = False) -> bool:
     relative = [str(path.relative_to(ROOT)) for path in paths]
     if not relative:
         return False
@@ -1776,7 +1776,12 @@ def commit(message: str, paths: list[Path]) -> bool:
             == 0
         ):
             return False
-        command = ["git", "-C", str(ROOT), "commit", "-S"]
+        # Ordinary Coordinator progression must not require signing.  The
+        # opt-in fast receipt protocol retains its separately verified local
+        # signature marker.
+        command = ["git", "-C", str(ROOT), "commit"]
+        if sign:
+            command.append("-S")
         if project_settings()["commit_signoff"]:
             command.append("-s")
         run([*command, "-m", message, "--only", "--", *relative], capture=False)
@@ -3088,7 +3093,9 @@ def commit_persisted_mutation(
     message = f"chore(state): {kind} {args.task}"
     if receipt_id is not None:
         message += f"\n\nHandoffctl-Receipt: {receipt_id}"
-    committed = commit(message, changed_paths(before, include_deleted=True))
+    committed = commit(
+        message, changed_paths(before, include_deleted=True), sign=receipt_id is not None
+    )
     if receipt_id is not None and not committed:
         raise RuntimeError("fast receipt mutation produced no signed commit")
     if receipt_id is not None:
@@ -3562,7 +3569,7 @@ def _product_commit_for_checkpoint(product: Path, source_commit: str) -> str:
 
 
 def _revert_product(product: Path, source_commit: str, current_commit: str) -> str:
-    """Create one signed product revert, leaving conflicts fail-closed."""
+    """Create one local product revert, leaving conflicts fail-closed."""
     if current_commit != source_commit:
         run(
             [
@@ -3583,7 +3590,6 @@ def _revert_product(product: Path, source_commit: str, current_commit: str) -> s
             "-C",
             str(product),
             "commit",
-            "-S",
             "-s",
             "-m",
             f"revert: restore coordinator checkpoint {source_commit[:12]}",
