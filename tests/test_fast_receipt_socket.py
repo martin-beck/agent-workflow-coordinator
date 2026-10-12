@@ -30,6 +30,7 @@ from tools.fast_receipt_socket import (
     _require_request,
     _safe_socket,
     _send_reply,
+    _socket_path,
     socket_service,
     try_socket_fast,
 )
@@ -133,6 +134,18 @@ class FastReceiptSocketTests(unittest.TestCase):
                 ]
             ),
         )
+
+    def test_update_requires_mutation_and_socket_path_needs_git_metadata(self) -> None:
+        self.assertIsNone(
+            _fast_request(
+                [
+                    "fast", "update", "AR-0120", "--owner", "worker-a",
+                    "--expected-revision", "2", "--note", "No mutation.",
+                    "--key", "worker-a:update:2",
+                ]
+            )
+        )
+        self.assertIsNone(_socket_path(Path(self.directory.name)))
         self.assertEqual(
             {
                 "protocol": 1,
@@ -287,7 +300,7 @@ class FastReceiptSocketTests(unittest.TestCase):
                 self.pid = pid
                 self.replies: list[bytes] = []
 
-            def __enter__(self) -> "Peer":
+            def __enter__(self) -> Peer:
                 return self
 
             def __exit__(self, *_args: object) -> None:
@@ -475,6 +488,10 @@ class FastReceiptSocketTests(unittest.TestCase):
                     "key": "worker-a:update:2",
                 }
             )
+        with self.assertRaisesRegex(RuntimeError, "invalid fast observation request"):
+            _require_request(
+                {"protocol": 1, "action": "observe", "max_age_seconds": 30, "extra": True}
+            )
 
     def test_unsafe_socket_symlink_is_not_followed(self) -> None:
         target = self.private / "target"
@@ -485,6 +502,41 @@ class FastReceiptSocketTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "unsafe"), socket_service(self.core):
             pass
         self.assertTrue(self.path.is_symlink())
+
+    def test_existing_unverifiable_socket_path_is_rejected_before_replacement(self) -> None:
+        self.path.write_text("not a socket", encoding="utf-8")
+        with (
+            patch("tools.fast_receipt_socket._safe_socket", return_value=False),
+            self.assertRaisesRegex(RuntimeError, "path is unsafe"),
+            socket_service(self.core),
+        ):
+            pass
+
+    def test_non_observation_socket_protocol_error_is_terminal(self) -> None:
+        class Peer:
+            def __enter__(self) -> "Peer":
+                return self
+
+            def __exit__(self, *_args: object) -> None:
+                return None
+
+            def settimeout(self, _value: float) -> None:
+                return None
+
+            def connect(self, _path: str) -> None:
+                return None
+
+            def sendall(self, _data: bytes) -> None:
+                return None
+
+        with (
+            patch("tools.fast_receipt_socket._socket_path", return_value=self.path),
+            patch("tools.fast_receipt_socket._safe_socket", return_value=True),
+            patch("tools.fast_receipt_socket.socket.socket", return_value=Peer()),
+            patch("tools.fast_receipt_socket._read_line", side_effect=RuntimeError("malformed")),
+            self.assertRaisesRegex(RuntimeError, "malformed"),
+        ):
+            try_socket_fast(self.argv)
 
     def test_socket_path_requires_private_parent_and_actual_socket(self) -> None:
         target = self.private / "not-a-socket"
@@ -639,6 +691,22 @@ class FastReceiptSocketTests(unittest.TestCase):
             self.assertEqual("promote", queued["operation"])
             self.assertEqual("queued-local", queued["phase"])
             self.assertEqual(1, self._intent_count())
+
+    def test_bound_service_queues_claim_receipt_with_worker_identity(self) -> None:
+        argv = [
+            "fast", "claim", "AR-0120", "--owner", "worker-a", "--expected-revision", "2",
+            "--worker-pid", "123", "--worker-start-time", "456", "--key", "worker-a:claim:2",
+        ]
+        with (
+            socket_service(self.core),
+            patch("tools.fast_receipt_socket._socket_path", return_value=self.path),
+            contextlib.redirect_stdout(io.StringIO()) as output,
+        ):
+            self.assertEqual(0, try_socket_fast(argv))
+            queued = json.loads(output.getvalue())
+            self.assertEqual("claim", queued["operation"])
+            self.assertEqual("queued-local", queued["phase"])
+        self.assertEqual(1, self._intent_count())
 
     def test_bound_service_accepts_largest_valid_update_frame(self) -> None:
         argv = [
