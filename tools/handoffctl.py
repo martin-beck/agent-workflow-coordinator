@@ -3301,6 +3301,83 @@ def cmd_issue_series_plan(args: argparse.Namespace) -> None:
     print(receipt)
 
 
+def cmd_issue_series_create(args: argparse.Namespace) -> None:  # noqa: C901
+    """Atomically create one locally validated series through Git authority."""
+    if backend_selection()["backend"] != "git":
+        raise RuntimeError(
+            "issue-series create requires Git authority until SQLite parity is available"
+        )
+    with locked(phase="issue_series_create"):
+        if backend_selection()["backend"] != "git":
+            raise RuntimeError("BACKEND_CHANGED: retry issue-series create")
+        sync_replica_before_write()
+        tasks = all_tasks()
+        receipt_text = load_issue_series_plan(Path(args.manifest), tasks)
+        receipt = cast(Meta, json.loads(receipt_text))
+        if args.expected_state_digest != receipt["current_state_digest"]:
+            raise RuntimeError("STALE_STATE: re-run issue-series plan before create")
+        manifest_path = issue_series_manifest_path(receipt)
+        if manifest_path.exists():
+            raise RuntimeError("issue-series manifest identity already exists")
+        created = issue_series_tasks(receipt, manifest_path)
+        candidate = [*tasks, *created]
+        policy = policy_snapshot(None)
+        errors = [
+            error
+            for path, meta, _body in created
+            for error in basic_task_errors(path, meta, policy)
+        ]
+        errors.extend(mutation_global_errors(candidate))
+        if errors:
+            raise RuntimeError("issue-series preflight failed:\n" + "\n".join(sorted(set(errors))))
+        before: dict[Path, str | None] = {
+            path: path.read_text() if path.exists() else None for path, _meta, _body in created
+        }
+        before[manifest_path] = None
+        before.update(
+            {path: path.read_text() if path.exists() else None for path in generated_paths()}
+        )
+        committed = False
+        try:
+            atomic(manifest_path, json.dumps(receipt["manifest"], indent=2, sort_keys=True) + "\n")
+            for path, meta, body in created:
+                write_task(path, meta, body)
+            view_tasks = all_tasks()
+            settings = project_settings()
+            views = rendered_task_views(view_tasks)
+            before.update(
+                {
+                    path: path.read_text() if path.exists() else None
+                    for path in views
+                    if path not in before
+                }
+            )
+            write_rendered_task_views(views)
+            require_project_settings_unchanged(settings)
+            require_policy_unchanged(ROOT, policy)
+            errors = mutation_global_errors(view_tasks)
+            errors.extend(
+                generated_view_errors(view_tasks, rendered_snapshot=(view_tasks, views, settings))
+            )
+            errors.extend(introduced_content_errors(before))
+            if errors:
+                raise RuntimeError(
+                    "issue-series mutation validation failed:\n" + "\n".join(sorted(set(errors)))
+                )
+            committed = commit(
+                f"chore(state): create issue series {receipt['series_identity']['repository']}"
+                f"#{receipt['series_identity']['issue_number']}",
+                changed_paths(before, include_deleted=True),
+            )
+            if not committed:
+                raise RuntimeError("issue-series create produced no commit")
+            push_replica()
+        except Exception:
+            if not committed:
+                restore_paths(before)
+            raise
+
+
 def issue_series_manifest_path(receipt: Meta) -> Path:
     """Return one bounded deterministic local manifest name for a validated receipt."""
     identity = cast(Meta, receipt["series_identity"])
@@ -4391,7 +4468,7 @@ def dispatch_bound_command(args: argparse.Namespace) -> int:
     return dispatch_bound_standard_command(args)
 
 
-def main() -> int:
+def main() -> int:  # noqa: C901
     parser = argparse.ArgumentParser()
     commands = parser.add_subparsers(dest="cmd", required=True)
     item = commands.add_parser("init")
@@ -4449,6 +4526,9 @@ def main() -> int:
     issue_series_actions = item.add_subparsers(dest="issue_series_action", required=True)
     issue_series_plan = issue_series_actions.add_parser("plan")
     issue_series_plan.add_argument("--manifest", type=Path, required=True)
+    issue_series_create = issue_series_actions.add_parser("create")
+    issue_series_create.add_argument("--manifest", type=Path, required=True)
+    issue_series_create.add_argument("--expected-state-digest", required=True)
     commands.add_parser("board")
     commands.add_parser("metrics")
     item = commands.add_parser("checkpoint")
@@ -4639,6 +4719,9 @@ def main() -> int:
     if args.cmd == "issue-series":
         if args.issue_series_action == "plan":
             cmd_issue_series_plan(args)
+            return 0
+        if args.issue_series_action == "create":
+            cmd_issue_series_create(args)
             return 0
         raise RuntimeError("unsupported issue-series action")
     return dispatch_bound_command(args)
