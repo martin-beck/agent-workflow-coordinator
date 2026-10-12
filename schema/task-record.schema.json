@@ -84,10 +84,24 @@
         "parent_task_ref": {
             "anyOf": [{"type": "string", "maxLength": 0}, {"$ref": "#/$defs/taskId"}]
         },
-        "children": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/taskId"}}
+        "children": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/taskId"}},
+        "issue_series": {"$ref": "#/$defs/issueSeriesLinkage"}
     },
     "$defs": {
         "taskId": {"type": "string", "pattern": "^AR-[0-9]{4}$"},
+        "issueSeriesLinkage": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["manifest_ref", "manifest_digest", "member_id"],
+            "properties": {
+                "manifest_ref": {
+                    "type": "string",
+                    "pattern": "^issue-series/[a-z0-9][a-z0-9._-]{0,127}\\.json$"
+                },
+                "manifest_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+                "member_id": {"$ref": "#/$defs/taskId"}
+            }
+        },
         "humanSession": {
             "type": "object",
             "additionalProperties": false,
