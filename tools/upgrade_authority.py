@@ -88,6 +88,8 @@ _AUTHORITY_TABLES = {
         "finalized",
     ),
     "checkpoints": ("name", "revision", "recorded_at"),
+    "issue_series": ("repository", "issue_number", "manifest_json", "manifest_digest"),
+    "issue_series_members": ("repository", "issue_number", "task_id", "member_id"),
     "sqlite_sequence": ("name", "seq"),
 }
 _AUTHORITY_ORDER = {
@@ -98,6 +100,8 @@ _AUTHORITY_ORDER = {
     "command_results": "sequence",
     "migrations": "sequence",
     "checkpoints": "name",
+    "issue_series": "repository,issue_number",
+    "issue_series_members": "repository,issue_number,task_id",
     "sqlite_sequence": "name",
 }
 _SQLITE_SIDECARS = ("-wal", "-shm")
