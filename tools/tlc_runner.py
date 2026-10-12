@@ -105,6 +105,7 @@ def build_command(
     tasks_max: int = 64,
     timeout_seconds: int = 1800,
     cgroup_mode: str = "required",
+    unit_name: str | None = None,
 ) -> list[str]:
     """Build a bounded TLC command without executing it."""
     worker_count = _positive_int(str(workers), "workers")
@@ -163,9 +164,11 @@ def build_command(
     systemd = shutil.which("systemd-run")
     if systemd is None:
         raise AdmissionError("systemd-run is required for TLC cgroup containment")
+    unit_name = unit_name or f"handoffctl-tlc-{uuid.uuid4().hex}"
     return [
         systemd,
         "--user",
+        "--unit=" + unit_name,
         "--quiet",
         "--wait",
         "--collect",
@@ -231,6 +234,22 @@ def _prepare_workspace(workspace: Path, metadir: Path, storage_reserve: int) -> 
     metadir.mkdir(mode=0o700, parents=True, exist_ok=True)
     if _available_bytes(workspace) < storage_reserve:
         raise AdmissionError("insufficient workspace capacity before TLC admission")
+
+
+def _stop_over_budget(process: subprocess.Popen[bytes], cgroup_mode: str, unit_name: str) -> None:
+    """Stop the actual contained service, not merely its systemd-run client."""
+    if cgroup_mode == "required":
+        systemctl = shutil.which("systemctl")
+        if systemctl is None:
+            raise AdmissionError("systemctl is required to stop an over-budget TLC unit")
+        subprocess.run([systemctl, "--user", "stop", unit_name], check=False)  # noqa: S603
+    else:
+        process.terminate()
+    try:
+        process.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait()
 
 
 def _cgroup_v2_directory(proc_root: Path = Path("/proc")) -> tuple[Path, Path]:
@@ -331,6 +350,7 @@ def run(args: argparse.Namespace) -> int:
     _prepare_workspace(workspace, metadir, storage_reserve)
     _prune_stale(queue)
     job = queue / f"{os.getpid()}-{uuid.uuid4().hex}.job.json"
+    unit_name = f"handoffctl-tlc-{uuid.uuid4().hex}"
     outcome = job.with_name(job.name.replace(".job.json", ".outcome.json"))
     lock_path = Path(getattr(args, "admission_lock", DEFAULT_ADMISSION_LOCK))
     record = {
@@ -362,6 +382,7 @@ def run(args: argparse.Namespace) -> int:
             tasks_max=args.tasks_max,
             timeout_seconds=args.timeout_seconds,
             cgroup_mode=args.cgroup_mode,
+            unit_name=unit_name,
         )
         with lock_path.open("w") as lock:
             fcntl.flock(lock, fcntl.LOCK_EX)
@@ -371,22 +392,20 @@ def run(args: argparse.Namespace) -> int:
             classification = "completed"
             while process.poll() is None:
                 if _directory_bytes(workspace) > storage_max:
-                    process.terminate()
-                    try:
-                        process.wait(timeout=5)
-                    except subprocess.TimeoutExpired:
-                        process.kill()
-                        process.wait()
+                    _stop_over_budget(process, args.cgroup_mode, unit_name)
                     classification = "storage-exhausted"
                     break
                 time.sleep(0.1)
+            usage = _directory_bytes(workspace)
+            if usage > storage_max:
+                classification = "storage-exhausted"
             exit_code = process.returncode
             record.update(
                 {
                     "ended": time.time(),
                     "state": classification,
                     "exit_code": exit_code,
-                    "workspace_bytes": _directory_bytes(workspace),
+                    "workspace_bytes": usage,
                 }
             )
             outcome.write_text(json.dumps(record, sort_keys=True) + "\n")

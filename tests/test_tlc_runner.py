@@ -505,6 +505,79 @@ class TLCAdmissionTests(unittest.TestCase):
             outcome = next(Path(directory).glob("*.outcome.json"))
             self.assertEqual(json.loads(outcome.read_text())["state"], "failed")
 
+    def test_fast_exit_over_storage_budget_is_not_reported_as_completed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            queue = Path(directory)
+            args = type(
+                "Args",
+                (),
+                {
+                    "queue": str(queue),
+                    "model": "Model.tla",
+                    "jar": "tla.jar",
+                    "config": "Model.cfg",
+                    "metadir": str(queue / "workspace" / "states"),
+                    "workspace": str(queue / "workspace"),
+                    "workers": 2,
+                    "heap": "64m",
+                    "memory_max": "1G",
+                    "swap_max": "1G",
+                    "storage_max": "1M",
+                    "storage_reserve": "1M",
+                    "cpu_quota": "200%",
+                    "tasks_max": 64,
+                    "timeout_seconds": 1800,
+                    "cgroup_mode": "off",
+                },
+            )()
+            with (
+                patch.object(_runner, "_available_bytes", return_value=2 * 1024**2),
+                patch.object(_runner, "_directory_bytes", return_value=2 * 1024**2),
+                patch("tools.tlc_runner.subprocess.Popen") as execute,
+            ):
+                execute.return_value.poll.return_value = 0
+                execute.return_value.returncode = 0
+                self.assertEqual(run(args), 75)
+            outcome = next(queue.glob("*.outcome.json"))
+            self.assertEqual("storage-exhausted", json.loads(outcome.read_text())["state"])
+
+    def test_required_storage_stop_targets_the_transient_unit(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            queue = Path(directory)
+            args = type(
+                "Args",
+                (),
+                {
+                    "queue": str(queue),
+                    "model": "Model.tla",
+                    "jar": "tla.jar",
+                    "config": "Model.cfg",
+                    "metadir": str(queue / "workspace" / "states"),
+                    "workspace": str(queue / "workspace"),
+                    "workers": 2,
+                    "heap": "64m",
+                    "memory_max": "1G",
+                    "swap_max": "1G",
+                    "storage_max": "1M",
+                    "storage_reserve": "1M",
+                    "cpu_quota": "200%",
+                    "tasks_max": 64,
+                    "timeout_seconds": 1800,
+                    "cgroup_mode": "required",
+                },
+            )()
+            with (
+                patch.object(_runner, "_available_bytes", return_value=2 * 1024**2),
+                patch.object(_runner, "_directory_bytes", return_value=2 * 1024**2),
+                patch("tools.tlc_runner.shutil.which", side_effect=lambda name: f"/usr/bin/{name}"),
+                patch("tools.tlc_runner.subprocess.Popen") as execute,
+                patch("tools.tlc_runner.subprocess.run") as stop,
+            ):
+                execute.return_value.poll.side_effect = [None, 0]
+                execute.return_value.returncode = 0
+                self.assertEqual(run(args), 75)
+            self.assertEqual(["/usr/bin/systemctl", "--user", "stop"], stop.call_args.args[0][:3])
+
 
 if __name__ == "__main__":
     unittest.main()
