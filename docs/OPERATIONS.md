@@ -25,6 +25,11 @@
 - `render-status`: render/check the optional complete status view.
 - `doctor`: validate structure; `--live` also checks Git/GitHub observations.
 - `migrate --to sqlite|git`: explicitly switch authority after an equivalence-checked export/import.
+- `issue-series plan --manifest FILE`: validate a bounded local issue-to-AR manifest and print a
+  deterministic receipt without changing authority.
+- `issue-series create --manifest FILE --expected-state-digest DIGEST`: atomically create a
+  validated local series through the selected Git or SQLite authority. It creates no GitHub issue,
+  comment, or closure and needs no credentials, signature, external review, or hosted CI.
 - `board` and `metrics`: read-only, byte-stable JSON projections from SQLite containing role
   progress, decision backlog, gate failures, blocked tasks, and evidence coverage. They do not
   contact GitHub, include task bodies, or expose credentials, and refuse Git authority mode.
