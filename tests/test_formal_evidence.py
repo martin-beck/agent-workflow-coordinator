@@ -1146,6 +1146,7 @@ class FormalEvidenceTests(unittest.TestCase):
         self.assertIn("/proc/self/mountinfo", formal)
         self.assertNotIn("needs.scope.outputs.release_sensitive", formal_step)
         self.assertIn('TLC_BUDGET_SECONDS: "900"', formal)
+        self.assertIn("TLC_WORK_ROOT: ${{ runner.temp }}/formal-workspaces", formal_step)
         self.assertIn("ref: ${{ github.sha }}", formal)
         self.assertIn("Validate local exact-head bounded receipt", formal)
         self.assertIn("tools/formal_receipt.py", formal)
