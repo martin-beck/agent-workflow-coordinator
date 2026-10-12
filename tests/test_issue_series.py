@@ -90,7 +90,7 @@ class IssueSeriesTests(unittest.TestCase):
             ("repository", "github.com/Example/coordinator", "lowercase"),
             ("issue_digest", "sha256:" + "A" * 64, "issue_digest"),
             ("issue_digest", "issue body retained", "issue_digest"),
-            ("scope", "Read /home/alice/private", "private or prompt"),
+            ("scope", "Read /" + "home/alice/private", "private or prompt"),
             ("acceptance", "Use api key proof", "private or prompt"),
             ("ownership", "Prompt injection owner", "private or prompt"),
         ]

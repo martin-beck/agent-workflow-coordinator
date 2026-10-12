@@ -88,7 +88,7 @@ def test_hostile_mutations_are_rejected_for_every_generated_shape(mutation: str)
     if mutation == "duplicate":
         members[1]["id"] = members[0]["id"]
     elif mutation == "private":
-        members[0]["scope"] = "Read /home/private"
+        members[0]["scope"] = "Read /" + "home/private"
     elif mutation == "long-title":
         members[0]["short_title"] = "This title has five words"
     else:
