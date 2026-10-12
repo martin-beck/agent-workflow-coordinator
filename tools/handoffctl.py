@@ -3432,6 +3432,40 @@ def git_issue_series_receipts(tasks: list[Task]) -> list[Meta]:
     ]
 
 
+def git_issue_series_publication_receipts(tasks: list[Task]) -> list[Meta]:
+    """Reconstruct bounded Git publication receipts for SQLite authority migration."""
+    identities = {
+        publication_key(
+            str(cast(Meta, receipt["series_identity"])["repository"]),
+            int(cast(Meta, receipt["series_identity"])["issue_number"]),
+            str(receipt["manifest_digest"]),
+        ): cast(Meta, receipt["series_identity"])
+        for receipt in git_issue_series_receipts(tasks)
+    }
+    directory = ROOT / "issue-series-publications"
+    if not directory.exists():
+        return []
+    receipts: list[Meta] = []
+    for path in sorted(directory.glob("*.json")):
+        if path.parent != directory or path.is_symlink() or path.stat().st_size > 10_000:
+            raise RuntimeError("issue-series publication receipt is not a bounded regular file")
+        raw = cast(Meta, json.loads(path.read_text(encoding="utf-8")))
+        key = raw.get("publication_key")
+        identity = identities.get(key) if isinstance(key, str) else None
+        if identity is None or raw.get("manifest_digest") is None:
+            raise RuntimeError("issue-series publication receipt does not match a local series")
+        receipts.append(
+            {
+                "series_identity": identity,
+                "manifest_digest": raw["manifest_digest"],
+                "publication_key": key,
+                "status": raw.get("status"),
+                "comment_id": raw.get("comment_id") or None,
+            }
+        )
+    return receipts
+
+
 def cmd_issue_series_plan(args: argparse.Namespace) -> None:
     """Print a deterministic local planning receipt; never publish or mutate."""
     receipt = load_issue_series_plan(Path(args.manifest), all_tasks())
@@ -4609,6 +4643,7 @@ def cmd_init(args: argparse.Namespace) -> None:
                 source_checkpoint="uncommitted-init",
                 command_results=legacy_command_results(),
                 issue_series=git_issue_series_receipts(initial_tasks),
+                issue_series_publications=git_issue_series_publication_receipts(initial_tasks),
             )
             provision_sqlite_barrier()
         atomic(BACKEND_CONFIG, json.dumps(selection, indent=2, sort_keys=True) + "\n")
@@ -4656,6 +4691,7 @@ def cmd_migrate(args: argparse.Namespace) -> None:  # noqa: C901
                     session_records=session_records,
                     checkpoint_records=checkpoint_records,
                     issue_series=issue_series,
+                    issue_series_publications=git_issue_series_publication_receipts(tasks),
                 )
                 imported = SQLiteBackend(DATABASE, binding, TASKS).load_tasks()
                 if [(m, b) for _, m, b in tasks] != [(m, b) for _, m, b in imported]:

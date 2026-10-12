@@ -1453,7 +1453,7 @@ CREATE TABLE checkpoints(name TEXT PRIMARY KEY, revision INTEGER NOT NULL,
 )
 
 
-def create_database(
+def create_database(  # noqa: C901
     path: Path,
     binding: Meta,
     tasks: Sequence[Task],
@@ -1465,6 +1465,7 @@ def create_database(
     session_records: Sequence[Meta] = (),
     checkpoint_records: Sequence[Meta] = (),
     issue_series: Sequence[Meta] = (),
+    issue_series_publications: Sequence[Meta] = (),
 ) -> None:
     """Build a complete database beside its final target and install atomically."""
     require_local_filesystem(path)
@@ -1547,6 +1548,24 @@ def create_database(
                         (repository, issue_number, str(member_id), str(member_id))
                         for member_id in receipt["task_ids"]
                     ],
+                )
+            for receipt in issue_series_publications:
+                normalized = SQLiteBackend._normalize_issue_series_publication(receipt, imported_at)
+                identity = cast(Meta, normalized["series_identity"])
+                connection.execute(
+                    """INSERT INTO issue_series_publications(
+                           repository, issue_number, manifest_digest, publication_key,
+                           status, comment_id, recorded_at
+                       ) VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        identity["repository"],
+                        identity["issue_number"],
+                        normalized["manifest_digest"],
+                        normalized["publication_key"],
+                        normalized["status"],
+                        normalized["comment_id"],
+                        normalized["recorded_at"],
+                    ),
                 )
             connection.execute(
                 """INSERT INTO migrations(source_backend, source_checkpoint, imported_at)
