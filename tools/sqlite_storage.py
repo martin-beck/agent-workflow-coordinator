@@ -8,11 +8,13 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import sqlite3
 import stat
 import tempfile
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import AbstractContextManager, contextmanager, nullcontext
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol, cast
 
@@ -30,6 +32,24 @@ NETWORK_FILESYSTEMS = frozenset(
     {"9p", "afs", "ceph", "cifs", "fuse.sshfs", "gfs2", "glusterfs", "nfs", "nfs4", "smb3"}
 )
 _FACTORY_SENTINEL = object()
+_SHA256_DIGEST = re.compile(r"sha256:[0-9a-f]{64}$")
+_PUBLICATION_KEY = re.compile(r"[0-9a-f]{64}$")
+_COMMENT_ID = re.compile(r"[1-9][0-9]{0,18}$")
+_PUBLICATION_STATUSES = frozenset(
+    {
+        "published",
+        "already_published",
+        "dry_run",
+        "deferred_unavailable",
+        "deferred_unauthorized",
+        "deferred_timeout",
+        "deferred_conflict",
+        "deferred_wrong_identity",
+        "deferred_closed",
+        "deferred_moved",
+        "ambiguous",
+    }
+)
 
 
 class StorageContentionError(RuntimeError):
@@ -1004,6 +1024,248 @@ class SQLiteBackend:
         finally:
             connection.close()
 
+    @staticmethod
+    def _issue_series_publication_identity(receipt: Meta) -> tuple[str, int]:
+        """Extract the normalized local manifest identity from a receipt."""
+        identity = receipt.get("series_identity")
+        if not isinstance(identity, dict):
+            raise ValueError("issue-series publication lacks series identity")
+        repository = identity.get("repository")
+        issue_number = identity.get("issue_number")
+        if (
+            not isinstance(repository, str)
+            or not repository.startswith("github.com/")
+            or repository != repository.lower()
+            or "\n" in repository
+            or "\r" in repository
+        ):
+            raise ValueError("issue-series publication has unsafe repository identity")
+        if isinstance(issue_number, bool) or not isinstance(issue_number, int) or issue_number < 1:
+            raise ValueError("issue-series publication has invalid issue number")
+        return repository, issue_number
+
+    @staticmethod
+    def _normalize_issue_series_publication(receipt: Meta, recorded_at: str) -> Meta:
+        """Return the small, local receipt shape permitted in durable storage."""
+        repository, issue_number = SQLiteBackend._issue_series_publication_identity(receipt)
+        digest = receipt.get("manifest_digest")
+        key = receipt.get("publication_key")
+        status = receipt.get("status")
+        comment_id = receipt.get("comment_id")
+        if not isinstance(digest, str) or not _SHA256_DIGEST.fullmatch(digest):
+            raise ValueError("issue-series publication has invalid manifest digest")
+        if not isinstance(key, str) or not _PUBLICATION_KEY.fullmatch(key):
+            raise ValueError("issue-series publication has invalid publication key")
+        expected_key = hashlib.sha256(
+            f"issue-series-publication-v1\0{repository}\0{issue_number}\0{digest}".encode()
+        ).hexdigest()
+        if key != expected_key:
+            raise ValueError("issue-series publication key disagrees with its identity")
+        if not isinstance(status, str) or status not in _PUBLICATION_STATUSES:
+            raise ValueError("issue-series publication has invalid status")
+        if comment_id is not None and (
+            not isinstance(comment_id, str) or not _COMMENT_ID.fullmatch(comment_id)
+        ):
+            raise ValueError("issue-series publication has invalid comment identifier")
+        if status not in {"published", "already_published"} and comment_id is not None:
+            raise ValueError("deferred issue-series publication cannot carry a comment identifier")
+        if not isinstance(recorded_at, str) or not recorded_at or "\n" in recorded_at:
+            raise ValueError("issue-series publication has invalid recorded time")
+        return {
+            "series_identity": {"repository": repository, "issue_number": issue_number},
+            "manifest_digest": digest,
+            "publication_key": key,
+            "status": status,
+            "comment_id": comment_id,
+            "recorded_at": recorded_at,
+        }
+
+    def load_issue_series_publications(self) -> list[Meta]:
+        """Return normalized publication receipts in deterministic identity order."""
+        connection = self._connect(read_only=True)
+        try:
+            try:
+                rows = connection.execute(
+                    """SELECT repository, issue_number, manifest_digest, publication_key,
+                              status, comment_id, recorded_at
+                       FROM issue_series_publications
+                       ORDER BY repository, issue_number, manifest_digest, publication_key"""
+                )
+            except sqlite3.OperationalError as error:
+                if "no such table" not in str(error).lower():
+                    raise
+                return []
+            return [
+                {
+                    "series_identity": {
+                        "repository": str(row["repository"]),
+                        "issue_number": int(row["issue_number"]),
+                    },
+                    "manifest_digest": str(row["manifest_digest"]),
+                    "publication_key": str(row["publication_key"]),
+                    "status": str(row["status"]),
+                    "comment_id": row["comment_id"],
+                    "recorded_at": str(row["recorded_at"]),
+                }
+                for row in rows
+            ]
+        except sqlite3.Error as error:
+            raise _translate(error) from error
+        finally:
+            connection.close()
+
+    def record_issue_series_publication(
+        self,
+        receipt_or_repository: Meta | str,
+        issue_number: int | None = None,
+        record: Meta | None = None,
+        *,
+        recorded_at: str | None = None,
+    ) -> Meta:
+        """Atomically persist one normalized publication receipt or return its exact replay.
+
+        A duplicate identity or correlation key is idempotent only when every
+        normalized fact agrees.  This avoids silently converting an uncertain
+        request into a different durable outcome.
+
+        The ``repository, issue_number, record`` form is a narrow adapter for
+        the command layer.  Its optional renderer digest is intentionally not
+        copied to durable storage; the local manifest digest is the binding
+        fact.  Direct callers pass the complete normalized receipt and an
+        explicit ``recorded_at`` value.
+        """
+        if isinstance(receipt_or_repository, str):
+            if issue_number is None or record is None or recorded_at is not None:
+                raise ValueError("issue-series publication adapter arguments are incomplete")
+            receipt: Meta = {
+                "series_identity": {
+                    "repository": receipt_or_repository,
+                    "issue_number": issue_number,
+                },
+                "manifest_digest": record.get("manifest_digest"),
+                "publication_key": record.get("publication_key"),
+                "status": record.get("status"),
+                "comment_id": record.get("comment_id") or None,
+            }
+            timestamp = datetime.now(UTC).isoformat()
+        else:
+            if issue_number is not None or record is not None or recorded_at is None:
+                raise ValueError(
+                    "issue-series publication receipt requires an explicit recorded time"
+                )
+            receipt = receipt_or_repository
+            timestamp = recorded_at
+        normalized = self._normalize_issue_series_publication(receipt, timestamp)
+        identity = cast(Meta, normalized["series_identity"])
+        repository = str(identity["repository"])
+        issue_number = int(identity["issue_number"])
+        digest = str(normalized["manifest_digest"])
+        key = str(normalized["publication_key"])
+        with self.transaction() as connection:
+            self._ensure_issue_series_schema(connection)
+            manifest = connection.execute(
+                """SELECT manifest_digest FROM issue_series
+                   WHERE repository=? AND issue_number=?""",
+                (repository, issue_number),
+            ).fetchone()
+            if manifest is None or str(manifest["manifest_digest"]) != digest:
+                raise RuntimeError("issue-series publication does not match a local manifest")
+            existing = connection.execute(
+                """SELECT repository, issue_number, manifest_digest, publication_key,
+                              status, comment_id, recorded_at
+                       FROM issue_series_publications
+                       WHERE (repository=? AND issue_number=? AND manifest_digest=?)
+                          OR publication_key=?""",
+                (repository, issue_number, digest, key),
+            ).fetchone()
+            if existing is not None:
+                replay = {
+                    "series_identity": {
+                        "repository": str(existing["repository"]),
+                        "issue_number": int(existing["issue_number"]),
+                    },
+                    "manifest_digest": str(existing["manifest_digest"]),
+                    "publication_key": str(existing["publication_key"]),
+                    "status": str(existing["status"]),
+                    "comment_id": existing["comment_id"],
+                    "recorded_at": str(existing["recorded_at"]),
+                }
+                if {key: value for key, value in replay.items() if key != "recorded_at"} != {
+                    key: value for key, value in normalized.items() if key != "recorded_at"
+                }:
+                    raise RuntimeError(
+                        "issue-series publication receipt conflicts with durable record"
+                    )
+                return replay
+            connection.execute(
+                """INSERT INTO issue_series_publications(
+                       repository, issue_number, manifest_digest, publication_key,
+                       status, comment_id, recorded_at
+                   ) VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    repository,
+                    issue_number,
+                    digest,
+                    key,
+                    normalized["status"],
+                    normalized["comment_id"],
+                    timestamp,
+                ),
+            )
+        return normalized
+
+    def resolve_issue_series_publication(
+        self, repository: str, issue_number: int, record: Meta
+    ) -> Meta:
+        """Replace only a pre-call ambiguous receipt with one normalized outcome."""
+        receipt: Meta = {
+            "series_identity": {"repository": repository, "issue_number": issue_number},
+            "manifest_digest": record.get("manifest_digest"),
+            "publication_key": record.get("publication_key"),
+            "status": record.get("status"),
+            "comment_id": record.get("comment_id") or None,
+        }
+        normalized = self._normalize_issue_series_publication(
+            receipt, datetime.now(UTC).isoformat()
+        )
+        identity = cast(Meta, normalized["series_identity"])
+        with self.transaction() as connection:
+            existing = connection.execute(
+                """SELECT status FROM issue_series_publications
+                   WHERE repository=? AND issue_number=?
+                     AND manifest_digest=? AND publication_key=?""",
+                (
+                    identity["repository"],
+                    identity["issue_number"],
+                    normalized["manifest_digest"],
+                    normalized["publication_key"],
+                ),
+            ).fetchone()
+            if existing is None:
+                raise RuntimeError("issue-series publication reservation is missing")
+            if str(existing["status"]) in {"published", "already_published"}:
+                if (
+                    str(existing["status"]) != str(normalized["status"])
+                    or existing["comment_id"] != normalized["comment_id"]
+                ):
+                    raise RuntimeError("issue-series publication receipt is already final")
+                return normalized
+            connection.execute(
+                """UPDATE issue_series_publications SET status=?, comment_id=?, recorded_at=?
+                   WHERE repository=? AND issue_number=?
+                     AND manifest_digest=? AND publication_key=?""",
+                (
+                    normalized["status"],
+                    normalized["comment_id"],
+                    normalized["recorded_at"],
+                    identity["repository"],
+                    identity["issue_number"],
+                    normalized["manifest_digest"],
+                    normalized["publication_key"],
+                ),
+            )
+        return normalized
+
     def create_issue_series(
         self,
         receipt: Meta,
@@ -1132,6 +1394,23 @@ ISSUE_SERIES_STATEMENTS = (
  FOREIGN KEY(repository, issue_number)
    REFERENCES issue_series(repository, issue_number) ON DELETE CASCADE
 ) STRICT""",
+    """CREATE TABLE IF NOT EXISTS issue_series_publications(
+ repository TEXT NOT NULL,
+ issue_number INTEGER NOT NULL CHECK(issue_number > 0),
+ manifest_digest TEXT NOT NULL CHECK(length(manifest_digest)=71),
+ publication_key TEXT NOT NULL CHECK(length(publication_key)=64),
+ status TEXT NOT NULL CHECK(status IN (
+   'published','already_published','dry_run','deferred_unavailable',
+   'deferred_unauthorized','deferred_timeout','deferred_conflict',
+   'deferred_wrong_identity','deferred_closed','deferred_moved','ambiguous')),
+ comment_id TEXT CHECK(comment_id IS NULL OR (length(comment_id) BETWEEN 1 AND 128)),
+ recorded_at TEXT NOT NULL,
+ PRIMARY KEY(repository, issue_number, manifest_digest),
+ UNIQUE(publication_key),
+ FOREIGN KEY(repository, issue_number)
+   REFERENCES issue_series(repository, issue_number) ON DELETE CASCADE,
+ CHECK((status IN ('published','already_published')) OR comment_id IS NULL)
+) STRICT""",
 )
 ISSUE_SERIES_SCHEMA = "\n".join(f"{statement};" for statement in ISSUE_SERIES_STATEMENTS)
 
@@ -1174,7 +1453,7 @@ CREATE TABLE checkpoints(name TEXT PRIMARY KEY, revision INTEGER NOT NULL,
 )
 
 
-def create_database(
+def create_database(  # noqa: C901
     path: Path,
     binding: Meta,
     tasks: Sequence[Task],
@@ -1186,6 +1465,7 @@ def create_database(
     session_records: Sequence[Meta] = (),
     checkpoint_records: Sequence[Meta] = (),
     issue_series: Sequence[Meta] = (),
+    issue_series_publications: Sequence[Meta] = (),
 ) -> None:
     """Build a complete database beside its final target and install atomically."""
     require_local_filesystem(path)
@@ -1268,6 +1548,24 @@ def create_database(
                         (repository, issue_number, str(member_id), str(member_id))
                         for member_id in receipt["task_ids"]
                     ],
+                )
+            for receipt in issue_series_publications:
+                normalized = SQLiteBackend._normalize_issue_series_publication(receipt, imported_at)
+                identity = cast(Meta, normalized["series_identity"])
+                connection.execute(
+                    """INSERT INTO issue_series_publications(
+                           repository, issue_number, manifest_digest, publication_key,
+                           status, comment_id, recorded_at
+                       ) VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        identity["repository"],
+                        identity["issue_number"],
+                        normalized["manifest_digest"],
+                        normalized["publication_key"],
+                        normalized["status"],
+                        normalized["comment_id"],
+                        normalized["recorded_at"],
+                    ),
                 )
             connection.execute(
                 """INSERT INTO migrations(source_backend, source_checkpoint, imported_at)

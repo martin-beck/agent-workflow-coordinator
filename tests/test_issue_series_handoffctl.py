@@ -7,6 +7,7 @@ import argparse
 import json
 import multiprocessing
 import sqlite3
+import subprocess
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -144,6 +145,166 @@ class IssueSeriesHandoffTest(unittest.TestCase):
             CORE.cmd_issue_series_create(args)
         self.assertEqual(before, (self.root / "CURRENT.md").read_text())
 
+    def test_optional_publication_is_local_idempotent_and_never_changes_tasks(self) -> None:
+        self.make_task()
+        manifest = self.issue_series_manifest()
+        digest = CORE.issue_series_state_digest(CORE.all_tasks())
+        with patch.object(CORE, "commit", return_value=True):
+            CORE.cmd_issue_series_create(
+                argparse.Namespace(manifest=manifest, expected_state_digest=digest)
+            )
+        series = CORE.git_issue_series_receipts(CORE.all_tasks())
+        self.assertEqual(1, len(series))
+        before = [
+            (meta["id"], meta["status"], meta["task_revision"]) for _, meta, _ in CORE.all_tasks()
+        ]
+        args = argparse.Namespace(
+            repository="github.com/owner/product",
+            issue_number=42,
+            expected_manifest_digest=series[0]["manifest_digest"],
+            transport="mock",
+            mock_status="published",
+            mock_comment_id="42",
+        )
+        with patch.object(CORE, "commit", return_value=True) as commit:
+            CORE.cmd_issue_series_publish(args)
+        records = list((self.root / "issue-series-publications").glob("*.json"))
+        self.assertEqual(1, len(records))
+        recorded = json.loads(records[0].read_text())
+        self.assertEqual("published", recorded["status"])
+        self.assertEqual("42", recorded["comment_id"])
+        self.assertEqual(
+            before,
+            [
+                (meta["id"], meta["status"], meta["task_revision"])
+                for _, meta, _ in CORE.all_tasks()
+            ],
+        )
+        with patch.object(CORE, "commit", return_value=True) as replay:
+            CORE.cmd_issue_series_publish(args)
+        commit.assert_called_once()
+        replay.assert_not_called()
+        args.repository = "github.com/other/project"
+        with self.assertRaisesRegex(RuntimeError, "authoritative manifest"):
+            CORE.cmd_issue_series_publish(args)
+        self.assertEqual(1, len(list((self.root / "issue-series-publications").glob("*.json"))))
+
+    def test_live_publication_reserves_then_resolves_outside_the_lock(self) -> None:
+        self.make_task()
+        manifest = self.issue_series_manifest()
+        with patch.object(CORE, "commit", return_value=True):
+            CORE.cmd_issue_series_create(
+                argparse.Namespace(
+                    manifest=manifest,
+                    expected_state_digest=CORE.issue_series_state_digest(CORE.all_tasks()),
+                )
+            )
+        digest = CORE.git_issue_series_receipts(CORE.all_tasks())[0]["manifest_digest"]
+        args = argparse.Namespace(
+            repository="github.com/owner/product",
+            issue_number=42,
+            expected_manifest_digest=digest,
+            transport="live",
+            mock_status="published",
+            mock_comment_id="unused",
+        )
+        outcome = CORE.PublicationOutcome(
+            "published",
+            CORE.publication_key(args.repository, args.issue_number, digest),
+            digest,
+            "42",
+        )
+        with (
+            patch.object(CORE, "commit", return_value=True) as commit,
+            patch.object(CORE, "_live_issue_series_publication", return_value=outcome) as live,
+        ):
+            CORE.cmd_issue_series_publish(args)
+        live.assert_called_once()
+        self.assertEqual(2, commit.call_count)
+        record = json.loads(
+            next((self.root / "issue-series-publications").glob("*.json")).read_text()
+        )
+        self.assertEqual("published", record["status"])
+        self.assertEqual("42", record["comment_id"])
+
+    def test_live_publication_classifies_failures_without_retaining_diagnostics(self) -> None:
+        digest = "sha256:" + "a" * 64
+        key = CORE.publication_key("github.com/owner/product", 42, digest)
+        cases = {
+            "HTTP 401": "deferred_unauthorized",
+            "HTTP 410": "deferred_closed",
+            "HTTP 404": "deferred_moved",
+            "HTTP 409": "deferred_conflict",
+            "temporary outage": "deferred_unavailable",
+        }
+        for diagnostic, expected in cases.items():
+            with self.subTest(diagnostic=diagnostic):
+                outcome = CORE._live_publication_failure(diagnostic, key, digest)
+                self.assertEqual(expected, outcome.status)
+                self.assertNotIn(diagnostic, repr(outcome))
+
+    def test_live_publication_replays_final_receipt_without_another_post(self) -> None:
+        self.make_task()
+        manifest = self.issue_series_manifest()
+        with patch.object(CORE, "commit", return_value=True):
+            CORE.cmd_issue_series_create(
+                argparse.Namespace(
+                    manifest=manifest,
+                    expected_state_digest=CORE.issue_series_state_digest(CORE.all_tasks()),
+                )
+            )
+        digest = CORE.git_issue_series_receipts(CORE.all_tasks())[0]["manifest_digest"]
+        args = argparse.Namespace(
+            repository="github.com/owner/product",
+            issue_number=42,
+            expected_manifest_digest=digest,
+            transport="live",
+            mock_status="published",
+            mock_comment_id="unused",
+        )
+        outcome = CORE.PublicationOutcome(
+            "published",
+            CORE.publication_key(args.repository, args.issue_number, digest),
+            digest,
+            "42",
+        )
+        with (
+            patch.object(CORE, "commit", return_value=True),
+            patch.object(CORE, "_live_issue_series_publication", return_value=outcome),
+        ):
+            CORE.cmd_issue_series_publish(args)
+        with patch.object(CORE, "_live_issue_series_publication") as live:
+            CORE.cmd_issue_series_publish(args)
+        live.assert_not_called()
+
+    def test_live_publication_rejects_non_numeric_remote_comment_id(self) -> None:
+        digest = "sha256:" + "a" * 64
+        with patch.object(CORE, "CONFIG", self.root / "config.json"):
+            CORE.CONFIG.write_text(json.dumps({"github_repository": "owner/product"}))
+            responses = [
+                subprocess.CompletedProcess([], 0, "", ""),
+                subprocess.CompletedProcess([], 0, "sensitive-output", ""),
+            ]
+            with patch.object(CORE.subprocess, "run", side_effect=responses):
+                outcome = CORE._live_issue_series_publication(
+                    "github.com/owner/product", 42, digest, "body"
+                )
+        self.assertEqual("ambiguous", outcome.status)
+        self.assertIsNone(outcome.comment_id)
+
+    def test_live_publication_recovers_marker_before_posting(self) -> None:
+        digest = "sha256:" + "b" * 64
+        with patch.object(CORE, "CONFIG", self.root / "config.json"):
+            CORE.CONFIG.write_text(json.dumps({"github_repository": "owner/product"}))
+            found = subprocess.CompletedProcess([], 0, "77\n", "")
+            with patch.object(CORE.subprocess, "run", return_value=found) as run:
+                outcome = CORE._live_issue_series_publication(
+                    "github.com/owner/product", 42, digest, "body"
+                )
+        self.assertEqual("already_published", outcome.status)
+        self.assertEqual("77", outcome.comment_id)
+        run.assert_called_once()
+
     def test_issue_series_create_restores_every_precommit_write(self) -> None:
         self.make_task()
         manifest = self.issue_series_manifest()
@@ -265,6 +426,44 @@ class IssueSeriesHandoffTest(unittest.TestCase):
         finally:
             connection.close()
         self.assertTrue(list((self.root / "issue-series").glob("*.json")))
+
+    def test_sqlite_publication_exports_the_same_local_receipt_projection(self) -> None:
+        self.make_task()
+        CORE.DATABASE.parent.mkdir()
+        CORE.create_database(
+            CORE.DATABASE,
+            CORE.project_binding(),
+            CORE.git_tasks(),
+            imported_at="2026-10-12T00:00:00+00:00",
+            source_backend="git",
+            source_checkpoint="a" * 40,
+        )
+        CORE.BACKEND_CONFIG.write_text(
+            json.dumps({"schema_version": 1, "project_id": project_uuid("1"), "backend": "sqlite"})
+        )
+        manifest = self.issue_series_manifest()
+        CORE.cmd_issue_series_create(
+            argparse.Namespace(
+                manifest=manifest,
+                expected_state_digest=CORE.issue_series_state_digest(CORE.all_tasks()),
+            )
+        )
+        series = CORE.storage_backend().load_issue_series()
+        args = argparse.Namespace(
+            repository="github.com/owner/product",
+            issue_number=42,
+            expected_manifest_digest=series[0]["manifest_digest"],
+            transport="dry-run",
+            mock_status="published",
+            mock_comment_id="unused",
+        )
+        CORE.cmd_issue_series_publish(args)
+        backend = CORE.storage_backend()
+        published = backend.load_issue_series_publications()
+        self.assertEqual(1, len(published))
+        self.assertEqual("dry_run", published[0]["status"])
+        projection = CORE.issue_series_publication_path(str(published[0]["publication_key"]))
+        self.assertEqual(published[0], json.loads(projection.read_text()))
 
     def test_sixteen_processes_serialize_one_issue_series_create(self) -> None:
         self.make_task()
