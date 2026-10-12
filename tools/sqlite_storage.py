@@ -34,6 +34,7 @@ NETWORK_FILESYSTEMS = frozenset(
 _FACTORY_SENTINEL = object()
 _SHA256_DIGEST = re.compile(r"sha256:[0-9a-f]{64}$")
 _PUBLICATION_KEY = re.compile(r"[0-9a-f]{64}$")
+_COMMENT_ID = re.compile(r"[1-9][0-9]{0,18}$")
 _PUBLICATION_STATUSES = frozenset(
     {
         "published",
@@ -1063,11 +1064,7 @@ class SQLiteBackend:
         if not isinstance(status, str) or status not in _PUBLICATION_STATUSES:
             raise ValueError("issue-series publication has invalid status")
         if comment_id is not None and (
-            not isinstance(comment_id, str)
-            or not comment_id
-            or len(comment_id) > 128
-            or "\n" in comment_id
-            or "\r" in comment_id
+            not isinstance(comment_id, str) or not _COMMENT_ID.fullmatch(comment_id)
         ):
             raise ValueError("issue-series publication has invalid comment identifier")
         if status not in {"published", "already_published"} and comment_id is not None:
@@ -1246,8 +1243,13 @@ class SQLiteBackend:
             ).fetchone()
             if existing is None:
                 raise RuntimeError("issue-series publication reservation is missing")
-            if str(existing["status"]) != "ambiguous":
-                raise RuntimeError("issue-series publication reservation is no longer pending")
+            if str(existing["status"]) in {"published", "already_published"}:
+                if (
+                    str(existing["status"]) != str(normalized["status"])
+                    or existing["comment_id"] != normalized["comment_id"]
+                ):
+                    raise RuntimeError("issue-series publication receipt is already final")
+                return normalized
             connection.execute(
                 """UPDATE issue_series_publications SET status=?, comment_id=?, recorded_at=?
                    WHERE repository=? AND issue_number=?

@@ -33,6 +33,7 @@ PublicationStatus = Literal[
 ]
 
 _DIGEST: Final = re.compile(r"sha256:[0-9a-f]{64}$")
+_COMMENT_ID: Final = re.compile(r"[1-9][0-9]{0,18}$")
 _MAX_MARKDOWN: Final = 8_192
 _STATUS_MAP: Final[dict[str, PublicationStatus]] = {
     "published": "published",
@@ -150,7 +151,7 @@ def normalize_outcome(
     ):
         return PublicationOutcome("deferred_wrong_identity", key, digest)
     comment_id = value.get("comment_id")
-    if not isinstance(comment_id, str) or not comment_id or len(comment_id) > 128:
+    if not isinstance(comment_id, str) or not _COMMENT_ID.fullmatch(comment_id):
         return PublicationOutcome("ambiguous", key, digest)
     return PublicationOutcome(status, key, digest, comment_id)
 

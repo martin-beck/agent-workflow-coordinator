@@ -7,6 +7,7 @@ import argparse
 import json
 import multiprocessing
 import sqlite3
+import subprocess
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -241,6 +242,55 @@ class IssueSeriesHandoffTest(unittest.TestCase):
                 outcome = CORE._live_publication_failure(diagnostic, key, digest)
                 self.assertEqual(expected, outcome.status)
                 self.assertNotIn(diagnostic, repr(outcome))
+
+    def test_live_publication_replays_final_receipt_without_another_post(self) -> None:
+        self.make_task()
+        manifest = self.issue_series_manifest()
+        with patch.object(CORE, "commit", return_value=True):
+            CORE.cmd_issue_series_create(
+                argparse.Namespace(
+                    manifest=manifest,
+                    expected_state_digest=CORE.issue_series_state_digest(CORE.all_tasks()),
+                )
+            )
+        digest = CORE.git_issue_series_receipts(CORE.all_tasks())[0]["manifest_digest"]
+        args = argparse.Namespace(
+            repository="github.com/owner/product",
+            issue_number=42,
+            expected_manifest_digest=digest,
+            transport="live",
+            mock_status="published",
+            mock_comment_id="unused",
+        )
+        outcome = CORE.PublicationOutcome(
+            "published",
+            CORE.publication_key(args.repository, args.issue_number, digest),
+            digest,
+            "42",
+        )
+        with (
+            patch.object(CORE, "commit", return_value=True),
+            patch.object(CORE, "_live_issue_series_publication", return_value=outcome),
+        ):
+            CORE.cmd_issue_series_publish(args)
+        with patch.object(CORE, "_live_issue_series_publication") as live:
+            CORE.cmd_issue_series_publish(args)
+        live.assert_not_called()
+
+    def test_live_publication_rejects_non_numeric_remote_comment_id(self) -> None:
+        digest = "sha256:" + "a" * 64
+        with patch.object(CORE, "CONFIG", self.root / "config.json"):
+            CORE.CONFIG.write_text(json.dumps({"github_repository": "owner/product"}))
+            responses = [
+                subprocess.CompletedProcess([], 0, "", ""),
+                subprocess.CompletedProcess([], 0, "sensitive-output", ""),
+            ]
+            with patch.object(CORE.subprocess, "run", side_effect=responses):
+                outcome = CORE._live_issue_series_publication(
+                    "github.com/owner/product", 42, digest, "body"
+                )
+        self.assertEqual("ambiguous", outcome.status)
+        self.assertIsNone(outcome.comment_id)
 
     def test_issue_series_create_restores_every_precommit_write(self) -> None:
         self.make_task()

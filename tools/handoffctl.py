@@ -3571,13 +3571,16 @@ def _git_record_issue_series_publication(record: Meta) -> None:
 
 
 def _git_resolve_issue_series_publication(record: Meta) -> None:
-    """Replace a pre-call ambiguous Git receipt with exactly one final outcome."""
+    """Replace a non-final Git receipt with one locally durable outcome."""
     path = issue_series_publication_path(str(record["publication_key"]))
     if not path.exists():
         raise RuntimeError("issue-series publication reservation is missing")
     current = cast(Meta, json.loads(path.read_text(encoding="utf-8")))
-    if current.get("status") != "ambiguous":
-        raise RuntimeError("issue-series publication reservation is no longer pending")
+    if current.get("status") in {"published", "already_published"}:
+        if current != record:
+            raise RuntimeError("issue-series publication receipt is already final")
+        push_replica()
+        return
     if current.get("manifest_digest") != record.get("manifest_digest"):
         raise RuntimeError("issue-series publication reservation identity changed")
     atomic(path, json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n")
@@ -3603,6 +3606,26 @@ def _record_issue_series_publication(
         _git_record_issue_series_publication(record)
 
 
+def _existing_issue_series_publication(
+    repository: str, issue_number: int, digest: str
+) -> Meta | None:
+    """Load the one local receipt for this immutable publication intent."""
+    key = publication_key(repository, issue_number, digest)
+    backend = storage_backend()
+    if isinstance(backend, SQLiteBackend):
+        for receipt in backend.load_issue_series_publications():
+            if receipt.get("publication_key") == key:
+                return receipt
+        return None
+    path = issue_series_publication_path(key)
+    if not path.exists():
+        return None
+    record = cast(Meta, json.loads(path.read_text(encoding="utf-8")))
+    if record.get("manifest_digest") != digest:
+        raise RuntimeError("issue-series publication receipt identity changed")
+    return record
+
+
 def _live_publication_failure(diagnostic: str, key: str, digest: str) -> PublicationOutcome:
     """Classify a bounded live transport failure without retaining its response."""
     normalized = diagnostic.lower()
@@ -3617,6 +3640,40 @@ def _live_publication_failure(diagnostic: str, key: str, digest: str) -> Publica
     return PublicationOutcome("deferred_unavailable", key, digest)
 
 
+def _live_existing_issue_series_comment(
+    slug: str, issue_number: int, key: str, digest: str
+) -> PublicationOutcome | None:
+    """Find the sole prior marker comment, without retaining its hosted body."""
+    marker = f"agent-workflow-issue-series:v1 digest={digest} key={key}"
+    try:
+        found = subprocess.run(
+            [
+                "gh",
+                "api",
+                "--paginate",
+                f"repos/{slug}/issues/{issue_number}/comments?per_page=100",
+                "--jq",
+                f'.[] | select(.body | contains("{marker}")) | .id',
+            ],
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=15,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return PublicationOutcome("deferred_timeout", key, digest)
+    if found.returncode:
+        return _live_publication_failure(found.stderr, key, digest)
+    existing_ids = [line for line in found.stdout.splitlines() if line]
+    if len(existing_ids) == 1 and re.fullmatch(r"[1-9][0-9]{0,18}", existing_ids[0]):
+        return PublicationOutcome("already_published", key, digest, existing_ids[0])
+    if len(existing_ids) > 1 or any(
+        not re.fullmatch(r"[1-9][0-9]{0,18}", item) for item in existing_ids
+    ):
+        return PublicationOutcome("ambiguous", key, digest)
+    return None
+
+
 def _live_issue_series_publication(
     repository: str, issue_number: int, digest: str, markdown: str
 ) -> PublicationOutcome:
@@ -3625,11 +3682,12 @@ def _live_issue_series_publication(
     if not CONFIG.exists():
         return PublicationOutcome("deferred_unavailable", key, digest)
     configured = config().get("github_repository")
-    if not isinstance(configured, str) or repository_slug(configured) != repository_slug(
-        repository
-    ):
-        return PublicationOutcome("deferred_wrong_identity", key, digest)
     slug = repository.removeprefix("github.com/")
+    if not isinstance(configured, str) or repository_slug(configured) != repository_slug(slug):
+        return PublicationOutcome("deferred_wrong_identity", key, digest)
+    existing = _live_existing_issue_series_comment(slug, issue_number, key, digest)
+    if existing is not None:
+        return existing
     try:
         result = subprocess.run(
             [
@@ -3653,7 +3711,7 @@ def _live_issue_series_publication(
     if result.returncode:
         return _live_publication_failure(result.stderr, key, digest)
     comment_id = result.stdout.strip()
-    if not comment_id or len(comment_id) > 128 or "\n" in comment_id:
+    if not re.fullmatch(r"[1-9][0-9]{0,18}", comment_id):
         return PublicationOutcome("ambiguous", key, digest)
     return PublicationOutcome("published", key, digest, comment_id)
 
@@ -3684,20 +3742,28 @@ def cmd_issue_series_publish(args: argparse.Namespace) -> None:
                 )
             outcome = MockTransport(raw).publish(repository, issue_number, digest, markdown)
         else:
-            reservation = _publication_record(
-                PublicationOutcome("ambiguous", key, digest), markdown
-            )
-            _record_issue_series_publication(repository, issue_number, reservation)
-            outcome = None
-        if outcome is not None:
+            existing = _existing_issue_series_publication(repository, issue_number, digest)
+            if existing is not None and existing.get("status") in {
+                "published",
+                "already_published",
+            }:
+                record = existing
+            else:
+                reservation = _publication_record(
+                    PublicationOutcome("ambiguous", key, digest), markdown
+                )
+                if existing is None:
+                    _record_issue_series_publication(repository, issue_number, reservation)
+                else:
+                    _record_issue_series_publication(
+                        repository, issue_number, reservation, resolve=True
+                    )
+                outcome = _live_issue_series_publication(repository, issue_number, digest, markdown)
+                record = _publication_record(outcome, markdown)
+                _record_issue_series_publication(repository, issue_number, record, resolve=True)
+        if args.transport in {"dry-run", "mock"}:
             record = _publication_record(outcome, markdown)
             _record_issue_series_publication(repository, issue_number, record)
-    if args.transport == "live":
-        outcome = _live_issue_series_publication(repository, issue_number, digest, markdown)
-        record = _publication_record(outcome, markdown)
-        with locked(phase="issue_series_publish_resolve"):
-            _issue_series_receipt(repository, issue_number, digest)
-            _record_issue_series_publication(repository, issue_number, record, resolve=True)
     print(json.dumps(record, sort_keys=True))
 
 
