@@ -22,6 +22,7 @@ from tools.production_upgrade_binding import (
     resolve_sqlite_live_binding,
 )
 from tools.rollback_control_store import SQLiteBarrierSessionStore, SQLiteRollbackControlStore
+from tools.sqlite_storage import SCHEMA
 from tools.upgrade_authority import inspect_sqlite_release_authority
 from tools.upgrade_binding import LiveUpgradeBinding, UpgradeRuntimeBinding
 from tools.upgrade_identity import (
@@ -98,26 +99,8 @@ class ProductionUpgradeBindingTests(unittest.TestCase):
             authority = root / "authority.sqlite"
             with sqlite3.connect(authority) as connection:
                 connection.executescript(
-                    """
-                    CREATE TABLE metadata(key TEXT PRIMARY KEY, value TEXT NOT NULL);
-                    CREATE TABLE tasks(id INTEGER PRIMARY KEY AUTOINCREMENT, filename TEXT NOT NULL,
-                        meta_json TEXT NOT NULL, body TEXT NOT NULL, revision INTEGER NOT NULL,
-                        status TEXT NOT NULL, owner TEXT NOT NULL, claim_expires TEXT NOT NULL,
-                        branch TEXT NOT NULL, worktree_key TEXT NOT NULL, updated_at TEXT NOT NULL);
-                    CREATE TABLE dependencies(task_id TEXT NOT NULL, dependency_id TEXT NOT NULL);
-                    CREATE TABLE events(sequence INTEGER PRIMARY KEY, task_id TEXT NOT NULL,
-                        revision INTEGER NOT NULL, kind TEXT NOT NULL, recorded_at TEXT NOT NULL,
-                        note TEXT NOT NULL);
-                    CREATE TABLE command_results(
-                        sequence INTEGER PRIMARY KEY, task_id TEXT NOT NULL,
-                        owner TEXT NOT NULL, argv_sha256 TEXT NOT NULL, returncode INTEGER NOT NULL,
-                        classification TEXT NOT NULL, recorded_at TEXT NOT NULL);
-                    CREATE TABLE migrations(
-                        sequence INTEGER PRIMARY KEY, source_backend TEXT NOT NULL,
-                        source_checkpoint TEXT NOT NULL, imported_at TEXT NOT NULL,
-                        finalized INTEGER NOT NULL);
-                    CREATE TABLE checkpoints(name TEXT PRIMARY KEY, revision INTEGER NOT NULL,
-                        recorded_at TEXT NOT NULL);
+                    SCHEMA
+                    + """
                     INSERT INTO metadata(key, value) VALUES
                         ('schema_version', '1'), ('backend', 'sqlite'),
                         ('project_id', 'placeholder'),
