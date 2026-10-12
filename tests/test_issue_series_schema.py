@@ -25,6 +25,7 @@ def manifest() -> dict[str, Any]:
         "members": [
             {
                 "id": "AR-1000",
+                "short_title": "Create records",
                 "scope": "Create local task records",
                 "acceptance": "Focused tests pass",
                 "ownership": "Coordinator core",

@@ -27,7 +27,7 @@ _TOP_LEVEL = frozenset(
     {"schema_version", "repository", "issue", "issue_digest", "members", "finalizer"}
 )
 _ISSUE = frozenset({"number", "url"})
-_MEMBER = frozenset({"id", "scope", "acceptance", "ownership", "depends_on"})
+_MEMBER = frozenset({"id", "short_title", "scope", "acceptance", "ownership", "depends_on"})
 _DEPENDENCY = frozenset({"id", "rationale"})
 
 
@@ -48,6 +48,7 @@ class Member:
     """A proposed AR with its bounded planning data."""
 
     id: str
+    short_title: str
     scope: str
     acceptance: str
     ownership: str
@@ -120,11 +121,19 @@ def _member(value: object, index: int) -> Member:
         )
     return Member(
         task_id,
+        _short_title(item["short_title"], f"members[{index}].short_title"),
         _text(item["scope"], f"members[{index}].scope"),
         _text(item["acceptance"], f"members[{index}].acceptance"),
         _text(item["ownership"], f"members[{index}].ownership"),
         tuple(parsed),
     )
+
+
+def _short_title(value: object, label: str) -> str:
+    text = _text(value, label)
+    if len(text.split()) > 4:
+        _fail(f"{label} must contain at most four words")
+    return text
 
 
 def _edge_errors(members: tuple[Member, ...]) -> tuple[list[str], dict[str, tuple[str, ...]]]:

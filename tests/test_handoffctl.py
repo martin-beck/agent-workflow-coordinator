@@ -4738,6 +4738,7 @@ class HandoffTest(unittest.TestCase):
                     "members": [
                         {
                             "id": "AR-9000",
+                            "short_title": "Create records",
                             "scope": "Create local series records",
                             "acceptance": "Focused local tests pass",
                             "ownership": "Coordinator core",
@@ -4745,6 +4746,7 @@ class HandoffTest(unittest.TestCase):
                         },
                         {
                             "id": "AR-9001",
+                            "short_title": "Qualify records",
                             "scope": "Qualify local series records",
                             "acceptance": "Local graph checks pass",
                             "ownership": "Coordinator core",
@@ -4772,6 +4774,7 @@ class HandoffTest(unittest.TestCase):
         self.assertEqual({"AR-0001", "AR-9000", "AR-9001"}, set(created))
         self.assertEqual("AR-9001", created["AR-9000"]["parent_task_ref"])
         self.assertEqual(["AR-9000"], created["AR-9001"]["children"])
+        self.assertEqual("Create records", created["AR-9000"]["short_title"])
         self.assertEqual(1, len(list((self.root / "issue-series").glob("*.json"))))
         commit.assert_called_once()
         before = (self.root / "CURRENT.md").read_text()

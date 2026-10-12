@@ -3491,7 +3491,8 @@ def issue_series_tasks(receipt: Meta, manifest_path: Path) -> list[Task]:
         meta: Meta = {
             "schema_version": 1,
             "id": task_id,
-            "title": str(member["scope"]),
+            "title": str(member["short_title"]),
+            "short_title": str(member["short_title"]),
             "status": "planned",
             "priority": "P1",
             "summary": str(member["scope"]),

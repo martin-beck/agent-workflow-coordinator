@@ -22,6 +22,7 @@ def manifest() -> dict[str, Any]:
         "members": [
             {
                 "id": "AR-1000",
+                "short_title": "Parse manifest",
                 "scope": "Parse a bounded manifest",
                 "acceptance": "Focused validator tests pass",
                 "ownership": "Coordinator core",
@@ -29,6 +30,7 @@ def manifest() -> dict[str, Any]:
             },
             {
                 "id": "AR-1001",
+                "short_title": "Publish series",
                 "scope": "Publish only after preflight",
                 "acceptance": "Atomic publisher test passes",
                 "ownership": "Coordinator core",
@@ -106,6 +108,8 @@ class IssueSeriesTests(unittest.TestCase):
 
     def test_member_requirements_and_dependency_rationale_are_strict(self) -> None:
         cases = [
+            ("short_title", "", "short_title"),
+            ("short_title", "This title contains five words", "at most four words"),
             ("scope", "", "scope"),
             ("acceptance", "", "acceptance"),
             ("ownership", "", "ownership"),
@@ -165,6 +169,7 @@ class IssueSeriesTests(unittest.TestCase):
         value["members"].append(
             {
                 "id": "AR-1002",
+                "short_title": "Finish locally",
                 "scope": "Finish locally",
                 "acceptance": "The final local check passes",
                 "ownership": "Coordinator core",

@@ -24,6 +24,7 @@ def manifest() -> dict[str, Any]:
         "members": [
             {
                 "id": "AR-1000",
+                "short_title": "Create plan",
                 "scope": "Create a local plan",
                 "acceptance": "Focused tests pass",
                 "ownership": "Coordinator core",
@@ -31,6 +32,7 @@ def manifest() -> dict[str, Any]:
             },
             {
                 "id": "AR-1001",
+                "short_title": "Complete plan",
                 "scope": "Complete the local plan",
                 "acceptance": "Receipt is canonical",
                 "ownership": "Coordinator core",

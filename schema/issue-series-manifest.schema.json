@@ -27,6 +27,7 @@
             "pattern": "^github\\.com/[a-z0-9][a-z0-9_.-]*/[a-z0-9][a-z0-9_.-]*$"
         },
         "safeText": {"type": "string", "minLength": 1, "maxLength": 500, "pattern": "^[^\\r\\n]+$"},
+        "shortTitle": {"type": "string", "minLength": 1, "maxLength": 120, "pattern": "^[^\\r\\n]+$"},
         "issue": {
             "type": "object",
             "additionalProperties": false,
@@ -51,9 +52,10 @@
         "member": {
             "type": "object",
             "additionalProperties": false,
-            "required": ["id", "scope", "acceptance", "ownership", "depends_on"],
+            "required": ["id", "short_title", "scope", "acceptance", "ownership", "depends_on"],
             "properties": {
                 "id": {"$ref": "#/$defs/taskId"},
+                "short_title": {"$ref": "#/$defs/shortTitle"},
                 "scope": {"$ref": "#/$defs/safeText"},
                 "acceptance": {"$ref": "#/$defs/safeText"},
                 "ownership": {"$ref": "#/$defs/safeText"},

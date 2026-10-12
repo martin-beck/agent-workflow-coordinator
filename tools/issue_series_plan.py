@@ -93,6 +93,7 @@ def _manifest_payload(manifest: IssueSeriesManifest) -> dict[str, object]:
         "members": [
             {
                 "id": member.id,
+                "short_title": member.short_title,
                 "scope": member.scope,
                 "acceptance": member.acceptance,
                 "ownership": member.ownership,
