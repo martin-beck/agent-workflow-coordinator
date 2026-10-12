@@ -14,6 +14,7 @@ import re
 import runpy
 import subprocess
 import sys
+import time
 import unittest
 from pathlib import Path
 from typing import Any, cast
@@ -931,6 +932,8 @@ class FormalEvidenceTests(unittest.TestCase):
             "tasks_max",
             "runtime_max_seconds",
             "pr_runtime_max_seconds",
+            "pr_fast_runtime_max_seconds",
+            "pr_publication_runtime_max_seconds",
         ):
             self.assertIsInstance(bounds[name], int)
             self.assertGreater(bounds[name], 0)
@@ -993,6 +996,17 @@ class FormalEvidenceTests(unittest.TestCase):
         )
         self.assertEqual(23, len(manifest["profiles"]["full-exhaustive"]["models"]))
         self.assertEqual(9, len(manifest["profiles"]["pr-publication"]["models"]))
+        self.assertEqual(300, manifest["profiles"]["pr-fast"]["aggregate_budget_seconds"])
+        self.assertEqual(900, manifest["profiles"]["pr-publication"]["aggregate_budget_seconds"])
+        self.assertEqual(86400, manifest["profiles"]["full-exhaustive"]["aggregate_budget_seconds"])
+        self.assertIn(
+            "reduced bounded release qualification",
+            manifest["profiles"]["pr-publication"]["claims"],
+        )
+        self.assertIn(
+            "neither refinement evidence", manifest["profiles"]["pr-publication"]["claims"]
+        )
+        self.assertIn("advisory", manifest["profiles"]["full-exhaustive"]["claims"])
         pr_config = (FORMAL_ROOT / "HandoffctlPR.cfg").read_text()
         self.assertIn('Processes = {"p1"}', pr_config)
         self.assertIn("EventualCompletion", pr_config)
@@ -1004,6 +1018,15 @@ class FormalEvidenceTests(unittest.TestCase):
         self.assertIn("runner-produced outcome manifest", attest)
         self.assertIn('effective_bound("TLC_MEMORY_MAX", "3G", boundary)', attest)
         self.assertIn('effective_bound("TLC_SWAP_MAX", "3G", boundary)', attest)
+        self.assertIn('export TLC_MEMORY_MAX="${TLC_MEMORY_MAX:-3G}"', verify)
+        self.assertIn('export TLC_SWAP_MAX="${TLC_SWAP_MAX:-3G}"', verify)
+        self.assertIn("TIER_BUDGET_SECONDS=300", verify)
+        self.assertIn("TIER_BUDGET_SECONDS=900", verify)
+        self.assertIn("aggregate verifier budget exhausted (including admission)", verify)
+        self.assertIn("--started-epoch", verify)
+        self.assertIn("--budget-seconds", verify)
+        self.assertIn("TIER_BUDGET_SECONDS", attest)
+        self.assertIn("verifier_budget", attest)
 
     def test_workflow_separates_fork_pr_publication_and_weekly_tiers(self) -> None:
         workflow = (ROOT / ".github" / "workflows" / "verify.yml").read_text()
@@ -1031,7 +1054,7 @@ class FormalEvidenceTests(unittest.TestCase):
         self.assertIn("        type: choice\n", manual_dispatch)
         self.assertEqual(
             re.findall(r"^          - (.+)$", manual_dispatch, re.MULTILINE),
-            ["pr-fast", "full-exhaustive"],
+            ["pr-fast", "pr-publication", "full-exhaustive"],
         )
         self.assertIn(
             "TLC_TIER: ${{ github.event_name == 'schedule' && 'full-exhaustive' || "
@@ -1040,10 +1063,11 @@ class FormalEvidenceTests(unittest.TestCase):
         )
         self.assertIn(
             "timeout-minutes: ${{ (github.event_name == 'schedule' || "
-            "inputs.tier == 'full-exhaustive') && 1440 || 30 }}",
+            "inputs.tier == 'full-exhaustive') && 1440 || inputs.tier == "
+            "'pr-publication' && 15 || 5 }}",
             formal,
         )
-        self.assertNotIn("continue-on-error:", formal)
+        self.assertIn("continue-on-error:", formal)
         self.assertIn("schedule:", formal)
         self.assertIn("if: github.ref == 'refs/heads/main'", formal)
         self.assertIn("runs-on: [self-hosted, Linux, X64, agent-workflow-coordinator-ci]", formal)
@@ -1057,7 +1081,7 @@ class FormalEvidenceTests(unittest.TestCase):
             "TLC_HEAP",
             "TLC_MEMORY_MAX",
             "TLC_SWAP_MAX",
-            "TLC_TIMEOUT_SECONDS",
+            "TLC_BUDGET_SECONDS",
         ):
             self.assertIn(resource_setting, formal_step)
         full_tier_condition = (
@@ -1085,14 +1109,16 @@ class FormalEvidenceTests(unittest.TestCase):
         self.assertIn("/proc/self/cgroup", formal)
         self.assertIn("/proc/self/mountinfo", formal)
         self.assertNotIn("needs.scope.outputs.release_sensitive", formal_step)
-        timeout_expression = formal[
-            formal.index("TLC_TIMEOUT_SECONDS:") : formal.index(
-                "\n", formal.index("TLC_TIMEOUT_SECONDS:")
+        budget_expression = formal[
+            formal.index("TLC_BUDGET_SECONDS:") : formal.index(
+                "\n", formal.index("TLC_BUDGET_SECONDS:")
             )
         ]
-        self.assertIn("inputs.tier == 'full-exhaustive'", timeout_expression)
-        self.assertIn("'6000'", timeout_expression)
-        self.assertIn("'1200'", timeout_expression)
+        self.assertIn("inputs.tier == 'full-exhaustive'", budget_expression)
+        self.assertIn("'86400'", budget_expression)
+        self.assertIn("'900'", budget_expression)
+        self.assertIn("'300'", budget_expression)
+        self.assertNotIn("DCO certification", workflow)
 
     def test_attestation_rejects_failed_formal_outcomes(self) -> None:
         script = ROOT / "formal" / "handoffctl" / "attest.py"
@@ -1115,6 +1141,10 @@ class FormalEvidenceTests(unittest.TestCase):
                     str(script),
                     "--models",
                     "HandoffctlBinding",
+                    "--budget-seconds",
+                    "600",
+                    "--started-epoch",
+                    str(int(time.time())),
                 ],
             ),
             mock.patch.object(sys, "stderr", stderr),
@@ -1139,6 +1169,17 @@ class FormalEvidenceTests(unittest.TestCase):
             effective_bound("TLC_MEMORY_MAX", "3G", "required")
         with mock.patch.dict(os.environ, {}, clear=True):
             self.assertEqual("3G", effective_bound("TLC_MEMORY_MAX", "3G", "portable"))
+
+    def test_attestation_rejects_budget_or_elapsed_that_exceeds_tier_policy(self) -> None:
+        validate_verifier_budget = runpy.run_path(
+            str(ROOT / "formal" / "handoffctl" / "attest.py")
+        )["validate_verifier_budget"]
+        validate_verifier_budget("pr-fast", 300, 300)
+        validate_verifier_budget("pr-publication", 900, 0)
+        with self.assertRaisesRegex(ValueError, "requires declared budget 300 seconds"):
+            validate_verifier_budget("pr-fast", 301, 0)
+        with self.assertRaisesRegex(ValueError, "within the declared budget"):
+            validate_verifier_budget("pr-publication", 900, 901)
 
 
 if __name__ == "__main__":

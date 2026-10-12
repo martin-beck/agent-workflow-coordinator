@@ -27,5 +27,7 @@ TLA+ modules keep their required MODULE declaration first and place the header i
 The exact Huawei copyright and SPDX lines must form one adjacent pair at that required location;
 standalone matching lines elsewhere do not count as duplicate headers.
 
-Use signed commits with a matching `Signed-off-by` trailer. By contributing, you certify the
-Developer Certificate of Origin 1.1.
+Run the listed checks locally and retain their reproducible evidence before progressing, merging, or
+releasing. A `Signed-off-by` trailer certifying the Developer Certificate of Origin 1.1 is encouraged,
+but neither DCO nor a cryptographic commit signature is a gate. A single developer does not need
+external authentication, GitHub approval, or independent external review to proceed.

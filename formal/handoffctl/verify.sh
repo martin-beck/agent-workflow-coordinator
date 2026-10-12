@@ -25,6 +25,41 @@ fi
 readonly EXECUTION_CLASSIFICATION
 readonly ATTESTATION="${TLC_ATTESTATION_PATH:-${TMPDIR:-/tmp}/handoffctl-${TIER}-attestation.json}"
 
+# These are end-to-end verifier budgets, rather than per-model TLC deadlines:
+# fetching the pinned verifier, queue admission, every model, and attestation
+# all consume the same allowance.  The checked-in tier policy fixes each value.
+case "${TIER}" in
+    portable-smoke) readonly TIER_BUDGET_SECONDS=600 ;;
+    pr-fast) readonly TIER_BUDGET_SECONDS=300 ;;
+    pr-publication) readonly TIER_BUDGET_SECONDS=900 ;;
+    full-exhaustive) readonly TIER_BUDGET_SECONDS=86400 ;;
+esac
+readonly DECLARED_BUDGET_SECONDS="${TLC_BUDGET_SECONDS:-${TIER_BUDGET_SECONDS}}"
+if [[ ! "${DECLARED_BUDGET_SECONDS}" =~ ^[1-9][0-9]*$ ]] || (( DECLARED_BUDGET_SECONDS != TIER_BUDGET_SECONDS )); then
+    echo "${TIER} requires an aggregate verifier budget of ${TIER_BUDGET_SECONDS} seconds" >&2
+    exit 64
+fi
+readonly START_EPOCH_SECONDS="$(date +%s)"
+
+elapsed_seconds() {
+    echo $(( $(date +%s) - START_EPOCH_SECONDS ))
+}
+
+remaining_seconds() {
+    local remaining=$(( DECLARED_BUDGET_SECONDS - $(elapsed_seconds) ))
+    if (( remaining < 1 )); then
+        echo "${TIER} aggregate verifier budget exhausted (including admission)" >&2
+        exit 124
+    fi
+    echo "${remaining}"
+}
+
+# The runner and receipt must describe the same effective resource contract.
+# Workflows normally provide these values, but a direct local invocation must
+# remain self-contained rather than completing TLC and failing at attestation.
+export TLC_MEMORY_MAX="${TLC_MEMORY_MAX:-3G}"
+export TLC_SWAP_MAX="${TLC_SWAP_MAX:-3G}"
+
 readonly TLA_VERSION=1.7.4
 readonly TLA_SHA256=936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88
 readonly SPEC_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
@@ -37,8 +72,11 @@ trap 'rm -rf -- "${TEMP_DIR}" "${SLICE_DIR}"' EXIT
 readonly JAR="${TEMP_DIR}/tla2tools.jar"
 readonly URL="https://github.com/tlaplus/tlaplus/releases/download/v${TLA_VERSION}/tla2tools.jar"
 
-curl --fail --location --retry 3 --show-error --silent --output "${JAR}" "${URL}"
-printf '%s  %s\n' "${TLA_SHA256}" "${JAR}" | sha256sum --check --strict
+timeout --foreground --signal=TERM --kill-after=5s "$(remaining_seconds)" \
+    curl --fail --location --retry 3 --show-error --silent --output "${JAR}" "${URL}"
+timeout --foreground --signal=TERM --kill-after=5s "$(remaining_seconds)" \
+    bash -c 'printf "%s  %s\\n" "$1" "$2" | sha256sum --check --strict' \
+    -- "${TLA_SHA256}" "${JAR}"
 
 run_model() {
     local model="$1"
@@ -62,11 +100,17 @@ run_model() {
     else
         model_path="${SPEC_DIR}/${source}.tla"
     fi
-    python3 "${SPEC_DIR}/../../tools/tlc_runner.py" \
+    # timeout encloses queue/lock admission as well as TLC execution.  The
+    # per-model runner deadline is capped to the remaining aggregate budget.
+    local remaining
+    remaining="$(remaining_seconds)"
+    timeout --foreground --signal=TERM --kill-after=5s "${remaining}" \
+        python3 "${SPEC_DIR}/../../tools/tlc_runner.py" \
         --jar "${JAR}" \
         --model "${model_path}" \
         --config "${config}" \
         --metadir "${TEMP_DIR}/${model}-states" \
+        --timeout-seconds "${remaining}" \
         "${RUNNER_ADMISSION_ARGS[@]}"
     printf "%s success\n" "${model}" >> "${MANIFEST}"
 }
@@ -117,5 +161,6 @@ else
     done
     run_model HandoffctlRecovery
 fi
-python3 "${SPEC_DIR}/attest.py" --tier "${TIER}" --output "${ATTESTATION}" --jar "${JAR}" --manifest "${MANIFEST}" --execution-classification "${EXECUTION_CLASSIFICATION}" \
+timeout --foreground --signal=TERM --kill-after=5s "$(remaining_seconds)" \
+    python3 "${SPEC_DIR}/attest.py" --tier "${TIER}" --output "${ATTESTATION}" --jar "${JAR}" --manifest "${MANIFEST}" --execution-classification "${EXECUTION_CLASSIFICATION}" --budget-seconds "${DECLARED_BUDGET_SECONDS}" --started-epoch "${START_EPOCH_SECONDS}" \
     --models $(if [[ "${TIER}" == "portable-smoke" ]]; then echo HandoffctlBinding; elif [[ "${TIER}" == "pr-fast" ]]; then echo HandoffctlFast HandoffctlReceiptsFast HandoffctlPublicationFast HandoffctlObservation OracleInteractionGates; elif [[ "${TIER}" == "pr-publication" ]]; then echo HandoffctlBinding HandoffctlLocks HandoffctlRun HandoffctlStorage HandoffctlReceipts HandoffctlPublication HandoffctlObservation HandoffctlPR HandoffctlRecovery; else printf 'HandoffctlBinding HandoffctlLocks HandoffctlRun HandoffctlStorage HandoffctlReceipts HandoffctlPublication HandoffctlObservation '; (cd "${SPEC_DIR}" && python3 -c 'from slices import OPERATIONS; print(*(f"HandoffctlSlice-{operation}" for operation in OPERATIONS))'); echo HandoffctlRecovery; fi)

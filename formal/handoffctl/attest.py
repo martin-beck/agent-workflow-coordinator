@@ -18,6 +18,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from slices import OPERATIONS, render_source
 
 OPERATION_SLICES = {f"HandoffctlSlice-{operation}" for operation in OPERATIONS}
+TIER_BUDGET_SECONDS = {
+    "portable-smoke": 600,
+    "pr-fast": 300,
+    "pr-publication": 900,
+    "full-exhaustive": 86400,
+}
 
 EXPECTED_MODELS = {
     "portable-smoke": {"HandoffctlBinding"},
@@ -75,6 +81,15 @@ def effective_bound(name: str, default: str, boundary: str) -> str:
     if re.fullmatch(r"[1-9][0-9]*[MG]", value) is None:
         raise ValueError(f"{name} must be a positive MiB/GiB bound")
     return value
+
+
+def validate_verifier_budget(tier: str, declared_seconds: int, elapsed_seconds: int) -> None:
+    """Reject attestations that do not retain the tier's bounded receipt."""
+    expected_budget = TIER_BUDGET_SECONDS[tier]
+    if declared_seconds != expected_budget:
+        raise ValueError(f"{tier} requires declared budget {expected_budget} seconds")
+    if elapsed_seconds < 0 or elapsed_seconds > declared_seconds:
+        raise ValueError("attestation elapsed seconds must be within the declared budget")
 
 
 def digest(path: Path) -> str:
@@ -138,6 +153,8 @@ def main() -> int:
     parser.add_argument("--jar", type=Path, required=True)
     parser.add_argument("--models", nargs="+", required=True)
     parser.add_argument("--manifest", type=Path, required=True)
+    parser.add_argument("--budget-seconds", type=int, required=True)
+    parser.add_argument("--started-epoch", type=int, required=True)
     parser.add_argument(
         "--execution-classification",
         choices=("canonical", "diagnostic-private-admission"),
@@ -207,6 +224,12 @@ def main() -> int:
         swap_max = effective_bound("TLC_SWAP_MAX", "3G", boundary)
     except ValueError as error:
         parser.error(str(error))
+    completed_epoch = int(time.time())
+    elapsed_seconds = completed_epoch - args.started_epoch
+    try:
+        validate_verifier_budget(args.tier, args.budget_seconds, elapsed_seconds)
+    except ValueError as error:
+        parser.error(str(error))
     result = {
         "schema_version": 1,
         "profile": args.tier,
@@ -222,6 +245,11 @@ def main() -> int:
         "containment_mode": boundary,
         "execution_classification": args.execution_classification,
         "canonical_publication_evidence": args.execution_classification == "canonical",
+        "verifier_budget": {
+            "declared_seconds": args.budget_seconds,
+            "elapsed_seconds": elapsed_seconds,
+            "scope": "end-to-end including verifier download, admission, models, and attestation",
+        },
         "resource_bounds": {
             "workers": 2,
             "heap": os.environ.get("TLC_HEAP", "2048m"),
@@ -235,12 +263,28 @@ def main() -> int:
         "outcomes": outcomes,
         "state_counts": dict.fromkeys(args.models),
         "status": "success",
-        "timestamp_epoch": int(time.time()),
+        "timestamp_epoch": completed_epoch,
         "freshness_seconds": 0,
         "non_claims": [
             f"{args.tier} is non-exhaustive and cannot support full formal claims"
             if args.tier != "full-exhaustive"
             else "full-exhaustive is bounded model checking, not an implementation proof",
+            *(
+                [
+                    "pr-publication is reduced bounded release qualification, not refinement "
+                    "evidence or the full two-process lifecycle cross-product"
+                ]
+                if args.tier == "pr-publication"
+                else []
+            ),
+            *(
+                [
+                    "full-exhaustive is scheduled/manual advisory evidence and cannot block "
+                    "normal progression until AR-0102"
+                ]
+                if args.tier == "full-exhaustive"
+                else []
+            ),
             "bounded model checking does not prove implementation correspondence",
             "state_counts are unavailable unless parsed from TLC output and are not evidence "
             "of exhaustive exploration",

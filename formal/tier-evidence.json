@@ -3,16 +3,19 @@
   "profiles": {
     "portable-smoke": {
       "exhaustive": false,
+      "aggregate_budget_seconds": 600,
       "models": ["HandoffctlBinding"],
       "claims": "smoke-only; no full formal evidence or release attestation"
     },
     "pr-fast": {
       "exhaustive": false,
+      "aggregate_budget_seconds": 300,
       "models": ["HandoffctlFast", "HandoffctlReceiptsFast", "HandoffctlPublicationFast", "HandoffctlObservation", "OracleInteractionGates"],
       "claims": "required bounded safety-only merge gate; no liveness, full formal evidence, or release attestation"
     },
     "pr-publication": {
       "exhaustive": false,
+      "aggregate_budget_seconds": 900,
       "models": [
         "HandoffctlBinding",
         "HandoffctlLocks",
@@ -24,10 +27,11 @@
         "HandoffctlPR",
         "HandoffctlRecovery"
       ],
-      "claims": "all invariant families with bounded lifecycle coverage; no full two-process lifecycle cross-product or release attestation"
+      "claims": "reduced bounded release qualification for this declared model set; neither refinement evidence nor the full two-process lifecycle cross-product, and no full formal or release attestation"
     },
     "full-exhaustive": {
       "exhaustive": true,
+      "aggregate_budget_seconds": 86400,
       "models": [
         "HandoffctlBinding",
         "HandoffctlLocks",
@@ -53,7 +57,7 @@
         "HandoffctlSlice-release_done",
         "HandoffctlRecovery"
       ],
-      "claims": "all tracked models, configurations, invariants, and liveness properties; the two-process lifecycle aggregate is the exhaustive union of disjoint immutable-operation slices"
+      "claims": "scheduled/manual advisory bounded model checking until AR-0102; all tracked configurations and the two-process lifecycle aggregate are checked through the exhaustive union of disjoint immutable-operation slices"
     }
   },
   "required_full_inputs": [
@@ -67,6 +71,8 @@
   "non_claims": [
     "portable-smoke does not prove exhaustive model coverage",
     "pr-publication does not prove the full two-process lifecycle cross-product",
+    "pr-publication is not refinement evidence",
+    "full-exhaustive is advisory and cannot block normal progression until AR-0102",
     "portable address-space limits are not equivalent to cgroup RSS or swap accounting",
     "neither tier proves implementation correspondence"
   ]

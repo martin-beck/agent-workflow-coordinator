@@ -9,7 +9,7 @@
     "The full-exhaustive tier has a 48 GiB JVM heap and 64 GiB memory and swap cgroup limits after a 64 GiB host and parent-cgroup preflight.",
     "Before each required run, the runner verifies in its transient unit that leaf memory and swap limits exactly match the requested bounds.",
     "Before each required run, the runner verifies that no ancestor has a lower memory, memory-high, or swap limit.",
-    "Ordinary PR publication has a 1200-second per-model deadline; full-exhaustive models have a 6000-second deadline.",
+    "pr-fast has a 300-second aggregate end-to-end verifier budget and pr-publication has a 900-second aggregate end-to-end verifier budget, including admission; full-exhaustive has an 86400-second advisory aggregate budget.",
     "Formal jobs use one canonical host-wide flock admission lock and durable per-job queue and outcome records; admission does not stop coordinator workers."
   ],
   "bounds": {
@@ -27,8 +27,10 @@
     "swap_max_mb": 65536,
     "cpu_quota_percent": 200,
     "tasks_max": 64,
-    "pr_runtime_max_seconds": 1200,
-    "runtime_max_seconds": 6000
+    "pr_runtime_max_seconds": 900,
+    "pr_fast_runtime_max_seconds": 300,
+    "pr_publication_runtime_max_seconds": 900,
+    "runtime_max_seconds": 86400
   },
   "correspondence": "bounded-correspondence",
   "evidence_class": "bounded-model",

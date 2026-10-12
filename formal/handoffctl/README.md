@@ -213,27 +213,30 @@ the JAR or modify coordinator state.
 
 Formal tiers are explicit: `verify.sh --tier portable-smoke` runs one model
 and is non-exhaustive; it cannot produce publication or full evidence.
-`verify.sh --tier pr-publication` checks every invariant family. Seven models
-use their full configurations; the general lifecycle model uses the
-one-process `HandoffctlPR.cfg`, while the separate lock and recovery models
-retain independent-process races. This exact-head PR tier is not the complete
-two-process lifecycle cross-product and cannot produce full release evidence.
+`verify.sh --tier pr-publication` is reduced bounded release qualification for
+its declared model set. Seven models use their full configurations; the general
+lifecycle model uses the one-process `HandoffctlPR.cfg`, while the separate lock
+and recovery models retain independent-process races. It is neither refinement
+evidence nor the complete two-process lifecycle cross-product, and cannot
+produce full formal or release evidence.
 `verify.sh --tier full-exhaustive` runs every full focused configuration plus
 the complete two-process lifecycle domain as fifteen disjoint immutable-
 operation slices. Each slice fixes one process's request operation and leaves
 the competing process's operation domain complete; because requests do not
 change operation, their union is exactly the original aggregate state graph.
-The scheduled weekly gate or an explicit `full-exhaustive` manual-dispatch
-choice on `main` requires success for every slice. A release claim requires
-that fresh exact-head aggregate attestation; neither a missing slice nor a
-smaller tier substitutes for it.
+The scheduled weekly run or an explicit `full-exhaustive` manual-dispatch choice
+on `main` checks every slice as advisory evidence. Until AR-0102, a failed or
+missing full-exhaustive run cannot block normal progression. Neither a missing
+slice nor a smaller tier supports a full formal claim.
 
 Each model is executed through `tools/tlc_runner.py`, never directly through
 TLC. The runner uses finite workers (`2`), a dedicated `48g` heap and `64G`/`64G`
 memory/swap cgroup limits for full-exhaustive runs, a `2g` heap and `3G`/`3G`
 limits for ordinary same-repository PR publication, and a `512m` heap for hosted
-smoke. It retains CPU quota (`200%`), process limit (`64`), a 1200-second ordinary
-PR or 6000-second full-exhaustive per-model deadline, and a fail-closed 64 GiB
+smoke. It retains CPU quota (`200%`), process limit (`64`), a 300-second
+`pr-fast` or 900-second `pr-publication` aggregate end-to-end budget (including
+queue/lock admission), and an 86400-second advisory full-exhaustive aggregate
+budget, plus a fail-closed 64 GiB
 host/parent-cgroup prerequisite for full evidence. Before every required TLC
 execution, the runner reads `memory.max`, `memory.high`, and
 `memory.swap.max` from inside the transient unit and all of its ancestors; the
