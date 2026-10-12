@@ -157,8 +157,9 @@ class AdmissionSessionTests(unittest.TestCase):
             (self.lease, self.recheck, object(), "scope"),
         )
         for lease, recheck, candidate_scope, message in cases:
-            with self.subTest(message=message), self.assertRaisesRegex(
-                AdmissionLeaseError, message
+            with (
+                self.subTest(message=message),
+                self.assertRaisesRegex(AdmissionLeaseError, message),
             ):
                 AdmissionSession(lease, recheck, candidate_scope)  # type: ignore[arg-type]
         self.assertEqual([], scope.events)

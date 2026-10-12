@@ -104,8 +104,9 @@ class AdmittedControlStoreTests(unittest.TestCase):
             (self.lease, self.recheck, object(), "scope"),
         )
         for lease, recheck, scope, message in cases:
-            with self.subTest(message=message), self.assertRaisesRegex(
-                AdmissionLeaseError, message
+            with (
+                self.subTest(message=message),
+                self.assertRaisesRegex(AdmissionLeaseError, message),
             ):
                 AdmittedControlBinding.bind(Store(), lease, recheck, scope)  # type: ignore[arg-type]
 

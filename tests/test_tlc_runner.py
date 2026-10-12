@@ -471,7 +471,8 @@ class TLCAdmissionTests(unittest.TestCase):
                 "stat",
                 autospec=True,
                 side_effect=lambda path, *args, **kwargs: (
-                    (_ for _ in ()).throw(FileNotFoundError) if path == record
+                    (_ for _ in ()).throw(FileNotFoundError)
+                    if path == record
                     else original_stat(path, *args, **kwargs)
                 ),
             ):

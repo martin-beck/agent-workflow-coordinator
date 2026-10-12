@@ -94,6 +94,7 @@ class DurableBindingTests(unittest.TestCase):
             with self.assertRaisesRegex(DurableBindingError, "ambiguous"):
                 session.snapshot()
             self.assertTrue(session.safe_mode)
+
     def test_snapshot_read_binds_to_formal_model_action(self) -> None:
         map_path = (
             Path(__file__).parents[1] / "formal" / "upgrade" / "sqlite-snapshot-correspondence.json"
