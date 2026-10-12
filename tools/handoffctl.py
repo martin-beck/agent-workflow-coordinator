@@ -57,6 +57,7 @@ if __package__:
         validate_directive,
     )
     from .hierarchy import hierarchy_errors, open_child_error
+    from .issue_series_plan import IssueSeriesPlanError, plan_issue_series
     from .oracle_lifecycle import (
         ArtifactRef,
         GateError,
@@ -136,6 +137,10 @@ else:  # pragma: no cover - direct script execution
     from hierarchy import (  # type: ignore[import-not-found,no-redef]
         hierarchy_errors,
         open_child_error,
+    )
+    from issue_series_plan import (  # type: ignore[import-not-found,no-redef]
+        IssueSeriesPlanError,
+        plan_issue_series,
     )
     from oracle_lifecycle import (  # type: ignore[import-not-found,no-redef]
         ArtifactRef,
@@ -277,6 +282,7 @@ FIELDS = set(REQ) | {
     "spec_acceptance",
     "parent_task_ref",
     "children",
+    "issue_series",
 }
 type Meta = dict[str, Any]
 type Task = tuple[Path, Meta, str]
@@ -1762,7 +1768,7 @@ def validate(  # noqa: C901
     return errors
 
 
-def commit(message: str, paths: list[Path]) -> bool:
+def commit(message: str, paths: list[Path], *, sign: bool = False) -> bool:
     relative = [str(path.relative_to(ROOT)) for path in paths]
     if not relative:
         return False
@@ -1776,7 +1782,12 @@ def commit(message: str, paths: list[Path]) -> bool:
             == 0
         ):
             return False
-        command = ["git", "-C", str(ROOT), "commit", "-S"]
+        # Ordinary Coordinator progression must not require signing.  The
+        # opt-in fast receipt protocol retains its separately verified local
+        # signature marker.
+        command = ["git", "-C", str(ROOT), "commit"]
+        if sign:
+            command.append("-S")
         if project_settings()["commit_signoff"]:
             command.append("-s")
         run([*command, "-m", message, "--only", "--", *relative], capture=False)
@@ -2141,6 +2152,23 @@ def write_checkpoint_projections(checkpoint_records: list[Meta]) -> list[Path]:
     return [checkpoint_path(ROOT, task_id) for task_id in by_task]
 
 
+def write_sqlite_issue_series_projections(backend: SQLiteBackend) -> list[Path]:
+    """Export authoritative SQLite issue-series manifests as Git projections."""
+    issue_series_root = ROOT / "issue-series"
+    issue_series_root.mkdir(mode=0o700, parents=True, exist_ok=True)
+    expected_series: set[Path] = set()
+    paths: list[Path] = []
+    for receipt in backend.load_issue_series():
+        path = issue_series_manifest_path(receipt)
+        expected_series.add(path.resolve())
+        atomic(path, json.dumps(receipt["manifest"], indent=2, sort_keys=True) + "\n")
+        paths.append(path)
+    for path in issue_series_root.glob("*.json"):
+        if path.resolve() not in expected_series:
+            path.unlink()
+    return paths
+
+
 def write_sqlite_projections(
     tasks: list[Task],
     *,
@@ -2159,11 +2187,16 @@ def write_sqlite_projections(
         views = rendered_task_views(tasks)
         for target, content in views.items():
             atomic(target, content)
+        backend = storage_backend()
+        issue_series_paths = (
+            write_sqlite_issue_series_projections(backend)
+            if isinstance(backend, SQLiteBackend)
+            else []
+        )
         require_policy_unchanged(ROOT, selected_policy)
         errors = validate(live=False, policy=selected_policy)
         if errors:
             raise RuntimeError("projection validation failed:\n" + "\n".join(errors))
-        backend = storage_backend()
         session_records = backend.load_session_records()
         session_paths = write_session_projections(session_records)
         checkpoint_records = backend.load_checkpoint_records()
@@ -2171,6 +2204,7 @@ def write_sqlite_projections(
         return [
             *[path for path, _, _ in tasks],
             *views,
+            *issue_series_paths,
             *session_paths,
             *checkpoint_paths,
         ]
@@ -3088,7 +3122,9 @@ def commit_persisted_mutation(
     message = f"chore(state): {kind} {args.task}"
     if receipt_id is not None:
         message += f"\n\nHandoffctl-Receipt: {receipt_id}"
-    committed = commit(message, changed_paths(before, include_deleted=True))
+    committed = commit(
+        message, changed_paths(before, include_deleted=True), sign=receipt_id is not None
+    )
     if receipt_id is not None and not committed:
         raise RuntimeError("fast receipt mutation produced no signed commit")
     if receipt_id is not None:
@@ -3245,6 +3281,256 @@ def mutate_sqlite(
             f"SQLITE_COMMITTED_EXPORT_FAILED: task={args.task}; revision={expected + 1}; {error}"
         ) from error
     return None
+
+
+def issue_series_state_digest(tasks: list[Task]) -> str:
+    """Bind a plan receipt to the stable, local task graph it inspected."""
+    snapshot = [
+        {
+            "depends_on": meta.get("depends_on", []),
+            "id": meta["id"],
+            "parent_task_ref": meta.get("parent_task_ref", ""),
+            "status": meta["status"],
+            "task_revision": meta["task_revision"],
+        }
+        for _path, meta, _body in sorted(tasks, key=lambda task: str(task[1]["id"]))
+    ]
+    encoded = json.dumps(snapshot, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    return "sha256:" + hashlib.sha256(encoded).hexdigest()
+
+
+def load_issue_series_plan(path: Path, tasks: list[Task]) -> str:
+    """Validate one offline issue-series plan without changing local authority."""
+    try:
+        info = path.lstat()
+        if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode) or info.st_size > 200_000:
+            raise RuntimeError("issue-series manifest must be a bounded regular file")
+        return plan_issue_series(
+            path,
+            expected_product_slug=str(project_binding()["product_repository"]),
+            existing_task_ids=(str(meta["id"]) for _path, meta, _body in tasks),
+            existing_issue_series_identities=(
+                meta.get("issue_series") for _path, meta, _body in tasks
+            ),
+            current_state_digest=issue_series_state_digest(tasks),
+        )
+    except (OSError, IssueSeriesPlanError) as error:
+        raise RuntimeError(f"invalid issue-series manifest: {error}") from error
+
+
+def _load_git_issue_series_receipt(manifest_ref: str, members: list[Meta]) -> Meta:
+    """Load one bounded projection and prove its task linkage before authority migration."""
+    path = (ROOT / manifest_ref).resolve()
+    issue_root = (ROOT / "issue-series").resolve()
+    if path.parent != issue_root or path.suffix != ".json":
+        raise RuntimeError("issue-series manifest reference is outside the local series directory")
+    try:
+        info = path.lstat()
+        if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode) or info.st_size > 200_000:
+            raise RuntimeError("issue-series manifest must be a bounded regular file")
+        receipt = cast(
+            Meta,
+            json.loads(
+                plan_issue_series(
+                    path,
+                    expected_product_slug=str(project_binding()["product_repository"]),
+                    existing_task_ids=(),
+                    existing_issue_series_identities=(),
+                    current_state_digest="sha256:" + "0" * 64,
+                )
+            ),
+        )
+    except (OSError, IssueSeriesPlanError) as error:
+        raise RuntimeError(f"invalid issue-series manifest {manifest_ref}: {error}") from error
+    expected_ids = sorted(str(item) for item in receipt["task_ids"])
+    linked_ids = sorted(str(meta["id"]) for meta in members)
+    if linked_ids != expected_ids:
+        raise RuntimeError(f"issue-series membership does not match manifest {manifest_ref}")
+    digest = str(receipt["manifest_digest"])
+    if any(cast(Meta, item["issue_series"]).get("manifest_digest") != digest for item in members):
+        raise RuntimeError(f"issue-series digest does not match manifest {manifest_ref}")
+    return receipt
+
+
+def git_issue_series_receipts(tasks: list[Task]) -> list[Meta]:
+    """Reconstruct and validate authoritative local series records for SQLite import."""
+    linked: dict[str, list[Meta]] = {}
+    for _path, meta, _body in tasks:
+        linkage = meta.get("issue_series")
+        if linkage is None:
+            continue
+        if not isinstance(linkage, dict) or not isinstance(linkage.get("manifest_ref"), str):
+            raise RuntimeError(f"invalid issue-series linkage in {meta['id']}")
+        linked.setdefault(str(linkage["manifest_ref"]), []).append(meta)
+    return [
+        _load_git_issue_series_receipt(manifest_ref, members)
+        for manifest_ref, members in sorted(linked.items())
+    ]
+
+
+def cmd_issue_series_plan(args: argparse.Namespace) -> None:
+    """Print a deterministic local planning receipt; never publish or mutate."""
+    receipt = load_issue_series_plan(Path(args.manifest), all_tasks())
+    print(receipt)
+
+
+def create_sqlite_issue_series(receipt: Meta, created: list[Task], policy: EvidencePolicy) -> None:
+    """Commit one preflighted series in SQLite before exporting disposable projections."""
+    backend = mutating_sqlite_backend()
+    backend.create_issue_series(
+        receipt,
+        created,
+        expected_state_digest=str(receipt["current_state_digest"]),
+        recorded_at=now(),
+    )
+    try:
+        write_sqlite_projections(backend.load_tasks(), already_locked=True, policy=policy)
+    except Exception as error:
+        identity = cast(Meta, receipt["series_identity"])
+        raise StorageCommittedError(
+            "SQLITE_COMMITTED_EXPORT_FAILED: issue-series="
+            f"{identity['repository']}#{identity['issue_number']}; {error}"
+        ) from error
+
+
+def create_git_issue_series(receipt: Meta, created: list[Task], policy: EvidencePolicy) -> None:
+    """Write, validate, and commit one preflighted Git-authoritative issue series."""
+    manifest_path = issue_series_manifest_path(receipt)
+    before: dict[Path, str | None] = {
+        path: path.read_text() if path.exists() else None for path, _meta, _body in created
+    }
+    before[manifest_path] = None
+    before.update({path: path.read_text() if path.exists() else None for path in generated_paths()})
+    committed = False
+    try:
+        atomic(manifest_path, json.dumps(receipt["manifest"], indent=2, sort_keys=True) + "\n")
+        for path, meta, body in created:
+            write_task(path, meta, body)
+        view_tasks = all_tasks()
+        settings = project_settings()
+        views = rendered_task_views(view_tasks)
+        before.update(
+            {
+                path: path.read_text() if path.exists() else None
+                for path in views
+                if path not in before
+            }
+        )
+        write_rendered_task_views(views)
+        require_project_settings_unchanged(settings)
+        require_policy_unchanged(ROOT, policy)
+        errors = mutation_global_errors(view_tasks)
+        errors.extend(
+            generated_view_errors(view_tasks, rendered_snapshot=(view_tasks, views, settings))
+        )
+        errors.extend(introduced_content_errors(before))
+        if errors:
+            raise RuntimeError(
+                "issue-series mutation validation failed:\n" + "\n".join(sorted(set(errors)))
+            )
+        identity = cast(Meta, receipt["series_identity"])
+        committed = commit(
+            f"chore(state): create issue series {identity['repository']}"
+            f"#{identity['issue_number']}",
+            changed_paths(before, include_deleted=True),
+        )
+        if not committed:
+            raise RuntimeError("issue-series create produced no commit")
+        push_replica()
+    except Exception:
+        if not committed:
+            restore_paths(before)
+        raise
+
+
+def cmd_issue_series_create(args: argparse.Namespace) -> None:
+    """Atomically create one locally validated series through selected local authority."""
+    with locked(phase="issue_series_create"):
+        selected_backend = str(backend_selection()["backend"])
+        if selected_backend not in {"git", "sqlite"}:
+            raise RuntimeError("BACKEND_CHANGED: retry issue-series create")
+        if selected_backend == "git":
+            sync_replica_before_write()
+        tasks = all_tasks()
+        receipt = cast(Meta, json.loads(load_issue_series_plan(Path(args.manifest), tasks)))
+        if args.expected_state_digest != receipt["current_state_digest"]:
+            raise RuntimeError("STALE_STATE: re-run issue-series plan before create")
+        manifest_path = issue_series_manifest_path(receipt)
+        if manifest_path.exists():
+            raise RuntimeError("issue-series manifest identity already exists")
+        created = issue_series_tasks(receipt, manifest_path)
+        policy = policy_snapshot(None)
+        errors = [
+            error
+            for path, meta, _body in created
+            for error in basic_task_errors(path, meta, policy)
+        ]
+        errors.extend(mutation_global_errors([*tasks, *created]))
+        if errors:
+            raise RuntimeError("issue-series preflight failed:\n" + "\n".join(sorted(set(errors))))
+        if selected_backend == "sqlite":
+            create_sqlite_issue_series(receipt, created, policy)
+        else:
+            create_git_issue_series(receipt, created, policy)
+
+
+def issue_series_manifest_path(receipt: Meta) -> Path:
+    """Return one bounded deterministic local manifest name for a validated receipt."""
+    identity = cast(Meta, receipt["series_identity"])
+    repository = str(identity["repository"])
+    number = int(identity["issue_number"])
+    stem = hashlib.sha256(f"{repository}#{number}".encode()).hexdigest()[:24]
+    return ROOT / "issue-series" / f"{stem}.json"
+
+
+def issue_series_tasks(receipt: Meta, manifest_path: Path) -> list[Task]:
+    """Derive every planned task and hierarchy edge before any Git write occurs."""
+    manifest = cast(Meta, receipt["manifest"])
+    finalizer = str(manifest["finalizer"])
+    manifest_digest = str(receipt["manifest_digest"])
+    members = cast(list[Meta], manifest["members"])
+    child_ids = [str(member["id"]) for member in members if str(member["id"]) != finalizer]
+    generated: list[Task] = []
+    created_at = now()
+    for member in members:
+        task_id = str(member["id"])
+        dependencies = [str(edge["id"]) for edge in cast(list[Meta], member["depends_on"])]
+        meta: Meta = {
+            "schema_version": 1,
+            "id": task_id,
+            "title": str(member["short_title"]),
+            "short_title": str(member["short_title"]),
+            "status": "planned",
+            "priority": "P1",
+            "summary": str(member["scope"]),
+            "next_action": "Implement the bounded scope and record local acceptance evidence.",
+            "task_revision": 1,
+            "updated_at": created_at,
+            "owner": "",
+            "claim_expires": "",
+            "checkpoint_commit": "",
+            "depends_on": dependencies,
+            "parent_task_ref": "" if task_id == finalizer else finalizer,
+            "children": child_ids if task_id == finalizer else [],
+            "issue_series": {
+                "manifest_ref": str(manifest_path.relative_to(ROOT)),
+                "manifest_digest": manifest_digest,
+                "member_id": task_id,
+            },
+        }
+        body = (
+            "\n\n".join(
+                (
+                    "Issue-series member created from a locally validated manifest.",
+                    f"Scope: {member['scope']}",
+                    f"Acceptance: {member['acceptance']}",
+                    f"Ownership hint: {member['ownership']}",
+                )
+            )
+            + "\n"
+        )
+        generated.append((TASKS / f"{task_id}.md", meta, body))
+    return generated
 
 
 def cmd_render_status(*, check: bool) -> None:
@@ -3562,7 +3848,7 @@ def _product_commit_for_checkpoint(product: Path, source_commit: str) -> str:
 
 
 def _revert_product(product: Path, source_commit: str, current_commit: str) -> str:
-    """Create one signed product revert, leaving conflicts fail-closed."""
+    """Create one local product revert, leaving conflicts fail-closed."""
     if current_commit != source_commit:
         run(
             [
@@ -3583,7 +3869,6 @@ def _revert_product(product: Path, source_commit: str, current_commit: str) -> s
             "-C",
             str(product),
             "commit",
-            "-S",
             "-s",
             "-m",
             f"revert: restore coordinator checkpoint {source_commit[:12]}",
@@ -3989,6 +4274,7 @@ def cmd_init(args: argparse.Namespace) -> None:
                 source_backend="initial",
                 source_checkpoint="uncommitted-init",
                 command_results=legacy_command_results(),
+                issue_series=git_issue_series_receipts(initial_tasks),
             )
             provision_sqlite_barrier()
         atomic(BACKEND_CONFIG, json.dumps(selection, indent=2, sort_keys=True) + "\n")
@@ -4014,6 +4300,7 @@ def cmd_migrate(args: argparse.Namespace) -> None:  # noqa: C901
         with locked():
             sync_replica_before_write()
             tasks = git_tasks()
+            issue_series = git_issue_series_receipts(tasks)
             command_results = legacy_command_results()
             session_records = storage_backend().load_session_records()
             checkpoint_records = storage_backend().load_checkpoint_records()
@@ -4034,6 +4321,7 @@ def cmd_migrate(args: argparse.Namespace) -> None:  # noqa: C901
                     command_results=command_results,
                     session_records=session_records,
                     checkpoint_records=checkpoint_records,
+                    issue_series=issue_series,
                 )
                 imported = SQLiteBackend(DATABASE, binding, TASKS).load_tasks()
                 if [(m, b) for _, m, b in tasks] != [(m, b) for _, m, b in imported]:
@@ -4280,7 +4568,7 @@ def dispatch_bound_command(args: argparse.Namespace) -> int:
     return dispatch_bound_standard_command(args)
 
 
-def main() -> int:
+def main() -> int:  # noqa: C901
     parser = argparse.ArgumentParser()
     commands = parser.add_subparsers(dest="cmd", required=True)
     item = commands.add_parser("init")
@@ -4334,6 +4622,13 @@ def main() -> int:
     role.add_argument("--assignment-id", required=True)
     item = commands.add_parser("snapshot")
     item.add_argument("--task")
+    item = commands.add_parser("issue-series")
+    issue_series_actions = item.add_subparsers(dest="issue_series_action", required=True)
+    issue_series_plan = issue_series_actions.add_parser("plan")
+    issue_series_plan.add_argument("--manifest", type=Path, required=True)
+    issue_series_create = issue_series_actions.add_parser("create")
+    issue_series_create.add_argument("--manifest", type=Path, required=True)
+    issue_series_create.add_argument("--expected-state-digest", required=True)
     commands.add_parser("board")
     commands.add_parser("metrics")
     item = commands.add_parser("checkpoint")
@@ -4521,6 +4816,14 @@ def main() -> int:
     if args.cmd == "directive":
         cmd_directive(args)
         return 0
+    if args.cmd == "issue-series":
+        if args.issue_series_action == "plan":
+            cmd_issue_series_plan(args)
+            return 0
+        if args.issue_series_action == "create":
+            cmd_issue_series_create(args)
+            return 0
+        raise RuntimeError("unsupported issue-series action")
     return dispatch_bound_command(args)
 
 

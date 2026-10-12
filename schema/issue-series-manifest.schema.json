@@ -1,0 +1,70 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": "https://github.com/martin-beck/agent-workflow-coordinator/schema/issue-series-manifest.schema.json",
+    "title": "Coordinator issue-series manifest",
+    "description": "Immutable, local-only binding from a public issue identity to a proposed AR series.",
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["schema_version", "repository", "issue", "issue_digest", "members", "finalizer"],
+    "properties": {
+        "schema_version": {"const": 1},
+        "repository": {"$ref": "#/$defs/repository"},
+        "issue": {"$ref": "#/$defs/issue"},
+        "issue_digest": {"$ref": "#/$defs/digest"},
+        "members": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": {"$ref": "#/$defs/member"}
+        },
+        "finalizer": {"$ref": "#/$defs/taskId"}
+    },
+    "$defs": {
+        "taskId": {"type": "string", "pattern": "^AR-[0-9]{4}$"},
+        "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+        "repository": {
+            "type": "string",
+            "pattern": "^github\\.com/[a-z0-9][a-z0-9_.-]*/[a-z0-9][a-z0-9_.-]*$"
+        },
+        "safeText": {"type": "string", "minLength": 1, "maxLength": 500, "pattern": "^[^\\r\\n]+$"},
+        "shortTitle": {"type": "string", "minLength": 1, "maxLength": 120, "pattern": "^[^\\r\\n]+$"},
+        "issue": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["number", "url"],
+            "properties": {
+                "number": {"type": "integer", "minimum": 1},
+                "url": {
+                    "type": "string",
+                    "pattern": "^https://github\\.com/[a-z0-9][a-z0-9_.-]*/[a-z0-9][a-z0-9_.-]*/issues/[1-9][0-9]*$"
+                }
+            }
+        },
+        "dependency": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "rationale"],
+            "properties": {
+                "id": {"$ref": "#/$defs/taskId"},
+                "rationale": {"$ref": "#/$defs/safeText"}
+            }
+        },
+        "member": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "short_title", "scope", "acceptance", "ownership", "depends_on"],
+            "properties": {
+                "id": {"$ref": "#/$defs/taskId"},
+                "short_title": {"$ref": "#/$defs/shortTitle"},
+                "scope": {"$ref": "#/$defs/safeText"},
+                "acceptance": {"$ref": "#/$defs/safeText"},
+                "ownership": {"$ref": "#/$defs/safeText"},
+                "depends_on": {
+                    "type": "array",
+                    "uniqueItems": true,
+                    "items": {"$ref": "#/$defs/dependency"}
+                }
+            }
+        }
+    }
+}

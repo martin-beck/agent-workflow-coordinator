@@ -627,6 +627,33 @@ class SQLiteStorageTest(unittest.TestCase):
         )
         connection.close()
 
+    def test_additive_issue_series_schema_stays_inside_legacy_transaction(self) -> None:
+        backend = self.create()
+        connection = sqlite3.connect(self.database, isolation_level=None)
+        try:
+            connection.execute("DROP TABLE issue_series_members")
+            connection.execute("DROP TABLE issue_series")
+            connection.execute("BEGIN IMMEDIATE")
+            backend._ensure_issue_series_schema(connection)
+            connection.rollback()
+        finally:
+            connection.close()
+        check = sqlite3.connect(self.database)
+        try:
+            self.assertIsNone(
+                check.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name='issue_series'"
+                ).fetchone()
+            )
+            self.assertIsNone(
+                check.execute(
+                    """SELECT name FROM sqlite_master
+                       WHERE type='table' AND name='issue_series_members'"""
+                ).fetchone()
+            )
+        finally:
+            check.close()
+
     def test_busy_timeout_corruption_network_fs_and_read_only_fail_closed(self) -> None:
         backend = self.create()
         connection = sqlite3.connect(self.database, isolation_level=None)
