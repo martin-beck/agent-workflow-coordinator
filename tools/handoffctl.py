@@ -4904,6 +4904,7 @@ def cmd_init(args: argparse.Namespace) -> None:
                 initial_errors.extend(basic_task_errors(path, meta))
             initial_errors.extend(graph_errors(initial_tasks))
             initial_errors.extend(hierarchy_errors(initial_tasks))
+            initial_errors.extend(execution_envelope_validation_errors(initial_tasks))
             if initial_errors:
                 raise RuntimeError("initial task import failed:\n" + "\n".join(initial_errors))
             create_database(

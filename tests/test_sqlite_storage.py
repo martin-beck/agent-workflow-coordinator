@@ -1648,6 +1648,59 @@ class SQLiteStorageTest(unittest.TestCase):
         self.assertFalse(CORE.BACKEND_CONFIG.exists())
         self.assertFalse(self.database.exists())
 
+    def test_sqlite_init_rejects_cross_task_execution_receipt_history(self) -> None:
+        self.configure_core()
+        CORE.PROJECT_CONFIG.unlink()
+        CORE.BINDING.unlink()
+        CORE.BACKEND_CONFIG.unlink()
+        self.write_git_tasks([task("AR-0001"), task("AR-0002")])
+        intent = {
+            "schema_version": 1,
+            "execution_id": "00000000-0000-0000-0000-000000000001",
+            "task": "AR-0001",
+            "task_revision": 1,
+            "owner": "worker-a",
+            "claim_expires": "2099-01-01T00:00:00+00:00",
+            "worktree_key": "checkout-a",
+            "branch": "feature/a",
+            "spec_ref": None,
+            "spec_revision": None,
+            "policy_digest": "a" * 64,
+            "argv_sha256": "b" * 64,
+            "timeout_seconds": 10.0,
+            "created_at": "2026-10-12T12:00:00+00:00",
+        }
+        CORE.append_execution_record(self.root, "AR-0001", intent)
+        CORE.append_execution_record(
+            self.root,
+            "AR-0002",
+            {
+                "schema_version": 1,
+                "execution_id": intent["execution_id"],
+                "classification": "EXIT",
+                "returncode": 0,
+                "recorded_at": "2026-10-12T12:01:00+00:00",
+            },
+        )
+        args = argparse.Namespace(
+            state_repository="owner/state",
+            product_repository="owner/product",
+            project_name="test-project",
+            project_title="Test Project",
+            status_view=False,
+            commit_signoff=False,
+            backend="sqlite",
+        )
+        top = subprocess.CompletedProcess([], 0, str(self.root) + "\n", "")
+        with (
+            patch.object(CORE, "run", return_value=top),
+            patch.object(CORE, "git_repository_slug", return_value="owner/state"),
+            patch.object(CORE.Path, "cwd", return_value=self.root),
+            self.assertRaisesRegex(RuntimeError, "same-history"),
+        ):
+            CORE.cmd_init(args)
+        self.assertFalse(self.database.exists())
+
     def test_reconcile_publication_is_optional_bounded_and_ordered(self) -> None:
         self.configure_core(backend="sqlite")
         tracked = task("AR-0001")
