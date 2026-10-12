@@ -57,7 +57,15 @@ if __package__:
         validate_directive,
     )
     from .hierarchy import hierarchy_errors, open_child_error
+    from .issue_series import parse_manifest
     from .issue_series_plan import IssueSeriesPlanError, plan_issue_series
+    from .issue_series_publish import (
+        DryRunTransport,
+        MockTransport,
+        PublicationOutcome,
+        publication_key,
+        render_publication,
+    )
     from .oracle_lifecycle import (
         ArtifactRef,
         GateError,
@@ -138,9 +146,17 @@ else:  # pragma: no cover - direct script execution
         hierarchy_errors,
         open_child_error,
     )
+    from issue_series import parse_manifest  # type: ignore[import-not-found,no-redef]
     from issue_series_plan import (  # type: ignore[import-not-found,no-redef]
         IssueSeriesPlanError,
         plan_issue_series,
+    )
+    from issue_series_publish import (  # type: ignore[import-not-found,no-redef]
+        DryRunTransport,
+        MockTransport,
+        PublicationOutcome,
+        publication_key,
+        render_publication,
     )
     from oracle_lifecycle import (  # type: ignore[import-not-found,no-redef]
         ArtifactRef,
@@ -2169,6 +2185,24 @@ def write_sqlite_issue_series_projections(backend: SQLiteBackend) -> list[Path]:
     return paths
 
 
+def write_sqlite_issue_series_publication_projections(backend: SQLiteBackend) -> list[Path]:
+    """Export normalized optional publication receipts without making them authority."""
+    root = ROOT / "issue-series-publications"
+    root.mkdir(mode=0o700, parents=True, exist_ok=True)
+    expected: set[Path] = set()
+    paths: list[Path] = []
+    for record in backend.load_issue_series_publications():
+        key = str(record["publication_key"])
+        path = issue_series_publication_path(key)
+        expected.add(path.resolve())
+        atomic(path, json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n")
+        paths.append(path)
+    for path in root.glob("*.json"):
+        if path.resolve() not in expected:
+            path.unlink()
+    return paths
+
+
 def write_sqlite_projections(
     tasks: list[Task],
     *,
@@ -2193,6 +2227,11 @@ def write_sqlite_projections(
             if isinstance(backend, SQLiteBackend)
             else []
         )
+        issue_series_publication_paths = (
+            write_sqlite_issue_series_publication_projections(backend)
+            if isinstance(backend, SQLiteBackend)
+            else []
+        )
         require_policy_unchanged(ROOT, selected_policy)
         errors = validate(live=False, policy=selected_policy)
         if errors:
@@ -2205,6 +2244,7 @@ def write_sqlite_projections(
             *[path for path, _, _ in tasks],
             *views,
             *issue_series_paths,
+            *issue_series_publication_paths,
             *session_paths,
             *checkpoint_paths,
         ]
@@ -3474,6 +3514,101 @@ def cmd_issue_series_create(args: argparse.Namespace) -> None:
             create_git_issue_series(receipt, created, policy)
 
 
+def issue_series_publication_path(key: str) -> Path:
+    """Return the separate bounded Git projection for one local publication receipt."""
+    if not re.fullmatch(r"[0-9a-f]{64}", key):
+        raise RuntimeError("invalid issue-series publication key")
+    return ROOT / "issue-series-publications" / f"{key}.json"
+
+
+def _issue_series_receipt(repository: str, issue_number: int, digest: str) -> Meta:
+    """Locate exactly the immutable local series selected for optional projection."""
+    backend = storage_backend()
+    records = (
+        backend.load_issue_series()
+        if isinstance(backend, SQLiteBackend)
+        else git_issue_series_receipts(all_tasks())
+    )
+    for receipt in records:
+        identity = cast(Meta, receipt["series_identity"])
+        if (
+            identity.get("repository") == repository
+            and identity.get("issue_number") == issue_number
+            and receipt.get("manifest_digest") == digest
+        ):
+            return receipt
+    raise RuntimeError("issue-series publication does not match a local authoritative manifest")
+
+
+def _publication_record(outcome: PublicationOutcome, markdown: str) -> Meta:
+    """Make a bounded receipt without retaining arbitrary hosted material or Markdown."""
+    return {
+        "schema_version": 1,
+        "publication_key": outcome.publication_key,
+        "manifest_digest": outcome.manifest_digest,
+        "status": outcome.status,
+        "comment_id": outcome.comment_id or "",
+        "rendered_sha256": "sha256:" + hashlib.sha256(markdown.encode("utf-8")).hexdigest(),
+    }
+
+
+def _git_record_issue_series_publication(record: Meta) -> None:
+    """Commit one local-only projection; no network call occurs under the Coordinator lock."""
+    key = str(record["publication_key"])
+    path = issue_series_publication_path(key)
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    encoded = json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n"
+    if path.exists():
+        if path.read_text(encoding="utf-8") != encoded:
+            raise RuntimeError(
+                "issue-series publication receipt conflicts with existing local receipt"
+            )
+        return
+    atomic(path, encoded)
+    if not commit("chore(state): record issue-series publication", [path]):
+        raise RuntimeError("issue-series publication receipt produced no commit")
+    push_replica()
+
+
+def cmd_issue_series_publish(args: argparse.Namespace) -> None:
+    """Record an optional local-first series projection outcome without changing task lifecycle."""
+    with locked(phase="issue_series_publish"):
+        repository = str(args.repository)
+        issue_number = int(args.issue_number)
+        digest = str(args.expected_manifest_digest)
+        receipt = _issue_series_receipt(repository, issue_number, digest)
+        manifest = parse_manifest(cast(Meta, receipt["manifest"]))
+        markdown = render_publication(manifest, digest)
+        key = publication_key(repository, issue_number, digest)
+        if args.transport == "dry-run":
+            outcome = DryRunTransport().publish(repository, issue_number, digest, markdown)
+        elif args.transport == "mock":
+            raw: Meta = {"status": str(args.mock_status)}
+            if args.mock_status in {"published", "already_published"}:
+                raw.update(
+                    {
+                        "repository": repository,
+                        "issue_number": issue_number,
+                        "manifest_digest": digest,
+                        "publication_key": key,
+                        "comment_id": str(args.mock_comment_id),
+                    }
+                )
+            outcome = MockTransport(raw).publish(repository, issue_number, digest, markdown)
+        else:
+            # Live posting is deliberately a deferred projection until an isolated
+            # credential transport is configured; it cannot block local lifecycle.
+            outcome = PublicationOutcome("deferred_unavailable", key, digest)
+        record = _publication_record(outcome, markdown)
+        if isinstance(storage_backend(), SQLiteBackend):
+            backend = mutating_sqlite_backend()
+            backend.record_issue_series_publication(repository, issue_number, record)
+            write_sqlite_projections(backend.load_tasks(), already_locked=True)
+        else:
+            _git_record_issue_series_publication(record)
+    print(json.dumps(record, sort_keys=True))
+
+
 def issue_series_manifest_path(receipt: Meta) -> Path:
     """Return one bounded deterministic local manifest name for a validated receipt."""
     identity = cast(Meta, receipt["series_identity"])
@@ -4629,6 +4764,30 @@ def main() -> int:  # noqa: C901
     issue_series_create = issue_series_actions.add_parser("create")
     issue_series_create.add_argument("--manifest", type=Path, required=True)
     issue_series_create.add_argument("--expected-state-digest", required=True)
+    issue_series_publish = issue_series_actions.add_parser("publish")
+    issue_series_publish.add_argument("--repository", required=True)
+    issue_series_publish.add_argument("--issue-number", required=True, type=int)
+    issue_series_publish.add_argument("--expected-manifest-digest", required=True)
+    issue_series_publish.add_argument(
+        "--transport", choices=("dry-run", "mock", "live"), required=True
+    )
+    issue_series_publish.add_argument(
+        "--mock-status",
+        choices=(
+            "published",
+            "already_published",
+            "unavailable",
+            "unauthorized",
+            "timeout",
+            "conflict",
+            "wrong_identity",
+            "closed",
+            "moved",
+            "ambiguous",
+        ),
+        default="published",
+    )
+    issue_series_publish.add_argument("--mock-comment-id", default="mock-comment")
     commands.add_parser("board")
     commands.add_parser("metrics")
     item = commands.add_parser("checkpoint")
@@ -4822,6 +4981,9 @@ def main() -> int:  # noqa: C901
             return 0
         if args.issue_series_action == "create":
             cmd_issue_series_create(args)
+            return 0
+        if args.issue_series_action == "publish":
+            cmd_issue_series_publish(args)
             return 0
         raise RuntimeError("unsupported issue-series action")
     return dispatch_bound_command(args)

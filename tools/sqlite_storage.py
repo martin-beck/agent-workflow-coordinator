@@ -1212,7 +1212,7 @@ class SQLiteBackend:
                     key,
                     normalized["status"],
                     normalized["comment_id"],
-                    recorded_at,
+                    timestamp,
                 ),
             )
         return normalized
