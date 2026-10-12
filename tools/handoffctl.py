@@ -3570,6 +3570,94 @@ def _git_record_issue_series_publication(record: Meta) -> None:
     push_replica()
 
 
+def _git_resolve_issue_series_publication(record: Meta) -> None:
+    """Replace a pre-call ambiguous Git receipt with exactly one final outcome."""
+    path = issue_series_publication_path(str(record["publication_key"]))
+    if not path.exists():
+        raise RuntimeError("issue-series publication reservation is missing")
+    current = cast(Meta, json.loads(path.read_text(encoding="utf-8")))
+    if current.get("status") != "ambiguous":
+        raise RuntimeError("issue-series publication reservation is no longer pending")
+    if current.get("manifest_digest") != record.get("manifest_digest"):
+        raise RuntimeError("issue-series publication reservation identity changed")
+    atomic(path, json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n")
+    if not commit("chore(state): resolve issue-series publication", [path]):
+        raise RuntimeError("issue-series publication resolution produced no commit")
+    push_replica()
+
+
+def _record_issue_series_publication(
+    repository: str, issue_number: int, record: Meta, *, resolve: bool = False
+) -> None:
+    """Persist one optional projection with Git/SQLite parity."""
+    if isinstance(storage_backend(), SQLiteBackend):
+        backend = mutating_sqlite_backend()
+        if resolve:
+            backend.resolve_issue_series_publication(repository, issue_number, record)
+        else:
+            backend.record_issue_series_publication(repository, issue_number, record)
+        write_sqlite_projections(backend.load_tasks(), already_locked=True)
+    elif resolve:
+        _git_resolve_issue_series_publication(record)
+    else:
+        _git_record_issue_series_publication(record)
+
+
+def _live_publication_failure(diagnostic: str, key: str, digest: str) -> PublicationOutcome:
+    """Classify a bounded live transport failure without retaining its response."""
+    normalized = diagnostic.lower()
+    if "401" in normalized or "403" in normalized:
+        return PublicationOutcome("deferred_unauthorized", key, digest)
+    if "410" in normalized or "closed" in normalized:
+        return PublicationOutcome("deferred_closed", key, digest)
+    if "404" in normalized or "moved" in normalized:
+        return PublicationOutcome("deferred_moved", key, digest)
+    if "409" in normalized or "conflict" in normalized:
+        return PublicationOutcome("deferred_conflict", key, digest)
+    return PublicationOutcome("deferred_unavailable", key, digest)
+
+
+def _live_issue_series_publication(
+    repository: str, issue_number: int, digest: str, markdown: str
+) -> PublicationOutcome:
+    """Use configured ``gh`` credentials without storing a response or credential."""
+    key = publication_key(repository, issue_number, digest)
+    if not CONFIG.exists():
+        return PublicationOutcome("deferred_unavailable", key, digest)
+    configured = config().get("github_repository")
+    if not isinstance(configured, str) or repository_slug(configured) != repository_slug(
+        repository
+    ):
+        return PublicationOutcome("deferred_wrong_identity", key, digest)
+    slug = repository.removeprefix("github.com/")
+    try:
+        result = subprocess.run(
+            [
+                "gh",
+                "api",
+                "--method",
+                "POST",
+                f"repos/{slug}/issues/{issue_number}/comments",
+                "-f",
+                f"body={markdown}",
+                "--jq",
+                ".id",
+            ],
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=15,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return PublicationOutcome("deferred_timeout", key, digest)
+    if result.returncode:
+        return _live_publication_failure(result.stderr, key, digest)
+    comment_id = result.stdout.strip()
+    if not comment_id or len(comment_id) > 128 or "\n" in comment_id:
+        return PublicationOutcome("ambiguous", key, digest)
+    return PublicationOutcome("published", key, digest, comment_id)
+
+
 def cmd_issue_series_publish(args: argparse.Namespace) -> None:
     """Record an optional local-first series projection outcome without changing task lifecycle."""
     with locked(phase="issue_series_publish"):
@@ -3596,16 +3684,20 @@ def cmd_issue_series_publish(args: argparse.Namespace) -> None:
                 )
             outcome = MockTransport(raw).publish(repository, issue_number, digest, markdown)
         else:
-            # Live posting is deliberately a deferred projection until an isolated
-            # credential transport is configured; it cannot block local lifecycle.
-            outcome = PublicationOutcome("deferred_unavailable", key, digest)
+            reservation = _publication_record(
+                PublicationOutcome("ambiguous", key, digest), markdown
+            )
+            _record_issue_series_publication(repository, issue_number, reservation)
+            outcome = None
+        if outcome is not None:
+            record = _publication_record(outcome, markdown)
+            _record_issue_series_publication(repository, issue_number, record)
+    if args.transport == "live":
+        outcome = _live_issue_series_publication(repository, issue_number, digest, markdown)
         record = _publication_record(outcome, markdown)
-        if isinstance(storage_backend(), SQLiteBackend):
-            backend = mutating_sqlite_backend()
-            backend.record_issue_series_publication(repository, issue_number, record)
-            write_sqlite_projections(backend.load_tasks(), already_locked=True)
-        else:
-            _git_record_issue_series_publication(record)
+        with locked(phase="issue_series_publish_resolve"):
+            _issue_series_receipt(repository, issue_number, digest)
+            _record_issue_series_publication(repository, issue_number, record, resolve=True)
     print(json.dumps(record, sort_keys=True))
 
 

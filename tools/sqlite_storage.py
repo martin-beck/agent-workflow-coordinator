@@ -1217,6 +1217,53 @@ class SQLiteBackend:
             )
         return normalized
 
+    def resolve_issue_series_publication(
+        self, repository: str, issue_number: int, record: Meta
+    ) -> Meta:
+        """Replace only a pre-call ambiguous receipt with one normalized outcome."""
+        receipt: Meta = {
+            "series_identity": {"repository": repository, "issue_number": issue_number},
+            "manifest_digest": record.get("manifest_digest"),
+            "publication_key": record.get("publication_key"),
+            "status": record.get("status"),
+            "comment_id": record.get("comment_id") or None,
+        }
+        normalized = self._normalize_issue_series_publication(
+            receipt, datetime.now(UTC).isoformat()
+        )
+        identity = cast(Meta, normalized["series_identity"])
+        with self.transaction() as connection:
+            existing = connection.execute(
+                """SELECT status FROM issue_series_publications
+                   WHERE repository=? AND issue_number=?
+                     AND manifest_digest=? AND publication_key=?""",
+                (
+                    identity["repository"],
+                    identity["issue_number"],
+                    normalized["manifest_digest"],
+                    normalized["publication_key"],
+                ),
+            ).fetchone()
+            if existing is None:
+                raise RuntimeError("issue-series publication reservation is missing")
+            if str(existing["status"]) != "ambiguous":
+                raise RuntimeError("issue-series publication reservation is no longer pending")
+            connection.execute(
+                """UPDATE issue_series_publications SET status=?, comment_id=?, recorded_at=?
+                   WHERE repository=? AND issue_number=?
+                     AND manifest_digest=? AND publication_key=?""",
+                (
+                    normalized["status"],
+                    normalized["comment_id"],
+                    normalized["recorded_at"],
+                    identity["repository"],
+                    identity["issue_number"],
+                    normalized["manifest_digest"],
+                    normalized["publication_key"],
+                ),
+            )
+        return normalized
+
     def create_issue_series(
         self,
         receipt: Meta,

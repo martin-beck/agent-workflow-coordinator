@@ -188,6 +188,60 @@ class IssueSeriesHandoffTest(unittest.TestCase):
             CORE.cmd_issue_series_publish(args)
         self.assertEqual(1, len(list((self.root / "issue-series-publications").glob("*.json"))))
 
+    def test_live_publication_reserves_then_resolves_outside_the_lock(self) -> None:
+        self.make_task()
+        manifest = self.issue_series_manifest()
+        with patch.object(CORE, "commit", return_value=True):
+            CORE.cmd_issue_series_create(
+                argparse.Namespace(
+                    manifest=manifest,
+                    expected_state_digest=CORE.issue_series_state_digest(CORE.all_tasks()),
+                )
+            )
+        digest = CORE.git_issue_series_receipts(CORE.all_tasks())[0]["manifest_digest"]
+        args = argparse.Namespace(
+            repository="github.com/owner/product",
+            issue_number=42,
+            expected_manifest_digest=digest,
+            transport="live",
+            mock_status="published",
+            mock_comment_id="unused",
+        )
+        outcome = CORE.PublicationOutcome(
+            "published",
+            CORE.publication_key(args.repository, args.issue_number, digest),
+            digest,
+            "42",
+        )
+        with (
+            patch.object(CORE, "commit", return_value=True) as commit,
+            patch.object(CORE, "_live_issue_series_publication", return_value=outcome) as live,
+        ):
+            CORE.cmd_issue_series_publish(args)
+        live.assert_called_once()
+        self.assertEqual(2, commit.call_count)
+        record = json.loads(
+            next((self.root / "issue-series-publications").glob("*.json")).read_text()
+        )
+        self.assertEqual("published", record["status"])
+        self.assertEqual("42", record["comment_id"])
+
+    def test_live_publication_classifies_failures_without_retaining_diagnostics(self) -> None:
+        digest = "sha256:" + "a" * 64
+        key = CORE.publication_key("github.com/owner/product", 42, digest)
+        cases = {
+            "HTTP 401": "deferred_unauthorized",
+            "HTTP 410": "deferred_closed",
+            "HTTP 404": "deferred_moved",
+            "HTTP 409": "deferred_conflict",
+            "temporary outage": "deferred_unavailable",
+        }
+        for diagnostic, expected in cases.items():
+            with self.subTest(diagnostic=diagnostic):
+                outcome = CORE._live_publication_failure(diagnostic, key, digest)
+                self.assertEqual(expected, outcome.status)
+                self.assertNotIn(diagnostic, repr(outcome))
+
     def test_issue_series_create_restores_every_precommit_write(self) -> None:
         self.make_task()
         manifest = self.issue_series_manifest()
