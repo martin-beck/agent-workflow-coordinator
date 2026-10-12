@@ -77,6 +77,7 @@ SOURCE_FILES: tuple[tuple[str, str], ...] = (
     ("tools/task_spec.py", "tools/task_spec.py"),
     ("tools/issue_series.py", "tools/issue_series.py"),
     ("tools/issue_series_plan.py", "tools/issue_series_plan.py"),
+    ("tools/issue_series_publish.py", "tools/issue_series_publish.py"),
     ("tools/upgrade_commands.py", "tools/upgrade_commands.py"),
     ("tools/upgrade_admission.py", "tools/upgrade_admission.py"),
     ("tools/upgrade_binding.py", "tools/upgrade_binding.py"),
