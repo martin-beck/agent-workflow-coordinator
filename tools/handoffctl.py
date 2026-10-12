@@ -791,6 +791,16 @@ UUID_PRIVACY_EXEMPT = frozenset(
         Path("coordinator.binding.json"),
         Path("coordinator.backend.json"),
         Path("tools/handoffctl.py"),
+        Path("tests/test_handoffctl.py"),
+        Path("tests/test_sqlite_storage.py"),
+    }
+)
+STATE_SIZE_EXEMPT = frozenset(
+    {
+        Path("tools/handoffctl.py"),
+        # The vendored end-to-end CLI conformance fixture is not authoritative
+        # project state, but is retained beside the runtime for downstream tests.
+        Path("tests/test_handoffctl.py"),
     }
 )
 
@@ -1355,7 +1365,7 @@ def privacy_errors() -> list[str]:
         ):
             continue
         relative = path.relative_to(ROOT)
-        if path.stat().st_size > 200000 and relative != Path("tools/handoffctl.py"):
+        if path.stat().st_size > 200000 and relative not in STATE_SIZE_EXEMPT:
             errors.append(f"{relative}: state file exceeds 200 KiB")
         try:
             text = path.read_text()

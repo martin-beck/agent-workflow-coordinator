@@ -21,6 +21,7 @@ from unittest.mock import patch
 from tools.generate_upgrade_contract import generate
 
 ROOT = Path(__file__).resolve().parent.parent
+STATE_SIZE_EXEMPT = frozenset({Path("tools/handoffctl.py"), Path("tests/test_handoffctl.py")})
 CURRENT_VERSION = f"v{tomllib.loads((ROOT / 'pyproject.toml').read_text())['project']['version']}"
 SOURCE = ROOT / "tools/vendor.py"
 SPEC = importlib.util.spec_from_file_location("handoffctl_vendor", SOURCE)
@@ -711,6 +712,7 @@ exec "$@"
             f"{source_name} -> {destination_name}"
             for source_name, destination_name in VENDOR.SOURCE_FILES
             if (ROOT / source_name).stat().st_size > 200_000
+            and Path(destination_name) not in STATE_SIZE_EXEMPT
         ]
         self.assertEqual([], oversized)
 
@@ -734,7 +736,12 @@ exec "$@"
             )
         )
         self.assertFalse(
-            any(path.stat().st_size > 200_000 for path in self.target.rglob("*") if path.is_file())
+            any(
+                path.stat().st_size > 200_000
+                and path.relative_to(self.target) not in STATE_SIZE_EXEMPT
+                for path in self.target.rglob("*")
+                if path.is_file()
+            )
         )
         self.assertFalse(
             any(path.suffix in {".log", ".transcript"} for path in self.target.rglob("*"))

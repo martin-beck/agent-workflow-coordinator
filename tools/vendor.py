@@ -65,6 +65,7 @@ SOURCE_FILES: tuple[tuple[str, str], ...] = (
     ("tools/checkpoint_records.py", "tools/checkpoint_records.py"),
     ("tools/rollback_records.py", "tools/rollback_records.py"),
     ("tools/directive_records.py", "tools/directive_records.py"),
+    ("tools/execution_envelope.py", "tools/execution_envelope.py"),
     ("tools/hierarchy.py", "tools/hierarchy.py"),
     ("tools/role_assignment.py", "tools/role_assignment.py"),
     ("tools/role_registry.py", "tools/role_registry.py"),
