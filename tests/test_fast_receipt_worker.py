@@ -1459,7 +1459,7 @@ class FastReceiptWorkerTests(unittest.TestCase):
             "project_id": self.store.project_id,
             "task": "AR-0120",
         }
-        cases = (
+        cases: tuple[tuple[dict[str, object], dict[str, object], str], ...] = (
             ({**heartbeat, "project_id": "wrong-project"}, {}, "canonical typed fields"),
             ({**heartbeat, "task": "AR-9999"}, {}, "canonical typed fields"),
             ({**heartbeat, "expected_revision": 2}, {}, "canonical typed fields"),
@@ -1477,8 +1477,9 @@ class FastReceiptWorkerTests(unittest.TestCase):
             ({**heartbeat, "operation": "delete"}, {}, "unsupported"),
         )
         for payload, fields, message in cases:
-            with self.subTest(payload=payload, fields=fields), self.assertRaisesRegex(
-                RuntimeError, message
+            with (
+                self.subTest(payload=payload, fields=fields),
+                self.assertRaisesRegex(RuntimeError, message),
             ):
                 worker._validated_intent(intent(payload, **fields))
 
@@ -1489,9 +1490,7 @@ class FastReceiptWorkerTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "invalid receipt commit oid"):
             worker._require_signed_branch_commit(core, "not-an-oid")
         with (
-            patch.object(
-                core, "run", return_value=subprocess.CompletedProcess([], 1, "")
-            ),
+            patch.object(core, "run", return_value=subprocess.CompletedProcess([], 1, "")),
             self.assertRaisesRegex(RuntimeError, "signature is not trusted"),
         ):
             worker._require_signed_branch_commit(core, oid)
@@ -1540,8 +1539,9 @@ class FastReceiptWorkerTests(unittest.TestCase):
         target.chmod(0o600)
         linked = directory / "linked.lock"
         linked.hardlink_to(target)
-        with self.assertRaisesRegex(RuntimeError, "lock is unsafe"), worker._private_lock(
-            core, "linked.lock"
+        with (
+            self.assertRaisesRegex(RuntimeError, "lock is unsafe"),
+            worker._private_lock(core, "linked.lock"),
         ):
             pass
 

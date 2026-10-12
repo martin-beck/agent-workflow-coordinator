@@ -985,7 +985,9 @@ class FastReceiptTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "reservation was not visible"):
             store.claim_next()
         store.connection.execute("DROP TRIGGER receipt_claim_invisible")
-        self.assertEqual("queued-local", store.read(receipt_id)["phase"])
+        current = store.read(receipt_id)
+        assert current is not None
+        self.assertEqual("queued-local", current["phase"])
 
         store.claim_next()
         store.connection.execute(
@@ -995,7 +997,9 @@ class FastReceiptTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "outcome was not visible"):
             store.record_local_commit(receipt_id, "a" * 40, 2)
         store.connection.execute("DROP TRIGGER receipt_finish_invisible")
-        self.assertEqual("running", store.read(receipt_id)["phase"])
+        current = store.read(receipt_id)
+        assert current is not None
+        self.assertEqual("running", current["phase"])
 
         local = store.record_local_commit(receipt_id, "a" * 40, 2)
         store.connection.execute(
@@ -1013,8 +1017,11 @@ class FastReceiptTests(unittest.TestCase):
         store = self.store()
         queued = self.submit(store, key="queued")
         running = self.submit(store, key="running")
-        self.assertEqual(str(queued["receipt_id"]), store.claim_next()["receipt_id"])
-        self.assertEqual(str(running["receipt_id"]), store.claim_next()["receipt_id"])
+        first = store.claim_next()
+        second = store.claim_next()
+        assert first is not None and second is not None
+        self.assertEqual(str(queued["receipt_id"]), first["receipt_id"])
+        self.assertEqual(str(running["receipt_id"]), second["receipt_id"])
         self.assertEqual(
             [str(queued["receipt_id"]), str(running["receipt_id"])],
             [item["receipt_id"] for item in store.running()],
@@ -1095,7 +1102,9 @@ class FastReceiptTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "claim was not visible"):
             store.claim_publication(job_id, lease="1" * 32)
         store.connection.execute("DROP TRIGGER publication_claim_invisible")
-        self.assertEqual("queued", store.read_publication(job_id)["phase"])
+        current = store.read_publication(job_id)
+        assert current is not None
+        self.assertEqual("queued", current["phase"])
 
         store.claim_publication(job_id, lease="1" * 32)
         store.connection.execute(
@@ -1113,7 +1122,9 @@ class FastReceiptTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "changed while recovering"):
             store.recover_publication(job_id, observed_remote_oid="d" * 40)
         store.connection.execute("DROP TRIGGER publication_recover_race")
-        self.assertEqual("publishing", store.read_publication(job_id)["phase"])
+        current = store.read_publication(job_id)
+        assert current is not None
+        self.assertEqual("publishing", current["phase"])
 
     def test_sidecar_open_failure_closes_initialization_without_admitting_a_store(self) -> None:
         real_open = os.open
@@ -1123,7 +1134,7 @@ class FastReceiptTests(unittest.TestCase):
             *args: object,
             **kwargs: object,
         ) -> int:
-            if os.fspath(path).endswith(("-wal", "-shm")):
+            if os.fsdecode(os.fspath(path)).endswith(("-wal", "-shm")):
                 raise OSError("sidecar unavailable")
             return real_open(path, *args, **kwargs)  # type: ignore[arg-type]
 
@@ -1141,7 +1152,10 @@ class FastReceiptTests(unittest.TestCase):
             {"worker_pid": 1, "worker_start_time": -1},
         )
         for changes in invalid_claims:
-            with self.subTest(changes=changes), self.assertRaisesRegex(ValueError, "worker|revision"):
+            with (
+                self.subTest(changes=changes),
+                self.assertRaisesRegex(ValueError, "worker|revision"),
+            ):
                 claim = {
                     "key": "worker-a:claim:invalid",
                     "task": "AR-0120",
@@ -1151,12 +1165,15 @@ class FastReceiptTests(unittest.TestCase):
                 }
                 claim.update(changes)
                 store.enqueue_claim(**claim)  # type: ignore[arg-type]
-        for changes in (
+        for update_changes in (
             {"expected_revision": True},
             {"note": "contains\x00nul"},
             {"owner": "not valid"},
         ):
-            with self.subTest(changes=changes), self.assertRaisesRegex(ValueError, "update receipt"):
+            with (
+                self.subTest(changes=update_changes),
+                self.assertRaisesRegex(ValueError, "update receipt"),
+            ):
                 update = {
                     "key": "worker-a:update:invalid",
                     "task": "AR-0120",
@@ -1165,7 +1182,7 @@ class FastReceiptTests(unittest.TestCase):
                     "changes": {"priority": "P1"},
                     "note": "ordinary note",
                 }
-                update.update(changes)
+                update.update(update_changes)
                 store.enqueue_update(**update)  # type: ignore[arg-type]
         self.assertEqual(0, store.connection.execute("SELECT count(*) FROM intents").fetchone()[0])
 
@@ -1173,10 +1190,21 @@ class FastReceiptTests(unittest.TestCase):
         store = self.store()
         for changes in (
             {"key": "invalid key", "candidate_oid": "a" * 40, "expected_remote_oid": "b" * 40},
-            {"key": "publisher:invalid", "candidate_oid": "not-an-oid", "expected_remote_oid": "b" * 40},
-            {"key": "publisher:invalid", "candidate_oid": "a" * 40, "expected_remote_oid": "a" * 40},
+            {
+                "key": "publisher:invalid",
+                "candidate_oid": "not-an-oid",
+                "expected_remote_oid": "b" * 40,
+            },
+            {
+                "key": "publisher:invalid",
+                "candidate_oid": "a" * 40,
+                "expected_remote_oid": "a" * 40,
+            },
         ):
-            with self.subTest(changes=changes), self.assertRaisesRegex(ValueError, "publication admission"):
+            with (
+                self.subTest(changes=changes),
+                self.assertRaisesRegex(ValueError, "publication admission"),
+            ):
                 store.admit_publication(**changes)
         with self.assertRaisesRegex(RuntimeError, "unknown publication job"):
             store.finish_publication(
@@ -1185,7 +1213,9 @@ class FastReceiptTests(unittest.TestCase):
                 phase="rejected",
                 error_code="REMOTE_ADVANCED",
             )
-        self.assertEqual(0, store.connection.execute("SELECT count(*) FROM publication_jobs").fetchone()[0])
+        self.assertEqual(
+            0, store.connection.execute("SELECT count(*) FROM publication_jobs").fetchone()[0]
+        )
 
     def test_superseded_resolution_visibility_failure_rolls_back_the_outcome(self) -> None:
         store = self.store()

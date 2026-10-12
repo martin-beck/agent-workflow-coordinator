@@ -102,11 +102,14 @@ class IssueSeriesPlanCoreTests(unittest.TestCase):
             self.plan(invalid_utf8)
         path = self.write_manifest(manifest())
         for digest in ("", "sha256:" + "A" * 64, "sha256:" + "a" * 63):
-            with self.subTest(digest=digest), self.assertRaisesRegex(
-                IssueSeriesPlanError, "current state digest"
+            with (
+                self.subTest(digest=digest),
+                self.assertRaisesRegex(IssueSeriesPlanError, "current state digest"),
             ):
                 self.plan(path, current_state_digest=digest)
-        receipt = json.loads(self.plan(path, expected_product_slug="https://github.com/Example/Coordinator"))
+        receipt = json.loads(
+            self.plan(path, expected_product_slug="https://github.com/Example/Coordinator")
+        )
         self.assertEqual("github.com/example/coordinator", receipt["series_identity"]["repository"])
 
     def test_malformed_existing_identity_cannot_authorize_duplicate_detection(self) -> None:
@@ -124,9 +127,11 @@ class IssueSeriesPlanCoreTests(unittest.TestCase):
 
     def test_unreadable_manifest_and_invalid_existing_identities_fail_closed(self) -> None:
         path = self.write_manifest(manifest())
-        with patch.object(Path, "read_text", side_effect=OSError("denied")):
-            with self.assertRaisesRegex(IssueSeriesPlanError, "cannot be read"):
-                self.plan(path)
+        with (
+            patch.object(Path, "read_text", side_effect=OSError("denied")),
+            self.assertRaisesRegex(IssueSeriesPlanError, "cannot be read"),
+        ):
+            self.plan(path)
         receipt = self.plan(
             path,
             existing_issue_series_identities=(

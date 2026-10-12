@@ -15,7 +15,6 @@ class IssueSeriesModelTests(unittest.TestCase):
         self.assertGreater(evidence["accepted"], 0)
         self.assertGreater(evidence["rejected"], 0)
 
-
     def test_model_rejects_same_identity_and_overlapping_member_commit(self) -> None:
         initial = ModelState(frozenset(), frozenset(), ("absent", "absent"))
         committed = step(step(initial, 0, "issue-a", "prepare"), 0, "issue-a", "commit")
@@ -30,9 +29,11 @@ class IssueSeriesModelTests(unittest.TestCase):
             (0, "unknown", "prepare", "unknown creator"),
             (0, "issue-a", "unknown", "unknown issue-series action"),
         ):
-            with self.subTest(creator=creator, identity=identity, action=action):
-                with self.assertRaisesRegex(ValueError, message):
-                    step(initial, creator, identity, action)
+            with (
+                self.subTest(creator=creator, identity=identity, action=action),
+                self.assertRaisesRegex(ValueError, message),
+            ):
+                step(initial, creator, identity, action)
         partial = ModelState(frozenset({"issue-a"}), frozenset(), ("committed", "absent"))
         with self.assertRaisesRegex(AssertionError, "partial issue-series members"):
             _invariant(partial)

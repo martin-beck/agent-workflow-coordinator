@@ -18,11 +18,10 @@ import time
 import unittest
 import uuid
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 from unittest.mock import patch
 
 from tools.fast_receipt_socket import (
-    _TransportUnavailableError,
     _client_common_dir,
     _fast_request,
     _handle,
@@ -31,6 +30,7 @@ from tools.fast_receipt_socket import (
     _safe_socket,
     _send_reply,
     _socket_path,
+    _TransportUnavailableError,
     socket_service,
     try_socket_fast,
 )
@@ -139,9 +139,17 @@ class FastReceiptSocketTests(unittest.TestCase):
         self.assertIsNone(
             _fast_request(
                 [
-                    "fast", "update", "AR-0120", "--owner", "worker-a",
-                    "--expected-revision", "2", "--note", "No mutation.",
-                    "--key", "worker-a:update:2",
+                    "fast",
+                    "update",
+                    "AR-0120",
+                    "--owner",
+                    "worker-a",
+                    "--expected-revision",
+                    "2",
+                    "--note",
+                    "No mutation.",
+                    "--key",
+                    "worker-a:update:2",
                 ]
             )
         )
@@ -265,7 +273,7 @@ class FastReceiptSocketTests(unittest.TestCase):
             def __init__(self, _family: int, _kind: int) -> None:
                 pass
 
-            def __enter__(self) -> "ReplySocket":
+            def __enter__(self) -> ReplySocket:
                 return self
 
             def __exit__(self, *_args: object) -> None:
@@ -280,12 +288,14 @@ class FastReceiptSocketTests(unittest.TestCase):
             def sendall(self, _data: bytes) -> None:
                 return None
 
-        with patch("tools.fast_receipt_socket._socket_path", return_value=self.path), patch(
-            "tools.fast_receipt_socket._safe_socket", return_value=True
-        ), patch("tools.fast_receipt_socket.socket.socket", ReplySocket):
-            with patch("tools.fast_receipt_socket._read_line", return_value=b"[]"):
-                with self.assertRaisesRegex(RuntimeError, "response is invalid"):
-                    try_socket_fast(self.argv)
+        with (
+            patch("tools.fast_receipt_socket._socket_path", return_value=self.path),
+            patch("tools.fast_receipt_socket._safe_socket", return_value=True),
+            patch("tools.fast_receipt_socket.socket.socket", ReplySocket),
+            patch("tools.fast_receipt_socket._read_line", return_value=b"[]"),
+            self.assertRaisesRegex(RuntimeError, "response is invalid"),
+        ):
+            try_socket_fast(self.argv)
             with patch("tools.fast_receipt_socket._read_line", return_value=b'{"error":"denied"}'):
                 errors = io.StringIO()
                 with contextlib.redirect_stderr(errors):
@@ -294,7 +304,9 @@ class FastReceiptSocketTests(unittest.TestCase):
             with patch("tools.fast_receipt_socket._read_line", side_effect=ConnectionResetError):
                 self.assertIsNone(try_socket_fast(self.argv))
 
-    def test_handle_treats_unavailable_timeout_and_unauthorized_peers_as_non_authority(self) -> None:
+    def test_handle_treats_unavailable_timeout_and_unauthorized_peers_as_non_authority(
+        self,
+    ) -> None:
         class Peer:
             def __init__(self, pid: int) -> None:
                 self.pid = pid
@@ -315,12 +327,18 @@ class FastReceiptSocketTests(unittest.TestCase):
             def sendall(self, value: bytes) -> None:
                 self.replies.append(value)
 
-        for error in (_TransportUnavailableError("gone"), TimeoutError("late")):
+        for expected_error in (_TransportUnavailableError("gone"), TimeoutError("late")):
             peer = Peer(os.getpid())
+
+            def fail_request(
+                _request: dict[str, Any], error: Exception = expected_error
+            ) -> dict[str, Any]:
+                raise error
+
             _handle(
                 self.core,
                 peer,  # type: ignore[arg-type]
-                lambda _request: (_ for _ in ()).throw(error),
+                fail_request,
                 b'{"protocol":1,"action":"receipt","receipt_id":"x"}',
             )
             self.assertEqual([], peer.replies)
@@ -330,10 +348,58 @@ class FastReceiptSocketTests(unittest.TestCase):
 
     def test_fast_parser_rejects_duplicate_and_malformed_mutation_shapes(self) -> None:
         cases = (
-            ["fast", "promote", "AR-0120", "--expected-revision", "2", "--note", "Open", "--note", "again"],
-            ["fast", "promote", "AR-0120", "--expected-revision", "2", "--note", "Open", "--bad", "x"],
-            ["fast", "update", "-AR-0120", "--owner", "worker-a", "--expected-revision", "2", "--priority", "P1", "--note", "n", "--key", "k"],
-            ["fast", "update", "AR-0120", "--owner", "worker-a", "--expected-revision", "bad", "--priority", "P1", "--note", "n", "--key", "k"],
+            [
+                "fast",
+                "promote",
+                "AR-0120",
+                "--expected-revision",
+                "2",
+                "--note",
+                "Open",
+                "--note",
+                "again",
+            ],
+            [
+                "fast",
+                "promote",
+                "AR-0120",
+                "--expected-revision",
+                "2",
+                "--note",
+                "Open",
+                "--bad",
+                "x",
+            ],
+            [
+                "fast",
+                "update",
+                "-AR-0120",
+                "--owner",
+                "worker-a",
+                "--expected-revision",
+                "2",
+                "--priority",
+                "P1",
+                "--note",
+                "n",
+                "--key",
+                "k",
+            ],
+            [
+                "fast",
+                "update",
+                "AR-0120",
+                "--owner",
+                "worker-a",
+                "--expected-revision",
+                "bad",
+                "--priority",
+                "P1",
+                "--note",
+                "n",
+                "--key",
+                "k",
+            ],
             ["fast", "observe", "--max-age-seconds", "-1"],
         )
         for argv in cases:
@@ -342,13 +408,50 @@ class FastReceiptSocketTests(unittest.TestCase):
 
     def test_update_parser_rejects_duplicate_missing_and_empty_change_sets(self) -> None:
         base = [
-            "fast", "update", "AR-0120", "--owner", "worker-a", "--expected-revision", "2",
-            "--priority", "P1", "--note", "n", "--key", "k",
+            "fast",
+            "update",
+            "AR-0120",
+            "--owner",
+            "worker-a",
+            "--expected-revision",
+            "2",
+            "--priority",
+            "P1",
+            "--note",
+            "n",
+            "--key",
+            "k",
         ]
         cases = (
-            base[:-2] + ["--priority", "P2", "--key", "k"],
-            ["fast", "update", "AR-0120", "--owner", "worker-a", "--expected-revision", "2", "--priority", "P1", "--note", "n", "--bad", "x"],
-            ["fast", "update", "AR-0120", "--owner", "worker-a", "--expected-revision", "2", "--note", "n", "--key", "k"],
+            [*base[:-2], "--priority", "P2", "--key", "k"],
+            [
+                "fast",
+                "update",
+                "AR-0120",
+                "--owner",
+                "worker-a",
+                "--expected-revision",
+                "2",
+                "--priority",
+                "P1",
+                "--note",
+                "n",
+                "--bad",
+                "x",
+            ],
+            [
+                "fast",
+                "update",
+                "AR-0120",
+                "--owner",
+                "worker-a",
+                "--expected-revision",
+                "2",
+                "--note",
+                "n",
+                "--key",
+                "k",
+            ],
         )
         for argv in cases:
             with self.subTest(argv=argv):
@@ -359,7 +462,7 @@ class FastReceiptSocketTests(unittest.TestCase):
             def __init__(self, *_args: object) -> None:
                 pass
 
-            def __enter__(self) -> "OversizeSocket":
+            def __enter__(self) -> OversizeSocket:
                 return self
 
             def __exit__(self, *_args: object) -> None:
@@ -379,7 +482,10 @@ class FastReceiptSocketTests(unittest.TestCase):
             patch("tools.fast_receipt_socket._socket_path", return_value=self.path),
             patch("tools.fast_receipt_socket._safe_socket", return_value=True),
             patch("tools.fast_receipt_socket.socket.socket", OversizeSocket),
-            patch("tools.fast_receipt_socket._read_line", side_effect=RuntimeError("fast receipt socket message is too large")),
+            patch(
+                "tools.fast_receipt_socket._read_line",
+                side_effect=RuntimeError("fast receipt socket message is too large"),
+            ),
         ):
             self.assertIsNone(try_socket_fast(["fast", "observe", "--max-age-seconds", "30"]))
         self.assertIsNone(
@@ -466,11 +572,46 @@ class FastReceiptSocketTests(unittest.TestCase):
         invalid = (
             ({"protocol": 1, "action": "observe", "max_age_seconds": True}, "observation"),
             ({"protocol": 1, "action": "claim", "task": "AR-0120"}, "claim request"),
-            ({"protocol": 1, "action": "claim", "task": "AR-0120", "owner": "o", "expected_revision": 2, "lease_minutes": 20, "key": "k", "worker_pid": 0, "worker_start_time": 1}, "claim request fields"),
+            (
+                {
+                    "protocol": 1,
+                    "action": "claim",
+                    "task": "AR-0120",
+                    "owner": "o",
+                    "expected_revision": 2,
+                    "lease_minutes": 20,
+                    "key": "k",
+                    "worker_pid": 0,
+                    "worker_start_time": 1,
+                },
+                "claim request fields",
+            ),
             ({"protocol": 1, "action": "promote", "task": "AR-0120"}, "promote request"),
-            ({"protocol": 1, "action": "promote", "task": "AR-0120", "expected_revision": 2, "note": "n", "key": True}, "promote request fields"),
+            (
+                {
+                    "protocol": 1,
+                    "action": "promote",
+                    "task": "AR-0120",
+                    "expected_revision": 2,
+                    "note": "n",
+                    "key": True,
+                },
+                "promote request fields",
+            ),
             ({"protocol": 1, "action": "update", "task": "AR-0120"}, "update request"),
-            ({"protocol": 1, "action": "update", "task": "AR-0120", "owner": "o", "expected_revision": True, "changes": {"priority": "P1"}, "note": "n", "key": "k"}, "update request fields"),
+            (
+                {
+                    "protocol": 1,
+                    "action": "update",
+                    "task": "AR-0120",
+                    "owner": "o",
+                    "expected_revision": True,
+                    "changes": {"priority": "P1"},
+                    "note": "n",
+                    "key": "k",
+                },
+                "update request fields",
+            ),
         )
         for request, message in invalid:
             with self.subTest(request=request), self.assertRaisesRegex(RuntimeError, message):
@@ -514,7 +655,7 @@ class FastReceiptSocketTests(unittest.TestCase):
 
     def test_non_observation_socket_protocol_error_is_terminal(self) -> None:
         class Peer:
-            def __enter__(self) -> "Peer":
+            def __enter__(self) -> Peer:
                 return self
 
             def __exit__(self, *_args: object) -> None:
@@ -694,8 +835,19 @@ class FastReceiptSocketTests(unittest.TestCase):
 
     def test_bound_service_queues_claim_receipt_with_worker_identity(self) -> None:
         argv = [
-            "fast", "claim", "AR-0120", "--owner", "worker-a", "--expected-revision", "2",
-            "--worker-pid", "123", "--worker-start-time", "456", "--key", "worker-a:claim:2",
+            "fast",
+            "claim",
+            "AR-0120",
+            "--owner",
+            "worker-a",
+            "--expected-revision",
+            "2",
+            "--worker-pid",
+            "123",
+            "--worker-start-time",
+            "456",
+            "--key",
+            "worker-a:claim:2",
         ]
         with (
             socket_service(self.core),
@@ -1064,7 +1216,7 @@ class FastReceiptSocketTests(unittest.TestCase):
             peer.close()
 
     def test_receipt_slot_exhaustion_closes_extra_peer_without_enqueue(self) -> None:
-        entered = queue.Queue()
+        entered: queue.Queue[None] = queue.Queue()
         release = threading.Event()
 
         def block_handle(_core: object, peer: socket.socket, *_args: object) -> None:
@@ -1072,21 +1224,25 @@ class FastReceiptSocketTests(unittest.TestCase):
                 entered.put(None)
                 self.assertTrue(release.wait(2))
 
-        request = json.dumps(
-            {
-                "protocol": 1,
-                "action": "heartbeat",
-                "task": "AR-0120",
-                "owner": "worker-a",
-                "expected_revision": 2,
-                "lease_minutes": 20,
-                "key": "receipt-slot-test",
-            }
-        ).encode() + b"\n"
+        request = (
+            json.dumps(
+                {
+                    "protocol": 1,
+                    "action": "heartbeat",
+                    "task": "AR-0120",
+                    "owner": "worker-a",
+                    "expected_revision": 2,
+                    "lease_minutes": 20,
+                    "key": "receipt-slot-test",
+                }
+            ).encode()
+            + b"\n"
+        )
         admitted: list[socket.socket] = []
         try:
-            with socket_service(self.core), patch(
-                "tools.fast_receipt_socket._handle", side_effect=block_handle
+            with (
+                socket_service(self.core),
+                patch("tools.fast_receipt_socket._handle", side_effect=block_handle),
             ):
                 for _ in range(32):
                     peer = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
