@@ -1007,9 +1007,11 @@ class FormalEvidenceTests(unittest.TestCase):
             "neither refinement evidence", manifest["profiles"]["pr-publication"]["claims"]
         )
         self.assertIn("advisory", manifest["profiles"]["full-exhaustive"]["claims"])
-        pr_config = (FORMAL_ROOT / "HandoffctlPR.cfg").read_text()
-        self.assertIn('Processes = {"p1"}', pr_config)
-        self.assertIn("EventualCompletion", pr_config)
+        liveness_config = (FORMAL_ROOT / "HandoffctlLiveness.cfg").read_text()
+        self.assertIn('Processes = {"p1"}', liveness_config)
+        self.assertIn("EventualCompletion", liveness_config)
+        self.assertIn("SpecBindingIsMonotonic", liveness_config)
+        self.assertIn("PartialWorktreeKeyIsPreserved", liveness_config)
         attest = (ROOT / "formal" / "handoffctl" / "attest.py").read_text(encoding="utf-8")
         self.assertIn("state_counts", attest)
         self.assertIn("state_counts are unavailable", attest)
@@ -1027,6 +1029,60 @@ class FormalEvidenceTests(unittest.TestCase):
         self.assertIn("--budget-seconds", verify)
         self.assertIn("TIER_BUDGET_SECONDS", attest)
         self.assertIn("verifier_budget", attest)
+        self.assertIn("LIVENESS_COVERAGE.json", attest)
+
+    def test_reduced_liveness_coverage_mapping_is_complete_and_regression_safe(self) -> None:
+        mapping = json.loads((FORMAL_ROOT / "LIVENESS_COVERAGE.json").read_text())
+        self.assertEqual(1, mapping["schema_version"])
+        self.assertEqual("Handoffctl.tla", mapping["source_model"])
+        self.assertEqual("Handoffctl.cfg", mapping["source_configuration"])
+        self.assertEqual("HandoffctlLiveness.cfg", mapping["reduced_configuration"])
+        self.assertEqual(
+            {"processes": 1, "tasks": 2, "actors": 1, "max_revision": 1},
+            mapping["retained"]["constants"],
+        )
+        source = (FORMAL_ROOT / "Handoffctl.cfg").read_text()
+        reduced = (FORMAL_ROOT / "HandoffctlLiveness.cfg").read_text()
+        source_invariants = re.search(r"INVARIANTS\n(.*?)\n\nPROPERTIES", source, re.DOTALL)
+        reduced_invariants = re.search(r"INVARIANTS\n(.*?)\n\nPROPERTIES", reduced, re.DOTALL)
+        source_properties = re.search(r"PROPERTIES\n(.*)", source, re.DOTALL)
+        reduced_properties = re.search(r"PROPERTIES\n(.*)", reduced, re.DOTALL)
+        self.assertIsNotNone(source_invariants)
+        self.assertIsNotNone(reduced_invariants)
+        self.assertIsNotNone(source_properties)
+        self.assertIsNotNone(reduced_properties)
+
+        def names(match: re.Match[str]) -> list[str]:
+            return [line.strip() for line in match.group(1).splitlines() if line.strip()]
+
+        invariant_names = names
+        property_names = names
+        self.assertEqual(invariant_names(source_invariants), invariant_names(reduced_invariants))
+        self.assertEqual(invariant_names(source_invariants), mapping["retained"]["invariants"])
+        self.assertEqual(property_names(source_properties), property_names(reduced_properties))
+        self.assertEqual(property_names(source_properties), mapping["retained"]["properties"])
+        omitted = mapping["omitted_dimensions"]
+        self.assertGreaterEqual(len(omitted), 7)
+        self.assertEqual(len(omitted), len({item["dimension"] for item in omitted}))
+        tier_manifest = json.loads((ROOT / "formal" / "tier-evidence.json").read_text())
+        declared_models = {
+            model for profile in tier_manifest["profiles"].values() for model in profile["models"]
+        }
+        for item in omitted:
+            self.assertTrue(item["reduction"])
+            self.assertTrue(item["coverage"])
+            for reference in item["coverage"]:
+                if reference == "full-exhaustive:HandoffctlSlice-*":
+                    self.assertTrue(
+                        any(model.startswith("HandoffctlSlice-") for model in declared_models)
+                    )
+                else:
+                    self.assertIn(reference, declared_models)
+            for reference in item.get("source_only_coverage", []):
+                self.assertTrue((ROOT / reference).is_file(), reference)
+        tier_models = set(tier_manifest["profiles"]["pr-publication"]["models"])
+        self.assertIn("HandoffctlLiveness", tier_models)
+        self.assertTrue(mapping["non_claims"])
 
     def test_workflow_separates_fork_pr_publication_and_weekly_tiers(self) -> None:
         workflow = (ROOT / ".github" / "workflows" / "verify.yml").read_text()

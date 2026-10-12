@@ -180,7 +180,8 @@ class VendorTest(unittest.TestCase):
             "formal/handoffctl/OBSERVATION_CORRESPONDENCE.md",
             "formal/handoffctl/HandoffctlLocks.cfg",
             "formal/handoffctl/HandoffctlLocks.tla",
-            "formal/handoffctl/HandoffctlPR.cfg",
+            "formal/handoffctl/HandoffctlLiveness.cfg",
+            "formal/handoffctl/LIVENESS_COVERAGE.json",
             "formal/handoffctl/HandoffctlRecovery.cfg",
             "formal/handoffctl/HandoffctlRecovery.tla",
             "formal/handoffctl/HandoffctlRun.cfg",
@@ -297,7 +298,7 @@ exec "$@"
                 "HandoffctlReceipts",
                 "HandoffctlPublication",
                 "HandoffctlObservation",
-                "HandoffctlPR",
+                "HandoffctlLiveness",
                 "HandoffctlRecovery",
             },
         }
@@ -351,6 +352,7 @@ exec "$@"
                 "formal/tier-evidence.json",
                 "formal/handoffctl/verify.sh",
                 "formal/handoffctl/attest.py",
+                "formal/handoffctl/LIVENESS_COVERAGE.json",
                 "tools/tlc_runner.py",
             ):
                 self.assertEqual(VENDOR.sha256(self.target / name), value["formal_inputs"][name])
@@ -1033,6 +1035,17 @@ exec "$@"
         }
         after[VENDOR.LOCK_NAME] = (self.target / VENDOR.LOCK_NAME).read_bytes()
         self.assertEqual(before, after)
+
+    def test_sync_removes_retired_liveness_configuration_atomically(self) -> None:
+        with patch("builtins.print"):
+            VENDOR.sync(ROOT, self.target, CURRENT_VERSION, "a" * 40)
+        retired = self.target / "formal/handoffctl/HandoffctlPR.cfg"
+        retired.parent.mkdir(parents=True, exist_ok=True)
+        retired.write_text("obsolete reduced configuration\n", encoding="utf-8")
+        with patch("builtins.print"):
+            VENDOR.sync(ROOT, self.target, CURRENT_VERSION, "b" * 40)
+        self.assertFalse(retired.exists())
+        VENDOR.verify(self.target)
 
     def test_atomic_copy_rejects_symlink_and_git_query_is_bounded(self) -> None:
         source = self.target / "source"
