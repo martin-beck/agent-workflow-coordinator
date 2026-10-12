@@ -301,3 +301,24 @@ match the consumer's current inputs is usable as formal evidence. `failed`,
 `cancelled`, `superseded`, incomplete, and mismatched receipts are explicitly
 not evidence. The receipt store is local operational state; it uses no
 coordinator task lease, external authentication, signature, or review gate.
+
+## Exact-head bounded receipts
+
+The main formal workflow runs the fixed `pr-publication` tier rather than
+accepting a workflow input that could select a different profile. After the
+verifier writes its attestation, `tools/formal_receipt.py` checks it against the
+locally checked-out commit, each declared model and configuration digest, and
+the tier's fixed aggregate budget. A stale candidate, timeout, or resource
+exhaustion is rejected with concise remediation guidance. This validation is
+locally reproducible:
+
+```bash
+python3 tools/formal_receipt.py \
+  --receipt /path/to/formal-attestation.json \
+  --candidate "$(git rev-parse HEAD)" \
+  --tier pr-publication
+```
+
+Hosted CI can publish this receipt as advisory operational evidence, but it is
+not an authentication, signature, approval, review, merge, acceptance, or
+release gate.

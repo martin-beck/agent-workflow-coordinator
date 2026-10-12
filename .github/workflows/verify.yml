@@ -58,12 +58,12 @@ jobs:
           BASE: ${{ github.event.pull_request.base.sha }}
           HEAD: ${{ github.event.pull_request.head.sha }}
         run: |
-          if [[ "$EVENT" != "pull_request" ]] || git diff --name-only "$BASE...$HEAD" | grep -Eq "^(formal/|schema/|examples/roles/|docs/PUBLIC_CONTRACTS.md|tests/test_role_registry.py|tests/test_role_assignment.py|tests/test_verify_mutation_gate.py|tools/role_registry.py|tools/role_assignment.py|tools/lifecycle_trace.py|tools/runtime_bootstrap.py|tools/sqlite_storage.py|tools/tlc_runner.py|tools/verify_mutation_gate.py|tools/vendor.py|tools/handoffctl.py|pyproject.toml|uv.lock|CHANGELOG.md|coordinator.vendor.json|\\.github/workflows/(verify|formal)\\.yml)"; then
+          if [[ "$EVENT" != "pull_request" ]] || git diff --name-only "$BASE...$HEAD" | grep -Eq "^(formal/|schema/|examples/roles/|docs/PUBLIC_CONTRACTS.md|tests/test_role_registry.py|tests/test_role_assignment.py|tests/test_verify_mutation_gate.py|tools/role_registry.py|tools/role_assignment.py|tools/lifecycle_trace.py|tools/runtime_bootstrap.py|tools/sqlite_storage.py|tools/tlc_runner.py|tools/formal_receipt.py|tools/verify_mutation_gate.py|tools/vendor.py|tools/handoffctl.py|pyproject.toml|uv.lock|CHANGELOG.md|coordinator.vendor.json|\\.github/workflows/(verify|formal)\\.yml)"; then
             echo "formal_changed=true" >> "$GITHUB_OUTPUT"
           else
             echo "formal_changed=false" >> "$GITHUB_OUTPUT"
           fi
-          if [[ "$EVENT" != "pull_request" ]] || git diff --name-only "$BASE...$HEAD" | grep -Eq "^(formal/|tools/(tlc_runner|vendor|handoffctl|fast_receipt_(cli|socket|worker|s))\\.py|tests/test_fast_receipt_.*\\.py|pyproject.toml|uv.lock|CHANGELOG.md|coordinator.vendor.json|\\.github/workflows/(verify|formal)\\.yml)"; then
+          if [[ "$EVENT" != "pull_request" ]] || git diff --name-only "$BASE...$HEAD" | grep -Eq "^(formal/|tools/(tlc_runner|formal_receipt|vendor|handoffctl|fast_receipt_(cli|socket|worker|s))\\.py|tests/test_(fast_receipt|formal_receipt)_.*\\.py|pyproject.toml|uv.lock|CHANGELOG.md|coordinator.vendor.json|\\.github/workflows/(verify|formal)\\.yml)"; then
             echo "release_sensitive=true" >> "$GITHUB_OUTPUT"
           else
             echo "release_sensitive=false" >> "$GITHUB_OUTPUT"

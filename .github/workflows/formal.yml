@@ -3,16 +3,8 @@ name: Formal
 "on":
   push:
     branches: [main]
+  pull_request:
   workflow_dispatch:
-    inputs:
-      tier:
-        description: Formal verification tier to run on main
-        required: true
-        default: pr-fast
-        type: choice
-        options:
-          - pr-fast
-          - pr-publication
 
 permissions:
   contents: read
@@ -21,21 +13,27 @@ concurrency:
   # Bounded validation is intentionally separate from exploratory stress.
   # The latter has its own workflow, runner label, admission paths, and
   # concurrency domain, so it cannot delay this minute-scale workflow.
-  group: ${{ github.workflow }}-${{ github.ref }}-${{ inputs.tier || 'pr-fast' }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}-pr-publication
   cancel-in-progress: false
 
 jobs:
   formal-trusted:
-    if: github.ref == 'refs/heads/main'
+    # Never run untrusted fork code on the local constrained runner. The
+    # portable Verify signal still covers that case, while this exact-head
+    # receipt is available for repository pull requests and main candidates.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    # Hosted CI is advisory evidence only, never an external progression gate.
+    continue-on-error: true
     runs-on: [self-hosted, Linux, X64, agent-workflow-coordinator-ci]
-    timeout-minutes: ${{ inputs.tier == 'pr-publication' && 15 || 5 }}
+    timeout-minutes: 15
     env:
-      TLC_TIER: ${{ inputs.tier || 'pr-fast' }}
+      TLC_TIER: pr-publication
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
           fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961
         with:
           distribution: temurin
@@ -79,9 +77,15 @@ jobs:
           TLC_HEAP: 2048m
           TLC_MEMORY_MAX: 3G
           TLC_SWAP_MAX: 3G
-          TLC_BUDGET_SECONDS: ${{ inputs.tier == 'pr-publication' && '900' || '300' }}
+          TLC_BUDGET_SECONDS: "900"
           TLC_ATTESTATION_PATH: ${{ runner.temp }}/formal-attestation.json
         run: formal/handoffctl/verify.sh --tier "$TLC_TIER"
+      - name: Validate local exact-head bounded receipt
+        run: |
+          python3 tools/formal_receipt.py \
+            --receipt "${{ runner.temp }}/formal-attestation.json" \
+            --candidate "$(git rev-parse HEAD)" \
+            --tier pr-publication
       - name: Publish exact-head tier attestation
         uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08
         with:

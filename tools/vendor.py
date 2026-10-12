@@ -82,6 +82,7 @@ SOURCE_FILES: tuple[tuple[str, str], ...] = (
     ("tools/production_upgrade_binding.py", "tools/production_upgrade_binding.py"),
     ("tools/upgrade_contract_runtime.py", "tools/upgrade_contract_runtime.py"),
     ("tools/tlc_runner.py", "tools/tlc_runner.py"),
+    ("tools/formal_receipt.py", "tools/formal_receipt.py"),
     ("tools/vendor.py", "tools/handoffctl_vendor.py"),
     ("tests/test_handoffctl.py", "tests/test_handoffctl.py"),
     ("tests/test_concise_titles.py", "tests/test_concise_titles.py"),
@@ -99,6 +100,7 @@ SOURCE_FILES: tuple[tuple[str, str], ...] = (
     ("tests/test_checkpoint_records.py", "tests/test_checkpoint_records.py"),
     ("tests/test_hierarchy.py", "tests/test_hierarchy.py"),
     ("tests/test_tlc_runner.py", "tests/test_tlc_runner.py"),
+    ("tests/test_formal_receipt.py", "tests/test_formal_receipt.py"),
     (
         "schema/project-config.schema.json",
         "schema/handoffctl-project-config.schema.json",
