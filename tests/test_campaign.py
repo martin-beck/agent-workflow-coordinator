@@ -1,0 +1,191 @@
+# Copyright (C) Huawei Technologies Co., Ltd. 2026. All rights reserved.
+# SPDX-License-Identifier: MIT
+"""Contract tests for portable, read-only campaign projections."""
+
+from __future__ import annotations
+
+import argparse
+import io
+import json
+import unittest
+from pathlib import Path
+from unittest.mock import patch
+
+from tools import campaign, campaign_runtime, handoffctl, issue_series_service, resume_card_runtime
+from tools.session_records import build_session_record, validate_session_record
+
+OBSERVED_AT = campaign.parse_observed_at("2026-10-13T00:00:00Z")
+
+
+def task(task_id: str, **changes: object) -> tuple[Path, dict[str, object], str]:
+    meta: dict[str, object] = {
+        "id": task_id,
+        "title": f"{task_id} concise title",
+        "summary": "A durable campaign task.",
+        "priority": "P1",
+        "status": "in_progress",
+        "task_revision": 3,
+        "owner": "worker-one",
+        "claim_expires": "2026-10-13T01:00:00+00:00",
+        "depends_on": [],
+        "next_action": "Continue the bounded implementation.",
+        "updated_at": "2026-10-13T00:00:00+00:00",
+    }
+    meta.update(changes)
+    return Path(f"{task_id}.md"), meta, "authority body"
+
+
+def session(task_id: str, revision: int, status: str = "in_progress") -> dict[str, object]:
+    return build_session_record(
+        {
+            "id": task_id,
+            "task_revision": revision,
+            "status": status,
+            "next_action": "Continue the bounded implementation.",
+        },
+        "update",
+        "2026-10-13T00:00:00+00:00",
+    )
+
+
+class CampaignTests(unittest.TestCase):
+    def test_projection_links_tasks_workers_dependencies_attempts_and_outcomes(self) -> None:
+        predecessor = task("AR-0001", status="done", task_revision=4, owner="", claim_expires="")
+        active = task("AR-0002", depends_on=["AR-0001"])
+        projection = campaign.build([active, predecessor], [session("AR-0002", 2)], OBSERVED_AT)
+        self.assertEqual(["AR-0001", "AR-0002"], [card["id"] for card in projection["tasks"]])
+        done, working = projection["tasks"]
+        self.assertEqual({"status": "done", "acceptance": "absent"}, done["outcome"])
+        self.assertEqual(
+            {
+                "owner": "worker-one",
+                "claim_expires": "2026-10-13T01:00:00+00:00",
+                "state": "active",
+            },
+            working["worker"],
+        )
+        self.assertEqual([{"task": "AR-0001", "status": "done"}], working["dependencies"])
+        self.assertEqual("stale", working["attempts"][0]["state"])
+        self.assertEqual("record-current-session", working["recovery"]["kind"])
+        self.assertEqual([], working["blockers"])
+
+    def test_expired_execution_and_claim_observations_have_portable_recovery_views(self) -> None:
+        expired_execution = task(
+            "AR-0001",
+            execution_reservation={
+                "execution_id": "a" * 32,
+                "owner": "worker-one",
+                "task_revision": 3,
+                "envelope_digest": "sha256:" + "b" * 64,
+                "command_class": "test",
+                "scope_digest": "sha256:" + "c" * 64,
+                "argv_digest": "d" * 64,
+                "expires_at": "2026-10-12T23:59:59+00:00",
+            },
+        )
+        expired_claim = task("AR-0002", claim_expires="2026-10-12T23:59:59+00:00")
+        cards = campaign.build([expired_execution, expired_claim], [], OBSERVED_AT)["tasks"]
+        self.assertEqual("recover-execution-reservation", cards[0]["recovery"]["kind"])
+        self.assertIn({"kind": "execution-reservation", "state": "expired"}, cards[0]["blockers"])
+        self.assertEqual("expired", cards[1]["worker"]["state"])
+        self.assertEqual("recover-expired-claim", cards[1]["recovery"]["kind"])
+
+    def test_text_is_complete_equivalent_to_json(self) -> None:
+        rendered = campaign.command([task("AR-0001")], [session("AR-0001", 3)], False, OBSERVED_AT)
+        values = dict(line.split("=", 1) for line in rendered.splitlines()[1:])
+        as_json = json.loads(
+            campaign.command([task("AR-0001")], [session("AR-0001", 3)], True, OBSERVED_AT)
+        )
+        self.assertEqual(as_json["schema_version"], json.loads(values["SCHEMA_VERSION"]))
+        self.assertEqual(as_json["observed_at"], json.loads(values["OBSERVED_AT"]))
+        self.assertEqual(as_json["tasks"], json.loads(values["TASKS"]))
+        self.assertEqual(as_json["summary"], json.loads(values["SUMMARY"]))
+
+    def test_projection_rejects_private_and_stale_forward_session_data(self) -> None:
+        private_session = session("AR-0001", 2)
+        private_session["next_action"] = "to" + "ken" + "=do-not-project"
+        errors = campaign.projection_errors(
+            [task("AR-0001")],
+            [private_session],
+            basic_task_errors=lambda *_: [],
+            validate_session_record=validate_session_record,
+            private_text_errors=handoffctl.private_text_errors,
+            policy=None,
+        )
+        self.assertTrue(any("possible credential" in error for error in errors))
+        errors = campaign.projection_errors(
+            [task("AR-0001")],
+            [session("AR-0001", 4)],
+            basic_task_errors=lambda *_: [],
+            validate_session_record=validate_session_record,
+            private_text_errors=handoffctl.private_text_errors,
+            policy=None,
+        )
+        self.assertIn("session observation is ahead of AR-0001 authority", errors)
+        errors = campaign.projection_errors(
+            [task("AR-0001")],
+            [session("AR-0001", 3, "blocked")],
+            basic_task_errors=lambda *_: [],
+            validate_session_record=validate_session_record,
+            private_text_errors=handoffctl.private_text_errors,
+            policy=None,
+        )
+        self.assertIn("session observation status differs from AR-0001 authority", errors)
+
+    def test_runtime_is_read_only_and_uses_one_authoritative_snapshot(self) -> None:
+        loaded = [session("AR-0001", 3)]
+
+        class Backend:
+            def load_session_records(self) -> list[dict[str, object]]:
+                return loaded
+
+        class Coordinator:
+            ROOT = Path("/state")
+            LOCK_TIMEOUT_SECONDS = 1.0
+            LOCK_POLL_SECONDS = 0.01
+            LockTimeoutError = RuntimeError
+            evidence_policy = staticmethod(lambda _root: handoffctl.DEFAULT_EVIDENCE_POLICY)
+            all_tasks = staticmethod(lambda: [task("AR-0001")])
+            storage_backend = staticmethod(Backend)
+            basic_task_errors = staticmethod(lambda *_: [])
+            validate_session_record = staticmethod(validate_session_record)
+            private_text_errors = staticmethod(handoffctl.private_text_errors)
+            coordinator_lock_path = staticmethod(lambda: Path("/state/.runtime/state.lock"))
+
+        stream = io.StringIO()
+        with (
+            patch.object(
+                resume_card_runtime,
+                "read_only_snapshot",
+                side_effect=lambda callback, *_: callback(),
+            ),
+            patch("sys.stdout", stream),
+        ):
+            self.assertEqual(
+                0,
+                campaign_runtime.dispatch(
+                    argparse.Namespace(json=True, observed_at=OBSERVED_AT), Coordinator
+                ),
+            )
+        self.assertEqual("AR-0001", json.loads(stream.getvalue())["tasks"][0]["id"])
+
+    def test_parser_rejects_naive_campaign_observation_time(self) -> None:
+        parser = argparse.ArgumentParser()
+        commands = parser.add_subparsers(dest="cmd", required=True)
+        campaign.add_command_parser(commands)
+        with self.assertRaises(SystemExit):
+            parser.parse_args(["campaign", "--observed-at", "2026-10-13T00:00:00"])
+
+    def test_handoffctl_registers_campaign_as_a_read_only_command(self) -> None:
+        with (
+            patch("sys.argv", ["handoffctl", "campaign", "--json"]),
+            patch.object(handoffctl, "assert_project_binding"),
+            patch.object(issue_series_service, "dispatch_cli", return_value=False),
+            patch.object(handoffctl, "dispatch_bound_command", return_value=0) as dispatch,
+        ):
+            self.assertEqual(0, handoffctl.main())
+        self.assertEqual("campaign", dispatch.call_args.args[0].cmd)
+
+
+if __name__ == "__main__":
+    unittest.main()

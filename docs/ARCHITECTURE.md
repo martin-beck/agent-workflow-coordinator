@@ -7,6 +7,11 @@ presentation code and has no mutation authority. `CURRENT.md` is the compact act
 projection and includes only `in_progress`, `open`, `blocked`, `planned`, and `future` tasks;
 terminal history remains available in the full `STATUS.md` projection and task records.
 
+`handoffctl campaign` is a read-mostly, portable projection over those task records and their
+authoritative session records. It reports dependency links, portable worker observations, attempts,
+blockers, terminal outcomes, and local recovery views from one shared-lock snapshot. It is not a
+second mutation authority and does not require an account, signature, or separate reviewer.
+
 One project-bound backend is authoritative. New projects use `.runtime/coordinator.sqlite3` in WAL
 mode. Its strict relational schema stores binding metadata, tasks, dependency edges, uniqueness
 constraints, revisions, append-only events, command results, checkpoints and migrations. Short

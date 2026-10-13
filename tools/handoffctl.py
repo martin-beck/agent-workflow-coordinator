@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # Copyright (C) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 # SPDX-License-Identifier: MIT
-"""Transactional coordination state."""
+"""State."""
 
 import sys
 
@@ -1309,8 +1309,6 @@ def possible_uuid_pattern(text: str) -> bool:
 
 def possible_privacy_pattern(text: str, lowered: str, label: str) -> bool:
     """Use only necessary literals before the authoritative privacy regex."""
-    # Python's Unicode IGNORECASE can match non-ASCII case variants of ASCII
-    # literals that lower() does not turn into those same ASCII byte sequences.
     if not text.isascii():
         return True
     if label == "absolute Linux home path":
@@ -1330,8 +1328,6 @@ def possible_privacy_pattern(text: str, lowered: str, label: str) -> bool:
         return "-----BEGIN " in text
     if label == "session-like UUID":
         return possible_uuid_pattern(text)
-    # New pattern families must retain the full regex until a necessary
-    # prefilter is reviewed; an unknown label must never suppress a finding.
     return True
 
 
@@ -4605,6 +4601,13 @@ def dispatch_read_only_command(args: argparse.Namespace) -> int:
         cmd_snapshot(args.task)
     elif args.cmd == "resume-card":
         return resume_card_runtime.dispatch(args, sys.modules[__name__])
+    elif args.cmd == "campaign":
+        return cast(
+            int,
+            __import__("tools.campaign_runtime", fromlist=["dispatch"]).dispatch(
+                args, sys.modules[__name__]
+            ),
+        )
     elif args.cmd == "board":
         cmd_board()
     elif args.cmd == "metrics":
@@ -4671,7 +4674,7 @@ def dispatch_side_effect_command(args: argparse.Namespace) -> bool:
 def dispatch_returning_command(args: argparse.Namespace) -> int | None:
     if args.cmd == "roles":
         return dispatch_roles_command(args)
-    if args.cmd in ("snapshot", "resume-card", "board", "metrics", "preflight"):
+    if args.cmd in ("snapshot", "resume-card", "campaign", "board", "metrics", "preflight"):
         return dispatch_read_only_command(args)
     if args.cmd == "retry-circuit":
         return dispatch_retry_circuit(args)
@@ -4772,6 +4775,7 @@ def main() -> int:
     item = commands.add_parser("snapshot")
     item.add_argument("--task")
     resume_card.add_command_parser(commands)
+    __import__("tools.campaign", fromlist=["add_command_parser"]).add_command_parser(commands)
     issue_series_service.add_cli_parser(commands)
     commands.add_parser("board")
     commands.add_parser("metrics")
