@@ -3603,8 +3603,11 @@ def role_doctor_errors() -> list[str]:
         for _, m, _ in all_tasks()
         if m.get("status") == "in_progress" and m.get("owner")
     ]
-    return roles.doctor_errors(
-        RUNTIME / "roles.json", ROOT / "examples/roles/role-registry.json", owners
+    return cast(
+        list[str],
+        roles.doctor_errors(
+            RUNTIME / "roles.json", ROOT / "examples/roles/role-registry.json", owners
+        ),
     )
 
 
@@ -4616,7 +4619,7 @@ def dispatch_roles_command(args: argparse.Namespace) -> int:
         from .roles import list_assignments as list_roles
         from .roles import remove as remove_role
     else:
-        from roles import RolesError  # type: ignore[no-redef]
+        from roles import RolesError  # type: ignore[import-not-found,no-redef]
         from roles import assign as assign_role  # type: ignore[no-redef]
         from roles import check as check_roles  # type: ignore[no-redef]
         from roles import list_assignments as list_roles  # type: ignore[no-redef]
