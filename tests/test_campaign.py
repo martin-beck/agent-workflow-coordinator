@@ -186,7 +186,9 @@ class CampaignTests(unittest.TestCase):
         schema = json.loads(
             Path("schema/campaign-projection.schema.json").read_text(encoding="utf-8")
         )
-        validator = jsonschema.Draft202012Validator(schema)
+        validator = jsonschema.Draft202012Validator(
+            schema, format_checker=jsonschema.FormatChecker()
+        )
         rendered = json.loads(
             campaign.command([task("AR-0001")], [session("AR-0001", 3)], True, OBSERVED_AT)
         )
@@ -200,6 +202,34 @@ class CampaignTests(unittest.TestCase):
                     "summary": {"tasks": 1, "sessions": 0, "by_status": {}, "recovery_required": 0},
                 }
             )
+
+    def test_schema_rejects_terminal_contract_and_invalid_timestamp(self) -> None:
+        schema = json.loads(
+            Path("schema/campaign-projection.schema.json").read_text(encoding="utf-8")
+        )
+        validator = jsonschema.Draft202012Validator(
+            schema, format_checker=jsonschema.FormatChecker()
+        )
+        projection = campaign.build([task("AR-0001", status="cancelled")], [], OBSERVED_AT)
+        card = projection["tasks"][0]
+        invalid: list[tuple[str, object]] = [
+            ("terminal recovery", {**card, "recovery": {"kind": "recover-expired-claim"}}),
+            ("null terminal outcome", {**card, "status": "done", "outcome": None}),
+        ]
+        for name, value in invalid:
+            with self.subTest(name=name), self.assertRaises(jsonschema.ValidationError):
+                validator.validate({**projection, "tasks": [value]})
+        with self.assertRaises(jsonschema.ValidationError):
+            validator.validate({**projection, "observed_at": "2026-13-99T25:61:61+00:00"})
+
+    def test_runtime_contract_rejects_terminal_advice_and_invalid_timestamp(self) -> None:
+        projection = campaign.build([task("AR-0001", status="done")], [], OBSERVED_AT)
+        card = projection["tasks"][0]
+        card["recovery"] = {"kind": "resume-or-unblock"}
+        projection["observed_at"] = "2026-10-13T00:00:00"
+        errors = campaign.projection_contract_errors(projection)
+        self.assertTrue(any("terminal task has recovery advice" in error for error in errors))
+        self.assertTrue(any("observed_at is not a timestamp" in error for error in errors))
 
     def test_runtime_is_read_only_and_uses_one_authoritative_snapshot(self) -> None:
         loaded = [session("AR-0001", 3)]

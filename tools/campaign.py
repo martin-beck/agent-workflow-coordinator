@@ -7,6 +7,7 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import json
+import re
 from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any
@@ -23,17 +24,19 @@ type Task = tuple[Path, Meta, str]
 SCHEMA_VERSION = 1
 TERMINAL = frozenset({"done", "cancelled", "superseded"})
 MAX_PROJECTED_BYTES = 200_000
+ISO_8601_TIMESTAMP = re.compile(
+    r"^[0-9]{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12][0-9]|3[01])"
+    r"T(?:[01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]"
+    r"(?:\.[0-9]{1,9})?(?:Z|[+-](?:0[0-9]|1[0-4]):[0-5][0-9])$"
+)
 
 
 def parse_observed_at(value: str) -> dt.datetime:
     """Parse a reproducible, timezone-aware campaign observation instant."""
     try:
-        parsed = dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+        return _timestamp(value, "observed-at").replace(microsecond=0)
     except ValueError as error:
         raise argparse.ArgumentTypeError("observed-at must be ISO-8601") from error
-    if parsed.tzinfo is None or parsed.utcoffset() is None:
-        raise argparse.ArgumentTypeError("observed-at must include a timezone")
-    return parsed.astimezone(dt.UTC).replace(microsecond=0)
 
 
 def current_observed_at() -> dt.datetime:
@@ -42,7 +45,7 @@ def current_observed_at() -> dt.datetime:
 
 
 def _timestamp(value: object, field: str) -> dt.datetime:
-    if not isinstance(value, str):
+    if not isinstance(value, str) or not ISO_8601_TIMESTAMP.fullmatch(value):
         raise ValueError(f"{field} is not a timestamp")
     try:
         parsed = dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
@@ -51,6 +54,60 @@ def _timestamp(value: object, field: str) -> dt.datetime:
     if parsed.tzinfo is None or parsed.utcoffset() is None:
         raise ValueError(f"{field} lacks timezone")
     return parsed.astimezone(dt.UTC)
+
+
+def projection_contract_errors(campaign: Meta) -> list[str]:
+    """Check output-only terminal and timestamp invariants before rendering."""
+    errors: list[str] = []
+    try:
+        _timestamp(campaign.get("observed_at"), "observed_at")
+    except ValueError as error:
+        errors.append(str(error))
+    for card in campaign.get("tasks", []):
+        errors.extend(_card_contract_errors(card))
+    return errors
+
+
+def _card_contract_errors(card: object) -> list[str]:
+    if not isinstance(card, dict):
+        return ["campaign card is invalid"]
+    task_id = str(card.get("id", "unknown"))
+    errors = _terminal_contract_errors(task_id, card)
+    errors.extend(_card_timestamp_errors(task_id, card))
+    return errors
+
+
+def _terminal_contract_errors(task_id: str, card: Meta) -> list[str]:
+    status, outcome, recovery = card.get("status"), card.get("outcome"), card.get("recovery")
+    if status in TERMINAL:
+        errors = []
+        if not isinstance(outcome, dict) or outcome.get("status") != status:
+            errors.append(f"{task_id}: terminal outcome does not match status")
+        if recovery != {"kind": "none"}:
+            errors.append(f"{task_id}: terminal task has recovery advice")
+        return errors
+    return [f"{task_id}: nonterminal task has outcome"] if outcome is not None else []
+
+
+def _card_timestamp_errors(task_id: str, card: Meta) -> list[str]:
+    errors: list[str] = []
+    values: list[tuple[object, str]] = [(card.get("worker"), "worker")]
+    values.extend((attempt, "attempt") for attempt in card.get("attempts", []))
+    for value, name in values:
+        if isinstance(value, dict):
+            errors.extend(_value_timestamp_errors(task_id, name, value))
+    return errors
+
+
+def _value_timestamp_errors(task_id: str, name: str, value: Meta) -> list[str]:
+    errors: list[str] = []
+    for field in ("claim_expires", "recorded_at"):
+        if field in value:
+            try:
+                _timestamp(value[field], f"{task_id} {name} {field}")
+            except ValueError as error:
+                errors.append(str(error))
+    return errors
 
 
 def _canonical(value: object) -> str:
@@ -315,4 +372,6 @@ def command(
 ) -> str:
     """Return one text-first or canonical JSON campaign projection."""
     campaign = build(tasks, sessions, observed_at)
+    if errors := projection_contract_errors(campaign):
+        raise ValueError("campaign projection contract failed:\n" + "\n".join(errors))
     return _canonical(campaign) + "\n" if as_json else render_text(campaign)
