@@ -25,6 +25,8 @@ jobs:
     timeout-minutes: 15
     env:
       TLC_TIER: pr-publication
+      TLC_ADMISSION_QUEUE: ${{ github.workspace }}/.agent-workflow-coordinator-tlc-${{ github.run_id }}-queue
+      TLC_ADMISSION_LOCK: ${{ github.workspace }}/.agent-workflow-coordinator-tlc-${{ github.run_id }}-lock
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -79,8 +81,8 @@ jobs:
           TLC_ATTESTATION_PATH: ${{ runner.temp }}/formal-attestation.json
         run: |
           formal/handoffctl/verify.sh --tier "$TLC_TIER" \
-            --diagnostic-queue "${RUNNER_TEMP}/formal-queue" \
-            --diagnostic-admission-lock "${RUNNER_TEMP}/formal-admission.lock"
+            --diagnostic-queue "$TLC_ADMISSION_QUEUE" \
+            --diagnostic-admission-lock "$TLC_ADMISSION_LOCK"
       - name: Validate local exact-head bounded receipt
         run: |
           python3 tools/formal_receipt.py \

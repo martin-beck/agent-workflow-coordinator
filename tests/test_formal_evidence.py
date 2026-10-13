@@ -1207,10 +1207,8 @@ class FormalEvidenceTests(unittest.TestCase):
         self.assertNotIn("needs.scope.outputs.release_sensitive", formal_step)
         self.assertIn('TLC_BUDGET_SECONDS: "900"', formal)
         self.assertIn("TLC_WORK_ROOT: ${{ runner.temp }}/formal-workspaces", formal_step)
-        self.assertIn('--diagnostic-queue "${RUNNER_TEMP}/formal-queue"', formal_step)
-        self.assertIn(
-            '--diagnostic-admission-lock "${RUNNER_TEMP}/formal-admission.lock"', formal_step
-        )
+        self.assertIn('--diagnostic-queue "$TLC_ADMISSION_QUEUE"', formal_step)
+        self.assertIn('--diagnostic-admission-lock "$TLC_ADMISSION_LOCK"', formal_step)
         self.assertIn("ref: ${{ github.sha }}", formal)
         self.assertIn("Validate local exact-head bounded receipt", formal)
         self.assertIn("tools/formal_receipt.py", formal)
