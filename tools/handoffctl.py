@@ -2389,10 +2389,10 @@ def dependency_satisfied(dependency_id: str, tasks: list[Task]) -> bool:
 def require_role_admission(owner_id: str, required_role: str = "implementer") -> None:
     """Require a durable role assignment when the role store is present."""
     if __package__:
-        from .roles import role_admission_error
+        from .roles import role_admission_error as _role_admission_error
     else:  # pragma: no cover - direct script execution
-        from roles import role_admission_error  # type: ignore[import-not-found,no-redef]
-    error = role_admission_error(
+        from roles import role_admission_error as _role_admission_error  # type: ignore[import-not-found]
+    error = _role_admission_error(
         RUNTIME / "roles.json",
         ROOT / "examples/roles/role-registry.json",
         owner_id=owner_id,
@@ -3608,15 +3608,15 @@ def cmd_render_status(*, check: bool) -> None:
 def role_doctor_errors() -> list[str]:
     """Reject active owners absent from the durable role store."""
     if __package__:
-        from .roles import role_admission_errors
+        from .roles import role_admission_errors as _role_admission_errors
     else:  # pragma: no cover - direct script execution
-        from roles import role_admission_errors
+        from roles import role_admission_errors as _role_admission_errors
     owners = [
         (str(meta["owner"]), "implementer")
         for _path, meta, _body in all_tasks()
         if meta.get("status") == "in_progress" and meta.get("owner")
     ]
-    return role_admission_errors(
+    return _role_admission_errors(
         RUNTIME / "roles.json", ROOT / "examples/roles/role-registry.json", owners
     )
 
