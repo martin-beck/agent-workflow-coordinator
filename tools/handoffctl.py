@@ -118,7 +118,7 @@ if __package__:
         task_spec_errors,
         task_spec_policy_errors,
     )
-else:  # pragma: no cover - direct script execution
+else:
     import assumption_revalidation  # type: ignore[import-not-found,no-redef]
     import autonomy_limits as al  # type: ignore[import-not-found,no-redef]
     import change_drift  # type: ignore[import-not-found,no-redef]
@@ -2387,21 +2387,8 @@ def dependency_satisfied(dependency_id: str, tasks: list[Task]) -> bool:
 
 
 def require_role_admission(owner_id: str, required_role: str = "implementer") -> None:
-    """Require a durable role assignment when the role store is present."""
-    if __package__:
-        from .roles import role_admission_error as _role_admission_error
-    else:  # pragma: no cover - direct script execution
-        from roles import (  # type: ignore[import-not-found,no-redef]
-            role_admission_error as _role_admission_error,
-        )
-    error = _role_admission_error(
-        RUNTIME / "roles.json",
-        ROOT / "examples/roles/role-registry.json",
-        owner_id=owner_id,
-        required_role=required_role,
-    )
-    if error:
-        raise RuntimeError(error)
+    roles = __import__(f"{__package__ + '.' if __package__ else ''}roles", fromlist=["r"])
+    roles.require_admission(RUNTIME / "roles.json", ROOT / "examples/roles/role-registry.json", owner_id, required_role)
 
 
 def require_update_role_admission(kind: str, owner_id: str) -> None:
@@ -3608,19 +3595,13 @@ def cmd_render_status(*, check: bool) -> None:
 
 
 def role_doctor_errors() -> list[str]:
-    """Reject active owners absent from the durable role store."""
-    if __package__:
-        from .roles import role_admission_errors as _role_admission_errors
-    else:  # pragma: no cover - direct script execution
-        from roles import role_admission_errors as _role_admission_errors  # type: ignore[no-redef]
+    roles = __import__(f"{__package__ + '.' if __package__ else ''}roles", fromlist=["r"])
     owners = [
-        (str(meta["owner"]), "implementer")
-        for _path, meta, _body in all_tasks()
-        if meta.get("status") == "in_progress" and meta.get("owner")
+        (str(m["owner"]), "implementer")
+        for _, m, _ in all_tasks()
+        if m.get("status") == "in_progress" and m.get("owner")
     ]
-    return _role_admission_errors(
-        RUNTIME / "roles.json", ROOT / "examples/roles/role-registry.json", owners
-    )
+    return roles.doctor_errors(RUNTIME / "roles.json", ROOT / "examples/roles/role-registry.json", owners)
 
 
 def doctor_checks(*, live: bool, sqlite: bool, live_state: State | None) -> list[str]:
@@ -4541,7 +4522,7 @@ def cmd_upgrade(args: argparse.Namespace) -> int:
     if args.upgrade_action == "consume":
         if __package__:
             from .runtime_bootstrap import ExpectedRuntimeIdentity
-        else:  # pragma: no cover - direct script execution
+        else:
             from runtime_bootstrap import (  # type: ignore[import-not-found,no-redef]
                 ExpectedRuntimeIdentity,
             )
@@ -4570,7 +4551,7 @@ def cmd_upgrade(args: argparse.Namespace) -> int:
                 resolve_git_live_binding,
                 resolve_sqlite_live_binding,
             )
-        else:  # pragma: no cover - direct script execution
+        else:
             from production_upgrade_binding import (  # type: ignore[import-not-found,no-redef]
                 resolve_git_live_binding,
                 resolve_sqlite_live_binding,
@@ -4630,7 +4611,7 @@ def dispatch_roles_command(args: argparse.Namespace) -> int:
         from .roles import check as check_roles
         from .roles import list_assignments as list_roles
         from .roles import remove as remove_role
-    else:  # pragma: no cover - direct script execution
+    else:
         from roles import RolesError  # type: ignore[no-redef]
         from roles import assign as assign_role  # type: ignore[no-redef]
         from roles import check as check_roles  # type: ignore[no-redef]
