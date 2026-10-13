@@ -2103,7 +2103,7 @@ def reconcile(
 
 
 def observation_is_superseded(scan_config: Meta | None, scan_binding: Meta, ticket: int) -> bool:
-    """Fence an unlocked scan against changed inputs and newer publications."""
+    """Fence an unlocked scan."""
     if backend_selection()["backend"] != "git":
         raise RuntimeError("BACKEND_CHANGED: retry using the selected backend")
     current_config = config() if CONFIG.exists() else None
@@ -2114,7 +2114,7 @@ def observation_is_superseded(scan_config: Meta | None, scan_binding: Meta, tick
 
 
 def pending_observation_paths() -> list[Path]:
-    """Return only coordinator-produced paths awaiting a reconciliation commit."""
+    """Return pending coordinator paths."""
     marker = RUNTIME / "last-reconcile.json"
     if not marker.exists():
         return []
@@ -2139,7 +2139,7 @@ def pending_observation_paths() -> list[Path]:
 
 
 def pending_path_matches_head(path: Path) -> bool:
-    """Discard only paths already committed (or absent both locally and at HEAD)."""
+    """Discard paths already committed."""
     relative = path.relative_to(ROOT).as_posix()
     committed = run(["git", "-C", str(ROOT), "show", f"HEAD:{relative}"], check=False)
     if committed.returncode:
@@ -2148,7 +2148,7 @@ def pending_path_matches_head(path: Path) -> bool:
 
 
 def validate_pending_path_scope(paths: list[Path]) -> None:
-    """Refuse marker paths outside task and generated projection namespaces."""
+    """Refuse unsafe marker paths."""
     allowed = {path.resolve() for path, _, _ in all_tasks()}
     allowed.update(path.resolve() for path in generated_paths())
     if any(
@@ -2163,12 +2163,12 @@ def validate_pending_path_scope(paths: list[Path]) -> None:
 
 
 def pending_path_digest(path: Path) -> str | None:
-    """Bind a pending path to exact contents, including an intentional deletion."""
+    """Bind a pending path to contents."""
     return hashlib.sha256(path.read_bytes()).hexdigest() if path.exists() else None
 
 
 def remaining_pending_paths(paths: list[Path], do_commit: bool) -> list[str]:
-    """Keep coordinator-produced paths until a commit request consumes them."""
+    """Keep coordinator paths pending commit."""
     if do_commit:
         return []
     return [str(path.relative_to(ROOT)) for path in paths]
@@ -2183,7 +2183,7 @@ def apply_git_reconciliation(
     do_commit: bool,
     push: bool,
 ) -> bool | None:
-    """Apply a completed external observation while holding the authority lock."""
+    """Apply an external observation."""
     if observation_is_superseded(scan_config, scan_binding, ticket):
         return None
     prior_pending = pending_observation_paths()
@@ -2236,7 +2236,7 @@ def apply_git_reconciliation(
 
 
 def write_session_projections(session_records: list[Meta]) -> list[Path]:
-    """Render bounded session histories from authoritative records."""
+    """Render bounded session histories."""
     by_task: dict[str, list[Meta]] = {}
     for record in session_records:
         validate_session_record(record)
@@ -2257,7 +2257,7 @@ def write_session_projections(session_records: list[Meta]) -> list[Path]:
 
 
 def write_checkpoint_projections(checkpoint_records: list[Meta]) -> list[Path]:
-    """Render bounded checkpoint histories from authoritative SQLite records."""
+    """Render bounded checkpoint histories."""
     by_task: dict[str, list[Meta]] = {}
     for record in checkpoint_records:
         validate_checkpoint(record)
@@ -2283,7 +2283,7 @@ def write_sqlite_projections(
     already_locked: bool = False,
     policy: EvidencePolicy | None = None,
 ) -> list[Path]:
-    """Regenerate byte-stable Markdown projections from one database snapshot."""
+    """Regenerate Markdown projections."""
     selected_policy = policy_snapshot(policy)
     with contextlib.nullcontext() if already_locked else locked():
         expected = {path.resolve() for path, _, _ in tasks}
@@ -2315,13 +2315,13 @@ def write_sqlite_projections(
 
 
 def export_sqlite_projections(policy: EvidencePolicy | None = None) -> list[Path]:
-    """Regenerate projections from the currently selected SQLite authority."""
+    """Regenerate SQLite projections."""
     selected_policy = policy_snapshot(policy)
     return write_sqlite_projections(all_tasks(), policy=selected_policy)
 
 
 def refresh_sqlite_live_state() -> State | None:
-    """Refresh live observations when the private runtime is configured."""
+    """Refresh configured live observations."""
     if not (CONFIG.exists() and config().get("github_repository")):
         return None
     state = project_scan()
@@ -2331,7 +2331,7 @@ def refresh_sqlite_live_state() -> State | None:
 
 
 def reconcile_sqlite(*, do_commit: bool, push: bool, policy: EvidencePolicy | None = None) -> bool:
-    """Export local authority; optional Git/GitHub publication is a replica only."""
+    """Export local authority."""
     if push and not do_commit:
         raise RuntimeError("SQLite publication requires --commit with --push")
     selected_policy = policy_snapshot(policy)
@@ -2394,7 +2394,7 @@ def dependency_satisfied(dependency_id: str, tasks: list[Task]) -> bool:
 
 
 def require_role_admission(owner_id: str, required_role: str = "implementer") -> None:
-    """Compatibility no-op: role assignments are advisory, never an execution gate."""
+    """Retain advisory role compatibility."""
     del owner_id, required_role
 
 
@@ -2482,7 +2482,7 @@ def apply_claim(args: argparse.Namespace, meta: Meta, tasks: list[Task]) -> str:
 
 
 def dirty_state_paths() -> list[str]:
-    """Return public state-repository changes that would make promotion ambiguous."""
+    """Return ambiguous public changes."""
     result = run(
         [
             "git",
@@ -4115,6 +4115,7 @@ def execution_preflight(args: argparse.Namespace) -> tuple[bool, str, str, float
                 envelope_scope_path(worktree, str(relative))
             rule = envelope["command_classes"][args.command_class]
             args._envelope_worktree = str(worktree)
+            args._envelope_worktree_fd = int(worktree.name)
             args._envelope_worktree_context = worktree_context
             args._envelope_write_scope = (
                 list(args.scope_path)
@@ -4134,19 +4135,25 @@ def release_envelope_worktree(args: argparse.Namespace) -> None:
     if context is not None:
         delattr(args, "_envelope_worktree_context")
         context.__exit__(None, None, None)
+    for name in ("_envelope_worktree", "_envelope_worktree_fd"):
+        if hasattr(args, name):
+            delattr(args, name)
 
 
 def print_execution_preflight(args: argparse.Namespace) -> int:
     """Print an explainable, side-effect-free envelope admission decision."""
-    allowed, code, detail, timeout = execution_preflight(args)
-    result: dict[str, object] = {"allowed": allowed, "code": code, "detail": detail}
-    if timeout is not None:
-        result["timeout_seconds"] = timeout
-    if args.json:
-        print(json.dumps(result, sort_keys=True, separators=(",", ":")))
-    else:
-        print(f"{code}: {detail}")
-    return 0 if allowed else 2
+    try:
+        allowed, code, detail, timeout = execution_preflight(args)
+        result: dict[str, object] = {"allowed": allowed, "code": code, "detail": detail}
+        if timeout is not None:
+            result["timeout_seconds"] = timeout
+        if args.json:
+            print(json.dumps(result, sort_keys=True, separators=(",", ":")))
+        else:
+            print(f"{code}: {detail}")
+        return 0 if allowed else 2
+    finally:
+        release_envelope_worktree(args)
 
 
 def run_envelope_timeout(args: argparse.Namespace) -> float | None:
@@ -4336,11 +4343,15 @@ def _cmd_run_fenced(
             args.retry_circuit_resolution_revision = int(args.expected_revision) + 1
     timed_out = False
     try:
+        pass_fds = (
+            (int(args._envelope_worktree_fd),) if hasattr(args, "_envelope_worktree_fd") else ()
+        )
         proc = subprocess.run(
             command,
             check=False,
             stdin=subprocess.DEVNULL,
             timeout=timeout,
+            pass_fds=pass_fds,
         )
     except subprocess.TimeoutExpired:
         timed_out = True

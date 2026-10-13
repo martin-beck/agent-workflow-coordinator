@@ -521,6 +521,16 @@ class ExecutionEnvelopeLifecycleTest(HandoffTest):
             self.assertEqual("original", (mounts[0][1] / "marker").read_text(encoding="utf-8"))
         finally:
             CORE.release_envelope_worktree(args)
+        display = argparse.Namespace(
+            task="AR-0001",
+            owner="worker-a",
+            command_class="source-write",
+            scope_path=["src"],
+            json=True,
+        )
+        with patch("builtins.print"):
+            self.assertEqual(0, CORE.print_execution_preflight(display))
+        self.assertFalse(hasattr(display, "_envelope_worktree_context"))
 
     def test_command_journal_rejects_malformed_records(self) -> None:
         CORE.RUNTIME.mkdir(exist_ok=True)
