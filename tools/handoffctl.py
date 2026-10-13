@@ -2760,7 +2760,10 @@ def valid_binding_worktree(value: object) -> bool:
         settings = config()
         if value in {".", "..", str(settings.get("product_worktree", ""))}:
             return False
-        root = Path(str(settings["projects_root"])).resolve()
+        projects_root = settings.get("projects_root")
+        if not isinstance(projects_root, str) or not projects_root:
+            return bool(settings)
+        root = Path(projects_root).resolve()
         candidate = root / value
         return not candidate.is_symlink() and inside(candidate, root)
     except KeyError:
