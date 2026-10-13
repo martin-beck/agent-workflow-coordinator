@@ -559,6 +559,8 @@ class SQLiteMutationBarrierProcessTests(unittest.TestCase):
             LOCK=runtime / "state.lock",
         )
         self.coordinator_globals.start()
+        self.addCleanup(self.coordinator_globals.stop)
+        self.addCleanup(self.directory.cleanup)
         self.git_authority = self.root / "git-authority"
         self.git_authority.mkdir()
         _git(self.git_authority, "init", "-b", "main")
@@ -614,10 +616,6 @@ class SQLiteMutationBarrierProcessTests(unittest.TestCase):
             self.control.control_lock_path,
             PROJECT,
         )
-
-    def tearDown(self) -> None:
-        self.coordinator_globals.stop()
-        self.directory.cleanup()
 
     def _create_held(self) -> BarrierSessionState:
         return self.session.create(_identity())
