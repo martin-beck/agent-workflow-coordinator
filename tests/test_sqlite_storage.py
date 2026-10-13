@@ -24,6 +24,7 @@ from unittest.mock import patch
 
 from fixture_ids import project_uuid
 
+from tools import change_drift
 from tools.sqlite_storage import (
     SQLiteAuthorityBinding,
     SQLiteBackend,
@@ -219,6 +220,32 @@ def sqlite_resume_worker(start: Any, outcomes: Any) -> None:
 
 
 class SQLiteStorageTest(unittest.TestCase):
+    def test_change_drift_history_round_trips_and_keeps_the_revision_fence(self) -> None:
+        record = change_drift._record(
+            "baseline",
+            "AR-0001",
+            1,
+            "2026-10-12T00:00:00+00:00",
+            {"head": "", "entries": [], "scope": ["src"]},
+        )
+        backend = self.create([task("AR-0001", change_drift=[record])])
+        self.assertEqual([record], backend.load_tasks()[0][1]["change_drift"])
+
+        def append(meta: dict[str, Any], _tasks: list[Any]) -> tuple[str, str]:
+            history = change_drift.records(meta)
+            meta["change_drift"] = [
+                *history,
+                change_drift.rescope(
+                    "AR-0001", 2, "2026-10-12T00:01:00+00:00", record["digest"], ["src", "tests"]
+                ),
+            ]
+            return "rescope", "# Test\n"
+
+        backend.mutate("AR-0001", 1, "change-drift", "2026-10-12T00:01:00+00:00", append)
+        self.assertEqual(2, len(backend.load_tasks()[0][1]["change_drift"]))
+        with self.assertRaisesRegex(RuntimeError, "stale revision"):
+            backend.mutate("AR-0001", 1, "change-drift", "2026-10-12T00:02:00+00:00", append)
+
     def test_authority_sidecar_descriptor_failures_are_fail_closed(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)

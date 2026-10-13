@@ -39,7 +39,7 @@ if not __package__:
         sys.path.insert(0, _SCRIPT_ROOT)
 
 if __package__:
-    from . import execution_envelope, execution_receipt
+    from . import change_drift, execution_envelope, execution_receipt
     from .board_metrics import build_metrics
     from .board_metrics import encode as encode_metrics
     from .checkpoint_records import (
@@ -108,6 +108,8 @@ if __package__:
         task_spec_policy_errors,
     )
 else:  # pragma: no cover - direct script execution
+    import change_drift  # type: ignore[import-not-found,no-redef]
+
     try:
         from board_metrics import build_metrics  # type: ignore[import-not-found,no-redef]  # noqa: I001
         from board_metrics import encode as encode_metrics  # type: ignore[no-redef]
@@ -245,6 +247,7 @@ LIFECYCLE_MUTATION_COMMANDS = (
     "recover-expired",
     "recover-execution",
     "update",
+    "change-drift",
 )
 
 
@@ -298,6 +301,7 @@ FIELDS = set(REQ) | {
     "parent_task_ref",
     "children",
     "issue_series",
+    "change_drift",
 }
 type Meta = dict[str, Any]
 type Task = tuple[Path, Meta, str]
@@ -1438,6 +1442,8 @@ def execution_metadata_errors(task_id: str, meta: Meta) -> list[str]:
         errors.append(f"{task_id}: invalid execution_result")
     if not valid_execution_envelope_binding(meta):
         errors.append(f"{task_id}: invalid execution envelope binding")
+    if error := change_drift.metadata_error(meta):
+        errors.append(f"{task_id}: {error}")
     return errors
 
 
@@ -2380,6 +2386,8 @@ def require_done_admission(
         hierarchy_error = open_child_error(meta, tasks)
         if hierarchy_error:
             raise RuntimeError(hierarchy_error)
+    if error := change_drift.done_admission_error(meta):
+        raise RuntimeError(error)
 
 
 def require_release_admission(
@@ -3132,6 +3140,8 @@ def apply_transition(  # noqa: C901
         return apply_recover_execution(args, meta)
     if kind == "gate":
         return apply_gate(args, meta)
+    if kind == "change-drift":
+        return change_drift.apply(args, meta, Path(str(config()["projects_root"])), now())
     record_transition = {"checkpoint": apply_checkpoint, "rollback": apply_rollback}.get(kind)
     if record_transition is not None:
         return record_transition(args, meta)
@@ -4903,6 +4913,7 @@ def main() -> int:
     item.add_argument("--summary")
     item.add_argument("--next-action")
     item.add_argument("--note", required=True)
+    change_drift.add_command_parser(commands)
     item = commands.add_parser("gate")
     item.add_argument("task")
     item.add_argument("--expected-revision", type=int, required=True)
