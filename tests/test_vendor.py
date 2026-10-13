@@ -180,6 +180,8 @@ class VendorTest(unittest.TestCase):
             "formal/handoffctl/HandoffctlObservation.tla",
             "formal/handoffctl/HandoffctlPredicateLedger.cfg",
             "formal/handoffctl/HandoffctlPredicateLedger.tla",
+            "formal/handoffctl/HandoffctlAssumptions.cfg",
+            "formal/handoffctl/HandoffctlAssumptions.tla",
             "formal/handoffctl/OBSERVATION_CORRESPONDENCE.md",
             "formal/handoffctl/HandoffctlLocks.cfg",
             "formal/handoffctl/HandoffctlLocks.tla",
@@ -216,6 +218,12 @@ class VendorTest(unittest.TestCase):
         manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
         with self.assertRaisesRegex(RuntimeError, "formal lifecycle operation drift"):
             VENDOR.verify(self.target)
+
+    def test_clean_vendored_snapshot_has_aligned_lifecycle_inventory(self) -> None:
+        """A newly vendored snapshot preserves every runtime lifecycle operation."""
+        with patch("builtins.print"):
+            VENDOR.sync(ROOT, self.target, CURRENT_VERSION, "1" * 40)
+        VENDOR.verify_formal_lifecycle_alignment(self.target)
 
     def test_formal_lifecycle_alignment_rejects_malformed_and_missing_inventories(self) -> None:
         tools = self.target / "tools"
@@ -304,6 +312,7 @@ exec "$@"
                 "HandoffctlPublication",
                 "HandoffctlObservation",
                 "HandoffctlPredicateLedger",
+                "HandoffctlAssumptions",
                 "HandoffctlLiveness",
                 "HandoffctlRecovery",
             },

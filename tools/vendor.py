@@ -22,6 +22,7 @@ SOURCE_FILES: tuple[tuple[str, str], ...] = (
     ("tools/handoffctl", "tools/handoffctl"),
     ("tools/handoffctl.py", "tools/handoffctl.py"),
     ("tools/change_drift.py", "tools/change_drift.py"),
+    ("tools/assumption_revalidation.py", "tools/assumption_revalidation.py"),
     ("tools/issue_series_service.py", "tools/issue_series_service.py"),
     ("tools/issue_series.py", "tools/issue_series.py"),
     ("tools/issue_series_plan.py", "tools/issue_series_plan.py"),
@@ -93,7 +94,12 @@ SOURCE_FILES: tuple[tuple[str, str], ...] = (
     ("tools/formal_receipt.py", "tools/formal_receipt.py"),
     ("tools/vendor.py", "tools/handoffctl_vendor.py"),
     ("tests/test_handoffctl.py", "tests/test_handoffctl.py"),
+    ("tests/test_assumption_revalidation.py", "tests/test_assumption_revalidation.py"),
     ("tests/test_predicate_evidence_ledger.py", "tests/test_predicate_evidence_ledger.py"),
+    (
+        "tests/test_assumption_revalidation_formal_model.py",
+        "tests/test_assumption_revalidation_formal_model.py",
+    ),
     ("tests/test_issue_series_handoffctl.py", "tests/test_issue_series_handoffctl.py"),
     ("tests/test_concise_titles.py", "tests/test_concise_titles.py"),
     ("tests/test_execution_envelope.py", "tests/test_execution_envelope.py"),
@@ -195,6 +201,14 @@ SOURCE_FILES: tuple[tuple[str, str], ...] = (
     (
         "formal/handoffctl/HandoffctlPredicateLedger.tla",
         "formal/handoffctl/HandoffctlPredicateLedger.tla",
+    ),
+    (
+        "formal/handoffctl/HandoffctlAssumptions.cfg",
+        "formal/handoffctl/HandoffctlAssumptions.cfg",
+    ),
+    (
+        "formal/handoffctl/HandoffctlAssumptions.tla",
+        "formal/handoffctl/HandoffctlAssumptions.tla",
     ),
     (
         "formal/handoffctl/OBSERVATION_CORRESPONDENCE.md",

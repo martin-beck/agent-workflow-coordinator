@@ -6,14 +6,21 @@ from __future__ import annotations
 
 import argparse
 import json
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any, cast
 
 if __package__:
-    from .task_spec import EvidencePolicy, evidence_ledger_errors, task_spec_errors
+    from .task_spec import (
+        EvidencePolicy,
+        done_admission_error,
+        evidence_ledger_errors,
+        task_spec_errors,
+    )
 else:  # pragma: no cover - direct handoffctl execution
     from task_spec import (  # type: ignore[import-not-found,no-redef]
         EvidencePolicy,
+        done_admission_error,
         evidence_ledger_errors,
         task_spec_errors,
     )
@@ -166,4 +173,41 @@ def apply_predicate_acceptance(
     errors = evidence_ledger_errors(root, meta, policy)
     if errors:
         raise RuntimeError("predicate evidence is invalid: " + "; ".join(errors))
+    return str(args.note)
+
+
+def apply_acceptance(
+    root: Path,
+    args: argparse.Namespace,
+    meta: Meta,
+    policy: EvidencePolicy | None,
+    freshness_error: str | Callable[[], str | None] | None = None,
+) -> str:
+    """Apply ordinary or predicate acceptance after optional freshness admission."""
+    if meta.get("owner") != args.owner:
+        raise RuntimeError(f"{args.task} is owned by {meta.get('owner') or 'nobody'}")
+    if meta.get("status") != "in_progress":
+        raise RuntimeError("accept requires an active task")
+    if args.expected_revision != meta["task_revision"]:
+        raise RuntimeError(
+            f"stale revision: expected {args.expected_revision}, current {meta['task_revision']}"
+        )
+    error = freshness_error() if callable(freshness_error) else freshness_error
+    if error:
+        raise RuntimeError(error)
+    if inputs := predicate_acceptance_inputs(args):
+        return apply_predicate_acceptance(root, args, meta, policy, inputs)
+    acceptance: Meta = {
+        "status": "pass",
+        "evidence_class": args.evidence_class,
+        "evidence_ref": args.evidence_ref,
+        "evidence_digest": args.evidence_digest,
+    }
+    if "spec_ref" in meta and "spec_revision" in meta:
+        acceptance.update(spec_ref=meta["spec_ref"], spec_revision=meta["spec_revision"])
+    else:
+        acceptance["match"] = "best_effort"
+    meta["spec_acceptance"] = acceptance
+    if error := done_admission_error(root, meta, policy):
+        raise RuntimeError(error)
     return str(args.note)

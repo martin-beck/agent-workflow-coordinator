@@ -39,7 +39,7 @@ if not __package__:
         sys.path.insert(0, _SCRIPT_ROOT)
 
 if __package__:
-    from . import change_drift, execution_envelope, execution_receipt
+    from . import assumption_revalidation, change_drift, execution_envelope, execution_receipt
     from .board_metrics import build_metrics
     from .board_metrics import encode as encode_metrics
     from .checkpoint_records import (
@@ -68,7 +68,7 @@ if __package__:
         gate_errors,
         transition_allowed,
     )
-    from .predicate_ledger import apply_predicate_acceptance, predicate_acceptance_inputs
+    from .predicate_ledger import apply_acceptance
     from .rollback_records import (
         append_record,
         build_record,
@@ -108,6 +108,7 @@ if __package__:
         task_spec_policy_errors,
     )
 else:  # pragma: no cover - direct script execution
+    import assumption_revalidation  # type: ignore[import-not-found,no-redef]
     import change_drift  # type: ignore[import-not-found,no-redef]
 
     try:
@@ -154,10 +155,7 @@ else:  # pragma: no cover - direct script execution
         gate_errors,
         transition_allowed,
     )
-    from predicate_ledger import (  # type: ignore[import-not-found,no-redef]
-        apply_predicate_acceptance,
-        predicate_acceptance_inputs,
-    )
+    from predicate_ledger import apply_acceptance  # type: ignore[import-not-found,no-redef]
     from rollback_records import (  # type: ignore[import-not-found,no-redef]
         append_record,
         build_record,
@@ -248,6 +246,7 @@ LIFECYCLE_MUTATION_COMMANDS = (
     "recover-execution",
     "update",
     "change-drift",
+    "assumption",
 )
 
 
@@ -302,6 +301,7 @@ FIELDS = set(REQ) | {
     "children",
     "issue_series",
     "change_drift",
+    "assumption_revalidation",
 }
 type Meta = dict[str, Any]
 type Task = tuple[Path, Meta, str]
@@ -1444,6 +1444,8 @@ def execution_metadata_errors(task_id: str, meta: Meta) -> list[str]:
         errors.append(f"{task_id}: invalid execution envelope binding")
     if error := change_drift.metadata_error(meta):
         errors.append(f"{task_id}: {error}")
+    if error := assumption_revalidation.metadata_error(meta):
+        errors.append(f"{task_id}: {error}")
     return errors
 
 
@@ -2388,6 +2390,15 @@ def require_done_admission(
             raise RuntimeError(hierarchy_error)
     if error := change_drift.done_admission_error(meta):
         raise RuntimeError(error)
+    task_metadata = [item for _, item, _ in tasks] if tasks is not None else []
+    if error := (
+        assumption_revalidation.admission_error(
+            ROOT, Path(str(config()["projects_root"])), meta, task_metadata
+        )
+        if assumption_revalidation.needs_admission(meta)
+        else None
+    ):
+        raise RuntimeError(error)
 
 
 def require_release_admission(
@@ -2654,34 +2665,30 @@ def require_promotion_preflight(kind: str) -> None:
         raise RuntimeError("promotion requires a clean state repository")
 
 
-def apply_accept(args: argparse.Namespace, meta: Meta, policy: EvidencePolicy | None) -> str:
-    """Record one owner's exact-revision assertion against the referenced spec."""
-    if meta.get("owner") != args.owner:
-        raise RuntimeError(f"{args.task} is owned by {meta.get('owner') or 'nobody'}")
+def apply_accept(
+    args: argparse.Namespace,
+    meta: Meta,
+    policy: EvidencePolicy | None,
+    tasks: list[Task] | None = None,
+) -> str:
+    """Record acceptance with optional material-assumption freshness admission."""
     require_role_admission(str(args.owner))
-    if meta.get("status") != "in_progress":
-        raise RuntimeError("accept requires an active task")
-    if args.expected_revision != meta["task_revision"]:
-        raise RuntimeError(
-            f"stale revision: expected {args.expected_revision}, current {meta['task_revision']}"
-        )
-    if predicate_inputs := predicate_acceptance_inputs(args):
-        return apply_predicate_acceptance(ROOT, args, meta, policy, predicate_inputs)
-    acceptance: Meta = {
-        "status": "pass",
-        "evidence_class": args.evidence_class,
-        "evidence_ref": args.evidence_ref,
-        "evidence_digest": args.evidence_digest,
-    }
-    if "spec_ref" in meta and "spec_revision" in meta:
-        acceptance.update(spec_ref=meta["spec_ref"], spec_revision=meta["spec_revision"])
-    else:
-        acceptance["match"] = "best_effort"
-    meta["spec_acceptance"] = acceptance
-    error = done_admission_error(ROOT, meta, policy)
-    if error:
-        raise RuntimeError(error)
-    return str(args.note)
+    return apply_acceptance(
+        ROOT,
+        args,
+        meta,
+        policy,
+        lambda: (
+            assumption_revalidation.admission_error(
+                ROOT,
+                Path(str(config()["projects_root"])),
+                meta,
+                [item for _, item, _ in tasks] if tasks is not None else [],
+            )
+            if assumption_revalidation.needs_admission(meta)
+            else None
+        ),
+    )
 
 
 def apply_bind_spec(args: argparse.Namespace, meta: Meta, policy: EvidencePolicy | None) -> str:
@@ -3142,11 +3149,19 @@ def apply_transition(  # noqa: C901
         return apply_gate(args, meta)
     if kind == "change-drift":
         return change_drift.apply(args, meta, Path(str(config()["projects_root"])), now())
+    if kind == "assumption":
+        return assumption_revalidation.apply(
+            ROOT,
+            Path(str(config()["projects_root"])),
+            args,
+            meta,
+            [item for _, item, _ in tasks],
+        )
     record_transition = {"checkpoint": apply_checkpoint, "rollback": apply_rollback}.get(kind)
     if record_transition is not None:
         return record_transition(args, meta)
     transition = {
-        "accept": lambda: apply_accept(args, meta, policy),
+        "accept": lambda: apply_accept(args, meta, policy, tasks),
         "bind-spec": lambda: apply_bind_spec(args, meta, policy),
         "bind-worktree": lambda: apply_bind_worktree(args, meta, tasks),
         "bind-envelope": lambda: apply_bind_envelope(args, meta),
@@ -4914,6 +4929,7 @@ def main() -> int:
     item.add_argument("--next-action")
     item.add_argument("--note", required=True)
     change_drift.add_command_parser(commands)
+    assumption_revalidation.add_command_parser(commands)
     item = commands.add_parser("gate")
     item.add_argument("task")
     item.add_argument("--expected-revision", type=int, required=True)
