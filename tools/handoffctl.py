@@ -2391,7 +2391,7 @@ def require_role_admission(owner_id: str, required_role: str = "implementer") ->
     if __package__:
         from .roles import role_admission_error
     else:  # pragma: no cover - direct script execution
-        from roles import role_admission_error  # type: ignore[no-redef]
+        from roles import role_admission_error  # type: ignore[import-not-found,no-redef]
     error = role_admission_error(
         RUNTIME / "roles.json",
         ROOT / "examples/roles/role-registry.json",
