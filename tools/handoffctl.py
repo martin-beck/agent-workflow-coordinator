@@ -260,7 +260,6 @@ LIFECYCLE_MUTATION_COMMANDS = (
     "accept",
     "bind-spec",
     "bind-worktree",
-    "repair-legacy-binding",
     "bind-envelope",
     "release",
     "promote",
@@ -336,12 +335,10 @@ type State = dict[str, Any]
 
 
 def task_label(meta: Meta) -> str:
-    """Return the compatibility-safe human label for one task."""
     return f"{meta['id']} — {meta.get('short_title') or meta['title']}"
 
 
 def short_title_errors(path: Path, task_id: str, value: object) -> list[str]:
-    """Validate optional concise task metadata."""
     if value is None:
         return []
     if (
@@ -372,7 +369,6 @@ PROJECT_SETTING_KEYS = frozenset(DEFAULT_PROJECT_SETTINGS)
 
 
 def project_settings() -> Meta:
-    """Load and strictly validate the tracked, non-secret project profile."""
     if not PROJECT_CONFIG.exists():
         return dict(DEFAULT_PROJECT_SETTINGS)
     value = json.loads(PROJECT_CONFIG.read_text())
@@ -400,7 +396,6 @@ def project_settings() -> Meta:
 
 
 def repository_slug(value: object) -> str:
-    """Normalize a GitHub repository URL or OWNER/REPOSITORY value."""
     text = str(value or "").strip().removesuffix(".git")
     if "://" in text:
         text = text.split("://", 1)[1].split("/", 1)[-1]
@@ -413,7 +408,6 @@ def repository_slug(value: object) -> str:
 
 
 def backend_selection() -> Meta:
-    """Load the selected backend."""
     if not BACKEND_CONFIG.exists():
         return {"schema_version": 1, "backend": "git", "legacy": True}
     try:
@@ -429,8 +423,6 @@ def backend_selection() -> Meta:
 
 
 class GitBackend:
-    """Adapter preserving the existing file/Git authority contract."""
-
     name = "git"
 
     def load_tasks(self) -> list[Task]:
@@ -2776,7 +2768,6 @@ def valid_binding_worktree(value: object) -> bool:
 
 
 def binding_identity_conflicts(args: argparse.Namespace, meta: Meta, tasks: list[Task]) -> bool:
-    """Report whether another active task already owns either requested identity."""
     return any(
         other.get("id") != meta.get("id")
         and other.get("status") == "in_progress"
@@ -2838,22 +2829,9 @@ def apply_bind_worktree(args: argparse.Namespace, meta: Meta, tasks: list[Task])
 
 def apply_repair_legacy_binding(args: argparse.Namespace, meta: Meta, _tasks: list[Task]) -> str:
     """Clear one exact stale worktree key from an unowned partial legacy task."""
-    if args.expected_revision != meta["task_revision"]:
-        raise RuntimeError(
-            f"stale revision: expected {args.expected_revision}, current {meta['task_revision']}"
-        )
-    if meta.get("status") != "open" or meta.get("owner") or meta.get("claim_expires"):
-        raise RuntimeError("repair-legacy-binding requires an open, unowned task")
-    if meta.get("branch"):
-        raise RuntimeError("repair-legacy-binding requires an empty legacy branch")
-    if not valid_binding_worktree(args.worktree_key):
-        raise RuntimeError("repair-legacy-binding worktree key is invalid")
-    if meta.get("worktree_key") != args.worktree_key:
-        raise RuntimeError("repair-legacy-binding worktree key does not match retained metadata")
-    if not args.note.strip():
-        raise RuntimeError("repair-legacy-binding note must not be empty")
-    meta["worktree_key"] = ""
-    return str(args.note)
+    from legacy_binding_repair import repair
+
+    return repair(args, meta, valid_binding_worktree)
 
 
 def bind_envelope_candidate(args: argparse.Namespace, meta: Meta) -> tuple[Meta, str]:
@@ -3241,7 +3219,6 @@ def apply_transition(
 
 
 def rendered_task_views(tasks: list[Task]) -> dict[Path, str]:
-    """Return every enabled task-derived projection for one consistent task snapshot."""
     views = {ROOT / "CURRENT.md": render_current(tasks)}
     if project_settings()["status_view"]:
         views.update(
@@ -4760,6 +4737,9 @@ def dispatch_bound_standard_command(args: argparse.Namespace) -> int:
     result = dispatch_returning_command(args)
     if result is not None:
         return result
+    if args.cmd == "repair-legacy-binding":
+        dispatch_lifecycle_mutation(args)
+        return 0
     if args.cmd in (
         *LIFECYCLE_MUTATION_COMMANDS,
         "gate",
