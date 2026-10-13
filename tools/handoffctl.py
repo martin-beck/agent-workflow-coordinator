@@ -118,7 +118,7 @@ if __package__:
         task_spec_errors,
         task_spec_policy_errors,
     )
-else:  # pragma: no cover - direct script execution
+else:
     import assumption_revalidation  # type: ignore[import-not-found,no-redef]
     import autonomy_limits as al  # type: ignore[import-not-found,no-redef]
     import change_drift  # type: ignore[import-not-found,no-redef]
@@ -127,7 +127,7 @@ else:  # pragma: no cover - direct script execution
     try:
         from board_metrics import build_metrics  # type: ignore[import-not-found,no-redef]  # noqa: I001
         from board_metrics import encode as encode_metrics  # type: ignore[no-redef]
-    except ModuleNotFoundError:  # pragma: no cover - standalone vendored bootstrap
+    except ModuleNotFoundError:
 
         def build_metrics(tasks: list[tuple[Any, dict[str, Any], str]]) -> dict[str, Any]:
             del tasks
@@ -2380,8 +2380,10 @@ def dependency_satisfied(dependency_id: str, tasks: list[Task]) -> bool:
 
 
 def require_role_admission(owner_id: str, required_role: str = "implementer") -> None:
-    """Retain advisory role compatibility."""
-    del owner_id, required_role
+    roles = __import__(f"{__package__ + '.' if __package__ else ''}roles", fromlist=["r"])
+    roles.require_admission(
+        RUNTIME / "roles.json", ROOT / "examples/roles/role-registry.json", owner_id, required_role
+    )
 
 
 def require_update_role_admission(kind: str, owner_id: str) -> None:
@@ -3594,8 +3596,13 @@ def cmd_render_status(*, check: bool) -> None:
 
 
 def role_doctor_errors() -> list[str]:
-    """Roles belong to the external role registry and do not gate coordinator health."""
-    return []
+    roles = __import__(f"{__package__ + '.' if __package__ else ''}roles", fromlist=["r"])
+    owners = [
+        (str(m["owner"]), "implementer")
+        for _, m, _ in all_tasks()
+        if m.get("status") == "in_progress" and m.get("owner")
+    ]
+    return cast(list[str], roles.doctor_errors(RUNTIME / "roles.json", owners))
 
 
 def doctor_checks(*, live: bool, sqlite: bool, live_state: State | None) -> list[str]:
@@ -4516,7 +4523,7 @@ def cmd_upgrade(args: argparse.Namespace) -> int:
     if args.upgrade_action == "consume":
         if __package__:
             from .runtime_bootstrap import ExpectedRuntimeIdentity
-        else:  # pragma: no cover - direct script execution
+        else:
             from runtime_bootstrap import (  # type: ignore[import-not-found,no-redef]
                 ExpectedRuntimeIdentity,
             )
@@ -4545,7 +4552,7 @@ def cmd_upgrade(args: argparse.Namespace) -> int:
                 resolve_git_live_binding,
                 resolve_sqlite_live_binding,
             )
-        else:  # pragma: no cover - direct script execution
+        else:
             from production_upgrade_binding import (  # type: ignore[import-not-found,no-redef]
                 resolve_git_live_binding,
                 resolve_sqlite_live_binding,
@@ -4605,7 +4612,7 @@ def dispatch_roles_command(args: argparse.Namespace) -> int:
         from .roles import check as check_roles
         from .roles import list_assignments as list_roles
         from .roles import remove as remove_role
-    else:  # pragma: no cover - direct script execution
+    else:
         from roles import RolesError  # type: ignore[import-not-found,no-redef]
         from roles import assign as assign_role  # type: ignore[no-redef]
         from roles import check as check_roles  # type: ignore[no-redef]
@@ -4757,7 +4764,7 @@ def dispatch_bound_standard_command(args: argparse.Namespace) -> int:
 
 if __package__:
     from . import issue_series_service
-else:  # pragma: no cover - direct vendored execution
+else:  # pragma: no cover
     import issue_series_service  # type: ignore[import-not-found,no-redef]
 
 globals().update(issue_series_service.install(globals()))
