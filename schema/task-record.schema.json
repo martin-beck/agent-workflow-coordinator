@@ -135,6 +135,17 @@
             "maxItems": 64,
             "items": {"type": "object"}
         },
+        "retry_circuit": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["schema_version", "attempts", "recoveries", "hold"],
+            "properties": {
+                "schema_version": {"const": 1},
+                "attempts": {"type": "array", "maxItems": 64, "items": {"type": "object"}},
+                "recoveries": {"type": "array", "maxItems": 32, "items": {"type": "object"}},
+                "hold": {"type": ["object", "null"]}
+            }
+        },
         "parent_task_ref": {
             "anyOf": [{"type": "string", "maxLength": 0}, {"$ref": "#/$defs/taskId"}]
         },

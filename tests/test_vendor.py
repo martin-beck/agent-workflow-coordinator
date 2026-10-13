@@ -313,6 +313,7 @@ exec "$@"
                 "HandoffctlObservation",
                 "HandoffctlPredicateLedger",
                 "HandoffctlAssumptions",
+                "HandoffctlRetryCircuit",
                 "HandoffctlLiveness",
                 "HandoffctlRecovery",
             },

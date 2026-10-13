@@ -180,6 +180,7 @@ elif [[ "${TIER}" == "pr-publication" ]]; then
     run_model HandoffctlObservation
     run_model HandoffctlPredicateLedger
     run_model HandoffctlAssumptions
+    run_model HandoffctlRetryCircuit
     run_model HandoffctlLiveness Handoffctl
     run_model HandoffctlRecovery
 else
@@ -192,6 +193,7 @@ else
     run_model HandoffctlObservation
     run_model HandoffctlPredicateLedger
     run_model HandoffctlAssumptions
+    run_model HandoffctlRetryCircuit
     # `operation` is immutable. These p1 operation slices partition the
     # original two-process aggregate model exactly; p2 retains its full domain.
     mapfile -t local_operations < <(
@@ -209,4 +211,4 @@ else
 fi
 timeout --foreground --signal=TERM --kill-after=5s "$(remaining_seconds)" \
     python3 "${SPEC_DIR}/attest.py" --tier "${TIER}" --output "${ATTESTATION}" --jar "${JAR}" --manifest "${MANIFEST}" --execution-classification "${EXECUTION_CLASSIFICATION}" --budget-seconds "${DECLARED_BUDGET_SECONDS}" --started-epoch "${START_EPOCH_SECONDS}" \
-    --models $(if [[ "${TIER}" == "portable-smoke" ]]; then echo HandoffctlBinding; elif [[ "${TIER}" == "pr-fast" ]]; then echo HandoffctlFast HandoffctlReceiptsFast HandoffctlPublicationFast HandoffctlObservation OracleInteractionGates; elif [[ "${TIER}" == "pr-publication" ]]; then echo HandoffctlBinding HandoffctlLocks HandoffctlRun HandoffctlStorage HandoffctlReceipts HandoffctlPublication HandoffctlObservation HandoffctlPredicateLedger HandoffctlAssumptions HandoffctlLiveness HandoffctlRecovery; else printf 'HandoffctlBinding HandoffctlLocks HandoffctlRun HandoffctlStorage HandoffctlReceipts HandoffctlPublication HandoffctlObservation HandoffctlPredicateLedger HandoffctlAssumptions '; (cd "${SPEC_DIR}" && python3 -c 'from slices import OPERATIONS; print(*(f"HandoffctlSlice-{operation}" for operation in OPERATIONS))'); echo HandoffctlRecovery; fi)
+    --models $(if [[ "${TIER}" == "portable-smoke" ]]; then echo HandoffctlBinding; elif [[ "${TIER}" == "pr-fast" ]]; then echo HandoffctlFast HandoffctlReceiptsFast HandoffctlPublicationFast HandoffctlObservation OracleInteractionGates; elif [[ "${TIER}" == "pr-publication" ]]; then echo HandoffctlBinding HandoffctlLocks HandoffctlRun HandoffctlStorage HandoffctlReceipts HandoffctlPublication HandoffctlObservation HandoffctlPredicateLedger HandoffctlAssumptions HandoffctlRetryCircuit HandoffctlLiveness HandoffctlRecovery; else printf 'HandoffctlBinding HandoffctlLocks HandoffctlRun HandoffctlStorage HandoffctlReceipts HandoffctlPublication HandoffctlObservation HandoffctlPredicateLedger HandoffctlAssumptions HandoffctlRetryCircuit '; (cd "${SPEC_DIR}" && python3 -c 'from slices import OPERATIONS; print(*(f"HandoffctlSlice-{operation}" for operation in OPERATIONS))'); echo HandoffctlRecovery; fi)

@@ -998,7 +998,7 @@ class FormalEvidenceTests(unittest.TestCase):
             manifest["profiles"]["portable-smoke"]["models"],
             manifest["profiles"]["full-exhaustive"]["models"],
         )
-        self.assertEqual(29, len(manifest["profiles"]["full-exhaustive"]["models"]))
+        self.assertEqual(30, len(manifest["profiles"]["full-exhaustive"]["models"]))
         self.assertEqual(11, len(manifest["profiles"]["pr-publication"]["models"]))
         self.assertEqual(300, manifest["profiles"]["pr-fast"]["aggregate_budget_seconds"])
         self.assertEqual(900, manifest["profiles"]["pr-publication"]["aggregate_budget_seconds"])
