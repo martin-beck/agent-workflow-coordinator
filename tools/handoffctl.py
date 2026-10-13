@@ -2836,7 +2836,7 @@ def apply_bind_worktree(args: argparse.Namespace, meta: Meta, tasks: list[Task])
     return f"Bound worktree {args.worktree_key} on branch {args.branch}."
 
 
-def apply_repair_legacy_binding(args: argparse.Namespace, meta: Meta, tasks: list[Task]) -> str:
+def apply_repair_legacy_binding(args: argparse.Namespace, meta: Meta, _tasks: list[Task]) -> str:
     """Clear one exact stale worktree key from an unowned partial legacy task."""
     if args.expected_revision != meta["task_revision"]:
         raise RuntimeError(
