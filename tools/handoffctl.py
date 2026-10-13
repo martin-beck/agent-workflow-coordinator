@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # Copyright (C) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 # SPDX-License-Identifier: MIT
-"""Transactional, project-configurable coordination state."""
+"""Transactional coordination state."""
 
 import sys
 
@@ -28,7 +28,7 @@ import threading
 import time
 import uuid
 from collections import Counter
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, cast
@@ -39,7 +39,15 @@ if not __package__:
         sys.path.insert(0, _SCRIPT_ROOT)
 
 if __package__:
-    from . import assumption_revalidation, change_drift, execution_envelope, execution_receipt
+    from . import (
+        assumption_revalidation,
+        change_drift,
+        command_results,
+        execution_envelope,
+        execution_receipt,
+        retry_circuit,
+        run_command,
+    )
     from .board_metrics import build_metrics
     from .board_metrics import encode as encode_metrics
     from .checkpoint_records import (
@@ -110,6 +118,7 @@ if __package__:
 else:  # pragma: no cover - direct script execution
     import assumption_revalidation  # type: ignore[import-not-found,no-redef]
     import change_drift  # type: ignore[import-not-found,no-redef]
+    import command_results  # type: ignore[import-not-found,no-redef]
 
     try:
         from board_metrics import build_metrics  # type: ignore[import-not-found,no-redef]  # noqa: I001
@@ -126,6 +135,8 @@ else:  # pragma: no cover - direct script execution
 
     import execution_envelope  # type: ignore[import-not-found,no-redef]
     import execution_receipt  # type: ignore[import-not-found,no-redef]
+    import retry_circuit  # type: ignore[import-not-found,no-redef]
+    import run_command  # type: ignore[import-not-found,no-redef]
     from checkpoint_records import (  # type: ignore[import-not-found,no-redef]
         append_checkpoint,
         build_checkpoint,
@@ -302,6 +313,7 @@ FIELDS = set(REQ) | {
     "issue_series",
     "change_drift",
     "assumption_revalidation",
+    "retry_circuit",
 }
 type Meta = dict[str, Any]
 type Task = tuple[Path, Meta, str]
@@ -1445,6 +1457,8 @@ def execution_metadata_errors(task_id: str, meta: Meta) -> list[str]:
     if error := change_drift.metadata_error(meta):
         errors.append(f"{task_id}: {error}")
     if error := assumption_revalidation.metadata_error(meta):
+        errors.append(f"{task_id}: {error}")
+    if error := retry_circuit.metadata_error(meta):
         errors.append(f"{task_id}: {error}")
     return errors
 
@@ -2622,7 +2636,6 @@ def current_recovery_session(records: list[Meta], revision: int) -> Meta | None:
 
 
 def apply_recover_expired(args: argparse.Namespace, meta: Meta, _tasks: list[Task]) -> str:
-    """Reopen an expired claim, restoring only its exact current session snapshot."""
     if args.expected_revision != meta["task_revision"]:
         raise RuntimeError(
             f"stale revision: expected {args.expected_revision}, current {meta['task_revision']}"
@@ -2637,6 +2650,7 @@ def apply_recover_expired(args: argparse.Namespace, meta: Meta, _tasks: list[Tas
         raise RuntimeError(f"{args.task} claim has not expired")
     if not args.note.strip():
         raise RuntimeError("expired-claim recovery note must not be empty")
+    retry_circuit.require_no_live_reservation(meta, now())
     records = storage_backend().load_session_records(args.task)
     previous_owner = str(meta["owner"])
     recovery_note = str(args.note)
@@ -3123,7 +3137,52 @@ def apply_gate(args: argparse.Namespace, meta: Meta) -> str:
         raise RuntimeError(str(error)) from error
 
 
-def apply_transition(  # noqa: C901
+def apply_recover_expired_transition(
+    args: argparse.Namespace, meta: Meta, tasks: list[Task]
+) -> str:
+    require_no_execution_reservation(meta)
+    return apply_recover_expired(args, meta, tasks)
+
+
+def lifecycle_transition_handler(
+    args: argparse.Namespace,
+    kind: str,
+    meta: Meta,
+    tasks: list[Task],
+    policy: EvidencePolicy | None,
+) -> Callable[[], str] | None:
+    handlers: dict[str, Callable[[], str]] = {
+        "claim": lambda: apply_claim(args, meta, tasks),
+        "promote": lambda: apply_promote(args, meta, tasks),
+        "pause": lambda: apply_pause(args, meta),
+        "resume": lambda: apply_resume(args, meta, tasks),
+        "unblock": lambda: apply_unblock(args, meta, tasks),
+        "recover-expired": lambda: apply_recover_expired_transition(args, meta, tasks),
+        "recover-execution": lambda: apply_recover_execution(args, meta),
+        "gate": lambda: apply_gate(args, meta),
+        "change-drift": lambda: change_drift.apply(
+            args, meta, Path(str(config()["projects_root"])), now()
+        ),
+        "assumption": lambda: assumption_revalidation.apply(
+            ROOT, Path(str(config()["projects_root"])), args, meta, [item for _, item, _ in tasks]
+        ),
+        "retry-circuit": lambda: retry_circuit.apply(args, meta, now()),
+        "retry-circuit-reserve": lambda: retry_circuit.apply_reserve(args, meta, now()),
+        "retry-circuit-resolve": lambda: retry_circuit.apply_resolve(args, meta, now()),
+        "checkpoint": lambda: apply_checkpoint(args, meta),
+        "rollback": lambda: apply_rollback(args, meta),
+        "accept": lambda: apply_accept(args, meta, policy),
+        "bind-spec": lambda: apply_bind_spec(args, meta, policy),
+        "bind-worktree": lambda: apply_bind_worktree(args, meta, tasks),
+        "bind-envelope": lambda: apply_bind_envelope(args, meta),
+        "execution-start": lambda: apply_execution_start(args, meta),
+        "execution-result": lambda: apply_execution_result(args, meta),
+        "execution-finish": lambda: apply_execution_finish(args, meta),
+    }
+    return handlers.get(kind)
+
+
+def apply_transition(
     args: argparse.Namespace,
     kind: str,
     meta: Meta,
@@ -3131,50 +3190,9 @@ def apply_transition(  # noqa: C901
     policy: EvidencePolicy | None = None,
 ) -> str:
     """Dispatch one typed lifecycle transition for both storage backends."""
-    if kind == "claim":
-        return apply_claim(args, meta, tasks)
-    if kind == "promote":
-        return apply_promote(args, meta, tasks)
-    if kind == "pause":
-        return apply_pause(args, meta)
-    reopen = {"resume": apply_resume, "unblock": apply_unblock}.get(kind)
-    if reopen is not None:
-        return reopen(args, meta, tasks)
-    if kind == "recover-expired":
-        require_no_execution_reservation(meta)
-        return apply_recover_expired(args, meta, tasks)
-    if kind == "recover-execution":
-        return apply_recover_execution(args, meta)
-    if kind == "gate":
-        return apply_gate(args, meta)
-    if kind == "change-drift":
-        return change_drift.apply(args, meta, Path(str(config()["projects_root"])), now())
-    if kind == "assumption":
-        return assumption_revalidation.apply(
-            ROOT,
-            Path(str(config()["projects_root"])),
-            args,
-            meta,
-            [item for _, item, _ in tasks],
-        )
-    record_transition = {"checkpoint": apply_checkpoint, "rollback": apply_rollback}.get(kind)
-    if record_transition is not None:
-        return record_transition(args, meta)
-    transition = {
-        "accept": lambda: apply_accept(args, meta, policy, tasks),
-        "bind-spec": lambda: apply_bind_spec(args, meta, policy),
-        "bind-worktree": lambda: apply_bind_worktree(args, meta, tasks),
-        "bind-envelope": lambda: apply_bind_envelope(args, meta),
-    }.get(kind)
-    if transition is not None:
-        return transition()
-    execution = {
-        "execution-start": apply_execution_start,
-        "execution-result": apply_execution_result,
-        "execution-finish": apply_execution_finish,
-    }.get(kind)
-    if execution is not None:
-        return execution(args, meta)
+    handler = lifecycle_transition_handler(args, kind, meta, tasks, policy)
+    if handler is not None:
+        return handler()
     return apply_owned_change(args, kind, meta, tasks, policy)
 
 
@@ -4163,44 +4181,14 @@ def append_file_command_result(
     classification: str,
     recorded_at: str,
 ) -> None:
-    """Fsync a privacy-safe local result before any fallible post-command work."""
-    RUNTIME.mkdir(mode=0o700, parents=True, exist_ok=True)
-    record = {
-        "at": recorded_at,
-        "task": task_id,
-        "owner": owner,
-        "argv_sha256": command_hash,
-        "returncode": returncode,
-        "classification": classification,
-    }
-    path = RUNTIME / "command-results.jsonl"
-    descriptor = os.open(path, os.O_APPEND | os.O_CREAT | os.O_WRONLY, 0o600)
-    with os.fdopen(descriptor, "ab") as stream:
-        stream.write((json.dumps(record, sort_keys=True) + "\n").encode())
-        stream.flush()
-        os.fsync(stream.fileno())
+    command_results.append_file(
+        RUNTIME, task_id, owner, command_hash, returncode, classification, recorded_at
+    )
 
 
 def legacy_command_results() -> list[Meta]:
     """Strictly load the privacy-safe Git-backend journal for migration."""
-    path = RUNTIME / "command-results.jsonl"
-    if not path.exists():
-        return []
-    required = {"at", "task", "owner", "argv_sha256", "returncode", "classification"}
-    records: list[Meta] = []
-    for number, line in enumerate(path.read_text().splitlines(), 1):
-        try:
-            record = json.loads(line)
-        except json.JSONDecodeError as error:
-            raise RuntimeError(f"invalid command journal line {number}") from error
-        if not isinstance(record, dict) or set(record) != required:
-            raise RuntimeError(f"invalid command journal line {number}")
-        if not re.fullmatch(r"[0-9a-f]{64}", str(record["argv_sha256"])):
-            raise RuntimeError(f"invalid command journal digest at line {number}")
-        if not isinstance(record["returncode"], int):
-            raise RuntimeError(f"invalid command journal return code at line {number}")
-        records.append(cast(Meta, record))
-    return records
+    return command_results.load_file(RUNTIME)
 
 
 def append_command_result(
@@ -4215,82 +4203,21 @@ def append_command_result(
         if backend_selection()["backend"] == "sqlite"
         else storage_backend()
     )
-    selected_backend.append_command_result(
-        task_id,
-        owner,
-        command_hash,
-        returncode,
-        "SUBPROCESS_TIMEOUT" if timed_out else "EXIT",
-        now(),
+    command_results.append_backend(
+        selected_backend, now, task_id, owner, command_hash, returncode, timed_out
     )
+
+
+class _RunRuntime:
+    def __getattr__(self, name: str) -> Any:
+        return globals()[name]
+
+
+_RUN_RUNTIME = _RunRuntime()
 
 
 def cmd_run(args: argparse.Namespace) -> int:
-    if not args.command:
-        raise RuntimeError("missing command")
-    with task_execution_locked(args.task, exclusive=False, phase="task_run"):
-        (
-            policy,
-            command_hash,
-            timeout,
-            timed_out,
-            returncode,
-            execution_id,
-            execution_revision,
-        ) = _cmd_run_fenced(args)
-    if execution_id is not None:
-        result = argparse.Namespace(
-            task=args.task,
-            owner=args.owner,
-            expected_revision=execution_revision,
-            execution_id=execution_id,
-            classification="SUBPROCESS_TIMEOUT" if timed_out else "EXIT",
-            returncode=returncode,
-            recorded_at=now(),
-        )
-        mutate(result, "execution-result", policy)
-        _, recorded, _ = locate(args.task)
-        execution_revision = int(recorded["task_revision"])
-    try:
-        append_command_result(args.task, args.owner, command_hash, returncode, timed_out)
-    except Exception as error:
-        if execution_id is not None:
-            raise RuntimeError(
-                "EXECUTION_RESULT_UNKNOWN: command result could not be journaled"
-            ) from error
-        raise
-    note = (
-        f"Recorded command timeout; classification=SUBPROCESS_TIMEOUT; "
-        f"deadline={timeout:.1f}s; command argv SHA-256 {command_hash}."
-        if timed_out
-        else f"Recorded command exit {returncode}; command argv SHA-256 {command_hash}."
-    )
-    update = argparse.Namespace(
-        task=args.task,
-        owner=args.owner,
-        expected_revision=execution_revision,
-        status=None,
-        priority=None,
-        summary=None,
-        next_action=None,
-        note=note,
-        _session_trigger="run",
-    )
-    if execution_id is not None:
-        update.execution_id = execution_id
-        mutate(update, "execution-finish", policy)
-    else:
-        mutate(update, "update", policy)
-    sqlite = backend_selection()["backend"] == "sqlite"
-    try:
-        require_policy_unchanged(ROOT, policy)
-        reconcile(do_commit=not sqlite, push=not sqlite, policy=policy)
-    except Exception as error:
-        raise PostCommandReconcileError(
-            "COMMAND_RECORDED_POST_RECONCILE_FAILED: "
-            f"task={args.task}; argv_sha256={command_hash}; {error}"
-        ) from error
-    return returncode
+    return run_command.cmd_run(_RUN_RUNTIME, args)
 
 
 def _cmd_run_fenced(
@@ -4299,13 +4226,17 @@ def _cmd_run_fenced(
     if backend_selection()["backend"] == "git":
         config()
     policy = require_active_owner(args.task, args.owner)
+    timeout = float(getattr(args, "timeout_seconds", COMMAND_TIMEOUT_SECONDS))
+    if timeout <= 0:
+        raise RuntimeError("command timeout must be positive")
+    try:
+        retry_circuit._window(getattr(args, "retry_window", retry_circuit.DEFAULT_WINDOW))
+    except ValueError as error:
+        raise RuntimeError(str(error)) from error
     timeout_cap = run_envelope_timeout(args)
     # Never execute or consume untracked caller input. Scripts and data must be
     # named by argv or a stable file, whose content digest can be recorded too.
     command_hash = hashlib.sha256("\0".join(args.command).encode()).hexdigest()
-    timeout = float(getattr(args, "timeout_seconds", COMMAND_TIMEOUT_SECONDS))
-    if timeout <= 0:
-        raise RuntimeError("command timeout must be positive")
     if timeout_cap is not None and timeout > timeout_cap:
         raise RuntimeError(f"command timeout exceeds envelope limit of {timeout_cap}s")
     require_policy_unchanged(ROOT, policy)
@@ -4336,6 +4267,25 @@ def _cmd_run_fenced(
         mutate(reserve, "execution-start", policy)
         _, reserved, _ = locate(args.task)
         execution_revision = int(reserved["task_revision"])
+    if execution_id is None:
+        identity = retry_circuit.normalized_identity(
+            command_hash,
+            getattr(args, "command_class", None),
+            list(getattr(args, "scope_path", [])),
+        )
+        with task_execution_locked(args.task, exclusive=True, phase="retry_circuit_launch"):
+            _, current, _ = locate(args.task)
+            args.expected_revision = int(current["task_revision"])
+            args.retry_circuit_identity = identity
+            args.retry_circuit_reservation = uuid.uuid4().hex
+            args.retry_window = getattr(args, "retry_window", retry_circuit.DEFAULT_WINDOW)
+            args.retry_circuit_expires_at = (
+                (dt.datetime.now(dt.UTC) + dt.timedelta(seconds=timeout + 60))
+                .replace(microsecond=0)
+                .isoformat()
+            )
+            mutate(args, "retry-circuit-reserve", policy)
+            args.retry_circuit_resolution_revision = int(args.expected_revision) + 1
     timed_out = False
     try:
         proc = subprocess.run(
@@ -4644,6 +4594,26 @@ def dispatch_read_only_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_retry_circuit_status(task_id: str) -> int:
+    """Render the durable retry state without exposing command input or output."""
+    with locked(exclusive=False, phase="retry_circuit_status"):
+        _, meta, _ = locate(task_id)
+        state = meta.get("retry_circuit")
+        if state is None:
+            state = {
+                "schema_version": retry_circuit.SCHEMA_VERSION,
+                "attempts": [],
+                "recoveries": [],
+                "hold": None,
+                "reservations": [],
+                "abandoned": [],
+            }
+        else:
+            retry_circuit.validate(state)
+        print(json.dumps(state, sort_keys=True, separators=(",", ":")))
+    return 0
+
+
 def dispatch_fast_command(args: argparse.Namespace) -> int:
     """Dispatch the opt-in receipt contract after normal project binding."""
     from tools.fast_receipt_cli import dispatch_fast
@@ -4658,35 +4628,62 @@ def dispatch_lifecycle_mutation(args: argparse.Namespace) -> None:
         print(note)
 
 
-def dispatch_bound_standard_command(args: argparse.Namespace) -> int:  # noqa: C901
-    """Dispatch every non-fast command after permanent project binding."""
-    if args.cmd == "reconcile":
-        reconcile(do_commit=args.commit, push=args.push)
-    elif args.cmd == "roles":
+def dispatch_retry_circuit(args: argparse.Namespace) -> int:
+    """Dispatch retry inspection or its owner- and revision-fenced recovery."""
+    if args.retry_circuit_action == "status":
+        return cmd_retry_circuit_status(args.task)
+    dispatch_lifecycle_mutation(args)
+    return 0
+
+
+def dispatch_side_effect_command(args: argparse.Namespace) -> bool:
+    """Run standard commands whose successful result is the conventional zero."""
+    handlers: dict[str, Callable[[], object]] = {
+        "reconcile": lambda: reconcile(do_commit=args.commit, push=args.push),
+        "checkpoint": lambda: cmd_checkpoint(args),
+        "rollback": lambda: cmd_rollback(args),
+        "render-status": lambda: cmd_render_status(check=args.check),
+        "migrate": lambda: cmd_migrate(args),
+    }
+    handler = handlers.get(args.cmd)
+    if handler is None:
+        return False
+    handler()
+    return True
+
+
+def dispatch_returning_command(args: argparse.Namespace) -> int | None:
+    """Dispatch standard commands with meaningful non-uniform result values."""
+    if args.cmd == "roles":
         return dispatch_roles_command(args)
-    elif args.cmd in ("snapshot", "board", "metrics", "preflight"):
+    if args.cmd in ("snapshot", "board", "metrics", "preflight"):
         return dispatch_read_only_command(args)
-    elif args.cmd == "checkpoint":
-        cmd_checkpoint(args)
-    elif args.cmd == "rollback":
-        cmd_rollback(args)
-    elif args.cmd == "doctor":
+    if args.cmd == "retry-circuit":
+        return dispatch_retry_circuit(args)
+    if args.cmd == "doctor":
         return cmd_doctor(live=args.live)
-    elif args.cmd == "render-status":
-        cmd_render_status(check=args.check)
-    elif args.cmd in (
+    if args.cmd == "upgrade":
+        return cmd_upgrade(args)
+    return None
+
+
+def dispatch_bound_standard_command(args: argparse.Namespace) -> int:
+    """Dispatch every non-fast command after permanent project binding."""
+    result = dispatch_returning_command(args)
+    if result is not None:
+        return result
+    if args.cmd in (
         *LIFECYCLE_MUTATION_COMMANDS,
         "gate",
     ):
         dispatch_lifecycle_mutation(args)
-    elif args.cmd == "run":
+        return 0
+    if args.cmd == "run":
         if args.command and args.command[0] == "--":
             args.command = args.command[1:]
         return cmd_run(args)
-    elif args.cmd == "migrate":
-        cmd_migrate(args)
-    elif args.cmd == "upgrade":
-        return cmd_upgrade(args)
+    if dispatch_side_effect_command(args):
+        return 0
     return 0
 
 
@@ -4930,6 +4927,7 @@ def main() -> int:
     item.add_argument("--note", required=True)
     change_drift.add_command_parser(commands)
     assumption_revalidation.add_command_parser(commands)
+    retry_circuit.add_command_parser(commands)
     item = commands.add_parser("gate")
     item.add_argument("task")
     item.add_argument("--expected-revision", type=int, required=True)
@@ -4962,6 +4960,7 @@ def main() -> int:
     item.add_argument("task")
     item.add_argument("--owner", required=True)
     item.add_argument("--timeout-seconds", type=float, default=COMMAND_TIMEOUT_SECONDS)
+    item.add_argument("--retry-window", type=int, default=retry_circuit.DEFAULT_WINDOW)
     item.add_argument("--command-class", choices=sorted(execution_envelope.COMMAND_CLASSES))
     item.add_argument("--scope-path", action="append", default=[])
     item.add_argument("command", nargs=argparse.REMAINDER)

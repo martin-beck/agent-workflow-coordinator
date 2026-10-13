@@ -35,6 +35,9 @@ and does not depend on a package registry, network fetch, submodule, or upstream
 - One owner can hold one active task; a task, branch and worktree have one active owner.
 - Pre-commit failures restore task and generated-view files.
 - Lock, Git/GitHub and wrapped-command waits are bounded and classified.
+- Failed wrapped commands are tracked by a normalized digest-only retry identity. After a
+  configurable bounded window (three failures by default) with no durable progress, the exact
+  command is held until a checkpoint, changed approach, or explicit retry exception is recorded.
 - Wrapped commands require runtime configuration before execution and fsync a privacy-safe result
   journal before task recording or live reconciliation.
 - Keep UUID privacy checks active except in required identity and contract files.
@@ -112,6 +115,9 @@ tools/handoffctl snapshot
 tools/handoffctl claim AR-0001 --owner worker-unique --lease-minutes 120
 tools/handoffctl run --owner worker-unique --command-class source-write --scope-path tools \
   AR-0001 -- command arg
+tools/handoffctl retry-circuit status AR-0001
+tools/handoffctl retry-circuit changed-approach AR-0001 --owner worker-unique \
+  --expected-revision 5 --attempt sha256:... --reason "Use isolated reproduction"
 tools/handoffctl update AR-0001 --owner worker-unique --expected-revision 2 \
   --note "Verified result and next action"
 tools/handoffctl accept AR-0001 --owner worker-unique --expected-revision 3 \
@@ -152,7 +158,7 @@ Install the pinned quality environment and run the downstream-compatible complex
 
 ```sh
 uv sync --locked --only-group quality
-uv run lizard -l python --CCN 14 tools/handoffctl.py tools/assumption_revalidation.py
+uv run lizard -l python --CCN 14 tools/handoffctl.py tools/assumption_revalidation.py tools/retry_circuit.py
 ```
 
 CI runs the same CCN 14 budget with formatting, lint, strict typing, coverage, schemas, vendoring

@@ -138,6 +138,29 @@ dependency and observation, and preserve a concrete next action. A moving
 `main` ref is an optimistic-concurrency signal, not such a dependency. The
 exact remote-head check remains mandatory when publishing a protected ref or
 release; it does not authorize pausing unrelated development work.
+
+### Retry circuit breaker
+
+`handoffctl run` records a privacy-safe normalized identity for each non-zero
+wrapped-command outcome. The identity contains hashes and declared command class/scope only;
+it does not retain argv, output, paths, or credentials. Three unchanged failures are permitted
+by default (`--retry-window` may select a bounded value from 3 through 16). At the threshold,
+the same identity and unchanged durable-progress fingerprint are held before the command starts.
+
+Inspect the durable state with `handoffctl retry-circuit status TASK`. A held command is reopened
+only by one owner- and revision-fenced action: `retry-circuit checkpoint` after a recorded task
+checkpoint, `retry-circuit changed-approach` with a concise reason, or `retry-circuit
+retry-exception` with a concise reason. These are local operational records, not review,
+authentication, signature, or external-service gates. A checkpoint/change-drift/acceptance update
+also changes the progress fingerprint and permits a fresh bounded attempt series without erasing
+the prior hold.
+
+Only unbound runs use retry launch slots. A slot is revision-fenced, carries a bounded expiry
+derived from the command timeout, and is resolved after the child exits. If a child is interrupted
+or result recording fails, a later unbound launch retires only elapsed slots and retains a concise
+`abandoned` expiry record before admitting a replacement. This avoids permanent capacity loss
+without clearing a live slot or changing bound execution-envelope fence/result/finish ordering.
+
 ## Binding failures
 
 - Profile mismatch: profile and binding UUIDs differ.

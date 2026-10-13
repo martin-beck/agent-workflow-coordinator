@@ -26,6 +26,7 @@
         "HandoffctlObservation",
         "HandoffctlPredicateLedger",
         "HandoffctlAssumptions",
+        "HandoffctlRetryCircuit",
         "HandoffctlLiveness",
         "HandoffctlRecovery"
       ],
@@ -44,6 +45,7 @@
         "HandoffctlObservation",
         "HandoffctlPredicateLedger",
         "HandoffctlAssumptions",
+        "HandoffctlRetryCircuit",
         "HandoffctlSlice-promote",
         "HandoffctlSlice-resume",
         "HandoffctlSlice-unblock",

@@ -3135,7 +3135,7 @@ class HandoffTest(unittest.TestCase):
         ):
             self.assertEqual(0, CORE.cmd_run(args))
             self.assertIn("command argv SHA-256", mutate.call_args.args[0].note)
-            self.assertIsNone(mutate.call_args.args[0].expected_revision)
+            self.assertEqual(1, mutate.call_args.args[0].expected_revision)
             subprocess_run.assert_called_once_with(
                 ["true"], check=False, stdin=subprocess.DEVNULL, timeout=1800.0
             )
@@ -3991,7 +3991,7 @@ class HandoffTest(unittest.TestCase):
             )
         latest = CORE.latest_session(CORE.ROOT, "AR-0001")
         self.assertEqual("run", latest["trigger"])
-        self.assertEqual(3, latest["task_revision"])
+        self.assertEqual(5, latest["task_revision"])
         with (
             patch("builtins.print") as output,
             patch.object(CORE, "validate", return_value=[]),
@@ -4007,7 +4007,7 @@ class HandoffTest(unittest.TestCase):
         empty_note = argparse.Namespace(
             task="AR-0001",
             owner="worker-a",
-            expected_revision=3,
+            expected_revision=5,
             status=None,
             priority=None,
             summary=None,

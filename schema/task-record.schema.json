@@ -135,6 +135,104 @@
             "maxItems": 64,
             "items": {"type": "object"}
         },
+        "retry_circuit": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["schema_version", "attempts", "recoveries", "hold", "reservations", "abandoned"],
+            "properties": {
+                "schema_version": {"const": 1},
+                "attempts": {
+                    "type": "array",
+                    "maxItems": 64,
+                    "items": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": ["identity", "failure", "progress_digest", "task_revision", "recorded_at", "window"],
+                        "properties": {
+                            "identity": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+                            "failure": {"enum": ["EXIT", "SUBPROCESS_TIMEOUT", "RETRYABLE"]},
+                            "progress_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+                            "task_revision": {"type": "integer", "minimum": 1},
+                            "recorded_at": {"type": "string", "minLength": 1},
+                            "window": {"type": "integer", "minimum": 3, "maximum": 16}
+                        }
+                    }
+                },
+                "recoveries": {
+                    "type": "array",
+                    "maxItems": 32,
+                    "items": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": ["identity", "progress_digest", "kind", "reason", "task_revision", "recorded_at", "checkpoint_commit"],
+                        "properties": {
+                            "identity": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+                            "progress_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+                            "kind": {"enum": ["checkpoint", "changed-approach", "retry-exception"]},
+                            "reason": {"type": "string", "minLength": 1, "maxLength": 500, "pattern": "^[^\\n]+$"},
+                            "task_revision": {"type": "integer", "minimum": 1},
+                            "recorded_at": {"type": "string", "minLength": 1},
+                            "checkpoint_commit": {"type": "string", "pattern": "^(|[0-9a-f]{40})$"}
+                        }
+                    }
+                },
+                "hold": {
+                    "anyOf": [
+                        {"type": "null"},
+                        {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "required": ["identity", "attempts", "progress_digest", "held_at", "window"],
+                            "properties": {
+                                "identity": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+                                "attempts": {"type": "integer", "minimum": 3, "maximum": 16},
+                                "progress_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+                                "held_at": {"type": "string", "minLength": 1},
+                                "window": {"type": "integer", "minimum": 3, "maximum": 16}
+                            }
+                        }
+                    ]
+                },
+                "reservations": {
+                    "type": "array",
+                    "maxItems": 16,
+                    "items": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": ["id", "identity", "progress_digest", "window", "task_revision", "reserved_at", "expires_at"],
+                        "properties": {
+                            "id": {"type": "string", "pattern": "^[0-9a-f]{32}$"},
+                            "identity": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+                            "progress_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+                            "window": {"type": "integer", "minimum": 3, "maximum": 16},
+                            "task_revision": {"type": "integer", "minimum": 1},
+                            "reserved_at": {"type": "string", "format": "date-time"},
+                            "expires_at": {"type": "string", "format": "date-time"}
+                        }
+                    }
+                },
+                "abandoned": {
+                    "type": "array",
+                    "maxItems": 64,
+                    "items": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": ["id", "identity", "progress_digest", "window", "task_revision", "reserved_at", "expires_at", "cleaned_at", "cause"],
+                        "properties": {
+                            "id": {"type": "string", "pattern": "^[0-9a-f]{32}$"},
+                            "identity": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+                            "progress_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+                            "window": {"type": "integer", "minimum": 3, "maximum": 16},
+                            "task_revision": {"type": "integer", "minimum": 1},
+                            "reserved_at": {"type": "string", "format": "date-time"},
+                            "expires_at": {"type": "string", "format": "date-time"},
+                            "cleaned_at": {"type": "string", "format": "date-time"},
+                            "cause": {"const": "expired"}
+                        }
+                    }
+                }
+            }
+        },
         "parent_task_ref": {
             "anyOf": [{"type": "string", "maxLength": 0}, {"$ref": "#/$defs/taskId"}]
         },
