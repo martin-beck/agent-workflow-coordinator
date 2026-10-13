@@ -1445,6 +1445,9 @@ def value_errors(path: Path, meta: Meta) -> list[str]:
         if not isinstance(meta.get(name), str) or not meta.get(name)
     )
     errors.extend(short_title_errors(path, task_id, meta.get("short_title")))
+    worktree_key = meta.get("worktree_key")
+    if worktree_key not in (None, "") and not change_drift.valid_worktree_key(worktree_key):
+        errors.append(f"{task_id}: invalid worktree_key")
     errors.extend(f"{task_id}: {error}" for error in gate_errors(meta.get("oracle_gate")))
     errors.extend(execution_metadata_errors(task_id, meta))
     return errors
@@ -2757,8 +2760,9 @@ def valid_binding_branch(value: object) -> bool:
 
 def valid_binding_worktree(value: object) -> bool:
     """Accept one bounded worktree basename below the configured projects root."""
-    if not isinstance(value, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", value):
+    if not change_drift.valid_worktree_key(value):
         return False
+    value = cast(str, value)
     if value in {".", "..", str(config().get("product_worktree", ""))}:
         return False
     try:

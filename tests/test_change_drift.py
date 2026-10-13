@@ -661,6 +661,21 @@ class ChangeDriftTests(unittest.TestCase):
                     "now",
                 )
 
+    def test_bound_worktree_rejects_traversal_absolute_and_symlink_escape(self) -> None:
+        projects_root = self.root / "projects"
+        projects_root.mkdir()
+        (projects_root / "safe").mkdir()
+        outside = self.root / "outside"
+        outside.mkdir()
+        (projects_root / "link").symlink_to(outside, target_is_directory=True)
+        self.assertEqual(
+            projects_root / "safe",
+            change_drift.bound_worktree({"worktree_key": "safe"}, projects_root),
+        )
+        for key in ("../escape", "/outside/escape", "nested/worktree", "link", ""):
+            with self.subTest(key=key), self.assertRaisesRegex(RuntimeError, "bound worktree"):
+                change_drift.bound_worktree({"worktree_key": key}, projects_root)
+
     def _rehash(self, record: change_drift.Meta) -> None:
         record["digest"] = change_drift.digest(
             {

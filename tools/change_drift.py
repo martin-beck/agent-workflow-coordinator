@@ -10,7 +10,7 @@ import json
 import re
 import subprocess
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 type Meta = dict[str, Any]
 
@@ -20,6 +20,7 @@ TASK = re.compile(r"^AR-[0-9]{4}$")
 DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
 KINDS = frozenset({"baseline", "delta", "explain", "rescope"})
 CLASSIFICATIONS = frozenset({"in_scope", "out_of_scope"})
+WORKTREE_KEY = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 
 
 def canonical(value: object) -> bytes:
@@ -39,6 +40,11 @@ def safe_path(value: object) -> bool:
         and not Path(value).is_absolute()
         and all(part not in {"", ".", ".."} for part in Path(value).parts)
     )
+
+
+def valid_worktree_key(value: object) -> bool:
+    """Accept one bounded basename suitable for a projects-root child."""
+    return isinstance(value, str) and bool(WORKTREE_KEY.fullmatch(value))
 
 
 def normalize_scope(values: list[str]) -> list[str]:
@@ -631,9 +637,14 @@ def next_record(
 def bound_worktree(meta: Meta, projects_root: Path) -> Path:
     """Resolve the task's declared worktree without accepting arbitrary paths."""
     key = meta.get("worktree_key")
-    if not isinstance(key, str) or not key:
+    if not valid_worktree_key(key):
         raise RuntimeError("change-drift requires a bound worktree")
-    return projects_root.resolve() / key
+    key = cast(str, key)
+    root = projects_root.resolve()
+    worktree = (root / key).resolve()
+    if not worktree.is_relative_to(root) or worktree.parent != root:
+        raise RuntimeError("change-drift bound worktree escapes projects root")
+    return worktree
 
 
 def apply(args: argparse.Namespace, meta: Meta, projects_root: Path, timestamp: str) -> str:

@@ -339,7 +339,15 @@ class BindSpecTests(unittest.TestCase):
         self.assertTrue(core.valid_binding_worktree("worker-one"))
         self.assertFalse(core.valid_binding_worktree(None))
         self.assertFalse(core.valid_binding_worktree("product"))
+        self.assertFalse(core.valid_binding_worktree("../escape"))
+        self.assertFalse(core.valid_binding_worktree("/outside/escape"))
+        self.assertFalse(core.valid_binding_worktree("nested/worker"))
         meta = core.locate("AR-0001")[1]
+        invalid_metadata = {**meta, "worktree_key": "../escape"}
+        self.assertIn(
+            "AR-0001: invalid worktree_key",
+            core.value_errors(core.TASKS / "AR-0001-test.md", invalid_metadata),
+        )
         conflict = {
             **meta,
             "id": "AR-0002",
