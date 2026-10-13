@@ -3130,6 +3130,10 @@ class HandoffTest(unittest.TestCase):
         CORE.CONFIG.write_text("{}")
         with (
             patch.object(CORE.subprocess, "run", return_value=completed) as subprocess_run,
+            # This isolated legacy fixture deliberately has no opted-in policy.
+            # The command mock is process-wide, so declare that condition rather
+            # than allowing it to forge the policy's Git provenance probes.
+            patch.object(CORE.al, "policy", return_value=None),
             patch.object(CORE, "reconcile"),
             patch.object(CORE, "mutate") as mutate,
         ):
@@ -3151,6 +3155,7 @@ class HandoffTest(unittest.TestCase):
                 "run",
                 side_effect=subprocess.TimeoutExpired(["slow"], 0.1),
             ),
+            patch.object(CORE.al, "policy", return_value=None),
             patch.object(CORE, "reconcile"),
             patch.object(CORE, "mutate") as mutate,
         ):
@@ -3158,6 +3163,7 @@ class HandoffTest(unittest.TestCase):
             self.assertIn("classification=SUBPROCESS_TIMEOUT", mutate.call_args.args[0].note)
         with (
             patch.object(CORE.subprocess, "run", return_value=completed),
+            patch.object(CORE.al, "policy", return_value=None),
             patch.object(
                 CORE,
                 "reconcile",
@@ -3935,6 +3941,9 @@ class HandoffTest(unittest.TestCase):
         completed = subprocess.CompletedProcess(["true"], 0, stdout="", stderr="")
         with (
             patch.object(CORE.subprocess, "run", return_value=completed),
+            # Keep this legacy journal fixture explicitly outside the opt-in
+            # autonomy-policy contract while its wrapped command is mocked.
+            patch.object(CORE.al, "policy", return_value=None),
             patch.object(CORE, "mutate"),
             patch.object(CORE, "reconcile", side_effect=RuntimeError("HTTP 502")),
             self.assertRaisesRegex(
@@ -3980,6 +3989,7 @@ class HandoffTest(unittest.TestCase):
             patch.object(
                 CORE.subprocess, "run", return_value=subprocess.CompletedProcess(["true"], 0)
             ),
+            patch.object(CORE.al, "policy", return_value=None),
             patch.object(CORE, "commit", return_value=True),
             patch.object(CORE, "reconcile", return_value=True),
         ):

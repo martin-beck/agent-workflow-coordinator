@@ -143,6 +143,24 @@ class AutonomyLimitsTests(unittest.TestCase):
             with self.assertRaisesRegex(autonomy_limits.PolicyError, "tracked and unchanged"):
                 autonomy_limits.policy(root)
 
+    def test_missing_policy_is_opt_in_absent_but_tracked_deletion_fails_closed(self) -> None:
+        """An absent opt-in policy differs from deleting a tracked policy."""
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            git("init", "-q", str(root))
+            git("-C", str(root), "config", "user.email", "test@example.invalid")
+            git("-C", str(root), "config", "user.name", "Test")
+            git("-C", str(root), "commit", "--allow-empty", "-qm", "empty")
+            self.assertIsNone(autonomy_limits.policy(root))
+
+            path = root / autonomy_limits.POLICY_NAME
+            path.write_text(json.dumps({"schema_version": 1, "max_commands": 2}) + "\n")
+            git("-C", str(root), "add", path.name)
+            git("-C", str(root), "commit", "-qm", "policy")
+            path.unlink()
+            with self.assertRaisesRegex(autonomy_limits.PolicyError, "tracked and unchanged"):
+                autonomy_limits.policy(root)
+
 
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()
