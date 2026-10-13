@@ -27,10 +27,11 @@ Init ==
 Fail ==
     /\ ~held
     /\ attempts' = attempts + 1
-    /\ held' = attempts + 1 >= MaxAttempts
+    /\ held' = ((attempts + 1) >= MaxAttempts)
     /\ UNCHANGED <<progress, recoveryCount>>
 
 Progress ==
+    /\ progress < MaxAttempts
     /\ progress' = progress + 1
     /\ attempts' = 0
     /\ held' = FALSE
@@ -38,11 +39,13 @@ Progress ==
 
 Recover ==
     /\ held
+    /\ recoveryCount < MaxAttempts
+    /\ attempts' = 0
     /\ held' = FALSE
     /\ recoveryCount' = recoveryCount + 1
-    /\ UNCHANGED <<attempts, progress>>
+    /\ UNCHANGED progress
 
-Next == Fail \/ Progress \/ Recover
+Next == Fail \/ Progress \/ Recover \/ UNCHANGED vars
 
 Spec == Init /\ [][Next]_vars
 

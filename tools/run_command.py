@@ -12,16 +12,15 @@ def cmd_run(runtime: Any, args: argparse.Namespace) -> int:
     """Execute one fenced command, then durably record its result and retry state."""
     if not args.command:
         raise RuntimeError("missing command")
-    with runtime.task_execution_locked(args.task, exclusive=False, phase="task_run"):
-        (
-            policy,
-            command_hash,
-            timeout,
-            timed_out,
-            returncode,
-            execution_id,
-            execution_revision,
-        ) = runtime._cmd_run_fenced(args)
+    (
+        policy,
+        command_hash,
+        timeout,
+        timed_out,
+        returncode,
+        execution_id,
+        execution_revision,
+    ) = runtime._cmd_run_fenced(args)
     if execution_id is not None:
         result = argparse.Namespace(
             task=args.task,
@@ -43,20 +42,16 @@ def cmd_run(runtime: Any, args: argparse.Namespace) -> int:
                 "EXECUTION_RESULT_UNKNOWN: command result could not be journaled"
             ) from error
         raise
-    if returncode:
-        _, current, _ = runtime.locate(args.task)
-        args.expected_revision = int(current["task_revision"])
-        args.retry_circuit_identity = runtime.retry_circuit.normalized_identity(
-            command_hash,
-            getattr(args, "command_class", None),
-            list(getattr(args, "scope_path", [])),
-        )
-        args.retry_circuit_failure = (
-            "SUBPROCESS_TIMEOUT" if timed_out else "RETRYABLE" if returncode == 75 else "EXIT"
-        )
-        runtime.mutate(args, "retry-circuit-record", policy)
-        _, current, _ = runtime.locate(args.task)
-        execution_revision = int(current["task_revision"])
+    _, current, _ = runtime.locate(args.task)
+    args.expected_revision = int(current["task_revision"])
+    args.retry_circuit_failure = (
+        ("SUBPROCESS_TIMEOUT" if timed_out else "RETRYABLE" if returncode == 75 else "EXIT")
+        if returncode
+        else None
+    )
+    runtime.mutate(args, "retry-circuit-resolve", policy)
+    _, current, _ = runtime.locate(args.task)
+    execution_revision = int(current["task_revision"])
     note = (
         f"Recorded command timeout; classification=SUBPROCESS_TIMEOUT; "
         f"deadline={timeout:.1f}s; command argv SHA-256 {command_hash}."

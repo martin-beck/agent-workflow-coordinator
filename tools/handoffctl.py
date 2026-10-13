@@ -3145,21 +3145,6 @@ def apply_recover_expired_transition(
     return apply_recover_expired(args, meta, tasks)
 
 
-def apply_retry_circuit_record(args: argparse.Namespace, meta: Meta) -> str:
-    """Record a retry failure only for the task's current active owner."""
-    if meta.get("owner") != args.owner or meta.get("status") != "in_progress":
-        raise RuntimeError("retry circuit record requires the active task owner")
-    if args.expected_revision != meta.get("task_revision"):
-        raise RuntimeError("retry circuit record requires the current task revision")
-    return retry_circuit.record_failure(
-        meta,
-        args.retry_circuit_identity,
-        args.retry_circuit_failure,
-        getattr(args, "retry_window", retry_circuit.DEFAULT_WINDOW),
-        now(),
-    )
-
-
 def lifecycle_transition_handler(
     args: argparse.Namespace,
     kind: str,
@@ -3184,7 +3169,8 @@ def lifecycle_transition_handler(
             ROOT, Path(str(config()["projects_root"])), args, meta, [item for _, item, _ in tasks]
         ),
         "retry-circuit": lambda: retry_circuit.apply(args, meta, now()),
-        "retry-circuit-record": lambda: apply_retry_circuit_record(args, meta),
+        "retry-circuit-reserve": lambda: retry_circuit.apply_reserve(args, meta, now()),
+        "retry-circuit-resolve": lambda: retry_circuit.apply_resolve(args, meta, now()),
         "checkpoint": lambda: apply_checkpoint(args, meta),
         "rollback": lambda: apply_rollback(args, meta),
         "accept": lambda: apply_accept(args, meta, policy),
@@ -4294,6 +4280,18 @@ def _cmd_run_fenced(
         mutate(reserve, "execution-start", policy)
         _, reserved, _ = locate(args.task)
         execution_revision = int(reserved["task_revision"])
+    identity = retry_circuit.normalized_identity(
+        command_hash,
+        getattr(args, "command_class", None),
+        list(getattr(args, "scope_path", [])),
+    )
+    with task_execution_locked(args.task, exclusive=True, phase="retry_circuit_launch"):
+        _, current, _ = locate(args.task)
+        args.expected_revision = int(current["task_revision"])
+        args.retry_circuit_identity = identity
+        args.retry_circuit_reservation = uuid.uuid4().hex
+        args.retry_window = getattr(args, "retry_window", retry_circuit.DEFAULT_WINDOW)
+        mutate(args, "retry-circuit-reserve", policy)
     timed_out = False
     try:
         proc = subprocess.run(

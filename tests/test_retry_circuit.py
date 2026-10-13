@@ -6,9 +6,33 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import fcntl
+import json
+import multiprocessing
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
 from tools import retry_circuit, run_command
+
+
+def reserve_in_independent_process(state_path: str, launches_path: str, identity: str) -> None:
+    """Attempt one atomic pre-launch reservation from an independent process."""
+    path = Path(state_path)
+    with path.open("r+", encoding="utf-8") as handle:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        meta = json.load(handle)
+        try:
+            retry_circuit.reserve(
+                meta, identity, 3, multiprocessing.current_process().name[-1] * 32, "now"
+            )
+        except RuntimeError:
+            return
+        handle.seek(0)
+        json.dump(meta, handle, sort_keys=True)
+        handle.truncate()
+    with Path(launches_path).open("a", encoding="utf-8") as launches:
+        launches.write("launched\n")
 
 
 class FailingRunRuntime:
@@ -30,8 +54,12 @@ class FailingRunRuntime:
         return contextlib.nullcontext()
 
     def _cmd_run_fenced(
-        self, _args: argparse.Namespace
+        self, args: argparse.Namespace
     ) -> tuple[object, str, float, bool, int, None, None]:
+        identity = retry_circuit.normalized_identity("a" * 64, None, [])
+        args.retry_circuit_identity = identity
+        args.retry_circuit_reservation = "b" * 32
+        retry_circuit.reserve(self.meta, identity, 3, args.retry_circuit_reservation, "now")
         return object(), "a" * 64, 1.0, False, 1, None, None
 
     def append_command_result(self, *_args: object) -> None:
@@ -42,12 +70,12 @@ class FailingRunRuntime:
 
     def mutate(self, args: argparse.Namespace, kind: str, _policy: object) -> None:
         self.calls.append(kind)
-        if kind == "retry-circuit-record":
-            retry_circuit.record_failure(
+        if kind == "retry-circuit-resolve":
+            retry_circuit.resolve(
                 self.meta,
                 args.retry_circuit_identity,
+                args.retry_circuit_reservation,
                 args.retry_circuit_failure,
-                args.retry_window,
                 "now",
             )
         self.meta["task_revision"] += 1
@@ -186,6 +214,33 @@ class RetryCircuitTests(unittest.TestCase):
         )
         self.assertEqual(1, result)
         self.assertEqual(
-            ["journal", "retry-circuit-record", "update", "policy", "reconcile"], runtime.calls
+            ["journal", "retry-circuit-resolve", "update", "policy", "reconcile"], runtime.calls
         )
         self.assertEqual(1, len(runtime.meta["retry_circuit"]["attempts"]))
+
+    def test_independent_process_reservations_cap_unbound_launches_at_window(self) -> None:
+        """Concurrent unbound workers may launch no more than the durable retry window."""
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            state_path = root / "state.json"
+            launches_path = root / "launches.txt"
+            state_path.write_text(
+                json.dumps({"task_revision": 1, "owner": "worker", "status": "in_progress"}),
+                encoding="utf-8",
+            )
+            identity = retry_circuit.normalized_identity("a" * 64, None, [])
+            context = multiprocessing.get_context("spawn")
+            workers = [
+                context.Process(
+                    target=reserve_in_independent_process,
+                    args=(str(state_path), str(launches_path), identity),
+                    name=f"reserve-worker-{index}",
+                )
+                for index in range(6)
+            ]
+            for worker in workers:
+                worker.start()
+            for worker in workers:
+                worker.join(timeout=20)
+                self.assertEqual(0, worker.exitcode)
+            self.assertEqual(3, launches_path.read_text(encoding="utf-8").count("launched\n"))

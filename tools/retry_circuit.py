@@ -27,6 +27,7 @@ COMMAND_DIGEST = re.compile(r"^[0-9a-f]{64}$")
 COMMIT = re.compile(r"^[0-9a-f]{40}$")
 FAILURES = frozenset({"EXIT", "SUBPROCESS_TIMEOUT", "RETRYABLE"})
 RECOVERIES = frozenset({"checkpoint", "changed-approach", "retry-exception"})
+RESERVATION = re.compile(r"^[0-9a-f]{32}$")
 
 
 def canonical(value: object) -> bytes:
@@ -89,7 +90,13 @@ def progress_digest(meta: Meta) -> str:
 
 
 def empty() -> Meta:
-    return {"schema_version": SCHEMA_VERSION, "attempts": [], "recoveries": [], "hold": None}
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "attempts": [],
+        "recoveries": [],
+        "hold": None,
+        "reservations": [],
+    }
 
 
 def _reason(value: object) -> str:
@@ -186,12 +193,31 @@ def _validate_hold(hold: object, attempts: list[object]) -> None:
         raise ValueError("retry circuit hold has insufficient attempts")
 
 
-def validate(value: object) -> Meta:
+def _validate_reservation(reservation: object) -> None:
+    if (
+        not isinstance(reservation, dict)
+        or set(reservation)
+        != {"id", "identity", "progress_digest", "window", "task_revision", "reserved_at"}
+        or not RESERVATION.fullmatch(str(reservation.get("id", "")))
+        or not DIGEST.fullmatch(str(reservation.get("identity", "")))
+        or not DIGEST.fullmatch(str(reservation.get("progress_digest", "")))
+        or type(reservation.get("task_revision")) is not int
+        or not isinstance(reservation.get("reserved_at"), str)
+        or not reservation["reserved_at"]
+    ):
+        raise ValueError("retry circuit reservation is invalid")
+    _window(reservation.get("window"))
+
+
+def _validated_collections(
+    value: object,
+) -> tuple[Meta, list[object], list[object], object, list[object]]:
     if not isinstance(value, dict) or set(value) != {
         "schema_version",
         "attempts",
         "recoveries",
         "hold",
+        "reservations",
     }:
         raise ValueError("retry circuit fields are not exact")
     if value.get("schema_version") != SCHEMA_VERSION:
@@ -199,10 +225,20 @@ def validate(value: object) -> Meta:
     attempts = value.get("attempts")
     recoveries = value.get("recoveries")
     hold = value.get("hold")
-    if not isinstance(attempts, list) or not attempts or len(attempts) > MAX_ATTEMPTS:
+    reservations = value.get("reservations")
+    if not isinstance(attempts, list) or len(attempts) > MAX_ATTEMPTS:
         raise ValueError("retry circuit attempts are invalid")
     if not isinstance(recoveries, list) or len(recoveries) > MAX_RECOVERIES:
         raise ValueError("retry circuit recoveries are invalid")
+    if not isinstance(reservations, list) or len(reservations) > MAX_WINDOW:
+        raise ValueError("retry circuit reservations are invalid")
+    if not attempts and not reservations:
+        raise ValueError("retry circuit attempts are invalid")
+    return value, attempts, recoveries, hold, reservations
+
+
+def validate(value: object) -> Meta:
+    value, attempts, recoveries, hold, reservations = _validated_collections(value)
     last_revision = 0
     for attempt in attempts:
         last_revision = _validate_attempt(attempt, last_revision)
@@ -210,6 +246,8 @@ def validate(value: object) -> Meta:
     for recovery in recoveries:
         last_recovery_revision = _validate_recovery(recovery, last_recovery_revision)
     _validate_hold(hold, attempts)
+    for reservation in reservations:
+        _validate_reservation(reservation)
     return value
 
 
@@ -226,7 +264,18 @@ def metadata_error(meta: Meta) -> str | None:
 
 def _state(meta: Meta) -> Meta:
     value = meta.get("retry_circuit")
-    return empty() if value is None else dict(validate(value))
+    if value is None:
+        return empty()
+    if (
+        isinstance(value, dict)
+        and value.get("schema_version") == SCHEMA_VERSION
+        and value.get("attempts") == []
+        and value.get("recoveries") == []
+        and value.get("hold") is None
+        and value.get("reservations") == []
+    ):
+        return dict(value)
+    return dict(validate(value))
 
 
 def admit(meta: Meta, identity: str) -> None:
@@ -290,6 +339,59 @@ def record_failure(
     return result
 
 
+def reserve(meta: Meta, identity: str, window: int, reservation_id: str, recorded_at: str) -> str:
+    """Atomically consume one scoped launch slot before an external command starts."""
+    threshold = _window(window)
+    if (
+        not DIGEST.fullmatch(identity)
+        or not RESERVATION.fullmatch(reservation_id)
+        or not recorded_at
+    ):
+        raise ValueError("retry circuit reservation input is invalid")
+    state = _state(meta)
+    progress = progress_digest(meta)
+    admit(meta, identity)
+    used = sum(
+        item["identity"] == identity and item["progress_digest"] == progress
+        for item in state["attempts"] + state["reservations"]
+    )
+    if used >= threshold:
+        raise RuntimeError("RETRY_CIRCUIT_OPEN: retry window is fully reserved")
+    state["reservations"] = [
+        *state["reservations"],
+        {
+            "id": reservation_id,
+            "identity": identity,
+            "progress_digest": progress,
+            "window": threshold,
+            "task_revision": int(meta["task_revision"]),
+            "reserved_at": recorded_at,
+        },
+    ]
+    validate(state)
+    meta["retry_circuit"] = state
+    return "Reserved retry circuit launch slot."
+
+
+def resolve(
+    meta: Meta, identity: str, reservation_id: str, failure: str | None, recorded_at: str
+) -> str:
+    """Remove one exact launch slot and turn a failed launch into one attempt."""
+    state = _state(meta)
+    selected = next((item for item in state["reservations"] if item["id"] == reservation_id), None)
+    if selected is None or selected["identity"] != identity:
+        raise RuntimeError("retry circuit reservation is not current")
+    state["reservations"] = [item for item in state["reservations"] if item["id"] != reservation_id]
+    meta["retry_circuit"] = state
+    if failure is None:
+        if not state["attempts"]:
+            meta.pop("retry_circuit")
+        else:
+            validate(state)
+        return "Released retry circuit launch slot."
+    return record_failure(meta, identity, failure, int(selected["window"]), recorded_at)
+
+
 def recover(meta: Meta, identity: str, kind: str, reason: str, recorded_at: str) -> str:
     """Record a deliberate recovery and reopen only the held command identity."""
     if kind not in RECOVERIES or not DIGEST.fullmatch(identity) or not recorded_at:
@@ -339,4 +441,32 @@ def apply(args: argparse.Namespace, meta: Meta, recorded_at: str) -> str:
         raise RuntimeError("retry circuit recovery requires the current task revision")
     return recover(
         meta, str(args.attempt), str(args.retry_circuit_action), str(args.reason), recorded_at
+    )
+
+
+def apply_reserve(args: argparse.Namespace, meta: Meta, recorded_at: str) -> str:
+    if meta.get("owner") != args.owner or meta.get("status") != "in_progress":
+        raise RuntimeError("retry circuit reservation requires the active task owner")
+    if args.expected_revision != meta.get("task_revision"):
+        raise RuntimeError("retry circuit reservation requires the current task revision")
+    return reserve(
+        meta,
+        args.retry_circuit_identity,
+        args.retry_window,
+        args.retry_circuit_reservation,
+        recorded_at,
+    )
+
+
+def apply_resolve(args: argparse.Namespace, meta: Meta, recorded_at: str) -> str:
+    if meta.get("owner") != args.owner or meta.get("status") != "in_progress":
+        raise RuntimeError("retry circuit resolution requires the active task owner")
+    if args.expected_revision != meta.get("task_revision"):
+        raise RuntimeError("retry circuit resolution requires the current task revision")
+    return resolve(
+        meta,
+        args.retry_circuit_identity,
+        args.retry_circuit_reservation,
+        args.retry_circuit_failure,
+        recorded_at,
     )
