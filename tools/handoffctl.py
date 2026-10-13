@@ -587,20 +587,20 @@ def project_binding() -> Meta:
 
 
 def git_repository_slug(root: Path) -> str:
-    """Read and normalize one checkout's origin identity."""
+    """Normalize a checkout origin."""
     result = run(["git", "-C", str(root), "remote", "get-url", "origin"])
     return repository_slug(result.stdout.strip())
 
 
 def inside(candidate: Path, root: Path) -> bool:
-    """Return whether candidate is root or one of its descendants."""
+    """Inside."""
     candidate = candidate.resolve()
     root = root.resolve()
     return candidate == root or root in candidate.parents
 
 
 def _assert_storage_binding(binding: Meta) -> None:
-    """Check the tracked selector and SQLite-internal identity."""
+    """Check stored identity."""
     selection = backend_selection()
     if not selection.get("legacy") and selection.get("project_id") != binding["project_id"]:
         raise RuntimeError("storage backend does not match coordinator binding")
@@ -2748,7 +2748,7 @@ def apply_bind_spec(args: argparse.Namespace, meta: Meta, policy: EvidencePolicy
 
 
 def valid_binding_branch(value: object) -> bool:
-    """Accept one bounded, non-detached branch accepted by Git itself."""
+    """Validate a branch."""
     if not isinstance(value, str) or len(value) > 128 or value == "DETACHED":
         return False
     try:
@@ -2759,7 +2759,7 @@ def valid_binding_branch(value: object) -> bool:
 
 
 def valid_binding_worktree(value: object) -> bool:
-    """Accept one bounded worktree basename below the configured projects root."""
+    """Validate a direct worktree."""
     if not change_drift.valid_worktree_key(value):
         return False
     value = cast(str, value)
@@ -4064,7 +4064,7 @@ def require_active_owner(task_id: str, owner: str) -> EvidencePolicy:
 
 
 def execution_preflight(args: argparse.Namespace) -> tuple[bool, str, str, float | None]:
-    """Evaluate a bound envelope and return its admission result plus timeout cap."""
+    """Evaluate envelope admission."""
     with locked(exclusive=False, phase="execution_envelope_preflight"):
         _, meta, _ = locate(args.task)
         try:
@@ -4179,7 +4179,7 @@ def invocation_worktree() -> tuple[str, str] | None:
 
 
 def assert_invocation_worktree(meta: Meta) -> None:
-    """Reject product-checkout calls that do not match the active task claim."""
+    """Fence product-checkout calls."""
     observed = invocation_worktree()
     if observed is None:
         return
