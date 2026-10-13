@@ -19,6 +19,7 @@ from tools import (
     resume_card,
     resume_card_runtime,
     retry_circuit,
+    task_spec,
 )
 
 OBSERVED_AT = resume_card.parse_observed_at("2026-10-13T00:00:00Z")
@@ -57,6 +58,53 @@ def task(**changes: object) -> dict[str, object]:
 
 
 class ResumeCardTests(unittest.TestCase):
+    def test_evidence_projection_validates_acceptance_and_predicate_records(self) -> None:
+        digest = "sha256:" + "a" * 64
+        classes = task_spec.EVIDENCE_CLASSES
+        accepted = {
+            "status": "pass",
+            "evidence_class": "mechanical",
+            "evidence_ref": "github:owner/repository/commit",
+            "evidence_digest": digest,
+            "match": "best_effort",
+        }
+        self.assertEqual(accepted, resume_card._acceptance({"spec_acceptance": accepted}, classes))
+        for field, value in (
+            ("status", "pending"),
+            ("evidence_class", "unknown"),
+            ("evidence_ref", "x"),
+            ("evidence_digest", "sha256:bad"),
+            ("match", "exact"),
+        ):
+            with self.subTest(field=field), self.assertRaisesRegex(ValueError, "spec acceptance"):
+                resume_card._acceptance({"spec_acceptance": {**accepted, field: value}}, classes)
+        with self.assertRaisesRegex(ValueError, "spec acceptance"):
+            resume_card._acceptance({"spec_acceptance": {"status": "pass"}}, classes)
+
+        step = {
+            "predicate_id": "full-suite",
+            "status": "pass",
+            "candidate_ref": "github:owner/repository/commit",
+            "candidate_digest": digest,
+            "evidence_class": "mechanical",
+            "evidence_ref": "github:owner/repository/receipt",
+            "evidence_digest": digest,
+            "recorded_task_revision": 1,
+        }
+        ledger = {
+            "candidate_ref": step["candidate_ref"],
+            "candidate_digest": digest,
+            "steps": [step],
+        }
+        self.assertEqual([step], resume_card._predicates({"evidence_ledger": ledger}, classes))
+        with self.assertRaisesRegex(ValueError, "evidence ledger"):
+            resume_card._predicates({"evidence_ledger": {"steps": []}}, classes)
+        with self.assertRaisesRegex(ValueError, "evidence ledger step"):
+            resume_card._predicates(
+                {"evidence_ledger": {**ledger, "steps": [{**step, "recorded_task_revision": 0}]}},
+                classes,
+            )
+
     def test_card_is_stable_and_selects_one_material_assumption_action(self) -> None:
         meta = task()
         record = assumption_revalidation._record(

@@ -231,6 +231,63 @@ class CampaignTests(unittest.TestCase):
         self.assertTrue(any("terminal task has recovery advice" in error for error in errors))
         self.assertTrue(any("observed_at is not a timestamp" in error for error in errors))
 
+    def test_runtime_contract_rejects_malformed_cards_outcomes_and_embedded_times(self) -> None:
+        errors = campaign.projection_contract_errors(
+            {
+                "observed_at": "2026-02-30T00:00:00+00:00",
+                "tasks": [
+                    None,
+                    {
+                        "id": "AR-0001",
+                        "status": "done",
+                        "outcome": None,
+                        "recovery": {"kind": "none"},
+                        "worker": {"claim_expires": "2026-13-99T00:00:00+00:00"},
+                        "attempts": [{"recorded_at": "2026-10-13T00:00:00"}],
+                    },
+                    {
+                        "id": "AR-0002",
+                        "status": "in_progress",
+                        "outcome": {"status": "done"},
+                        "recovery": {"kind": "none"},
+                    },
+                ],
+            }
+        )
+        self.assertTrue(any("observed_at is not a timestamp" in error for error in errors))
+        self.assertIn("campaign card is invalid", errors)
+        self.assertIn("AR-0001: terminal outcome does not match status", errors)
+        self.assertTrue(
+            any("AR-0001 worker claim_expires is not a timestamp" in error for error in errors)
+        )
+        self.assertTrue(
+            any("AR-0001 attempt recorded_at is not a timestamp" in error for error in errors)
+        )
+        self.assertIn("AR-0002: nonterminal task has outcome", errors)
+
+    def test_campaign_helpers_preserve_unfenced_and_invalid_authority_boundaries(self) -> None:
+        unfenced = task("AR-0001", claim_expires="")[1]
+        self.assertEqual(
+            {"owner": "worker-one", "state": "unfenced"}, campaign._worker(unfenced, OBSERVED_AT)
+        )
+        with self.assertRaisesRegex(ValueError, "depends_on is invalid"):
+            campaign._dependencies(task("AR-0001", depends_on="AR-0002")[1], {})
+        with self.assertRaisesRegex(ValueError, "execution reservation is invalid"):
+            campaign._reservation(task("AR-0001", execution_reservation={})[1], OBSERVED_AT)
+
+    def test_command_rejects_an_invalid_projection_before_rendering(self) -> None:
+        malformed = {
+            "observed_at": "2026-10-13T00:00:00+00:00",
+            "tasks": [
+                {"id": "AR-0001", "status": "done", "outcome": None, "recovery": {"kind": "none"}}
+            ],
+        }
+        with (
+            patch.object(campaign, "build", return_value=malformed),
+            self.assertRaisesRegex(ValueError, "campaign projection contract failed"),
+        ):
+            campaign.command([], [], True, OBSERVED_AT)
+
     def test_runtime_is_read_only_and_uses_one_authoritative_snapshot(self) -> None:
         loaded = [session("AR-0001", 3)]
 
