@@ -152,7 +152,7 @@ Install the pinned quality environment and run the downstream-compatible complex
 
 ```sh
 uv sync --locked --only-group quality
-uv run lizard -l python --CCN 14 tools/handoffctl.py
+uv run lizard -l python --CCN 14 tools/handoffctl.py tools/assumption_revalidation.py
 ```
 
 CI runs the same CCN 14 budget with formatting, lint, strict typing, coverage, schemas, vendoring

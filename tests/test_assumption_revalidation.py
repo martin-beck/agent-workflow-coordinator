@@ -13,6 +13,8 @@ from unittest.mock import patch
 
 from tools import assumption_revalidation, change_drift, handoffctl
 
+REPOSITORY_ROOT = Path(__file__).resolve().parent.parent
+
 
 def git(root: Path, *arguments: str) -> None:
     subprocess.run(  # noqa: S603
@@ -154,6 +156,13 @@ class AssumptionRevalidationTests(unittest.TestCase):
                     "declare", "unsafe", kind="observation", reference="../escape", material=True
                 )
             )
+
+    def test_assumption_validator_is_covered_by_the_enforced_complexity_budget(self) -> None:
+        workflow = (REPOSITORY_ROOT / ".github/workflows/verify.yml").read_text(encoding="utf-8")
+        self.assertIn(
+            "lizard -l python --CCN 14 tools/handoffctl.py tools/assumption_revalidation.py",
+            workflow,
+        )
 
     def test_followups_are_fenced_and_cannot_change_policy_or_revalidate_same_binding(self) -> None:
         self.apply(self.args("declare", "base", kind="base", material=True))

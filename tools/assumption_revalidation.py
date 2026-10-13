@@ -34,6 +34,20 @@ ASSUMPTION_ID = re.compile(r"^[a-z][a-z0-9-]{0,63}$")
 KINDS = frozenset({"base", "dependency", "observation"})
 ACTIONS = frozenset({"declare", "revalidate", "dispose"})
 DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
+RECORD_FIELDS = frozenset(
+    {
+        "schema_version",
+        "action",
+        "id",
+        "kind",
+        "material",
+        "binding",
+        "task_revision",
+        "previous_digest",
+        "reason",
+        "digest",
+    }
+)
 
 
 def _canonical(value: object) -> bytes:
@@ -178,42 +192,46 @@ def _validate_binding(kind: str, binding: object) -> None:
         raise ValueError("assumption kind is invalid")
 
 
-def _validate(record: object) -> Meta:
-    if not isinstance(record, dict) or set(record) != {
-        "schema_version",
-        "action",
-        "id",
-        "kind",
-        "material",
-        "binding",
-        "task_revision",
-        "previous_digest",
-        "reason",
-        "digest",
-    }:
+def _record_fields(record: object) -> Meta:
+    if not isinstance(record, dict) or set(record) != RECORD_FIELDS:
         raise ValueError("assumption record fields are not exact")
+    return record
+
+
+def _validate_identity(record: Meta) -> None:
     identity = {key: record[key] for key in record if key != "digest"}
-    if (
-        record.get("schema_version") != SCHEMA_VERSION
-        or record.get("action") not in ACTIONS
-        or not ASSUMPTION_ID.fullmatch(str(record.get("id", "")))
-        or record.get("kind") not in KINDS
-        or type(record.get("material")) is not bool
-        or type(record.get("task_revision")) is not int
-        or int(record["task_revision"]) < 1
-        or not isinstance(record.get("previous_digest"), str)
-        or (record["previous_digest"] and not DIGEST.fullmatch(record["previous_digest"]))
-        or not isinstance(record.get("reason"), str)
-        or len(record["reason"]) > 512
-        or "\n" in record["reason"]
-        or record.get("digest") != _digest(identity)
-    ):
+    predecessor = record["previous_digest"]
+    valid = all(
+        (
+            record.get("schema_version") == SCHEMA_VERSION,
+            record.get("action") in ACTIONS,
+            ASSUMPTION_ID.fullmatch(str(record.get("id", ""))) is not None,
+            record.get("kind") in KINDS,
+            type(record.get("material")) is bool,
+            type(record.get("task_revision")) is int and int(record["task_revision"]) >= 1,
+            isinstance(predecessor, str),
+            isinstance(record.get("reason"), str),
+            len(str(record["reason"])) <= 512,
+            "\n" not in str(record["reason"]),
+            record.get("digest") == _digest(identity),
+        )
+    )
+    if not valid or (predecessor and not DIGEST.fullmatch(str(predecessor))):
         raise ValueError("assumption record identity is invalid")
+
+
+def _validate_disposition(record: Meta) -> None:
     if record["action"] == "dispose":
         if not record["reason"].strip():
             raise ValueError("assumption disposition reason is invalid")
     elif record["reason"]:
         raise ValueError("assumption non-disposition reason is invalid")
+
+
+def _validate(record: object) -> Meta:
+    record = _record_fields(record)
+    _validate_identity(record)
+    _validate_disposition(record)
     _validate_binding(str(record["kind"]), record["binding"])
     return record
 

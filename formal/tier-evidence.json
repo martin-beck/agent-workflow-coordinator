@@ -57,6 +57,8 @@
         "HandoffctlSlice-bind-envelope",
         "HandoffctlSlice-recover_expired",
         "HandoffctlSlice-recover_execution",
+        "HandoffctlSlice-change-drift",
+        "HandoffctlSlice-assumption",
         "HandoffctlSlice-release_planned",
         "HandoffctlSlice-release_open",
         "HandoffctlSlice-release_blocked",

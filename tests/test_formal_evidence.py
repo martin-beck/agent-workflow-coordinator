@@ -906,6 +906,8 @@ class FormalEvidenceTests(unittest.TestCase):
             "bind-envelope",
             "recover_expired",
             "recover_execution",
+            "change-drift",
+            "assumption",
             "release_planned",
             "release_open",
             "release_blocked",
@@ -923,7 +925,7 @@ class FormalEvidenceTests(unittest.TestCase):
             if name != "model_count":
                 self.assertEqual(value, bounds[name])
         self.assertEqual(10, model_bounds["model_count"])
-        self.assertEqual(17, len(slices))
+        self.assertEqual(19, len(slices))
         for name in (
             "tlc_workers",
             "jvm_heap_mb",
@@ -947,7 +949,7 @@ class FormalEvidenceTests(unittest.TestCase):
         module_name = slices["module_name"]
         base = (FORMAL_ROOT / "Handoffctl.cfg").read_text(encoding="utf-8")
         source = (FORMAL_ROOT / "Handoffctl.tla").read_text(encoding="utf-8")
-        self.assertEqual(18, len(operations))
+        self.assertEqual(19, len(operations))
         self.assertEqual(len(operations), len(set(operations)))
         for operation in operations:
             rendered = render_source(source, operation)
@@ -996,7 +998,7 @@ class FormalEvidenceTests(unittest.TestCase):
             manifest["profiles"]["portable-smoke"]["models"],
             manifest["profiles"]["full-exhaustive"]["models"],
         )
-        self.assertEqual(27, len(manifest["profiles"]["full-exhaustive"]["models"]))
+        self.assertEqual(29, len(manifest["profiles"]["full-exhaustive"]["models"]))
         self.assertEqual(11, len(manifest["profiles"]["pr-publication"]["models"]))
         self.assertEqual(300, manifest["profiles"]["pr-fast"]["aggregate_budget_seconds"])
         self.assertEqual(900, manifest["profiles"]["pr-publication"]["aggregate_budget_seconds"])
