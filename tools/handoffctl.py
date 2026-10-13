@@ -3610,7 +3610,7 @@ def role_doctor_errors() -> list[str]:
     if __package__:
         from .roles import role_admission_errors
     else:  # pragma: no cover - direct script execution
-        from roles import role_admission_errors  # type: ignore[no-redef]
+        from roles import role_admission_errors
     owners = [
         (str(meta["owner"]), "implementer")
         for _path, meta, _body in all_tasks()
