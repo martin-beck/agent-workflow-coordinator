@@ -97,6 +97,7 @@ SOURCE_FILES: tuple[tuple[str, str], ...] = (
     ("tools/formal_receipt.py", "tools/formal_receipt.py"),
     ("tools/vendor.py", "tools/handoffctl_vendor.py"),
     ("tests/test_handoffctl.py", "tests/test_handoffctl.py"),
+    ("tests/test_handoffctl_retry_recovery.py", "tests/test_handoffctl_retry_recovery.py"),
     ("tests/test_assumption_revalidation.py", "tests/test_assumption_revalidation.py"),
     ("tests/test_retry_circuit.py", "tests/test_retry_circuit.py"),
     ("tests/test_predicate_evidence_ledger.py", "tests/test_predicate_evidence_ledger.py"),

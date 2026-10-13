@@ -1347,7 +1347,7 @@ def privacy_errors() -> list[str]:
         ):
             continue
         relative = path.relative_to(ROOT)
-        if path.stat().st_size > 200000 and relative != Path("tests/test_handoffctl.py"):
+        if path.stat().st_size > 200000:
             errors.append(f"{relative}: state file exceeds 200 KiB")
         try:
             text = path.read_text()
