@@ -11,6 +11,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+import jsonschema
+
 from tools import campaign, campaign_runtime, handoffctl, issue_series_service, resume_card_runtime
 from tools.session_records import build_session_record, validate_session_record
 
@@ -110,6 +112,9 @@ class CampaignTests(unittest.TestCase):
             basic_task_errors=lambda *_: [],
             validate_session_record=validate_session_record,
             private_text_errors=handoffctl.private_text_errors,
+            graph_errors=handoffctl.graph_errors,
+            hierarchy_errors=handoffctl.hierarchy_errors,
+            supersession_errors=handoffctl.supersession_errors,
             policy=None,
         )
         self.assertTrue(any("possible credential" in error for error in errors))
@@ -119,6 +124,9 @@ class CampaignTests(unittest.TestCase):
             basic_task_errors=lambda *_: [],
             validate_session_record=validate_session_record,
             private_text_errors=handoffctl.private_text_errors,
+            graph_errors=handoffctl.graph_errors,
+            hierarchy_errors=handoffctl.hierarchy_errors,
+            supersession_errors=handoffctl.supersession_errors,
             policy=None,
         )
         self.assertIn("session observation is ahead of AR-0001 authority", errors)
@@ -128,9 +136,70 @@ class CampaignTests(unittest.TestCase):
             basic_task_errors=lambda *_: [],
             validate_session_record=validate_session_record,
             private_text_errors=handoffctl.private_text_errors,
+            graph_errors=handoffctl.graph_errors,
+            hierarchy_errors=handoffctl.hierarchy_errors,
+            supersession_errors=handoffctl.supersession_errors,
             policy=None,
         )
         self.assertIn("session observation status differs from AR-0001 authority", errors)
+
+    def test_cancelled_task_has_terminal_outcome_without_recovery_advice(self) -> None:
+        cancelled = task(
+            "AR-0001",
+            status="cancelled",
+            claim_expires="2026-10-12T23:59:59+00:00",
+        )
+        card = campaign.build([cancelled], [session("AR-0001", 2)], OBSERVED_AT)["tasks"][0]
+        self.assertEqual({"status": "cancelled", "acceptance": "absent"}, card["outcome"])
+        self.assertEqual({"kind": "none"}, card["recovery"])
+
+    def test_projection_rejects_global_graph_hierarchy_and_supersession_errors(self) -> None:
+        first = task("AR-0001", depends_on=["AR-0002"])
+        second = task("AR-0002", depends_on=["AR-0001"])
+        errors = campaign.projection_errors(
+            [first, second],
+            [],
+            basic_task_errors=handoffctl.basic_task_errors,
+            validate_session_record=validate_session_record,
+            private_text_errors=handoffctl.private_text_errors,
+            graph_errors=handoffctl.graph_errors,
+            hierarchy_errors=handoffctl.hierarchy_errors,
+            supersession_errors=handoffctl.supersession_errors,
+            policy=None,
+        )
+        self.assertTrue(any("dependency cycle" in error for error in errors))
+        missing = task("AR-0003", depends_on=["AR-9999"])
+        errors = campaign.projection_errors(
+            [missing],
+            [],
+            basic_task_errors=handoffctl.basic_task_errors,
+            validate_session_record=validate_session_record,
+            private_text_errors=handoffctl.private_text_errors,
+            graph_errors=handoffctl.graph_errors,
+            hierarchy_errors=handoffctl.hierarchy_errors,
+            supersession_errors=handoffctl.supersession_errors,
+            policy=None,
+        )
+        self.assertTrue(any("missing dependency" in error for error in errors))
+
+    def test_schema_validates_rendered_json_and_rejects_incomplete_card(self) -> None:
+        schema = json.loads(
+            Path("schema/campaign-projection.schema.json").read_text(encoding="utf-8")
+        )
+        validator = jsonschema.Draft202012Validator(schema)
+        rendered = json.loads(
+            campaign.command([task("AR-0001")], [session("AR-0001", 3)], True, OBSERVED_AT)
+        )
+        validator.validate(rendered)
+        with self.assertRaises(jsonschema.ValidationError):
+            validator.validate(
+                {
+                    "schema_version": 1,
+                    "observed_at": "2026-10-13T00:00:00+00:00",
+                    "tasks": [{}],
+                    "summary": {"tasks": 1, "sessions": 0, "by_status": {}, "recovery_required": 0},
+                }
+            )
 
     def test_runtime_is_read_only_and_uses_one_authoritative_snapshot(self) -> None:
         loaded = [session("AR-0001", 3)]
@@ -150,6 +219,9 @@ class CampaignTests(unittest.TestCase):
             basic_task_errors = staticmethod(lambda *_: [])
             validate_session_record = staticmethod(validate_session_record)
             private_text_errors = staticmethod(handoffctl.private_text_errors)
+            graph_errors = staticmethod(handoffctl.graph_errors)
+            hierarchy_errors = staticmethod(handoffctl.hierarchy_errors)
+            supersession_errors = staticmethod(handoffctl.supersession_errors)
             coordinator_lock_path = staticmethod(lambda: Path("/state/.runtime/state.lock"))
 
         stream = io.StringIO()

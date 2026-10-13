@@ -21,7 +21,7 @@ type Meta = dict[str, Any]
 type Task = tuple[Path, Meta, str]
 
 SCHEMA_VERSION = 1
-TERMINAL = frozenset({"done", "superseded"})
+TERMINAL = frozenset({"done", "cancelled", "superseded"})
 MAX_PROJECTED_BYTES = 200_000
 
 
@@ -121,9 +121,12 @@ def projection_errors(
     basic_task_errors: Any,
     validate_session_record: Any,
     private_text_errors: Any,
+    graph_errors: Any,
+    hierarchy_errors: Any,
+    supersession_errors: Any,
     policy: Any,
 ) -> list[str]:
-    """Reject malformed, stale-forward, oversized, or private observations."""
+    """Reject invalid authority before exposing any campaign projection."""
     errors, revisions = _task_projection_errors(
         tasks, basic_task_errors, private_text_errors, policy
     )
@@ -132,6 +135,12 @@ def projection_errors(
             tasks, sessions, revisions, validate_session_record, private_text_errors
         )
     )
+    # Campaign is a read-only authority view, not an alternative graph model.
+    # Reuse durable graph checks so incomplete or cyclic authority cannot be
+    # rendered as actionable worker information.
+    errors.extend(graph_errors(tasks))
+    errors.extend(hierarchy_errors(tasks))
+    errors.extend(supersession_errors(tasks))
     return sorted(set(errors))
 
 
@@ -227,6 +236,8 @@ def _attempts(task: Meta, sessions: list[Meta]) -> tuple[list[Meta], Meta]:
 
 
 def _recovery(task: Meta, worker: Meta, sessions: Meta, observed_at: dt.datetime) -> Meta:
+    if task.get("status") in TERMINAL:
+        return {"kind": "none"}
     state, _ = _reservation(task, observed_at)
     if state == "expired":
         return {"kind": "recover-execution-reservation"}

@@ -26,6 +26,9 @@ def dispatch(args: Any, coordinator: Any) -> int:
             basic_task_errors=coordinator.basic_task_errors,
             validate_session_record=coordinator.validate_session_record,
             private_text_errors=coordinator.private_text_errors,
+            graph_errors=coordinator.graph_errors,
+            hierarchy_errors=coordinator.hierarchy_errors,
+            supersession_errors=coordinator.supersession_errors,
             policy=policy,
         )
         if errors:
