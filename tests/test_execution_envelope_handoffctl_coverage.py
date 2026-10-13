@@ -159,6 +159,7 @@ class ExecutionEnvelopeHandoffctlCoverageTest(unittest.TestCase):
             patch.object(CORE, "sandboxed_envelope_command", return_value=["would-not-run"]),
             patch.object(CORE, "locate", return_value=(self.root / "task", current, "")),
             patch.object(CORE, "mutate", side_effect=RuntimeError("reservation rejected")),
+            patch.object(CORE.al, "policy", return_value=None),
             patch.object(CORE.subprocess, "run") as launched,
             self.assertRaisesRegex(RuntimeError, "reservation rejected"),
         ):
