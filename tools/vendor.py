@@ -24,6 +24,7 @@ SOURCE_FILES: tuple[tuple[str, str], ...] = (
     ("tools/change_drift.py", "tools/change_drift.py"),
     ("tools/assumption_revalidation.py", "tools/assumption_revalidation.py"),
     ("tools/resume_card.py", "tools/resume_card.py"),
+    ("tools/resume_card_runtime.py", "tools/resume_card_runtime.py"),
     ("tools/command_results.py", "tools/command_results.py"),
     ("tools/retry_circuit.py", "tools/retry_circuit.py"),
     ("tools/run_command.py", "tools/run_command.py"),

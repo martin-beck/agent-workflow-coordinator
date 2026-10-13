@@ -28,10 +28,32 @@ else:  # pragma: no cover - direct handoffctl execution
 
 type Meta = dict[str, Any]
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 MAX_TITLE_BYTES = 512
 MAX_SUMMARY_BYTES = 4000
 MAX_NEXT_ACTION_BYTES = 1024
+
+
+def parse_observed_at(value: str) -> dt.datetime:
+    """Parse one explicit, timezone-aware observation instant for a card."""
+    try:
+        parsed = dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("observed-at must be ISO-8601") from error
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise argparse.ArgumentTypeError("observed-at must include a timezone")
+    return parsed.astimezone(dt.UTC).replace(microsecond=0)
+
+
+def current_observed_at() -> dt.datetime:
+    """Capture the one live instant used for an otherwise unpinned card."""
+    return dt.datetime.now(dt.UTC).replace(microsecond=0)
+
+
+def _observed_at_text(observed_at: dt.datetime) -> str:
+    if observed_at.tzinfo is None or observed_at.utcoffset() is None:
+        raise ValueError("observed_at is not timezone-aware")
+    return observed_at.astimezone(dt.UTC).replace(microsecond=0).isoformat()
 
 
 def projection_errors(
@@ -249,7 +271,7 @@ def _evidence(task: Meta, evidence_classes: frozenset[str]) -> Meta:
     }
 
 
-def _execution_recovery(task: Meta) -> tuple[Meta, Meta | None]:
+def _execution_recovery(task: Meta, observed_at: dt.datetime) -> tuple[Meta, Meta | None]:
     """Describe a valid execution fence before less-specific recovery paths."""
     reservation = task.get("execution_reservation")
     if reservation is None:
@@ -257,11 +279,11 @@ def _execution_recovery(task: Meta) -> tuple[Meta, Meta | None]:
     if not execution_envelope.valid_reservation(reservation):
         raise ValueError("execution reservation is invalid")
     expires_at = dt.datetime.fromisoformat(str(reservation["expires_at"]).replace("Z", "+00:00"))
-    observed_at = dt.datetime.fromisoformat(str(task["updated_at"]).replace("Z", "+00:00"))
+    observed_at_text = _observed_at_text(observed_at)
     details: Meta = {
         "execution_id": reservation["execution_id"],
         "expires_at": reservation["expires_at"],
-        "observed_at": task["updated_at"],
+        "observed_at": observed_at_text,
     }
     if expires_at > observed_at:
         return {"state": "live", **details}, {
@@ -319,16 +341,19 @@ def build(
     projects_root: Path,
     task: Meta,
     tasks: list[Meta],
+    observed_at: dt.datetime,
     evidence_classes: frozenset[str] = task_spec.EVIDENCE_CLASSES,
 ) -> Meta:
-    """Compose one stable card without changing authority or recording new data."""
+    """Compose one stable card for an explicit observation instant."""
     scope, scope_drift = _scope(task)
     assumptions, assumption_drift = _assumptions(root, projects_root, task, tasks)
-    execution, execution_recovery = _execution_recovery(task)
+    observed_at_text = _observed_at_text(observed_at)
+    execution, execution_recovery = _execution_recovery(task, observed_at)
     retry, retry_recovery = _retry(task)
     drift = sorted([*scope_drift, *assumption_drift], key=lambda item: str(item["field"]))
     return {
         "schema_version": SCHEMA_VERSION,
+        "observed_at": observed_at_text,
         "task": {
             "id": task["id"],
             "priority": task["priority"],
@@ -356,6 +381,7 @@ def render_text(card: Meta) -> str:
         f"{name.upper()}=" + json.dumps(card[name], sort_keys=True, separators=(",", ":"))
         for name in (
             "schema_version",
+            "observed_at",
             "task",
             "source",
             "scope",
@@ -376,6 +402,12 @@ def add_command_parser(commands: argparse._SubParsersAction[argparse.ArgumentPar
     item = commands.add_parser("resume-card")
     item.add_argument("task")
     item.add_argument("--json", action="store_true")
+    item.add_argument(
+        "--observed-at",
+        type=parse_observed_at,
+        metavar="ISO_8601",
+        help="pin the card observation time for reproducible output (default: current UTC time)",
+    )
 
 
 def command(
@@ -384,13 +416,21 @@ def command(
     task_id: str,
     tasks: list[tuple[Path, Meta, str]],
     as_json: bool,
+    observed_at: dt.datetime,
     evidence_classes: frozenset[str] = task_spec.EVIDENCE_CLASSES,
 ) -> str:
     """Return one rendered card from a caller-held, consistent authority snapshot."""
     task = next((meta for _, meta, _ in tasks if meta.get("id") == task_id), None)
     if task is None:
         raise RuntimeError(f"unknown task {task_id}")
-    card = build(root, projects_root, task, [meta for _, meta, _ in tasks], evidence_classes)
+    card = build(
+        root,
+        projects_root,
+        task,
+        [meta for _, meta, _ in tasks],
+        observed_at,
+        evidence_classes,
+    )
     return (
         json.dumps(card, sort_keys=True, separators=(",", ":")) + "\n"
         if as_json

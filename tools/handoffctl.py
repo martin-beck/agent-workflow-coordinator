@@ -46,6 +46,7 @@ if __package__:
         execution_envelope,
         execution_receipt,
         resume_card,
+        resume_card_runtime,
         retry_circuit,
         run_command,
     )
@@ -137,6 +138,7 @@ else:  # pragma: no cover - direct script execution
     import execution_envelope  # type: ignore[import-not-found,no-redef]
     import execution_receipt  # type: ignore[import-not-found,no-redef]
     import resume_card  # type: ignore[import-not-found,no-redef]
+    import resume_card_runtime  # type: ignore[import-not-found,no-redef]
     import retry_circuit  # type: ignore[import-not-found,no-redef]
     import run_command  # type: ignore[import-not-found,no-redef]
     from checkpoint_records import (  # type: ignore[import-not-found,no-redef]
@@ -927,46 +929,6 @@ def locked(
         os.close(fd)
         if metric is not None:
             trace_lock_metric(*metric)
-
-
-def read_only_snapshot(callback: Callable[[], str]) -> str:
-    """Read one consistent snapshot without creating lock or trace artifacts.
-
-    A state that has never been mutated has no lock file yet.  In that case a
-    completed read is valid only if the file remains absent: a concurrent
-    writer must create and lock it before changing authority.  If it appears
-    while reading, retry under its shared advisory lock.  This preserves a
-    linearizable read boundary without allowing an observation command to
-    initialize runtime state.
-    """
-    lock_path = coordinator_lock_path()
-    for _ in range(2):
-        try:
-            descriptor = os.open(lock_path, os.O_RDONLY)
-        except FileNotFoundError:
-            result = callback()
-            if not lock_path.exists():
-                return result
-            continue
-        try:
-            deadline = time.monotonic() + LOCK_TIMEOUT_SECONDS
-            while True:
-                try:
-                    fcntl.flock(descriptor, fcntl.LOCK_SH | fcntl.LOCK_NB)
-                    break
-                except BlockingIOError as error:
-                    remaining = deadline - time.monotonic()
-                    if remaining <= 0:
-                        raise LockTimeoutError(
-                            f"LOCK_TIMEOUT after {LOCK_TIMEOUT_SECONDS:.1f}s acquiring "
-                            "shared resume-card snapshot lock"
-                        ) from error
-                    time.sleep(min(LOCK_POLL_SECONDS, remaining))
-            return callback()
-        finally:
-            fcntl.flock(descriptor, fcntl.LOCK_UN)
-            os.close(descriptor)
-    raise RuntimeError("resume-card authority snapshot changed while being read")
 
 
 def trace_lock_metric(phase: str, mode: str, wait: float, hold: float | None) -> None:
@@ -4627,23 +4589,7 @@ def dispatch_read_only_command(args: argparse.Namespace) -> int:
     if args.cmd == "snapshot":
         cmd_snapshot(args.task)
     elif args.cmd == "resume-card":
-
-        def render_resume_card() -> str:
-            policy = evidence_policy(ROOT)
-            tasks = all_tasks()
-            errors = resume_card_snapshot_errors(tasks, policy)
-            if errors:
-                raise RuntimeError("resume-card snapshot validation failed:\n" + "\n".join(errors))
-            return resume_card.command(
-                ROOT,
-                Path(str(config().get("projects_root", ""))),
-                args.task,
-                tasks,
-                args.json,
-                policy.classes,
-            )
-
-        print(read_only_snapshot(render_resume_card), end="")
+        return resume_card_runtime.dispatch(args, sys.modules[__name__])
     elif args.cmd == "board":
         cmd_board()
     elif args.cmd == "metrics":
@@ -4651,27 +4597,6 @@ def dispatch_read_only_command(args: argparse.Namespace) -> int:
     else:
         return print_execution_preflight(args)
     return 0
-
-
-def resume_card_snapshot_errors(tasks: list[Task], policy: EvidencePolicy) -> list[str]:
-    """Fail closed before projecting a locked authority task snapshot."""
-    errors: list[str] = []
-    ids: set[str] = set()
-    for path, meta, body in tasks:
-        task_id = str(meta.get("id", ""))
-        if task_id in ids:
-            errors.append(f"duplicate {task_id}")
-        ids.add(task_id)
-        errors.extend(basic_task_errors(path, meta, policy))
-        errors.extend(resume_card.projection_errors(path, meta, body, private_text_errors))
-        try:
-            resume_card._evidence(meta, policy.classes)
-        except ValueError as error:
-            errors.append(f"{task_id}: {error}")
-    errors.extend(graph_errors(tasks))
-    errors.extend(hierarchy_errors(tasks))
-    errors.extend(supersession_errors(tasks))
-    return sorted(set(errors))
 
 
 def cmd_retry_circuit_status(task_id: str) -> int:
