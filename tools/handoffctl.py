@@ -2839,7 +2839,9 @@ def apply_bind_worktree(args: argparse.Namespace, meta: Meta, tasks: list[Task])
 def apply_repair_legacy_binding(args: argparse.Namespace, meta: Meta, tasks: list[Task]) -> str:
     """Clear one exact stale worktree key from an unowned partial legacy task."""
     if args.expected_revision != meta["task_revision"]:
-        raise RuntimeError(f"stale revision: expected {args.expected_revision}, current {meta['task_revision']}")
+        raise RuntimeError(
+            f"stale revision: expected {args.expected_revision}, current {meta['task_revision']}"
+        )
     if meta.get("status") != "open" or meta.get("owner") or meta.get("claim_expires"):
         raise RuntimeError("repair-legacy-binding requires an open, unowned task")
     if meta.get("branch"):
