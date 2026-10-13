@@ -77,6 +77,14 @@ execution-fence slot. It models durable recovery evidence as a record with expli
 recovery requires the exact record for its reserved execution. It does not model evidence contents
 beyond that identity.
 
+Unbound `run` calls may additionally use the retry circuit. It reserves a privacy-safe command
+identity slot under the task lock before launch and resolves it after child completion. Slots have
+a durable bounded expiry. A child crash, interrupt, or command-result recording fault leaves an
+auditable abandoned slot which a later reservation retires only after expiry, so it cannot exhaust
+the retry window permanently. `HandoffctlRetryCircuit.tla` models three workers, bounded slots,
+failure resolution, child crash, expiry cleanup, and held-command recovery. Bound envelope runs do
+not use these slots and retain their execution-fence sequencing.
+
 The linearization point is the successful transition while the process holds the lock below Git's
 common directory. Every worktree of one local clone resolves the same lock path. Expected revisions
 are checked only after acquisition, so two processes observing one revision cannot both mutate it.

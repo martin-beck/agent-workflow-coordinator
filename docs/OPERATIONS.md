@@ -154,6 +154,13 @@ retry-exception` with a concise reason. These are local operational records, not
 authentication, signature, or external-service gates. A checkpoint/change-drift/acceptance update
 also changes the progress fingerprint and permits a fresh bounded attempt series without erasing
 the prior hold.
+
+Only unbound runs use retry launch slots. A slot is revision-fenced, carries a bounded expiry
+derived from the command timeout, and is resolved after the child exits. If a child is interrupted
+or result recording fails, a later unbound launch retires only elapsed slots and retains a concise
+`abandoned` expiry record before admitting a replacement. This avoids permanent capacity loss
+without clearing a live slot or changing bound execution-envelope fence/result/finish ordering.
+
 ## Binding failures
 
 - Profile mismatch: profile and binding UUIDs differ.

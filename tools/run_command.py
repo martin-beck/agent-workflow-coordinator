@@ -34,24 +34,28 @@ def cmd_run(runtime: Any, args: argparse.Namespace) -> int:
         runtime.mutate(result, "execution-result", policy)
         _, recorded, _ = runtime.locate(args.task)
         execution_revision = int(recorded["task_revision"])
+    if hasattr(args, "retry_circuit_reservation"):
+        _, current, _ = runtime.locate(args.task)
+        args.expected_revision = int(current["task_revision"])
+        args.retry_circuit_failure = (
+            ("SUBPROCESS_TIMEOUT" if timed_out else "RETRYABLE" if returncode == 75 else "EXIT")
+            if returncode
+            else None
+        )
+        runtime.mutate(args, "retry-circuit-resolve", policy)
+        _, current, _ = runtime.locate(args.task)
+        execution_revision = int(current["task_revision"])
     try:
         runtime.append_command_result(args.task, args.owner, command_hash, returncode, timed_out)
     except Exception as error:
+        # Unbound runs resolve their slot first, so an append failure cannot
+        # strand capacity after a command has already exited. Bound runs retain
+        # their established execution-result/journal/finish sequence.
         if execution_id is not None:
             raise RuntimeError(
                 "EXECUTION_RESULT_UNKNOWN: command result could not be journaled"
             ) from error
         raise
-    _, current, _ = runtime.locate(args.task)
-    args.expected_revision = int(current["task_revision"])
-    args.retry_circuit_failure = (
-        ("SUBPROCESS_TIMEOUT" if timed_out else "RETRYABLE" if returncode == 75 else "EXIT")
-        if returncode
-        else None
-    )
-    runtime.mutate(args, "retry-circuit-resolve", policy)
-    _, current, _ = runtime.locate(args.task)
-    execution_revision = int(current["task_revision"])
     note = (
         f"Recorded command timeout; classification=SUBPROCESS_TIMEOUT; "
         f"deadline={timeout:.1f}s; command argv SHA-256 {command_hash}."

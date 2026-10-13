@@ -9,10 +9,11 @@ reasons.  It never retains argv, stderr, paths, or other command output.
 from __future__ import annotations
 
 import argparse
+import datetime as dt
 import hashlib
 import json
 import re
-from typing import Any
+from typing import Any, cast
 
 type Meta = dict[str, Any]
 
@@ -21,6 +22,7 @@ DEFAULT_WINDOW = 3
 MAX_WINDOW = 16
 MAX_ATTEMPTS = 64
 MAX_RECOVERIES = 32
+MAX_ABANDONED = 64
 TASK = re.compile(r"^AR-[0-9]{4}$")
 DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
 COMMAND_DIGEST = re.compile(r"^[0-9a-f]{64}$")
@@ -96,6 +98,7 @@ def empty() -> Meta:
         "recoveries": [],
         "hold": None,
         "reservations": [],
+        "abandoned": [],
     }
 
 
@@ -109,6 +112,19 @@ def _window(value: object) -> int:
     if type(value) is not int or not DEFAULT_WINDOW <= int(value) <= MAX_WINDOW:
         raise ValueError(f"retry circuit window must be {DEFAULT_WINDOW}..{MAX_WINDOW}")
     return int(value)
+
+
+def _timestamp(value: object, field: str) -> dt.datetime:
+    """Return one canonical UTC timestamp used for durable slot expiry."""
+    if not isinstance(value, str) or not value:
+        raise ValueError(f"retry circuit {field} is invalid")
+    try:
+        parsed = dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as error:
+        raise ValueError(f"retry circuit {field} is invalid") from error
+    if parsed.tzinfo is None:
+        raise ValueError(f"retry circuit {field} is invalid")
+    return parsed.astimezone(dt.UTC)
 
 
 def _validate_attempt(attempt: object, previous_revision: int) -> int:
@@ -160,9 +176,7 @@ def _validate_recovery(recovery: object, previous_revision: int) -> int:
     return int(recovery["task_revision"])
 
 
-def _validate_hold(hold: object, attempts: list[object]) -> None:
-    if hold is None:
-        return
+def _hold_fields(hold: object) -> Meta:
     if not isinstance(hold, dict) or set(hold) != {
         "identity",
         "attempts",
@@ -171,6 +185,10 @@ def _validate_hold(hold: object, attempts: list[object]) -> None:
         "window",
     }:
         raise ValueError("retry circuit hold fields are invalid")
+    return hold
+
+
+def _hold_values(hold: Meta) -> None:
     if (
         not DIGEST.fullmatch(str(hold.get("identity", "")))
         or type(hold.get("attempts")) is not int
@@ -182,6 +200,9 @@ def _validate_hold(hold: object, attempts: list[object]) -> None:
         raise ValueError("retry circuit hold is invalid")
     if _window(hold.get("window")) != hold["attempts"]:
         raise ValueError("retry circuit hold threshold is invalid")
+
+
+def _matching_hold_attempts(hold: Meta, attempts: list[object]) -> int:
     matching = [
         item
         for item in attempts
@@ -189,7 +210,15 @@ def _validate_hold(hold: object, attempts: list[object]) -> None:
         and item["identity"] == hold["identity"]
         and item["progress_digest"] == hold["progress_digest"]
     ]
-    if len(matching) < int(hold["attempts"]):
+    return len(matching)
+
+
+def _validate_hold(hold: object, attempts: list[object]) -> None:
+    if hold is None:
+        return
+    checked = _hold_fields(hold)
+    _hold_values(checked)
+    if _matching_hold_attempts(checked, attempts) < int(checked["attempts"]):
         raise ValueError("retry circuit hold has insufficient attempts")
 
 
@@ -197,7 +226,15 @@ def _validate_reservation(reservation: object) -> None:
     if (
         not isinstance(reservation, dict)
         or set(reservation)
-        != {"id", "identity", "progress_digest", "window", "task_revision", "reserved_at"}
+        != {
+            "id",
+            "identity",
+            "progress_digest",
+            "window",
+            "task_revision",
+            "reserved_at",
+            "expires_at",
+        }
         or not RESERVATION.fullmatch(str(reservation.get("id", "")))
         or not DIGEST.fullmatch(str(reservation.get("identity", "")))
         or not DIGEST.fullmatch(str(reservation.get("progress_digest", "")))
@@ -207,38 +244,76 @@ def _validate_reservation(reservation: object) -> None:
     ):
         raise ValueError("retry circuit reservation is invalid")
     _window(reservation.get("window"))
+    if _timestamp(reservation["expires_at"], "reservation expiry") <= _timestamp(
+        reservation["reserved_at"], "reservation timestamp"
+    ):
+        raise ValueError("retry circuit reservation expiry is invalid")
 
 
-def _validated_collections(
-    value: object,
-) -> tuple[Meta, list[object], list[object], object, list[object]]:
+def _validate_abandoned(value: object) -> None:
+    """Validate the privacy-safe audit record left by slot expiry."""
+    if not isinstance(value, dict) or set(value) != {
+        "id",
+        "identity",
+        "progress_digest",
+        "window",
+        "task_revision",
+        "reserved_at",
+        "expires_at",
+        "cleaned_at",
+        "cause",
+    }:
+        raise ValueError("retry circuit abandoned slot fields are invalid")
+    _validate_reservation(
+        {key: value[key] for key in value if key != "cleaned_at" and key != "cause"}
+    )
+    if value["cause"] != "expired" or _timestamp(
+        value["cleaned_at"], "cleanup timestamp"
+    ) < _timestamp(value["expires_at"], "reservation expiry"):
+        raise ValueError("retry circuit abandoned slot is invalid")
+
+
+def _collections(value: object) -> Meta:
     if not isinstance(value, dict) or set(value) != {
         "schema_version",
         "attempts",
         "recoveries",
         "hold",
         "reservations",
+        "abandoned",
     }:
         raise ValueError("retry circuit fields are not exact")
     if value.get("schema_version") != SCHEMA_VERSION:
         raise ValueError("retry circuit schema is unsupported")
+    return value
+
+
+def _bounded_list(value: object, limit: int, error: str) -> list[object]:
+    if not isinstance(value, list) or len(value) > limit:
+        raise ValueError(error)
+    return value
+
+
+def _validated_collections(
+    value: object,
+) -> tuple[Meta, list[object], list[object], object, list[object], list[object]]:
+    value = _collections(value)
     attempts = value.get("attempts")
     recoveries = value.get("recoveries")
     hold = value.get("hold")
     reservations = value.get("reservations")
-    if not isinstance(attempts, list) or len(attempts) > MAX_ATTEMPTS:
+    abandoned = value.get("abandoned")
+    attempts = _bounded_list(attempts, MAX_ATTEMPTS, "retry circuit attempts are invalid")
+    recoveries = _bounded_list(recoveries, MAX_RECOVERIES, "retry circuit recoveries are invalid")
+    reservations = _bounded_list(reservations, MAX_WINDOW, "retry circuit reservations are invalid")
+    abandoned = _bounded_list(abandoned, MAX_ABANDONED, "retry circuit abandoned slots are invalid")
+    if not attempts and not reservations and not abandoned:
         raise ValueError("retry circuit attempts are invalid")
-    if not isinstance(recoveries, list) or len(recoveries) > MAX_RECOVERIES:
-        raise ValueError("retry circuit recoveries are invalid")
-    if not isinstance(reservations, list) or len(reservations) > MAX_WINDOW:
-        raise ValueError("retry circuit reservations are invalid")
-    if not attempts and not reservations:
-        raise ValueError("retry circuit attempts are invalid")
-    return value, attempts, recoveries, hold, reservations
+    return value, attempts, recoveries, hold, reservations, abandoned
 
 
 def validate(value: object) -> Meta:
-    value, attempts, recoveries, hold, reservations = _validated_collections(value)
+    value, attempts, recoveries, hold, reservations, abandoned = _validated_collections(value)
     last_revision = 0
     for attempt in attempts:
         last_revision = _validate_attempt(attempt, last_revision)
@@ -248,6 +323,11 @@ def validate(value: object) -> Meta:
     _validate_hold(hold, attempts)
     for reservation in reservations:
         _validate_reservation(reservation)
+    identifiers = [cast(Meta, item)["id"] for item in reservations]
+    if len(identifiers) != len(set(identifiers)):
+        raise ValueError("retry circuit reservations are duplicated")
+    for item in abandoned:
+        _validate_abandoned(item)
     return value
 
 
@@ -273,6 +353,7 @@ def _state(meta: Meta) -> Meta:
         and value.get("recoveries") == []
         and value.get("hold") is None
         and value.get("reservations") == []
+        and value.get("abandoned") == []
     ):
         return dict(value)
     return dict(validate(value))
@@ -289,6 +370,28 @@ def admit(meta: Meta, identity: str) -> None:
         raise RuntimeError(
             "RETRY_CIRCUIT_OPEN: repeated no-progress attempts require retry-circuit recovery"
         )
+
+
+def _expired(reservation: Meta, recorded_at: str) -> bool:
+    return _timestamp(reservation["expires_at"], "reservation expiry") <= _timestamp(
+        recorded_at, "cleanup timestamp"
+    )
+
+
+def cleanup_expired(meta: Meta, recorded_at: str) -> int:
+    """Durably retire only elapsed, unresolved slots before new admission."""
+    state = _state(meta)
+    expired = [item for item in state["reservations"] if _expired(item, recorded_at)]
+    if not expired:
+        return 0
+    state["reservations"] = [item for item in state["reservations"] if item not in expired]
+    state["abandoned"] = [
+        *state["abandoned"],
+        *[{**item, "cleaned_at": recorded_at, "cause": "expired"} for item in expired],
+    ][-MAX_ABANDONED:]
+    validate(state)
+    meta["retry_circuit"] = state
+    return len(expired)
 
 
 def record_failure(
@@ -339,7 +442,14 @@ def record_failure(
     return result
 
 
-def reserve(meta: Meta, identity: str, window: int, reservation_id: str, recorded_at: str) -> str:
+def reserve(
+    meta: Meta,
+    identity: str,
+    window: int,
+    reservation_id: str,
+    recorded_at: str,
+    expires_at: str,
+) -> str:
     """Atomically consume one scoped launch slot before an external command starts."""
     threshold = _window(window)
     if (
@@ -348,6 +458,11 @@ def reserve(meta: Meta, identity: str, window: int, reservation_id: str, recorde
         or not recorded_at
     ):
         raise ValueError("retry circuit reservation input is invalid")
+    if _timestamp(expires_at, "reservation expiry") <= _timestamp(
+        recorded_at, "reservation timestamp"
+    ):
+        raise ValueError("retry circuit reservation expiry is invalid")
+    cleaned = cleanup_expired(meta, recorded_at)
     state = _state(meta)
     progress = progress_digest(meta)
     admit(meta, identity)
@@ -366,11 +481,12 @@ def reserve(meta: Meta, identity: str, window: int, reservation_id: str, recorde
             "window": threshold,
             "task_revision": int(meta["task_revision"]),
             "reserved_at": recorded_at,
+            "expires_at": expires_at,
         },
     ]
     validate(state)
     meta["retry_circuit"] = state
-    return "Reserved retry circuit launch slot."
+    return f"Reserved retry circuit launch slot; expired_slots_cleaned={cleaned}."
 
 
 def resolve(
@@ -455,6 +571,7 @@ def apply_reserve(args: argparse.Namespace, meta: Meta, recorded_at: str) -> str
         args.retry_window,
         args.retry_circuit_reservation,
         recorded_at,
+        args.retry_circuit_expires_at,
     )
 
 

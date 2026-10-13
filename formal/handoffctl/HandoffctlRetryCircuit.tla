@@ -1,60 +1,103 @@
 ------------------------- MODULE HandoffctlRetryCircuit -------------------------
 \* Copyright (C) Huawei Technologies Co., Ltd. 2026. All rights reserved.
 \* SPDX-License-Identifier: MIT
-EXTENDS Naturals
+EXTENDS Naturals, FiniteSets, TLC
 
-(*)
-Bounded no-progress retry contract. A failed command can be retried below the
-configured threshold. At that threshold it is held. Only a durable-progress
-change or an explicit recovery record reopens it; neither path loses the fact
-that a hold occurred.
+(*
+Bounded no-progress retry admission for unbound commands. A worker receives a
+durable slot before launch. It either resolves that slot, crashes after launch,
+or its abandoned slot expires. Expiry prevents an interrupted worker or result
+recording fault from exhausting capacity forever. Bound execution envelopes are
+absent: their execution fence owns reservation/result/finish sequencing.
 *)
 
-CONSTANT MaxAttempts
+CONSTANTS MaxAttempts, Workers
 
-ASSUME MaxAttempts >= 3
+ASSUME /\ MaxAttempts >= 3
+       /\ Cardinality(Workers) >= MaxAttempts
 
-VARIABLES attempts, held, progress, recoveryCount
+SlotValues == {"idle", "reserved", "abandoned"}
 
-vars == <<attempts, held, progress, recoveryCount>>
+VARIABLES attempts, held, recovered, slots, cleaned
+
+vars == <<attempts, held, recovered, slots, cleaned>>
+
+ReservedCount == Cardinality({worker \in Workers: slots[worker] = "reserved"})
 
 Init ==
     /\ attempts = 0
     /\ held = FALSE
-    /\ progress = 0
-    /\ recoveryCount = 0
+    /\ recovered = FALSE
+    /\ slots = [worker \in Workers |-> "idle"]
+    /\ cleaned = FALSE
 
-Fail ==
+Reserve(worker) ==
+    /\ worker \in Workers
+    /\ slots[worker] = "idle"
     /\ ~held
-    /\ attempts' = attempts + 1
-    /\ held' = ((attempts + 1) >= MaxAttempts)
-    /\ UNCHANGED <<progress, recoveryCount>>
+    /\ attempts + ReservedCount < MaxAttempts
+    /\ slots' = [slots EXCEPT ![worker] = "reserved"]
+    /\ UNCHANGED <<attempts, held, recovered, cleaned>>
 
-Progress ==
-    /\ progress < MaxAttempts
-    /\ progress' = progress + 1
-    /\ attempts' = 0
-    /\ held' = FALSE
-    /\ UNCHANGED recoveryCount
+ResolveFailure(worker) ==
+    /\ worker \in Workers
+    /\ slots[worker] = "reserved"
+    /\ slots' = [slots EXCEPT ![worker] = "idle"]
+    /\ attempts' = attempts + 1
+    /\ held' = (attempts + 1 = MaxAttempts)
+    /\ UNCHANGED <<recovered, cleaned>>
+
+ResolveSuccess(worker) ==
+    /\ worker \in Workers
+    /\ slots[worker] = "reserved"
+    /\ slots' = [slots EXCEPT ![worker] = "idle"]
+    /\ UNCHANGED <<attempts, held, recovered, cleaned>>
+
+Crash(worker) ==
+    /\ worker \in Workers
+    /\ slots[worker] = "reserved"
+    /\ slots' = [slots EXCEPT ![worker] = "abandoned"]
+    /\ UNCHANGED <<attempts, held, recovered, cleaned>>
+
+Expire(worker) ==
+    /\ worker \in Workers
+    /\ slots[worker] = "abandoned"
+    /\ slots' = [slots EXCEPT ![worker] = "idle"]
+    /\ cleaned' = TRUE
+    /\ UNCHANGED <<attempts, held, recovered>>
 
 Recover ==
     /\ held
-    /\ recoveryCount < MaxAttempts
+    /\ ~recovered
     /\ attempts' = 0
     /\ held' = FALSE
-    /\ recoveryCount' = recoveryCount + 1
-    /\ UNCHANGED progress
+    /\ recovered' = TRUE
+    /\ UNCHANGED <<slots, cleaned>>
 
-Next == Fail \/ Progress \/ Recover \/ UNCHANGED vars
+Next ==
+    \/ \E worker \in Workers: Reserve(worker)
+    \/ \E worker \in Workers: ResolveFailure(worker)
+    \/ \E worker \in Workers: ResolveSuccess(worker)
+    \/ \E worker \in Workers: Crash(worker)
+    \/ \E worker \in Workers: Expire(worker)
+    \/ Recover
+    \/ UNCHANGED vars
 
-Spec == Init /\ [][Next]_vars
+Spec ==
+    /\ Init
+    /\ [][Next]_vars
+    /\ \A worker \in Workers: WF_vars(Expire(worker))
 
 TypeOK ==
-    /\ attempts \in Nat
+    /\ attempts \in 0..MaxAttempts
     /\ held \in BOOLEAN
-    /\ progress \in Nat
-    /\ recoveryCount \in Nat
+    /\ recovered \in BOOLEAN
+    /\ slots \in [Workers -> SlotValues]
+    /\ cleaned \in BOOLEAN
 
+CapacityBound == attempts + ReservedCount <= MaxAttempts
 HeldAtExactBound == held <=> attempts = MaxAttempts
-RecoveryCountMonotonic == recoveryCount \in Nat
+HeldHasNoLiveSlot == held => ReservedCount = 0
+AbandonedSlotsEventuallyClean ==
+    \A worker \in Workers: [] (slots[worker] = "abandoned" => <> (slots[worker] = "idle"))
 =============================================================================

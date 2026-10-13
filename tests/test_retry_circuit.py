@@ -15,6 +15,9 @@ from tempfile import TemporaryDirectory
 
 from tools import retry_circuit, run_command
 
+NOW = "2026-10-13T12:00:00+00:00"
+LATER = "2026-10-13T12:02:00+00:00"
+
 
 def reserve_in_independent_process(state_path: str, launches_path: str, identity: str) -> None:
     """Attempt one atomic pre-launch reservation from an independent process."""
@@ -24,7 +27,12 @@ def reserve_in_independent_process(state_path: str, launches_path: str, identity
         meta = json.load(handle)
         try:
             retry_circuit.reserve(
-                meta, identity, 3, multiprocessing.current_process().name[-1] * 32, "now"
+                meta,
+                identity,
+                3,
+                multiprocessing.current_process().name[-1] * 32,
+                NOW,
+                "2026-10-13T12:01:01+00:00",
             )
         except RuntimeError:
             return
@@ -33,6 +41,29 @@ def reserve_in_independent_process(state_path: str, launches_path: str, identity
         handle.truncate()
     with Path(launches_path).open("a", encoding="utf-8") as launches:
         launches.write("launched\n")
+
+
+def cleanup_and_reserve_in_independent_process(
+    state_path: str, launches_path: str, identity: str
+) -> None:
+    """Represent a later good worker recovering capacity after worker crashes."""
+    path = Path(state_path)
+    with path.open("r+", encoding="utf-8") as handle:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        meta = json.load(handle)
+        retry_circuit.reserve(
+            meta,
+            identity,
+            3,
+            "f" * 32,
+            LATER,
+            "2026-10-13T12:03:00+00:00",
+        )
+        handle.seek(0)
+        json.dump(meta, handle, sort_keys=True)
+        handle.truncate()
+    with Path(launches_path).open("a", encoding="utf-8") as launches:
+        launches.write("recovered-launch\n")
 
 
 class FailingRunRuntime:
@@ -55,11 +86,18 @@ class FailingRunRuntime:
 
     def _cmd_run_fenced(
         self, args: argparse.Namespace
-    ) -> tuple[object, str, float, bool, int, None, None]:
+    ) -> tuple[object, str, float, bool, int, str | None, int | None]:
         identity = retry_circuit.normalized_identity("a" * 64, None, [])
         args.retry_circuit_identity = identity
         args.retry_circuit_reservation = "b" * 32
-        retry_circuit.reserve(self.meta, identity, 3, args.retry_circuit_reservation, "now")
+        retry_circuit.reserve(
+            self.meta,
+            identity,
+            3,
+            args.retry_circuit_reservation,
+            NOW,
+            "2026-10-13T12:01:01+00:00",
+        )
         return object(), "a" * 64, 1.0, False, 1, None, None
 
     def append_command_result(self, *_args: object) -> None:
@@ -84,7 +122,7 @@ class FailingRunRuntime:
         return {"backend": "sqlite"}
 
     def now(self) -> str:
-        return "now"
+        return NOW
 
     def require_policy_unchanged(self, *_args: object) -> None:
         self.calls.append("policy")
@@ -94,6 +132,19 @@ class FailingRunRuntime:
 
     class PostCommandReconcileError(RuntimeError):
         pass
+
+
+class BoundRunRuntime(FailingRunRuntime):
+    """Exercise the pre-existing bound execution envelope completion order."""
+
+    def _cmd_run_fenced(
+        self, _args: argparse.Namespace
+    ) -> tuple[object, str, float, bool, int, str, int]:
+        return object(), "a" * 64, 1.0, False, 0, "c" * 32, 2
+
+    def mutate(self, _args: argparse.Namespace, kind: str, _policy: object) -> None:
+        self.calls.append(kind)
+        self.meta["task_revision"] += 1
 
 
 class RetryCircuitTests(unittest.TestCase):
@@ -214,9 +265,22 @@ class RetryCircuitTests(unittest.TestCase):
         )
         self.assertEqual(1, result)
         self.assertEqual(
-            ["journal", "retry-circuit-resolve", "update", "policy", "reconcile"], runtime.calls
+            ["retry-circuit-resolve", "journal", "update", "policy", "reconcile"], runtime.calls
         )
         self.assertEqual(1, len(runtime.meta["retry_circuit"]["attempts"]))
+
+    def test_bound_run_keeps_execution_envelope_result_journal_finish_sequence(self) -> None:
+        runtime = BoundRunRuntime()
+        result = run_command.cmd_run(
+            runtime,
+            argparse.Namespace(task="AR-0001", owner="worker", command=["true"]),
+        )
+        self.assertEqual(0, result)
+        self.assertEqual(
+            ["execution-result", "journal", "execution-finish", "policy", "reconcile"],
+            runtime.calls,
+        )
+        self.assertNotIn("retry-circuit-resolve", runtime.calls)
 
     def test_independent_process_reservations_cap_unbound_launches_at_window(self) -> None:
         """Concurrent unbound workers may launch no more than the durable retry window."""
@@ -244,3 +308,64 @@ class RetryCircuitTests(unittest.TestCase):
                 worker.join(timeout=20)
                 self.assertEqual(0, worker.exitcode)
             self.assertEqual(3, launches_path.read_text(encoding="utf-8").count("launched\n"))
+
+            # The successful reservers intentionally exit without resolving,
+            # simulating child crashes after their external launch boundary.
+            cleaner = context.Process(
+                target=cleanup_and_reserve_in_independent_process,
+                args=(str(state_path), str(launches_path), identity),
+            )
+            cleaner.start()
+            cleaner.join(timeout=20)
+            self.assertEqual(0, cleaner.exitcode)
+            self.assertIn("recovered-launch", launches_path.read_text(encoding="utf-8"))
+            recovered = json.loads(state_path.read_text(encoding="utf-8"))
+            self.assertEqual(3, len(recovered["retry_circuit"]["abandoned"]))
+
+    def test_expired_crash_slots_are_durably_cleaned_before_a_new_launch(self) -> None:
+        """A crashed worker cannot consume the retry window indefinitely."""
+        for index in range(3):
+            retry_circuit.reserve(
+                self.meta,
+                self.identity,
+                3,
+                f"{index:x}" * 32,
+                NOW,
+                "2026-10-13T12:00:01+00:00",
+            )
+        with self.assertRaisesRegex(RuntimeError, "fully reserved"):
+            retry_circuit.reserve(
+                self.meta,
+                self.identity,
+                3,
+                "d" * 32,
+                NOW,
+                "2026-10-13T12:00:01+00:00",
+            )
+        self.meta["task_revision"] = 3
+        message = retry_circuit.reserve(
+            self.meta,
+            self.identity,
+            3,
+            "e" * 32,
+            LATER,
+            "2026-10-13T12:03:00+00:00",
+        )
+        self.assertIn("expired_slots_cleaned=3", message)
+        state = self.meta["retry_circuit"]
+        self.assertEqual(1, len(state["reservations"]))
+        self.assertEqual(3, len(state["abandoned"]))
+
+    def test_expiry_records_are_validated_and_stale_resolution_is_rejected(self) -> None:
+        retry_circuit.reserve(
+            self.meta,
+            self.identity,
+            3,
+            "b" * 32,
+            NOW,
+            "2026-10-13T12:00:01+00:00",
+        )
+        retry_circuit.cleanup_expired(self.meta, LATER)
+        with self.assertRaisesRegex(RuntimeError, "not current"):
+            retry_circuit.resolve(self.meta, self.identity, "b" * 32, "EXIT", LATER)
+        retry_circuit.validate(self.meta["retry_circuit"])

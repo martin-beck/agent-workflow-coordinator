@@ -4230,26 +4230,17 @@ def _cmd_run_fenced(
     if backend_selection()["backend"] == "git":
         config()
     policy = require_active_owner(args.task, args.owner)
-    timeout_cap = run_envelope_timeout(args)
-    # Never execute or consume untracked caller input. Scripts and data must be
-    # named by argv or a stable file, whose content digest can be recorded too.
-    command_hash = hashlib.sha256("\0".join(args.command).encode()).hexdigest()
+    timeout = float(getattr(args, "timeout_seconds", COMMAND_TIMEOUT_SECONDS))
+    if timeout <= 0:
+        raise RuntimeError("command timeout must be positive")
     try:
         retry_circuit._window(getattr(args, "retry_window", retry_circuit.DEFAULT_WINDOW))
     except ValueError as error:
         raise RuntimeError(str(error)) from error
-    _, current, _ = locate(args.task)
-    retry_circuit.admit(
-        current,
-        retry_circuit.normalized_identity(
-            command_hash,
-            getattr(args, "command_class", None),
-            list(getattr(args, "scope_path", [])),
-        ),
-    )
-    timeout = float(getattr(args, "timeout_seconds", COMMAND_TIMEOUT_SECONDS))
-    if timeout <= 0:
-        raise RuntimeError("command timeout must be positive")
+    timeout_cap = run_envelope_timeout(args)
+    # Never execute or consume untracked caller input. Scripts and data must be
+    # named by argv or a stable file, whose content digest can be recorded too.
+    command_hash = hashlib.sha256("\0".join(args.command).encode()).hexdigest()
     if timeout_cap is not None and timeout > timeout_cap:
         raise RuntimeError(f"command timeout exceeds envelope limit of {timeout_cap}s")
     require_policy_unchanged(ROOT, policy)
@@ -4280,18 +4271,24 @@ def _cmd_run_fenced(
         mutate(reserve, "execution-start", policy)
         _, reserved, _ = locate(args.task)
         execution_revision = int(reserved["task_revision"])
-    identity = retry_circuit.normalized_identity(
-        command_hash,
-        getattr(args, "command_class", None),
-        list(getattr(args, "scope_path", [])),
-    )
-    with task_execution_locked(args.task, exclusive=True, phase="retry_circuit_launch"):
-        _, current, _ = locate(args.task)
-        args.expected_revision = int(current["task_revision"])
-        args.retry_circuit_identity = identity
-        args.retry_circuit_reservation = uuid.uuid4().hex
-        args.retry_window = getattr(args, "retry_window", retry_circuit.DEFAULT_WINDOW)
-        mutate(args, "retry-circuit-reserve", policy)
+    if execution_id is None:
+        identity = retry_circuit.normalized_identity(
+            command_hash,
+            getattr(args, "command_class", None),
+            list(getattr(args, "scope_path", [])),
+        )
+        with task_execution_locked(args.task, exclusive=True, phase="retry_circuit_launch"):
+            _, current, _ = locate(args.task)
+            args.expected_revision = int(current["task_revision"])
+            args.retry_circuit_identity = identity
+            args.retry_circuit_reservation = uuid.uuid4().hex
+            args.retry_window = getattr(args, "retry_window", retry_circuit.DEFAULT_WINDOW)
+            args.retry_circuit_expires_at = (
+                (dt.datetime.now(dt.UTC) + dt.timedelta(seconds=timeout + 60))
+                .replace(microsecond=0)
+                .isoformat()
+            )
+            mutate(args, "retry-circuit-reserve", policy)
     timed_out = False
     try:
         proc = subprocess.run(
@@ -4611,6 +4608,8 @@ def cmd_retry_circuit_status(task_id: str) -> int:
                 "attempts": [],
                 "recoveries": [],
                 "hold": None,
+                "reservations": [],
+                "abandoned": [],
             }
         else:
             retry_circuit.validate(state)

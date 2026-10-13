@@ -854,3 +854,17 @@ class HandoffctlCoverageTests(unittest.TestCase):
             self.assertRaisesRegex(OSError, "journal unavailable"),
         ):
             handoffctl.cmd_run(args)
+
+    def test_invalid_run_timeout_is_rejected_before_envelope_lookup(self) -> None:
+        args = argparse.Namespace(task="AR-0001", owner="worker", timeout_seconds=0, command=[])
+        with (
+            patch.object(handoffctl, "backend_selection", return_value={"backend": "sqlite"}),
+            patch.object(handoffctl, "require_active_owner", return_value=object()),
+            patch.object(
+                handoffctl,
+                "run_envelope_timeout",
+                side_effect=AssertionError("binding lookup must not occur"),
+            ),
+            self.assertRaisesRegex(RuntimeError, "timeout must be positive"),
+        ):
+            handoffctl._cmd_run_fenced(args)
