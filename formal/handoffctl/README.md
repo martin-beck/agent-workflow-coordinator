@@ -79,9 +79,9 @@ beyond that identity.
 
 Unbound `run` calls may additionally use the retry circuit. It reserves a privacy-safe command
 identity slot under the task lock before launch and resolves it after child completion, but only at
-the revision immediately following that reservation; an intervening mutation leaves the result
+the revision immediately following slot creation; an intervening mutation leaves the result
 stale. Slots have a durable bounded expiry. A child crash, interrupt, or command-result recording
-fault leaves an auditable abandoned slot which a later reservation retires only after expiry, so it
+fault leaves an auditable abandoned slot which a later launch retires only after expiry, so it
 cannot exhaust the retry window permanently. Expired-claim recovery rejects live unbound slots.
 `HandoffctlRetryCircuit.tla` models owner and revision fencing, bounded slots, stale-result
 rejection, expiry cleanup, expired-claim recovery, and fresh held-command recovery series. Bound
