@@ -127,7 +127,7 @@ else:
     try:
         from board_metrics import build_metrics  # type: ignore[import-not-found,no-redef]  # noqa: I001
         from board_metrics import encode as encode_metrics  # type: ignore[no-redef]
-    except ModuleNotFoundError:  # pragma: no cover - standalone vendored bootstrap
+    except ModuleNotFoundError:
 
         def build_metrics(tasks: list[tuple[Any, dict[str, Any], str]]) -> dict[str, Any]:
             del tasks
@@ -4764,7 +4764,7 @@ def dispatch_bound_standard_command(args: argparse.Namespace) -> int:
 
 if __package__:
     from . import issue_series_service
-else:  # pragma: no cover - direct vendored execution
+else:  # pragma: no cover
     import issue_series_service  # type: ignore[import-not-found,no-redef]
 
 globals().update(issue_series_service.install(globals()))
