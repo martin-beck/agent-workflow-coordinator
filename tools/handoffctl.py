@@ -210,6 +210,12 @@ else:  # pragma: no cover - direct script execution
         task_spec_policy_errors,
     )
 
+__all__ = (
+    "DEFAULT_EVIDENCE_POLICY",
+    "graph_errors",
+    "hierarchy_errors",
+)
+
 ROOT = Path(__file__).resolve().parent.parent
 TASKS = ROOT / "tasks"
 RUNTIME = ROOT / ".runtime"
