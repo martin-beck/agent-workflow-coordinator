@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.7.1 - 2026-10-13
+
+- Honor `TLC_RUNTIME_ROOT` as the formal verifier workspace parent when an
+  explicit `TLC_WORK_ROOT` is absent. This keeps hosted verification inside its
+  configured writable runtime area while preserving explicit-root precedence.
+
 ## 0.7.0 - 2026-10-13
 
 - Add the focused-autonomy program: durable execution envelopes, change-drift
