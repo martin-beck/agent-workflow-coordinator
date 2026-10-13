@@ -7,6 +7,7 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import json
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -28,6 +29,41 @@ else:  # pragma: no cover - direct handoffctl execution
 type Meta = dict[str, Any]
 
 SCHEMA_VERSION = 1
+MAX_TITLE_BYTES = 512
+MAX_SUMMARY_BYTES = 4000
+MAX_NEXT_ACTION_BYTES = 1024
+
+
+def projection_errors(
+    path: Path,
+    task: Meta,
+    body: str,
+    private_text_errors: Callable[[Path, str], list[str]],
+) -> list[str]:
+    """Reject unsafe or overlarge authority text before a card can expose it."""
+    errors: list[str] = []
+    limits = {
+        "title": MAX_TITLE_BYTES,
+        "summary": MAX_SUMMARY_BYTES,
+        "next_action": MAX_NEXT_ACTION_BYTES,
+    }
+    for field, maximum in limits.items():
+        value = task.get(field)
+        if isinstance(value, str) and len(value.encode("utf-8")) > maximum:
+            errors.append(f"{task.get('id', path.stem)}: {field} exceeds {maximum} bytes")
+    authority_text = json.dumps(task, sort_keys=True, separators=(",", ":")) + "\n" + body
+    if len(authority_text.encode("utf-8")) > 200000:
+        errors.append(f"{path.name}: projected authority exceeds 200 KiB")
+    errors.extend(private_text_errors(path, authority_text))
+    try:
+        updated_at = dt.datetime.fromisoformat(
+            str(task.get("updated_at", "")).replace("Z", "+00:00")
+        )
+        if updated_at.tzinfo is None or updated_at.utcoffset() is None:
+            raise ValueError
+    except ValueError:
+        errors.append(f"{task.get('id', path.stem)}: updated_at is not timezone-aware")
+    return errors
 
 
 def _source(task: Meta) -> Meta:
@@ -221,11 +257,13 @@ def _execution_recovery(task: Meta) -> tuple[Meta, Meta | None]:
     if not execution_envelope.valid_reservation(reservation):
         raise ValueError("execution reservation is invalid")
     expires_at = dt.datetime.fromisoformat(str(reservation["expires_at"]).replace("Z", "+00:00"))
+    observed_at = dt.datetime.fromisoformat(str(task["updated_at"]).replace("Z", "+00:00"))
     details: Meta = {
         "execution_id": reservation["execution_id"],
         "expires_at": reservation["expires_at"],
+        "observed_at": task["updated_at"],
     }
-    if expires_at > dt.datetime.now(dt.UTC):
+    if expires_at > observed_at:
         return {"state": "live", **details}, {
             "kind": "wait-for-execution-reservation",
             "instruction": "Wait for the live bound execution reservation to finish or expire.",

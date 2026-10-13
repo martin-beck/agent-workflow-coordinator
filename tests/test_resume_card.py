@@ -5,11 +5,12 @@
 from __future__ import annotations
 
 import argparse
-import contextlib
 import io
 import json
+import os
 import unittest
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from tools import assumption_revalidation, handoffctl, resume_card, retry_circuit
@@ -171,6 +172,33 @@ class ResumeCardTests(unittest.TestCase):
         self.assertEqual("live", card["recovery"]["execution"]["state"])
         self.assertEqual("wait-for-execution-reservation", card["next_action"]["kind"])
 
+    def test_execution_expiry_is_determined_by_the_authority_snapshot(self) -> None:
+        meta = task(
+            execution_reservation={
+                "execution_id": "a" * 32,
+                "owner": "worker",
+                "task_revision": 4,
+                "envelope_digest": "sha256:" + "b" * 64,
+                "command_class": "test",
+                "scope_digest": "sha256:" + "c" * 64,
+                "argv_digest": "d" * 64,
+                "expires_at": "2026-10-13T01:00:00+00:00",
+            },
+            updated_at="2026-10-13T00:00:00+00:00",
+        )
+
+        class NoClockDatetime(resume_card.dt.datetime):
+            @classmethod
+            def now(cls, *_args: object, **_kwargs: object) -> object:
+                raise AssertionError("wall clock")
+
+        with patch.object(resume_card.dt, "datetime", NoClockDatetime):
+            first = resume_card.build(Path("/state"), Path("/projects"), meta, [meta])
+            second = resume_card.build(Path("/state"), Path("/projects"), meta, [meta])
+        self.assertEqual(first, second)
+        self.assertEqual("live", first["recovery"]["execution"]["state"])
+        self.assertEqual("2026-10-13T00:00:00+00:00", first["recovery"]["execution"]["observed_at"])
+
     def test_malformed_durable_record_fails_closed(self) -> None:
         meta = task(assumption_revalidation=[{}])
         with self.assertRaisesRegex(ValueError, "fields are not exact"):
@@ -187,6 +215,35 @@ class ResumeCardTests(unittest.TestCase):
             [(Path("AR-0001.md"), meta, "")], handoffctl.DEFAULT_EVIDENCE_POLICY
         )
         self.assertIn("AR-0001.md: unknown field unrecognized_durable_metadata", errors)
+
+    def test_command_snapshot_rejects_private_projected_authority_text(self) -> None:
+        for field in ("summary", "observed_branch"):
+            with self.subTest(field=field):
+                meta = task(**{field: "token=do-not-project"})
+                errors = handoffctl.resume_card_snapshot_errors(
+                    [(Path("AR-0001.md"), meta, "")], handoffctl.DEFAULT_EVIDENCE_POLICY
+                )
+                self.assertTrue(any("possible credential" in error for error in errors))
+
+    def test_command_snapshot_rejects_oversized_projected_text(self) -> None:
+        for field, maximum in (
+            ("title", resume_card.MAX_TITLE_BYTES),
+            ("summary", resume_card.MAX_SUMMARY_BYTES),
+            ("next_action", resume_card.MAX_NEXT_ACTION_BYTES),
+        ):
+            with self.subTest(field=field):
+                meta = task(**{field: "x" * (maximum + 1)})
+                errors = handoffctl.resume_card_snapshot_errors(
+                    [(Path("AR-0001.md"), meta, "")], handoffctl.DEFAULT_EVIDENCE_POLICY
+                )
+                self.assertIn(f"AR-0001: {field} exceeds {maximum} bytes", errors)
+
+    def test_command_snapshot_rejects_snapshot_without_an_aware_observation_time(self) -> None:
+        meta = task(updated_at="2026-10-13T00:00:00")
+        errors = handoffctl.resume_card_snapshot_errors(
+            [(Path("AR-0001.md"), meta, "")], handoffctl.DEFAULT_EVIDENCE_POLICY
+        )
+        self.assertIn("AR-0001: updated_at is not timezone-aware", errors)
 
     def test_text_is_a_complete_equivalent_card_projection(self) -> None:
         card = resume_card.build(Path("/state"), Path("/projects"), task(), [task()])
@@ -211,7 +268,7 @@ class ResumeCardTests(unittest.TestCase):
                 return_value=handoffctl.DEFAULT_EVIDENCE_POLICY,
             ),
             patch.object(handoffctl, "resume_card_snapshot_errors", return_value=[]),
-            patch.object(handoffctl, "locked", return_value=contextlib.nullcontext()),
+            patch.object(handoffctl, "read_only_snapshot", side_effect=lambda callback: callback()),
             patch.object(resume_card, "build", return_value=card),
             patch("sys.stdout", stream),
         ):
@@ -222,6 +279,37 @@ class ResumeCardTests(unittest.TestCase):
                 ),
             )
         self.assertEqual(card, json.loads(stream.getvalue()))
+
+    def test_read_only_snapshot_creates_no_lock_or_trace_artifact(self) -> None:
+        with TemporaryDirectory() as directory:
+            runtime = Path(directory) / ".runtime"
+            trace = Path(directory) / "trace.jsonl"
+            with (
+                patch.object(
+                    handoffctl,
+                    "coordinator_lock_path",
+                    return_value=runtime / "state.lock",
+                ),
+                patch.dict(os.environ, {"HANDOFFCTL_LOCK_TRACE": str(trace)}),
+            ):
+                self.assertEqual("card", handoffctl.read_only_snapshot(lambda: "card"))
+            self.assertFalse(runtime.exists())
+            self.assertFalse(trace.exists())
+
+    def test_read_only_snapshot_never_traces_when_a_lock_already_exists(self) -> None:
+        with TemporaryDirectory() as directory:
+            runtime = Path(directory) / ".runtime"
+            runtime.mkdir()
+            lock = runtime / "state.lock"
+            lock.write_text("existing")
+            trace = Path(directory) / "trace.jsonl"
+            with (
+                patch.object(handoffctl, "coordinator_lock_path", return_value=lock),
+                patch.dict(os.environ, {"HANDOFFCTL_LOCK_TRACE": str(trace)}),
+            ):
+                self.assertEqual("card", handoffctl.read_only_snapshot(lambda: "card"))
+            self.assertEqual("existing", lock.read_text())
+            self.assertFalse(trace.exists())
 
         parser = argparse.ArgumentParser()
         commands = parser.add_subparsers(dest="cmd", required=True)
