@@ -14,6 +14,7 @@ import re
 import runpy
 import subprocess
 import sys
+import tempfile
 import time
 import unittest
 from pathlib import Path
@@ -56,6 +57,59 @@ def configured_bounds(configs: list[Path]) -> dict[str, int]:
 
 
 class FormalEvidenceTests(unittest.TestCase):
+    def test_verifier_workspace_root_precedence_is_executable(self) -> None:
+        """The verifier must select the documented root before downloading TLC."""
+        script = FORMAL_ROOT / "verify.sh"
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            fake_bin = root / "bin"
+            fake_bin.mkdir()
+            captured = root / "curl-output"
+            curl = fake_bin / "curl"
+            curl.write_text(
+                "#!/usr/bin/env bash\n"
+                "for ((index = 1; index <= $#; index++)); do\n"
+                '  if [[ "${!index}" == "--output" ]]; then\n'
+                "    next=$((index + 1))\n"
+                '    printf \'%s\\n\' "${!next}" > "${CAPTURED_OUTPUT}"\n'
+                "    break\n"
+                "  fi\n"
+                "done\n"
+                "exit 1\n",
+                encoding="utf-8",
+            )
+            curl.chmod(0o755)
+            runtime = root / "runtime"
+            explicit = root / "explicit"
+            temporary = root / "temporary"
+            for name, expected in (
+                ("explicit", explicit),
+                ("runtime", runtime / "agent-workflow-coordinator-tlc"),
+                ("temporary", temporary / "agent-workflow-coordinator-tlc"),
+            ):
+                environment = {
+                    **os.environ,
+                    "PATH": f"{fake_bin}:{os.environ['PATH']}",
+                    "CAPTURED_OUTPUT": str(captured),
+                    "TMPDIR": str(temporary),
+                    "TLC_BUDGET_SECONDS": "600",
+                }
+                if name == "explicit":
+                    environment["TLC_WORK_ROOT"] = str(explicit)
+                    environment["TLC_RUNTIME_ROOT"] = str(runtime)
+                elif name == "runtime":
+                    environment["TLC_RUNTIME_ROOT"] = str(runtime)
+                result = subprocess.run(  # noqa: S603 - exact tracked formal verifier
+                    [str(script), "--tier", "portable-smoke"],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    env=environment,
+                )
+                self.assertNotEqual(0, result.returncode)
+                output = Path(captured.read_text(encoding="utf-8").strip())
+                self.assertEqual(expected, output.parent.parent)
+
     def _backend_fence_correspondence(self) -> dict[str, Any]:
         value = json.loads(
             (ROOT / "formal" / "upgrade" / "backend-fence-correspondence.json").read_text(
