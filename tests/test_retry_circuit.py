@@ -249,6 +249,29 @@ class RetryCircuitTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "active task owner"):
             retry_circuit.apply(args, meta, "later")
 
+    def test_recovery_apply_rejects_an_unrelated_live_reservation(self) -> None:
+        meta: retry_circuit.Meta = {
+            "id": "AR-0001",
+            "owner": "worker",
+            "status": "in_progress",
+            "task_revision": 2,
+        }
+        for revision in range(2, 5):
+            meta["task_revision"] = revision
+            retry_circuit.record_failure(meta, self.identity, "EXIT", 3, str(revision))
+        meta["task_revision"] = 5
+        other = retry_circuit.normalized_identity("b" * 64, "test", ["tests"])
+        retry_circuit.reserve(meta, other, 3, "b" * 32, NOW, "2026-10-13T12:01:01+00:00")
+        args = argparse.Namespace(
+            owner="worker",
+            expected_revision=5,
+            attempt=self.identity,
+            retry_circuit_action="retry-exception",
+            reason="separate command remains live",
+        )
+        with self.assertRaisesRegex(RuntimeError, "live unbound retry reservation"):
+            retry_circuit.apply(args, meta, NOW)
+
     def test_parser_requires_fenced_recovery_arguments(self) -> None:
         parser = argparse.ArgumentParser()
         commands = parser.add_subparsers(dest="command", required=True)

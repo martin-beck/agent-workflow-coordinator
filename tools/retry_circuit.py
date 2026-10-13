@@ -584,6 +584,7 @@ def apply(args: argparse.Namespace, meta: Meta, recorded_at: str) -> str:
         raise RuntimeError("retry circuit recovery requires the active task owner")
     if args.expected_revision != meta.get("task_revision"):
         raise RuntimeError("retry circuit recovery requires the current task revision")
+    require_no_live_reservation(meta, recorded_at)
     return recover(
         meta, str(args.attempt), str(args.retry_circuit_action), str(args.reason), recorded_at
     )
