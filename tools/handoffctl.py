@@ -1442,9 +1442,7 @@ def execution_metadata_errors(task_id: str, meta: Meta) -> list[str]:
         errors.append(f"{task_id}: invalid execution_result")
     if not valid_execution_envelope_binding(meta):
         errors.append(f"{task_id}: invalid execution envelope binding")
-    try:
-        change_drift.records(meta)
-    except ValueError as error:
+    if error := change_drift.metadata_error(meta):
         errors.append(f"{task_id}: {error}")
     return errors
 
@@ -2388,21 +2386,8 @@ def require_done_admission(
         hierarchy_error = open_child_error(meta, tasks)
         if hierarchy_error:
             raise RuntimeError(hierarchy_error)
-    try:
-        history = change_drift.records(meta)
-        drift_error = change_drift.completion_error(history)
-        if drift_error == "CHANGE_DRIFT_UNEXPLAINED":
-            drift_error = None
-        if drift_error:
-            raise RuntimeError(drift_error)
-        outstanding = change_drift.unresolved(history)
-    except ValueError as exc:
-        raise RuntimeError(f"change-drift record is invalid: {exc}") from exc
-    if outstanding:
-        paths = ", ".join(str(entry["path"]) for entry in outstanding)
-        raise RuntimeError(
-            f"CHANGE_DRIFT_UNEXPLAINED: material changed paths require explanation: {paths}"
-        )
+    if error := change_drift.done_admission_error(meta):
+        raise RuntimeError(error)
 
 
 def require_release_admission(

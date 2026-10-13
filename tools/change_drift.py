@@ -534,6 +534,31 @@ def completion_error(records_value: list[Meta]) -> str | None:
     return None
 
 
+def metadata_error(meta: Meta) -> str | None:
+    """Return malformed change-drift history as task metadata validation error."""
+    try:
+        records(meta)
+    except ValueError as error:
+        return str(error)
+    return None
+
+
+def done_admission_error(meta: Meta) -> str | None:
+    """Return the fail-closed change-drift condition for terminal admission."""
+    try:
+        history = records(meta)
+        error = completion_error(history)
+        if error and error != "CHANGE_DRIFT_UNEXPLAINED":
+            return error
+        outstanding = unresolved(history)
+    except ValueError as error:
+        return f"change-drift record is invalid: {error}"
+    if outstanding:
+        paths = ", ".join(str(entry["path"]) for entry in outstanding)
+        return f"CHANGE_DRIFT_UNEXPLAINED: material changed paths require explanation: {paths}"
+    return None
+
+
 def next_record(
     task: str,
     revision: int,
