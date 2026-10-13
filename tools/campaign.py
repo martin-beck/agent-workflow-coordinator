@@ -249,14 +249,14 @@ def _blockers(task: Meta, dependencies: list[Meta], observed_at: dt.datetime) ->
         blockers.append({"kind": "task-status"})
     state, _ = _reservation(task, observed_at)
     if state != "clear":
-        blockers.append({"kind": "execution-reservation", "state": state})
+        blockers.append({"kind": "execution-claim", "state": state})
     circuit = task.get("retry_circuit")
     if circuit is not None:
         checked = retry_circuit.validate(circuit)
         if checked["hold"] is not None:
             blockers.append({"kind": "retry-circuit", "state": "held"})
         if checked["reservations"]:
-            blockers.append({"kind": "retry-reservation", "state": "live"})
+            blockers.append({"kind": "retry-claim", "state": "live"})
     return blockers
 
 
@@ -297,9 +297,9 @@ def _recovery(task: Meta, worker: Meta, sessions: Meta, observed_at: dt.datetime
         return {"kind": "none"}
     state, _ = _reservation(task, observed_at)
     if state == "expired":
-        return {"kind": "recover-execution-reservation"}
+        return {"kind": "recover-execution-claim"}
     if state == "live":
-        return {"kind": "wait-for-execution-reservation"}
+        return {"kind": "wait-for-execution-claim"}
     if worker["state"] == "expired":
         return {"kind": "recover-expired-claim"}
     if task.get("status") == "blocked":

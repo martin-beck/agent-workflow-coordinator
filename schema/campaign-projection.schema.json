@@ -27,13 +27,13 @@
       "oneOf": [
         {"type": "object", "additionalProperties": false, "required": ["kind", "task", "status"], "properties": {"kind": {"const": "dependency"}, "task": {"$ref": "#/$defs/taskId"}, "status": {"oneOf": [{"$ref": "#/$defs/status"}, {"const": "missing"}]}}},
         {"type": "object", "additionalProperties": false, "required": ["kind"], "properties": {"kind": {"const": "task-status"}}},
-        {"type": "object", "additionalProperties": false, "required": ["kind", "state"], "properties": {"kind": {"const": "execution-reservation"}, "state": {"enum": ["live", "expired"]}}},
-        {"type": "object", "additionalProperties": false, "required": ["kind", "state"], "properties": {"kind": {"enum": ["retry-circuit", "retry-reservation"]}, "state": {"enum": ["held", "live"]}}}
+        {"type": "object", "additionalProperties": false, "required": ["kind", "state"], "properties": {"kind": {"const": "execution-claim"}, "state": {"enum": ["live", "expired"]}}},
+        {"type": "object", "additionalProperties": false, "required": ["kind", "state"], "properties": {"kind": {"enum": ["retry-circuit", "retry-claim"]}, "state": {"enum": ["held", "live"]}}}
       ]
     },
     "attempt": {"type": "object", "additionalProperties": false, "required": ["revision", "recorded_at", "status", "trigger", "state"], "properties": {"revision": {"type": "integer", "minimum": 1}, "recorded_at": {"$ref": "#/$defs/timestamp"}, "status": {"type": "string", "minLength": 1, "maxLength": 64}, "trigger": {"enum": ["update", "run", "pause"]}, "state": {"enum": ["current", "stale"]}}},
     "session": {"type": "object", "additionalProperties": false, "required": ["current_session", "stale_sessions"], "properties": {"current_session": {"type": "boolean"}, "stale_sessions": {"type": "integer", "minimum": 0, "maximum": 10000}}},
-    "recovery": {"type": "object", "additionalProperties": false, "required": ["kind"], "properties": {"kind": {"enum": ["none", "recover-execution-reservation", "wait-for-execution-reservation", "recover-expired-claim", "resume-or-unblock", "record-current-session"]}}},
+    "recovery": {"type": "object", "additionalProperties": false, "required": ["kind"], "properties": {"kind": {"enum": ["none", "recover-execution-claim", "wait-for-execution-claim", "recover-expired-claim", "resume-or-unblock", "record-current-session"]}}},
     "outcome": {"oneOf": [{"type": "null"}, {"type": "object", "additionalProperties": false, "required": ["status", "acceptance"], "properties": {"status": {"enum": ["done", "cancelled", "superseded"]}, "acceptance": {"enum": ["pass", "absent"]}}}]},
     "noneRecovery": {"type": "object", "additionalProperties": false, "required": ["kind"], "properties": {"kind": {"const": "none"}}},
     "terminalOutcome": {"type": "object", "additionalProperties": false, "required": ["status", "acceptance"], "properties": {"status": {"enum": ["done", "cancelled", "superseded"]}, "acceptance": {"enum": ["pass", "absent"]}}},

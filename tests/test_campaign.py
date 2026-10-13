@@ -87,8 +87,8 @@ class CampaignTests(unittest.TestCase):
         )
         expired_claim = task("AR-0002", claim_expires="2026-10-12T23:59:59+00:00")
         cards = campaign.build([expired_execution, expired_claim], [], OBSERVED_AT)["tasks"]
-        self.assertEqual("recover-execution-reservation", cards[0]["recovery"]["kind"])
-        self.assertIn({"kind": "execution-reservation", "state": "expired"}, cards[0]["blockers"])
+        self.assertEqual("recover-execution-claim", cards[0]["recovery"]["kind"])
+        self.assertIn({"kind": "execution-claim", "state": "expired"}, cards[0]["blockers"])
         self.assertEqual("expired", cards[1]["worker"]["state"])
         self.assertEqual("recover-expired-claim", cards[1]["recovery"]["kind"])
 
