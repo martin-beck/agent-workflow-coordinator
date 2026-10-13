@@ -13,7 +13,7 @@ import re
 import stat
 import subprocess
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 type Meta = dict[str, Any]
 
@@ -166,8 +166,9 @@ def diff_bytes(root: Path) -> int:
         process.kill()
         raise RuntimeError("cannot measure autonomy diff budget")
     total = 0
-    while chunk := process.stdout.read(65536):
-        total += len(chunk)
+    with process.stdout:
+        while chunk := process.stdout.read(65536):
+            total += len(chunk)
     if process.wait(timeout=10) != 0:
         raise RuntimeError("cannot measure autonomy diff budget")
     return total
@@ -185,6 +186,7 @@ def prepare(runtime: Any, args: argparse.Namespace, evidence_policy: object) -> 
     args.expected_revision = int(current["task_revision"])
     args.autonomy_limits_policy = selected
     args.autonomy_diff_bytes = diff_bytes(runtime.ROOT)
+    args._autonomy_limits_phase = "preflight"
     runtime.mutate(args, "autonomy-limits-preflight", evidence_policy)
     require_unchanged(runtime.ROOT, selected)
     if getattr(args, "autonomy_limit_held", False):
@@ -382,6 +384,25 @@ def apply_dispose(args: argparse.Namespace, meta: Meta, at: str) -> str:
     return "Recorded local autonomy-limit disposition."
 
 
+def next_revision_projection(meta: Meta) -> Meta:
+    """Return the task shape after SQLite atomically advances its revision."""
+    projected = cast(Meta, json.loads(json.dumps(meta)))
+    projected["task_revision"] = int(meta["task_revision"]) + 1
+    return projected
+
+
+def carry_run_hold(args: argparse.Namespace, kind: str, meta: Meta) -> None:
+    """Fence a run-created hold to its final durable receipt revision."""
+    state = meta.get("autonomy_limits")
+    if (
+        kind == "update"
+        and getattr(args, "_session_trigger", None) == "run"
+        and isinstance(state, dict)
+        and isinstance(state.get("hold"), dict)
+    ):
+        state["hold"]["task_revision"] = int(meta["task_revision"]) + 1
+
+
 def preflight(admit: Any, args: argparse.Namespace, meta: Meta, at: str) -> str:
     admit(args, meta)
     return apply_preflight(args, meta, args.autonomy_limits_policy, at)
@@ -397,7 +418,7 @@ def transition(admit: Any, args: argparse.Namespace, meta: Meta, at: str) -> str
         return apply_dispose(args, meta, at)
     return (
         preflight(admit, args, meta, at)
-        if args.cmd.endswith("preflight")
+        if args._autonomy_limits_phase == "preflight"
         else record(admit, args, meta, at)
     )
 

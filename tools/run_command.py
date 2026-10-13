@@ -52,6 +52,7 @@ def cmd_run(runtime: Any, args: argparse.Namespace) -> int:  # noqa: C901
         args.expected_revision = int(current["task_revision"])
         args.autonomy_returncode = returncode
         args.autonomy_diff_bytes = runtime.al.diff_bytes(runtime.ROOT)
+        args._autonomy_limits_phase = "record"
         runtime.mutate(args, "autonomy-limits-record", policy)
         _, current, _ = runtime.locate(args.task)
         execution_revision = int(current["task_revision"])

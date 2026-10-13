@@ -329,6 +329,7 @@ FIELDS = set(REQ) | {
     "change_drift",
     "assumption_revalidation",
     "retry_circuit",
+    "autonomy_limits",
 }
 type Meta = dict[str, Any]
 type Task = tuple[Path, Meta, str]
@@ -3026,6 +3027,7 @@ def apply_owned_change(
         value = getattr(args, name, None)
         if value is not None:
             meta[name] = value
+    al.carry_run_hold(args, kind, meta)
     return str(args.note)
 
 
@@ -3515,11 +3517,13 @@ def mutate_sqlite(
     def transition(meta: Meta, tasks: list[Task]) -> tuple[str, str]:
         require_policy_unchanged(ROOT, selected_policy)
         note = apply_transition(args, kind, meta, tasks, selected_policy)
+        validated = al.next_revision_projection(meta)
         candidate = [
-            (path, meta if item["id"] == args.task else item, text) for path, item, text in tasks
+            (path, validated if item["id"] == args.task else item, text)
+            for path, item, text in tasks
         ]
         errors = (
-            basic_task_errors(selected[0], meta, selected_policy)
+            basic_task_errors(selected[0], validated, selected_policy)
             + graph_errors(candidate)
             + hierarchy_errors(candidate)
             + supersession_errors(candidate)

@@ -161,6 +161,17 @@ class AutonomyLimitsTests(unittest.TestCase):
             with self.assertRaisesRegex(autonomy_limits.PolicyError, "tracked and unchanged"):
                 autonomy_limits.policy(root)
 
+    def test_formal_bypass_attempt_retains_pre_and_post_effect_counts(self) -> None:
+        """Guard against reducing a held effect attempt to a vacuous stutter."""
+        root = Path(__file__).resolve().parents[1]
+        source = (root / "formal/handoffctl/HandoffctlAutonomyLimits.tla").read_text()
+        config = (root / "formal/handoffctl/HandoffctlAutonomyLimits.cfg").read_text()
+        self.assertIn('lastAction\' = "bypass"', source)
+        self.assertIn("bypassPreEffects' = effects", source)
+        self.assertIn("bypassEffects' = effects'", source)
+        self.assertIn('lastAction = "bypass" => bypassEffects = bypassPreEffects', source)
+        self.assertIn("INVARIANTS TypeOK FencedHold NoEffectBypass", config)
+
 
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()
