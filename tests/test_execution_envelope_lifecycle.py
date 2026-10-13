@@ -8,6 +8,7 @@ import argparse
 import json
 import subprocess
 import unittest
+from pathlib import Path
 from typing import cast
 from unittest.mock import patch
 
@@ -434,8 +435,9 @@ class ExecutionEnvelopeLifecycleTest(HandoffTest):
         self.assertTrue(allowed)
         self.assertEqual("ALLOWED", code)
         self.assertEqual(30, timeout)
-        self.assertEqual(str(worktree), args._envelope_worktree)
+        self.assertEqual("candidate", Path(args._envelope_worktree).resolve().name)
         self.assertEqual(["src"], args._envelope_write_scope)
+        CORE.release_envelope_worktree(args)
         (worktree / "src").rmdir()
         denied = CORE.execution_preflight(args)
         self.assertEqual((False, "PATH_SCOPE_UNAVAILABLE"), denied[:2])
@@ -467,6 +469,58 @@ class ExecutionEnvelopeLifecycleTest(HandoffTest):
             return_value=CORE.execution_envelope.Preflight(True, "ALLOWED", "fault injected"),
         ):
             self.assertEqual((False, "ENVELOPE_INVALID"), CORE.execution_preflight(args)[:2])
+
+    def test_execution_preflight_pins_worktree_until_sandbox_setup(self) -> None:
+        """A replacement after admission cannot alter the sandbox's source root."""
+        projects = self.root / "projects"
+        worktree = projects / "candidate"
+        (worktree / "src").mkdir(parents=True)
+        (worktree / "src" / "marker").write_text("original", encoding="utf-8")
+        CORE.CONFIG.parent.mkdir(exist_ok=True)
+        CORE.CONFIG.write_text(json.dumps({"projects_root": str(projects)}), encoding="utf-8")
+        envelope = {
+            "schema_version": 1,
+            "envelope_id": "AR-0001-e1",
+            "envelope_revision": 1,
+            "task": "AR-0001",
+            "task_revision": 1,
+            "spec_ref": "spec.json",
+            "spec_revision": 1,
+            "outputs": [{"id": "output", "description": "bounded output"}],
+            "non_goals": ["no expansion"],
+            "path_scope": {"read": ["src"], "write": ["src"]},
+            "command_classes": {"source-write": {"allowed": True, "timeout_seconds": 30}},
+            "evidence": [{"id": "tests", "class": "contract-test", "required": True}],
+            "stop_conditions": [{"id": "stop", "kind": "deny"}],
+        }
+        self.make_task(
+            status="in_progress",
+            owner="worker-a",
+            claim_expires="2099-01-01T00:00:00+00:00",
+            worktree_key="candidate",
+            spec_ref="spec.json",
+            spec_revision=1,
+            execution_envelope_ref="envelopes/AR-0001-e1.json",
+            execution_envelope_revision=1,
+            execution_envelope_task_revision=1,
+            execution_envelope_digest=CORE.execution_envelope.canonical_digest(envelope),
+            execution_envelope=envelope,
+        )
+        args = argparse.Namespace(
+            task="AR-0001", owner="worker-a", command_class="source-write", scope_path=["src"]
+        )
+        self.assertTrue(CORE.execution_preflight(args)[0])
+        parked = projects / "parked"
+        worktree.rename(parked)
+        (worktree / "src").mkdir(parents=True)
+        (worktree / "src" / "marker").write_text("replacement", encoding="utf-8")
+        try:
+            mounts = CORE.envelope_sandbox_mounts(
+                Path(args._envelope_worktree), args._envelope_read_scope, args._envelope_write_scope
+            )
+            self.assertEqual("original", (mounts[0][1] / "marker").read_text(encoding="utf-8"))
+        finally:
+            CORE.release_envelope_worktree(args)
 
     def test_command_journal_rejects_malformed_records(self) -> None:
         CORE.RUNTIME.mkdir(exist_ok=True)

@@ -1746,17 +1746,17 @@ def mutation_errors(
 
 
 def render_status_view(tasks: list[Task]) -> str:
-    """Render the public task dashboard with coordinator presentation constants."""
+    """Render the public dashboard."""
     return render_status(tasks, STATUSES, PRIORITIES, str(project_settings()["project_title"]))
 
 
 def render_status_views(tasks: list[Task]) -> dict[str, str]:
-    """Render the complete status view through the compatibility render hook."""
+    """Render the complete status view."""
     return render_status_pages_from_text(render_status_view(tasks))
 
 
 def status_projection_errors(expected: dict[str, str]) -> list[str]:
-    """Compare status pages and report missing, changed, or orphaned files."""
+    """Compare status pages."""
     errors = [
         f"{relative} differs from generated tasks"
         for relative, content in expected.items()
@@ -1788,7 +1788,7 @@ def generated_view_errors(
     *,
     rendered_snapshot: tuple[list[Task], dict[Path, str], Meta] | None = None,
 ) -> list[str]:
-    """Check both task-derived views without allowing renderer errors to escape."""
+    """Check task-derived views."""
     errors: list[str] = []
     if not all(meta.get("status") in STATUSES for _, meta, _ in tasks):
         return errors
@@ -1817,7 +1817,7 @@ def generated_view_errors(
 
 
 def rollback_validation_errors() -> list[str]:
-    """Validate the durable rollback journal independently from task views."""
+    """Validate the rollback journal."""
     try:
         for record in load_records(ROOT):
             validate_record(record)
@@ -1827,7 +1827,7 @@ def rollback_validation_errors() -> list[str]:
 
 
 def session_validation_errors() -> list[str]:
-    """Validate every authoritative session record on the selected backend."""
+    """Validate session records."""
     try:
         for record in storage_backend().load_session_records():
             validate_session_record(record)
@@ -1837,7 +1837,7 @@ def session_validation_errors() -> list[str]:
 
 
 def directive_validation_errors() -> list[str]:
-    """Validate the bounded directive journal and its active precedence rules."""
+    """Validate the directive journal."""
     try:
         records = latest_directives(ROOT)
         for record in records:
@@ -1963,7 +1963,7 @@ def is_ancestor(older: str, newer: str) -> bool:
 
 
 def record_replica_block(code: str, local_head: str, remote_head: str) -> None:
-    """Persist a privacy-safe circuit-breaker marker for reconciliation services."""
+    """Persist a reconciliation circuit-breaker marker."""
     atomic(
         REPLICA_BLOCKED,
         json.dumps(
@@ -1981,12 +1981,12 @@ def record_replica_block(code: str, local_head: str, remote_head: str) -> None:
 
 
 def clear_replica_block() -> None:
-    """Clear a replica circuit breaker after verified ancestry recovery."""
+    """Clear a recovered replica circuit breaker."""
     REPLICA_BLOCKED.unlink(missing_ok=True)
 
 
 def sync_replica_before_write() -> None:
-    """Fast-forward a clean behind replica before creating coordinator state."""
+    """Fast-forward a clean replica."""
     if not replication_enabled():
         return
     local_head, remote_head = replica_heads()
@@ -2028,7 +2028,7 @@ def push_replica() -> None:
 
 
 def restore_paths(before: dict[Path, str | None]) -> None:
-    """Restore a pre-transaction snapshot after a detected failure."""
+    """Restore a transaction snapshot."""
     for path, old in before.items():
         if old is None:
             path.unlink(missing_ok=True)
@@ -2037,7 +2037,7 @@ def restore_paths(before: dict[Path, str | None]) -> None:
 
 
 def generated_paths() -> list[Path]:
-    """Return every configured generated projection path."""
+    """Return generated projection paths."""
     names = ["CURRENT.md", "PROJECT_STATE.md", "WORKTREES.md"]
     if project_settings()["status_view"]:
         names.append("STATUS.md")
@@ -2048,7 +2048,7 @@ def generated_paths() -> list[Path]:
 
 
 def changed_paths(before: dict[Path, str | None], *, include_deleted: bool = False) -> list[Path]:
-    """Return paths whose current text differs from the captured snapshot."""
+    """Return changed snapshot paths."""
     return [
         path
         for path, old in before.items()
@@ -2058,7 +2058,7 @@ def changed_paths(before: dict[Path, str | None], *, include_deleted: bool = Fal
 
 
 def write_generated_views(tasks: list[Task], state: Meta) -> None:
-    """Atomically refresh every configured generated projection."""
+    """Atomically refresh projections."""
     atomic(ROOT / "CURRENT.md", render_current(tasks))
     if project_settings()["status_view"]:
         expected = render_status_views(tasks)
@@ -2069,7 +2069,7 @@ def write_generated_views(tasks: list[Task], state: Meta) -> None:
 
 
 def policy_snapshot(policy: EvidencePolicy | None) -> EvidencePolicy:
-    """Use one caller-owned policy snapshot or load it once at the outer boundary."""
+    """Return one policy snapshot."""
     return evidence_policy(ROOT) if policy is None else policy
 
 
@@ -4069,6 +4069,7 @@ def require_active_owner(task_id: str, owner: str) -> EvidencePolicy:
 def execution_preflight(args: argparse.Namespace) -> tuple[bool, str, str, float | None]:
     """Evaluate envelope admission."""
     with locked(exclusive=False, phase="execution_envelope_preflight"):
+        release_envelope_worktree(args)
         _, meta, _ = locate(args.task)
         if not meta.get("worktree_key"):
             return False, "WORKTREE_BINDING_REQUIRED", "bound execution requires a worktree", None
@@ -4079,6 +4080,7 @@ def execution_preflight(args: argparse.Namespace) -> tuple[bool, str, str, float
                 str(config().get("product_worktree", "")),
             )
             worktree = worktree_context.__enter__()
+            args._envelope_worktree_context = worktree_context
         except RuntimeError as error:
             return False, "WORKTREE_BINDING_INVALID", str(error), None
         try:
@@ -4090,13 +4092,16 @@ def execution_preflight(args: argparse.Namespace) -> tuple[bool, str, str, float
                 worktree,
             )
             if not result.allowed:
+                release_envelope_worktree(args)
                 return False, result.code, result.detail, None
             envelope = meta.get("execution_envelope")
             if not isinstance(envelope, dict):
+                release_envelope_worktree(args)
                 return False, "ENVELOPE_INVALID", "durable execution envelope is missing", None
             if execution_envelope.canonical_digest(envelope) != meta.get(
                 "execution_envelope_digest"
             ):
+                release_envelope_worktree(args)
                 return (
                     False,
                     "ENVELOPE_INVALID",
@@ -4109,9 +4114,8 @@ def execution_preflight(args: argparse.Namespace) -> tuple[bool, str, str, float
             for relative in mount_scope:
                 envelope_scope_path(worktree, str(relative))
             rule = envelope["command_classes"][args.command_class]
-            args._envelope_worktree = str(
-                Path(str(config()["projects_root"])).resolve() / str(meta["worktree_key"])
-            )
+            args._envelope_worktree = str(worktree)
+            args._envelope_worktree_context = worktree_context
             args._envelope_write_scope = (
                 list(args.scope_path)
                 if args.command_class in {"source-write", "git-publication"}
@@ -4120,9 +4124,16 @@ def execution_preflight(args: argparse.Namespace) -> tuple[bool, str, str, float
             args._envelope_read_scope = list(envelope["path_scope"]["read"])
             return True, result.code, result.detail, rule.get("timeout_seconds")
         except RuntimeError as error:
+            release_envelope_worktree(args)
             return False, "PATH_SCOPE_UNAVAILABLE", str(error), None
-        finally:
-            worktree_context.__exit__(None, None, None)
+
+
+def release_envelope_worktree(args: argparse.Namespace) -> None:
+    """Close a descriptor retained from bound execution admission."""
+    context = getattr(args, "_envelope_worktree_context", None)
+    if context is not None:
+        delattr(args, "_envelope_worktree_context")
+        context.__exit__(None, None, None)
 
 
 def print_execution_preflight(args: argparse.Namespace) -> int:
