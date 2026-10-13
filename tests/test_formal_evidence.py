@@ -922,7 +922,7 @@ class FormalEvidenceTests(unittest.TestCase):
         for name, value in model_bounds.items():
             if name != "model_count":
                 self.assertEqual(value, bounds[name])
-        self.assertEqual(9, model_bounds["model_count"])
+        self.assertEqual(10, model_bounds["model_count"])
         self.assertEqual(17, len(slices))
         for name in (
             "tlc_workers",
@@ -996,8 +996,8 @@ class FormalEvidenceTests(unittest.TestCase):
             manifest["profiles"]["portable-smoke"]["models"],
             manifest["profiles"]["full-exhaustive"]["models"],
         )
-        self.assertEqual(26, len(manifest["profiles"]["full-exhaustive"]["models"]))
-        self.assertEqual(10, len(manifest["profiles"]["pr-publication"]["models"]))
+        self.assertEqual(27, len(manifest["profiles"]["full-exhaustive"]["models"]))
+        self.assertEqual(11, len(manifest["profiles"]["pr-publication"]["models"]))
         self.assertEqual(300, manifest["profiles"]["pr-fast"]["aggregate_budget_seconds"])
         self.assertEqual(900, manifest["profiles"]["pr-publication"]["aggregate_budget_seconds"])
         self.assertEqual(86400, manifest["profiles"]["full-exhaustive"]["aggregate_budget_seconds"])

@@ -178,6 +178,13 @@ including same-ref/changed-digest and different-ref/same-digest transitions;
 it is a bounded abstraction, not
 implementation-refinement evidence.
 
+HandoffctlAssumptions.tla checks opt-in material freshness bindings for a
+base and dependency. It explores moved base/dependency races, stale and current
+revisions, explicit revalidation/disposition, and non-material assumptions. It
+requires a task released `done` to have every material declared input fresh or
+explicitly disposed; it is bounded best-effort design guidance, not an
+implementation-refinement proof.
+
 `HandoffctlStorage.tla` checks both selected backends, transaction mutual exclusion, one accepted
 revision increment per process, prepared SQLite authority before selector switch, eventual command
 completion and eventual migration switch under weak fairness. Real independent-process tests connect

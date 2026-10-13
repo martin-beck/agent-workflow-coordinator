@@ -40,6 +40,18 @@ This proves artifact identity and binding only, never the semantic correctness
 of arbitrary evidence.  `snapshot TASK` emits `NEXT_UNMET_STEP` when a
 specification still has a predicate without current-candidate passing evidence.
 
+### Assumption revalidation
+
+`handoffctl assumption` records an opt-in, bounded history for inputs whose
+freshness matters to a task. A declaration names a `base` Git HEAD, a
+dependency task revision, or a regular-file `observation`, and explicitly
+chooses `--material` or `--non-material`. The Coordinator compares each active
+material binding before `accept` and `release --status done`. A changed binding
+requires either `assumption revalidate` (which records the new binding) or
+`assumption dispose --reason ...`; non-material assumptions remain visible but
+never block these transitions. This is a local developer workflow control, not
+an authentication, signature, or reviewer gate.
+
 Change upstream when behavior affects:
 
 - lifecycle transitions, ownership, revisions or dependencies;
