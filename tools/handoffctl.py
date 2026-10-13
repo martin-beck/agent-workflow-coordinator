@@ -2769,8 +2769,10 @@ def valid_binding_worktree(value: object) -> bool:
         root = Path(str(config()["projects_root"])).resolve()
         candidate = root / value
         return not candidate.is_symlink() and inside(candidate, root)
-    except (KeyError, RuntimeError):
+    except KeyError:
         return False
+    except RuntimeError:
+        return not CONFIG.exists()
 
 
 def binding_identity_conflicts(args: argparse.Namespace, meta: Meta, tasks: list[Task]) -> bool:
@@ -4067,6 +4069,8 @@ def execution_preflight(args: argparse.Namespace) -> tuple[bool, str, str, float
     """Evaluate envelope admission."""
     with locked(exclusive=False, phase="execution_envelope_preflight"):
         _, meta, _ = locate(args.task)
+        if not meta.get("worktree_key"):
+            return False, "WORKTREE_BINDING_REQUIRED", "bound execution requires a worktree", None
         try:
             worktree = change_drift.bound_worktree(
                 meta,
@@ -4147,13 +4151,7 @@ envelope_scope_path = execution_envelope.envelope_scope_path
 
 
 def invocation_worktree() -> tuple[str, str] | None:
-    """Return the product worktree identity when called from a product checkout.
-
-    The coordinator itself is normally invoked from the bound state repository, so
-    that location remains valid for state-only commands.  When a caller starts in
-    the configured product checkout, identify the actual Git root and branch so an
-    active task can be fenced to its declared worktree.
-    """
+    """Return product worktree identity."""
     if not CONFIG.exists():
         return None
     settings = config()
