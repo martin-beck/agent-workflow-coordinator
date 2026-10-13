@@ -974,7 +974,7 @@ class FormalEvidenceTests(unittest.TestCase):
             "bind-worktree",
             "bind-envelope",
             "recover_expired",
-            "recover_execution",
+            "recover-execution",
             "change-drift",
             "assumption",
             "release_planned",
@@ -1028,6 +1028,23 @@ class FormalEvidenceTests(unittest.TestCase):
         self.assertIn("operation \\in [Processes -> Operations]", source)
         verify = (FORMAL_ROOT / "verify.sh").read_text(encoding="utf-8")
         self.assertIn('cp -- "${SPEC_DIR}/Handoffctl.cfg" "${slice}.cfg"', verify)
+
+    def test_recover_execution_inventory_uses_runtime_spelling(self) -> None:
+        slices = runpy.run_path(str(FORMAL_ROOT / "slices.py"))
+        self.assertIn("recover-execution", slices["OPERATIONS"])
+        self.assertNotIn("recover_execution", slices["OPERATIONS"])
+        self.assertEqual(
+            "HandoffctlSliceRecoverExecution",
+            slices["module_name"]("recover-execution"),
+        )
+        with self.assertRaises(ValueError):
+            slices["module_name"]("recover_execution")
+        source = (FORMAL_ROOT / "Handoffctl.tla").read_text(encoding="utf-8")
+        self.assertIn('operation[p] = "recover-execution"', source)
+        manifest = json.loads((ROOT / "formal" / "tier-evidence.json").read_text())
+        models = manifest["profiles"]["full-exhaustive"]["models"]
+        self.assertIn("HandoffctlSlice-recover-execution", models)
+        self.assertNotIn("HandoffctlSlice-recover_execution", models)
 
     def test_formal_tiers_require_explicit_non_ambiguous_selection(self) -> None:
         verify = (FORMAL_ROOT / "verify.sh").read_text(encoding="utf-8")

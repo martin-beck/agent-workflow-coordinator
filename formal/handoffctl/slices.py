@@ -21,7 +21,7 @@ OPERATIONS = (
     "bind-worktree",
     "bind-envelope",
     "recover_expired",
-    "recover_execution",
+    "recover-execution",
     "change-drift",
     "assumption",
     "release_planned",
