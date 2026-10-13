@@ -3137,7 +3137,68 @@ def apply_gate(args: argparse.Namespace, meta: Meta) -> str:
         raise RuntimeError(str(error)) from error
 
 
-def apply_transition(  # noqa: C901
+def apply_recover_expired_transition(
+    args: argparse.Namespace, meta: Meta, tasks: list[Task]
+) -> str:
+    """Recover an expired claim only when it has no execution reservation."""
+    require_no_execution_reservation(meta)
+    return apply_recover_expired(args, meta, tasks)
+
+
+def apply_retry_circuit_record(args: argparse.Namespace, meta: Meta) -> str:
+    """Record a retry failure only for the task's current active owner."""
+    if meta.get("owner") != args.owner or meta.get("status") != "in_progress":
+        raise RuntimeError("retry circuit record requires the active task owner")
+    if args.expected_revision != meta.get("task_revision"):
+        raise RuntimeError("retry circuit record requires the current task revision")
+    return retry_circuit.record_failure(
+        meta,
+        args.retry_circuit_identity,
+        args.retry_circuit_failure,
+        getattr(args, "retry_window", retry_circuit.DEFAULT_WINDOW),
+        now(),
+    )
+
+
+def lifecycle_transition_handler(
+    args: argparse.Namespace,
+    kind: str,
+    meta: Meta,
+    tasks: list[Task],
+    policy: EvidencePolicy | None,
+) -> Callable[[], str] | None:
+    """Return the typed lifecycle handler for a known transition, if any."""
+    handlers: dict[str, Callable[[], str]] = {
+        "claim": lambda: apply_claim(args, meta, tasks),
+        "promote": lambda: apply_promote(args, meta, tasks),
+        "pause": lambda: apply_pause(args, meta),
+        "resume": lambda: apply_resume(args, meta, tasks),
+        "unblock": lambda: apply_unblock(args, meta, tasks),
+        "recover-expired": lambda: apply_recover_expired_transition(args, meta, tasks),
+        "recover-execution": lambda: apply_recover_execution(args, meta),
+        "gate": lambda: apply_gate(args, meta),
+        "change-drift": lambda: change_drift.apply(
+            args, meta, Path(str(config()["projects_root"])), now()
+        ),
+        "assumption": lambda: assumption_revalidation.apply(
+            ROOT, Path(str(config()["projects_root"])), args, meta, [item for _, item, _ in tasks]
+        ),
+        "retry-circuit": lambda: retry_circuit.apply(args, meta, now()),
+        "retry-circuit-record": lambda: apply_retry_circuit_record(args, meta),
+        "checkpoint": lambda: apply_checkpoint(args, meta),
+        "rollback": lambda: apply_rollback(args, meta),
+        "accept": lambda: apply_accept(args, meta, policy),
+        "bind-spec": lambda: apply_bind_spec(args, meta, policy),
+        "bind-worktree": lambda: apply_bind_worktree(args, meta, tasks),
+        "bind-envelope": lambda: apply_bind_envelope(args, meta),
+        "execution-start": lambda: apply_execution_start(args, meta),
+        "execution-result": lambda: apply_execution_result(args, meta),
+        "execution-finish": lambda: apply_execution_finish(args, meta),
+    }
+    return handlers.get(kind)
+
+
+def apply_transition(
     args: argparse.Namespace,
     kind: str,
     meta: Meta,
@@ -3145,64 +3206,9 @@ def apply_transition(  # noqa: C901
     policy: EvidencePolicy | None = None,
 ) -> str:
     """Dispatch one typed lifecycle transition for both storage backends."""
-    if kind == "claim":
-        return apply_claim(args, meta, tasks)
-    if kind == "promote":
-        return apply_promote(args, meta, tasks)
-    if kind == "pause":
-        return apply_pause(args, meta)
-    reopen = {"resume": apply_resume, "unblock": apply_unblock}.get(kind)
-    if reopen is not None:
-        return reopen(args, meta, tasks)
-    if kind == "recover-expired":
-        require_no_execution_reservation(meta)
-        return apply_recover_expired(args, meta, tasks)
-    if kind == "recover-execution":
-        return apply_recover_execution(args, meta)
-    if kind == "gate":
-        return apply_gate(args, meta)
-    if kind == "change-drift":
-        return change_drift.apply(args, meta, Path(str(config()["projects_root"])), now())
-    if kind == "assumption":
-        return assumption_revalidation.apply(
-            ROOT,
-            Path(str(config()["projects_root"])),
-            args,
-            meta,
-            [item for _, item, _ in tasks],
-        )
-    if kind == "retry-circuit":
-        return retry_circuit.apply(args, meta, now())
-    if kind == "retry-circuit-record":
-        if meta.get("owner") != args.owner or meta.get("status") != "in_progress":
-            raise RuntimeError("retry circuit record requires the active task owner")
-        if args.expected_revision != meta.get("task_revision"):
-            raise RuntimeError("retry circuit record requires the current task revision")
-        return retry_circuit.record_failure(
-            meta,
-            args.retry_circuit_identity,
-            args.retry_circuit_failure,
-            getattr(args, "retry_window", retry_circuit.DEFAULT_WINDOW),
-            now(),
-        )
-    record_transition = {"checkpoint": apply_checkpoint, "rollback": apply_rollback}.get(kind)
-    if record_transition is not None:
-        return record_transition(args, meta)
-    transition = {
-        "accept": lambda: apply_accept(args, meta, policy, tasks),
-        "bind-spec": lambda: apply_bind_spec(args, meta, policy),
-        "bind-worktree": lambda: apply_bind_worktree(args, meta, tasks),
-        "bind-envelope": lambda: apply_bind_envelope(args, meta),
-    }.get(kind)
-    if transition is not None:
-        return transition()
-    execution = {
-        "execution-start": apply_execution_start,
-        "execution-result": apply_execution_result,
-        "execution-finish": apply_execution_finish,
-    }.get(kind)
-    if execution is not None:
-        return execution(args, meta)
+    handler = lifecycle_transition_handler(args, kind, meta, tasks, policy)
+    if handler is not None:
+        return handler()
     return apply_owned_change(args, kind, meta, tasks, policy)
 
 
