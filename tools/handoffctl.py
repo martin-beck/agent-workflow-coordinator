@@ -2391,7 +2391,7 @@ def require_role_admission(owner_id: str, required_role: str = "implementer") ->
     if __package__:
         from .roles import role_admission_error as _role_admission_error
     else:  # pragma: no cover - direct script execution
-        from roles import (  # type: ignore[import-not-found]
+        from roles import (  # type: ignore[import-not-found,no-redef]
             role_admission_error as _role_admission_error,
         )
     error = _role_admission_error(
@@ -3612,7 +3612,7 @@ def role_doctor_errors() -> list[str]:
     if __package__:
         from .roles import role_admission_errors as _role_admission_errors
     else:  # pragma: no cover - direct script execution
-        from roles import role_admission_errors as _role_admission_errors
+        from roles import role_admission_errors as _role_admission_errors  # type: ignore[no-redef]
     owners = [
         (str(meta["owner"]), "implementer")
         for _path, meta, _body in all_tasks()
@@ -4631,7 +4631,7 @@ def dispatch_roles_command(args: argparse.Namespace) -> int:
         from .roles import list_assignments as list_roles
         from .roles import remove as remove_role
     else:  # pragma: no cover - direct script execution
-        from roles import RolesError  # type: ignore[import-not-found,no-redef]
+        from roles import RolesError  # type: ignore[no-redef]
         from roles import assign as assign_role  # type: ignore[no-redef]
         from roles import check as check_roles  # type: ignore[no-redef]
         from roles import list_assignments as list_roles  # type: ignore[no-redef]
