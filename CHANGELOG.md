@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.7.2 - 2026-10-13
+
+- Contain change-drift and bound execution worktrees to their declared direct
+  checkout, including traversal, product-alias, symlink, and replacement-race
+  defenses. Bound Bubblewrap executions retain the admitted directory
+  descriptor through mount setup.
+- Permit structurally valid worktree metadata in projection-only state while
+  rejecting empty or malformed local-root configuration.
+
 ## 0.7.1 - 2026-10-13
 
 - Honor `TLC_RUNTIME_ROOT` as the formal verifier workspace parent when an
