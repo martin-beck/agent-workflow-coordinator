@@ -2380,8 +2380,19 @@ def dependency_satisfied(dependency_id: str, tasks: list[Task]) -> bool:
 
 
 def require_role_admission(owner_id: str, required_role: str = "implementer") -> None:
-    """Retain advisory role compatibility without gating lifecycle progress."""
-    del owner_id, required_role
+    """Require a valid durable role assignment when role management is initialized."""
+    if not (RUNTIME / "roles.json").exists():
+        return
+    try:
+        from .roles import require_admission
+    except ImportError:  # pragma: no cover - direct-script fallback
+        from roles import require_admission  # type: ignore[import-not-found]
+    require_admission(
+        RUNTIME / "roles.json",
+        ROOT / "examples/roles/role-registry.json",
+        owner_id,
+        required_role,
+    )
 
 
 def require_update_role_admission(kind: str, owner_id: str) -> None:
@@ -3594,8 +3605,20 @@ def cmd_render_status(*, check: bool) -> None:
 
 
 def role_doctor_errors() -> list[str]:
-    """Roles are external metadata and do not gate coordinator health."""
-    return []
+    """Validate active task owners against the durable role store when initialized."""
+    state = RUNTIME / "roles.json"
+    if not state.exists():
+        return []
+    try:
+        from .roles import doctor_errors
+    except ImportError:  # pragma: no cover - direct-script fallback
+        from roles import doctor_errors  # type: ignore[import-not-found]
+    owners = [
+        (str(meta["owner"]), "implementer")
+        for _path, meta, _body in all_tasks()
+        if meta.get("status") == "in_progress" and isinstance(meta.get("owner"), str)
+    ]
+    return doctor_errors(state, owners)
 
 
 def doctor_checks(*, live: bool, sqlite: bool, live_state: State | None) -> list[str]:
