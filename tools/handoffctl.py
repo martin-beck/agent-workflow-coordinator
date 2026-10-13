@@ -260,6 +260,7 @@ LIFECYCLE_MUTATION_COMMANDS = (
     "accept",
     "bind-spec",
     "bind-worktree",
+    "repair-legacy-binding",
     "bind-envelope",
     "release",
     "promote",
@@ -2835,6 +2836,24 @@ def apply_bind_worktree(args: argparse.Namespace, meta: Meta, tasks: list[Task])
     return f"Bound worktree {args.worktree_key} on branch {args.branch}."
 
 
+def apply_repair_legacy_binding(args: argparse.Namespace, meta: Meta, tasks: list[Task]) -> str:
+    """Clear one exact stale worktree key from an unowned partial legacy task."""
+    if args.expected_revision != meta["task_revision"]:
+        raise RuntimeError(f"stale revision: expected {args.expected_revision}, current {meta['task_revision']}")
+    if meta.get("status") != "open" or meta.get("owner") or meta.get("claim_expires"):
+        raise RuntimeError("repair-legacy-binding requires an open, unowned task")
+    if meta.get("branch"):
+        raise RuntimeError("repair-legacy-binding requires an empty legacy branch")
+    if not valid_binding_worktree(args.worktree_key):
+        raise RuntimeError("repair-legacy-binding worktree key is invalid")
+    if meta.get("worktree_key") != args.worktree_key:
+        raise RuntimeError("repair-legacy-binding worktree key does not match retained metadata")
+    if not args.note.strip():
+        raise RuntimeError("repair-legacy-binding note must not be empty")
+    meta["worktree_key"] = ""
+    return str(args.note)
+
+
 def bind_envelope_candidate(args: argparse.Namespace, meta: Meta) -> tuple[Meta, str]:
     """Load an envelope and verify its identity against the exact task revision."""
     if not isinstance(meta.get("spec_ref"), str) or not isinstance(meta.get("spec_revision"), int):
@@ -3195,6 +3214,7 @@ def lifecycle_transition_handler(
         "accept": lambda: apply_accept(args, meta, policy),
         "bind-spec": lambda: apply_bind_spec(args, meta, policy),
         "bind-worktree": lambda: apply_bind_worktree(args, meta, tasks),
+        "repair-legacy-binding": lambda: apply_repair_legacy_binding(args, meta, tasks),
         "bind-envelope": lambda: apply_bind_envelope(args, meta),
         "execution-start": lambda: apply_execution_start(args, meta),
         "execution-result": lambda: apply_execution_result(args, meta),
@@ -4942,6 +4962,11 @@ def main() -> int:
     item.add_argument("--expected-revision", type=int, required=True)
     item.add_argument("--branch", required=True)
     item.add_argument("--worktree-key", required=True)
+    item = commands.add_parser("repair-legacy-binding")
+    item.add_argument("task")
+    item.add_argument("--expected-revision", type=int, required=True)
+    item.add_argument("--worktree-key", required=True)
+    item.add_argument("--note", required=True)
     item = commands.add_parser("bind-envelope")
     item.add_argument("task")
     item.add_argument("--owner", required=True)
