@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.7.0 - 2026-10-13
+
+- Add the focused-autonomy program: durable execution envelopes, change-drift
+  guards, predicate evidence ledgers, assumption revalidation, compact
+  drift-aware resume cards, retry circuit breaking, a read-only cross-session
+  campaign projection, and local autonomy-limit escalation policies.
+- Preserve task authority in the underlying lifecycle records. Campaign and
+  resume views are validated projections, so they can improve long-running
+  autonomous work without creating a second mutation authority.
+- Keep all workflow progress locally operable: no signature, authentication,
+  authorization, or external-review prerequisite is required for lifecycle
+  progression or release qualification.
+
 ## 0.6.0 - 2026-10-12
 
 - Add revision-bound, durable execution envelopes for active tasks. They carry
