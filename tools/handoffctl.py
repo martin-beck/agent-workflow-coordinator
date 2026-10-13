@@ -2388,7 +2388,9 @@ def dependency_satisfied(dependency_id: str, tasks: list[Task]) -> bool:
 
 def require_role_admission(owner_id: str, required_role: str = "implementer") -> None:
     roles = __import__(f"{__package__ + '.' if __package__ else ''}roles", fromlist=["r"])
-    roles.require_admission(RUNTIME / "roles.json", ROOT / "examples/roles/role-registry.json", owner_id, required_role)
+    roles.require_admission(
+        RUNTIME / "roles.json", ROOT / "examples/roles/role-registry.json", owner_id, required_role
+    )
 
 
 def require_update_role_admission(kind: str, owner_id: str) -> None:
@@ -3601,7 +3603,9 @@ def role_doctor_errors() -> list[str]:
         for _, m, _ in all_tasks()
         if m.get("status") == "in_progress" and m.get("owner")
     ]
-    return roles.doctor_errors(RUNTIME / "roles.json", ROOT / "examples/roles/role-registry.json", owners)
+    return roles.doctor_errors(
+        RUNTIME / "roles.json", ROOT / "examples/roles/role-registry.json", owners
+    )
 
 
 def doctor_checks(*, live: bool, sqlite: bool, live_state: State | None) -> list[str]:

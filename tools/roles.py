@@ -233,9 +233,7 @@ def role_admission_errors(
 
 
 def require_admission(state_path: Path, registry_path: Path, owner_id: str, role: str) -> None:
-    error = role_admission_error(
-        state_path, registry_path, owner_id=owner_id, required_role=role
-    )
+    error = role_admission_error(state_path, registry_path, owner_id=owner_id, required_role=role)
     if error:
         raise RuntimeError(error)
 
