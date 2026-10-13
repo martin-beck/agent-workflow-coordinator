@@ -17,6 +17,7 @@ from tools import assumption_revalidation, handoffctl, resume_card, retry_circui
 
 def task(**changes: object) -> dict[str, object]:
     return {
+        "schema_version": 1,
         "id": "AR-0001",
         "title": "Resume task",
         "summary": "Resume from durable records.",
@@ -24,6 +25,7 @@ def task(**changes: object) -> dict[str, object]:
         "status": "in_progress",
         "next_action": "Run the focused verification.",
         "task_revision": 4,
+        "updated_at": "2026-10-13T00:00:00+00:00",
         "observed_branch": "feature/resume",
         "observed_head": "a" * 40,
         "checkpoint_commit": "",
@@ -129,10 +131,72 @@ class ResumeCardTests(unittest.TestCase):
         self.assertEqual("held", card["retry"]["state"])
         self.assertEqual("recover-retry-circuit", card["next_action"]["kind"])
 
+    def test_execution_reservation_precedes_retry_drift_and_task_actions(self) -> None:
+        meta = task(
+            execution_reservation={
+                "execution_id": "a" * 32,
+                "owner": "worker",
+                "task_revision": 4,
+                "envelope_digest": "sha256:" + "b" * 64,
+                "command_class": "test",
+                "scope_digest": "sha256:" + "c" * 64,
+                "argv_digest": "d" * 64,
+                "expires_at": "2020-01-01T00:00:00+00:00",
+            }
+        )
+        identity = "sha256:" + "c" * 64
+        retry_circuit.record_failure(meta, identity, "EXIT", 3, "2026-10-13T00:00:00+00:00")
+        meta["task_revision"] = 5
+        retry_circuit.record_failure(meta, identity, "EXIT", 3, "2026-10-13T00:01:00+00:00")
+        meta["task_revision"] = 6
+        retry_circuit.record_failure(meta, identity, "EXIT", 3, "2026-10-13T00:02:00+00:00")
+        card = resume_card.build(Path("/state"), Path("/projects"), meta, [meta])
+        self.assertEqual("expired", card["recovery"]["execution"]["state"])
+        self.assertEqual("recover-execution-reservation", card["next_action"]["kind"])
+
+    def test_live_execution_reservation_requires_wait_before_task_action(self) -> None:
+        meta = task(
+            execution_reservation={
+                "execution_id": "a" * 32,
+                "owner": "worker",
+                "task_revision": 4,
+                "envelope_digest": "sha256:" + "b" * 64,
+                "command_class": "test",
+                "scope_digest": "sha256:" + "c" * 64,
+                "argv_digest": "d" * 64,
+                "expires_at": "2099-01-01T00:00:00+00:00",
+            }
+        )
+        card = resume_card.build(Path("/state"), Path("/projects"), meta, [meta])
+        self.assertEqual("live", card["recovery"]["execution"]["state"])
+        self.assertEqual("wait-for-execution-reservation", card["next_action"]["kind"])
+
     def test_malformed_durable_record_fails_closed(self) -> None:
         meta = task(assumption_revalidation=[{}])
         with self.assertRaisesRegex(ValueError, "fields are not exact"):
             resume_card.build(Path("/state"), Path("/projects"), meta, [meta])
+
+    def test_unknown_evidence_metadata_fails_closed_without_projection(self) -> None:
+        meta = task(spec_acceptance={"unexpected": "private value"})
+        with self.assertRaisesRegex(ValueError, "spec acceptance is incomplete or unknown"):
+            resume_card.build(Path("/state"), Path("/projects"), meta, [meta])
+
+    def test_command_snapshot_rejects_unknown_task_metadata_before_projection(self) -> None:
+        meta = task(unrecognized_durable_metadata="private value")
+        errors = handoffctl.resume_card_snapshot_errors(
+            [(Path("AR-0001.md"), meta, "")], handoffctl.DEFAULT_EVIDENCE_POLICY
+        )
+        self.assertIn("AR-0001.md: unknown field unrecognized_durable_metadata", errors)
+
+    def test_text_is_a_complete_equivalent_card_projection(self) -> None:
+        card = resume_card.build(Path("/state"), Path("/projects"), task(), [task()])
+        lines = resume_card.render_text(card).splitlines()
+        self.assertEqual("RESUME_CARD=AR-0001", lines[0])
+        projected = {
+            name.lower(): json.loads(value)
+            for name, value in (line.split("=", 1) for line in lines[1:])
+        }
+        self.assertEqual(card, projected)
 
     def test_cli_text_and_json_share_one_read_only_card(self) -> None:
         meta = task()
@@ -141,6 +205,12 @@ class ResumeCardTests(unittest.TestCase):
         with (
             patch.object(handoffctl, "all_tasks", return_value=[(Path("task"), meta, "")]),
             patch.object(handoffctl, "config", return_value={"projects_root": "/projects"}),
+            patch.object(
+                handoffctl,
+                "evidence_policy",
+                return_value=handoffctl.DEFAULT_EVIDENCE_POLICY,
+            ),
+            patch.object(handoffctl, "resume_card_snapshot_errors", return_value=[]),
             patch.object(handoffctl, "locked", return_value=contextlib.nullcontext()),
             patch.object(resume_card, "build", return_value=card),
             patch("sys.stdout", stream),

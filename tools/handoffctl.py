@@ -4588,13 +4588,19 @@ def dispatch_read_only_command(args: argparse.Namespace) -> int:
         cmd_snapshot(args.task)
     elif args.cmd == "resume-card":
         with locked(exclusive=False, phase="resume_card"):
+            policy = evidence_policy(ROOT)
+            tasks = all_tasks()
+            errors = resume_card_snapshot_errors(tasks, policy)
+            if errors:
+                raise RuntimeError("resume-card snapshot validation failed:\n" + "\n".join(errors))
             print(
                 resume_card.command(
                     ROOT,
                     Path(str(config().get("projects_root", ""))),
                     args.task,
-                    all_tasks(),
+                    tasks,
                     args.json,
+                    policy.classes,
                 ),
                 end="",
             )
@@ -4605,6 +4611,26 @@ def dispatch_read_only_command(args: argparse.Namespace) -> int:
     else:
         return print_execution_preflight(args)
     return 0
+
+
+def resume_card_snapshot_errors(tasks: list[Task], policy: EvidencePolicy) -> list[str]:
+    """Fail closed before projecting a locked authority task snapshot."""
+    errors: list[str] = []
+    ids: set[str] = set()
+    for path, meta, _ in tasks:
+        task_id = str(meta.get("id", ""))
+        if task_id in ids:
+            errors.append(f"duplicate {task_id}")
+        ids.add(task_id)
+        errors.extend(basic_task_errors(path, meta, policy))
+        try:
+            resume_card._evidence(meta, policy.classes)
+        except ValueError as error:
+            errors.append(f"{task_id}: {error}")
+    errors.extend(graph_errors(tasks))
+    errors.extend(hierarchy_errors(tasks))
+    errors.extend(supersession_errors(tasks))
+    return sorted(set(errors))
 
 
 def cmd_retry_circuit_status(task_id: str) -> int:

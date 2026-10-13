@@ -5,16 +5,25 @@
 from __future__ import annotations
 
 import argparse
+import datetime as dt
 import json
 from pathlib import Path
 from typing import Any
 
 if __package__:
-    from . import assumption_revalidation, change_drift, retry_circuit
+    from . import (
+        assumption_revalidation,
+        change_drift,
+        execution_envelope,
+        retry_circuit,
+        task_spec,
+    )
 else:  # pragma: no cover - direct handoffctl execution
     import assumption_revalidation  # type: ignore[import-not-found,no-redef]
     import change_drift  # type: ignore[import-not-found,no-redef]
+    import execution_envelope  # type: ignore[import-not-found,no-redef]
     import retry_circuit  # type: ignore[import-not-found,no-redef]
+    import task_spec  # type: ignore[import-not-found,no-redef]
 
 type Meta = dict[str, Any]
 
@@ -112,21 +121,118 @@ def _assumptions(
     return cards, drift
 
 
-def _evidence(task: Meta) -> Meta:
+def _acceptance(task: Meta, evidence_classes: frozenset[str]) -> Meta | None:
+    """Return only a closed, validated legacy acceptance record."""
     acceptance = task.get("spec_acceptance")
+    if acceptance is None:
+        return None
+    has_spec = "spec_ref" in task or "spec_revision" in task
+    required = {"status", "evidence_class", "evidence_ref", "evidence_digest"}
+    required |= {"spec_ref", "spec_revision"} if has_spec else {"match"}
+    if not isinstance(acceptance, dict) or set(acceptance) != required:
+        raise ValueError("spec acceptance is incomplete or unknown")
+    if (
+        acceptance.get("status") != "pass"
+        or acceptance.get("evidence_class") not in evidence_classes
+        or not isinstance(acceptance.get("evidence_ref"), str)
+        or task_spec.EVIDENCE_REF.fullmatch(acceptance["evidence_ref"]) is None
+        or not isinstance(acceptance.get("evidence_digest"), str)
+        or task_spec.DIGEST.fullmatch(acceptance["evidence_digest"]) is None
+    ):
+        raise ValueError("spec acceptance is invalid")
+    if has_spec and (
+        acceptance.get("spec_ref") != task.get("spec_ref")
+        or acceptance.get("spec_revision") != task.get("spec_revision")
+    ):
+        raise ValueError("spec acceptance does not match task specification")
+    if not has_spec and acceptance.get("match") != "best_effort":
+        raise ValueError("spec acceptance match is invalid")
+    return {key: acceptance[key] for key in sorted(required)}
+
+
+def _predicates(task: Meta, evidence_classes: frozenset[str]) -> list[Meta]:
     ledger = task.get("evidence_ledger")
-    steps = ledger.get("steps", []) if isinstance(ledger, dict) else []
-    return {
-        "acceptance": acceptance if isinstance(acceptance, dict) else None,
-        "predicates": [
+    if ledger is None:
+        return []
+    if not isinstance(ledger, dict) or set(ledger) != task_spec.LEDGER_FIELDS:
+        raise ValueError("evidence ledger is incomplete or unknown")
+    candidate_ref = ledger.get("candidate_ref")
+    candidate_digest = ledger.get("candidate_digest")
+    steps = ledger.get("steps")
+    if (
+        not isinstance(candidate_ref, str)
+        or task_spec.EVIDENCE_REF.fullmatch(candidate_ref) is None
+        or not isinstance(candidate_digest, str)
+        or task_spec.DIGEST.fullmatch(candidate_digest) is None
+        or not isinstance(steps, list)
+    ):
+        raise ValueError("evidence ledger is invalid")
+    predicates: list[Meta] = []
+    for step in steps:
+        if not isinstance(step, dict) or set(step) != task_spec.LEDGER_STEP_FIELDS:
+            raise ValueError("evidence ledger step is incomplete or unknown")
+        if (
+            not isinstance(step.get("predicate_id"), str)
+            or task_spec.ID_REF.fullmatch(step["predicate_id"]) is None
+            or step.get("status") not in {"pass", "stale"}
+            or not isinstance(step.get("candidate_ref"), str)
+            or task_spec.EVIDENCE_REF.fullmatch(step["candidate_ref"]) is None
+            or not isinstance(step.get("candidate_digest"), str)
+            or task_spec.DIGEST.fullmatch(step["candidate_digest"]) is None
+            or step.get("evidence_class") not in evidence_classes
+            or not isinstance(step.get("evidence_ref"), str)
+            or task_spec.EVIDENCE_REF.fullmatch(step["evidence_ref"]) is None
+            or not isinstance(step.get("evidence_digest"), str)
+            or task_spec.DIGEST.fullmatch(step["evidence_digest"]) is None
+            or type(step.get("recorded_task_revision")) is not int
+            or step["recorded_task_revision"] < 1
+        ):
+            raise ValueError("evidence ledger step is invalid")
+        predicates.append(
             {
                 key: step[key]
-                for key in ("predicate_id", "status", "recorded_task_revision")
-                if key in step
+                for key in (
+                    "predicate_id",
+                    "status",
+                    "candidate_ref",
+                    "candidate_digest",
+                    "evidence_class",
+                    "evidence_ref",
+                    "evidence_digest",
+                    "recorded_task_revision",
+                )
             }
-            for step in sorted(steps, key=lambda value: str(value.get("predicate_id", "")))
-            if isinstance(step, dict)
-        ],
+        )
+    return sorted(predicates, key=lambda value: str(value["predicate_id"]))
+
+
+def _evidence(task: Meta, evidence_classes: frozenset[str]) -> Meta:
+    return {
+        "acceptance": _acceptance(task, evidence_classes),
+        "predicates": _predicates(task, evidence_classes),
+    }
+
+
+def _execution_recovery(task: Meta) -> tuple[Meta, Meta | None]:
+    """Describe a valid execution fence before less-specific recovery paths."""
+    reservation = task.get("execution_reservation")
+    if reservation is None:
+        return {"state": "clear"}, None
+    if not execution_envelope.valid_reservation(reservation):
+        raise ValueError("execution reservation is invalid")
+    expires_at = dt.datetime.fromisoformat(str(reservation["expires_at"]).replace("Z", "+00:00"))
+    details: Meta = {
+        "execution_id": reservation["execution_id"],
+        "expires_at": reservation["expires_at"],
+    }
+    if expires_at > dt.datetime.now(dt.UTC):
+        return {"state": "live", **details}, {
+            "kind": "wait-for-execution-reservation",
+            "instruction": "Wait for the live bound execution reservation to finish or expire.",
+        }
+    return {"state": "expired", **details}, {
+        "kind": "recover-execution-reservation",
+        "instruction": "Recover expired reservation with verified exit and result evidence.",
     }
 
 
@@ -148,9 +254,13 @@ def _retry(task: Meta) -> tuple[Meta, Meta | None]:
     return {"state": "clear", "attempts": len(checked["attempts"])}, None
 
 
-def _next_action(task: Meta, drift: list[Meta], recovery: Meta | None) -> Meta:
-    if recovery is not None:
-        return recovery
+def _next_action(
+    task: Meta, drift: list[Meta], execution_recovery: Meta | None, retry_recovery: Meta | None
+) -> Meta:
+    if execution_recovery is not None:
+        return execution_recovery
+    if retry_recovery is not None:
+        return retry_recovery
     material = next((item for item in drift if item["material"]), None)
     if material is not None:
         if material["kind"] == "scope":
@@ -166,11 +276,18 @@ def _next_action(task: Meta, drift: list[Meta], recovery: Meta | None) -> Meta:
     return {"kind": "task-next-action", "instruction": str(task["next_action"])}
 
 
-def build(root: Path, projects_root: Path, task: Meta, tasks: list[Meta]) -> Meta:
+def build(
+    root: Path,
+    projects_root: Path,
+    task: Meta,
+    tasks: list[Meta],
+    evidence_classes: frozenset[str] = task_spec.EVIDENCE_CLASSES,
+) -> Meta:
     """Compose one stable card without changing authority or recording new data."""
     scope, scope_drift = _scope(task)
     assumptions, assumption_drift = _assumptions(root, projects_root, task, tasks)
-    retry, recovery = _retry(task)
+    execution, execution_recovery = _execution_recovery(task)
+    retry, retry_recovery = _retry(task)
     drift = sorted([*scope_drift, *assumption_drift], key=lambda item: str(item["field"]))
     return {
         "schema_version": SCHEMA_VERSION,
@@ -183,27 +300,36 @@ def build(root: Path, projects_root: Path, task: Meta, tasks: list[Meta]) -> Met
         },
         "source": _source(task),
         "scope": scope,
-        "evidence": _evidence(task),
+        "evidence": _evidence(task, evidence_classes),
         "retry": retry,
+        "recovery": {"execution": execution, "retry": retry},
         "assumptions": assumptions,
         "drift": drift,
         "acknowledgements": _acknowledgements(task),
-        "next_action": _next_action(task, drift, recovery),
+        "next_action": _next_action(task, drift, execution_recovery, retry_recovery),
     }
 
 
 def render_text(card: Meta) -> str:
     """Render the same card as compact, deterministic text-first output."""
     task = card["task"]
-    lines = [
-        f"RESUME_CARD={task['id']}",
-        f"STATUS={task['status']}",
-        f"SOURCE_HEAD={card['source']['head']}",
-        f"SCOPE_STATE={card['scope']['state']}",
-        f"RETRY_STATE={card['retry']['state']}",
-        "DRIFT=" + json.dumps(card["drift"], sort_keys=True, separators=(",", ":")),
-        "NEXT_ACTION=" + json.dumps(card["next_action"], sort_keys=True, separators=(",", ":")),
-    ]
+    lines = [f"RESUME_CARD={task['id']}"]
+    lines.extend(
+        f"{name.upper()}=" + json.dumps(card[name], sort_keys=True, separators=(",", ":"))
+        for name in (
+            "schema_version",
+            "task",
+            "source",
+            "scope",
+            "assumptions",
+            "evidence",
+            "retry",
+            "recovery",
+            "acknowledgements",
+            "drift",
+            "next_action",
+        )
+    )
     return "\n".join(lines) + "\n"
 
 
@@ -220,12 +346,13 @@ def command(
     task_id: str,
     tasks: list[tuple[Path, Meta, str]],
     as_json: bool,
+    evidence_classes: frozenset[str] = task_spec.EVIDENCE_CLASSES,
 ) -> str:
     """Return one rendered card from a caller-held, consistent authority snapshot."""
     task = next((meta for _, meta, _ in tasks if meta.get("id") == task_id), None)
     if task is None:
         raise RuntimeError(f"unknown task {task_id}")
-    card = build(root, projects_root, task, [meta for _, meta, _ in tasks])
+    card = build(root, projects_root, task, [meta for _, meta, _ in tasks], evidence_classes)
     return (
         json.dumps(card, sort_keys=True, separators=(",", ":")) + "\n"
         if as_json
