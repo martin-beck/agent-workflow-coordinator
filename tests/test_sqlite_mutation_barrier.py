@@ -558,9 +558,9 @@ class SQLiteMutationBarrierProcessTests(unittest.TestCase):
             RUNTIME=runtime,
             LOCK=runtime / "state.lock",
         )
+        self.addCleanup(self.directory.cleanup)
         self.coordinator_globals.start()
         self.addCleanup(self.coordinator_globals.stop)
-        self.addCleanup(self.directory.cleanup)
         self.git_authority = self.root / "git-authority"
         self.git_authority.mkdir()
         _git(self.git_authority, "init", "-b", "main")
