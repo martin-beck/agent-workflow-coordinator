@@ -51,6 +51,7 @@ if __package__:
         run_command,
     )
     from . import autonomy_limits as al
+    from . import roles as role_module
     from .board_metrics import build_metrics
     from .board_metrics import encode as encode_metrics
     from .checkpoint_records import (
@@ -142,6 +143,7 @@ else:
     import resume_card  # type: ignore[import-not-found,no-redef]
     import resume_card_runtime  # type: ignore[import-not-found,no-redef]
     import retry_circuit  # type: ignore[import-not-found,no-redef]
+    import roles as role_module  # type: ignore[import-not-found,no-redef]
     import run_command  # type: ignore[import-not-found,no-redef]
     from checkpoint_records import (  # type: ignore[import-not-found,no-redef]
         append_checkpoint,
@@ -2380,8 +2382,15 @@ def dependency_satisfied(dependency_id: str, tasks: list[Task]) -> bool:
 
 
 def require_role_admission(owner_id: str, required_role: str = "implementer") -> None:
-    """Retain advisory role compatibility without gating lifecycle progress."""
-    del owner_id, required_role
+    """Require a valid durable role assignment when role management is initialized."""
+    if not (RUNTIME / "roles.json").exists():
+        return
+    role_module.require_admission(
+        RUNTIME / "roles.json",
+        ROOT / "examples/roles/role-registry.json",
+        owner_id,
+        required_role,
+    )
 
 
 def require_update_role_admission(kind: str, owner_id: str) -> None:
@@ -3594,8 +3603,16 @@ def cmd_render_status(*, check: bool) -> None:
 
 
 def role_doctor_errors() -> list[str]:
-    """Roles are external metadata and do not gate coordinator health."""
-    return []
+    """Validate active task owners against the durable role store when initialized."""
+    state = RUNTIME / "roles.json"
+    if not state.exists():
+        return []
+    owners = [
+        (str(meta["owner"]), "implementer")
+        for _path, meta, _body in all_tasks()
+        if meta.get("status") == "in_progress" and isinstance(meta.get("owner"), str)
+    ]
+    return role_module.doctor_errors(state, owners)
 
 
 def doctor_checks(*, live: bool, sqlite: bool, live_state: State | None) -> list[str]:
@@ -4599,18 +4616,11 @@ def cmd_upgrade(args: argparse.Namespace) -> int:
 
 def dispatch_roles_command(args: argparse.Namespace) -> int:
     """Dispatch a role command after the permanent project binding passed."""
-    if __package__:
-        from .roles import RolesError
-        from .roles import assign as assign_role
-        from .roles import check as check_roles
-        from .roles import list_assignments as list_roles
-        from .roles import remove as remove_role
-    else:
-        from roles import RolesError  # type: ignore[import-not-found,no-redef]
-        from roles import assign as assign_role  # type: ignore[no-redef]
-        from roles import check as check_roles  # type: ignore[no-redef]
-        from roles import list_assignments as list_roles  # type: ignore[no-redef]
-        from roles import remove as remove_role  # type: ignore[no-redef]
+    role_error = role_module.RolesError
+    assign_role = role_module.assign
+    check_roles = role_module.check
+    list_roles = role_module.list_assignments
+    remove_role = role_module.remove
     try:
         if args.roles_command == "assign":
             result = assign_role(
@@ -4636,7 +4646,7 @@ def dispatch_roles_command(args: argparse.Namespace) -> int:
                 expected_revision=args.expected_revision,
                 assignment_id=args.assignment_id,
             )
-    except RolesError as error:
+    except role_error as error:
         raise RuntimeError(str(error)) from error
     print(json.dumps(result, sort_keys=True, separators=(",", ":")))
     return 0

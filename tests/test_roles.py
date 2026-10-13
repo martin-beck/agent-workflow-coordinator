@@ -347,7 +347,7 @@ class RoleManagementTests(unittest.TestCase):
                 or "",
             )
 
-    def test_doctor_keeps_role_authorization_advisory(self) -> None:
+    def test_doctor_rejects_active_owner_without_role_assignment(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             runtime = root / ".runtime"
@@ -376,9 +376,11 @@ class RoleManagementTests(unittest.TestCase):
                 patch.object(handoffctl, "validate", return_value=[]),
                 patch.object(handoffctl, "all_tasks", return_value=active_unknown),
             ):
-                self.assertEqual(0, handoffctl.cmd_doctor(live=False))
+                with redirect_stdout(StringIO()) as output:
+                    self.assertEqual(1, handoffctl.cmd_doctor(live=False))
+                self.assertIn("no active assignment", output.getvalue())
 
-    def test_handoffctl_lifecycle_role_admission_is_advisory(self) -> None:
+    def test_handoffctl_lifecycle_role_admission_is_strict(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             runtime = root / ".runtime"
@@ -403,7 +405,8 @@ class RoleManagementTests(unittest.TestCase):
                 patch.object(handoffctl, "ROOT", root),
             ):
                 handoffctl.require_role_admission("worker-007")
-                handoffctl.require_role_admission("unknown-owner")
+                with self.assertRaisesRegex(RuntimeError, "no active assignment"):
+                    handoffctl.require_role_admission("unknown-owner")
 
 
 if __name__ == "__main__":
