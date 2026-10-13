@@ -2777,7 +2777,6 @@ def binding_identity_conflicts(args: argparse.Namespace, meta: Meta, tasks: list
 
 
 def require_active_binding_owner(args: argparse.Namespace, meta: Meta) -> None:
-    """Require the exact live owner and revision before binding an identity."""
     if meta.get("owner") != args.owner:
         raise RuntimeError(f"{args.task} is owned by {meta.get('owner') or 'nobody'}")
     require_role_admission(str(args.owner))
@@ -2820,7 +2819,6 @@ def require_bind_worktree_admission(
 
 
 def apply_bind_worktree(args: argparse.Namespace, meta: Meta, tasks: list[Task]) -> str:
-    """Bind one legacy task, or report an exact retry without mutating it."""
     require_bind_worktree_admission(args, meta, tasks)
     require_no_execution_reservation(meta)
     meta.update(branch=args.branch, worktree_key=args.worktree_key)
@@ -2828,8 +2826,10 @@ def apply_bind_worktree(args: argparse.Namespace, meta: Meta, tasks: list[Task])
 
 
 def apply_repair_legacy_binding(args: argparse.Namespace, meta: Meta, _tasks: list[Task]) -> str:
-    """Clear one exact stale worktree key from an unowned partial legacy task."""
-    from legacy_binding_repair import repair
+    if __package__:
+        from .legacy_binding_repair import repair
+    else:
+        from legacy_binding_repair import repair  # type: ignore[import-not-found,no-redef]
 
     return repair(args, meta, valid_binding_worktree)
 
