@@ -2760,9 +2760,9 @@ def valid_binding_worktree(value: object) -> bool:
         settings = config()
         if value in {".", "..", str(settings.get("product_worktree", ""))}:
             return False
-        projects_root = settings.get("projects_root")
-        if projects_root is None:
+        if "projects_root" not in settings:
             return bool(settings)
+        projects_root = settings["projects_root"]
         if not isinstance(projects_root, str) or not projects_root:
             return False
         root = Path(projects_root).resolve()

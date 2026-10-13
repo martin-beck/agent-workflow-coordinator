@@ -333,7 +333,7 @@ class HandoffctlCoverageTests(unittest.TestCase):
         with patch.object(handoffctl, "config", return_value={}):
             self.assertFalse(handoffctl.valid_binding_worktree("tree"))
         malformed: object
-        for malformed in ("", 7, []):
+        for malformed in (None, "", 7, []):
             with (
                 self.subTest(projects_root=malformed),
                 patch.object(handoffctl, "config", return_value={"projects_root": malformed}),
