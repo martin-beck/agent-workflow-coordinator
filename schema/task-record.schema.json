@@ -233,6 +233,22 @@
                 }
             }
         },
+        "autonomy_limits": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["schema_version", "policy_digest", "started_at", "commands", "retries", "cost_units", "external_side_effects", "hold", "dispositions"],
+            "properties": {
+                "schema_version": {"const": 1},
+                "policy_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+                "started_at": {"type": "string", "format": "date-time"},
+                "commands": {"type": "integer", "minimum": 0},
+                "retries": {"type": "integer", "minimum": 0},
+                "cost_units": {"type": "integer", "minimum": 0},
+                "external_side_effects": {"type": "integer", "minimum": 0},
+                "hold": {"type": ["null", "object"]},
+                "dispositions": {"type": "array", "maxItems": 32}
+            }
+        },
         "parent_task_ref": {
             "anyOf": [{"type": "string", "maxLength": 0}, {"$ref": "#/$defs/taskId"}]
         },

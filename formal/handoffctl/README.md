@@ -87,6 +87,13 @@ cannot exhaust the retry window permanently. Expired-claim recovery rejects live
 rejection, expiry cleanup, expired-claim recovery, and fresh held-command recovery series. Bound
 envelope runs do not use these slots and retain their execution-fence sequencing.
 
+An opt-in tracked autonomy-limits policy records only a policy digest, bounded
+counters, timestamps, and concise local dispositions. `HandoffctlAutonomyLimits.tla`
+models a command/cost-like budget, elapsed expiry, a held revision fence, a
+no-effect bypass attempt, and explicit local disposition. It is bounded
+best-effort design guidance; concrete Git and SQLite tests cover the typed policy,
+all six budget triggers, and task-record parity.
+
 The linearization point is the successful transition while the process holds the lock below Git's
 common directory. Every worktree of one local clone resolves the same lock path. Expected revisions
 are checked only after acquisition, so two processes observing one revision cannot both mutate it.

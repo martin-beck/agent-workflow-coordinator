@@ -50,6 +50,9 @@ if __package__:
         retry_circuit,
         run_command,
     )
+    from . import (
+        autonomy_limits as al,
+    )
     from .board_metrics import build_metrics
     from .board_metrics import encode as encode_metrics
     from .checkpoint_records import (
@@ -119,6 +122,7 @@ if __package__:
     )
 else:  # pragma: no cover - direct script execution
     import assumption_revalidation  # type: ignore[import-not-found,no-redef]
+    import autonomy_limits as al  # type: ignore[import-not-found,no-redef]
     import change_drift  # type: ignore[import-not-found,no-redef]
     import command_results  # type: ignore[import-not-found,no-redef]
 
@@ -1470,6 +1474,8 @@ def execution_metadata_errors(task_id: str, meta: Meta) -> list[str]:
     if error := assumption_revalidation.metadata_error(meta):
         errors.append(f"{task_id}: {error}")
     if error := retry_circuit.metadata_error(meta):
+        errors.append(f"{task_id}: {error}")
+    if error := al.metadata_error(meta):
         errors.append(f"{task_id}: {error}")
     return errors
 
@@ -3190,6 +3196,8 @@ def lifecycle_transition_handler(
         "execution-result": lambda: apply_execution_result(args, meta),
         "execution-finish": lambda: apply_execution_finish(args, meta),
     }
+    if kind.startswith("autonomy-limits"):
+        return lambda: al.transition(require_active_binding_owner, args, meta, now())
     return handlers.get(kind)
 
 
@@ -3200,7 +3208,6 @@ def apply_transition(
     tasks: list[Task],
     policy: EvidencePolicy | None = None,
 ) -> str:
-    """Dispatch one typed lifecycle transition for both storage backends."""
     handler = lifecycle_transition_handler(args, kind, meta, tasks, policy)
     if handler is not None:
         return handler()
@@ -4245,12 +4252,11 @@ def _cmd_run_fenced(
     except ValueError as error:
         raise RuntimeError(str(error)) from error
     timeout_cap = run_envelope_timeout(args)
-    # Never execute or consume untracked caller input. Scripts and data must be
-    # named by argv or a stable file, whose content digest can be recorded too.
     command_hash = hashlib.sha256("\0".join(args.command).encode()).hexdigest()
     if timeout_cap is not None and timeout > timeout_cap:
         raise RuntimeError(f"command timeout exceeds envelope limit of {timeout_cap}s")
     require_policy_unchanged(ROOT, policy)
+    al.prepare(_RUN_RUNTIME, args, policy)
     command = sandboxed_envelope_command(args)
     execution_id: str | None = None
     execution_revision: int | None = None
@@ -4627,21 +4633,18 @@ def cmd_retry_circuit_status(task_id: str) -> int:
 
 
 def dispatch_fast_command(args: argparse.Namespace) -> int:
-    """Dispatch the opt-in receipt contract after normal project binding."""
     from tools.fast_receipt_cli import dispatch_fast
 
     return dispatch_fast(sys.modules[__name__], args)
 
 
 def dispatch_lifecycle_mutation(args: argparse.Namespace) -> None:
-    """Run one lifecycle mutation and report an admitted no-op replay."""
     note = mutate(args, args.cmd)
     if note is not None:
         print(note)
 
 
 def dispatch_retry_circuit(args: argparse.Namespace) -> int:
-    """Dispatch retry inspection or its owner- and revision-fenced recovery."""
     if args.retry_circuit_action == "status":
         return cmd_retry_circuit_status(args.task)
     dispatch_lifecycle_mutation(args)
@@ -4649,7 +4652,6 @@ def dispatch_retry_circuit(args: argparse.Namespace) -> int:
 
 
 def dispatch_side_effect_command(args: argparse.Namespace) -> bool:
-    """Run standard commands whose successful result is the conventional zero."""
     handlers: dict[str, Callable[[], object]] = {
         "reconcile": lambda: reconcile(do_commit=args.commit, push=args.push),
         "checkpoint": lambda: cmd_checkpoint(args),
@@ -4671,6 +4673,8 @@ def dispatch_returning_command(args: argparse.Namespace) -> int | None:
         return dispatch_read_only_command(args)
     if args.cmd == "retry-circuit":
         return dispatch_retry_circuit(args)
+    if args.cmd == "autonomy-limits":
+        return al.dispatch(_RUN_RUNTIME, args)
     if args.cmd == "doctor":
         return cmd_doctor(live=args.live)
     if args.cmd == "upgrade":
@@ -4938,6 +4942,7 @@ def main() -> int:
     change_drift.add_command_parser(commands)
     assumption_revalidation.add_command_parser(commands)
     retry_circuit.add_command_parser(commands)
+    al.add_command_parser(commands)
     item = commands.add_parser("gate")
     item.add_argument("task")
     item.add_argument("--expected-revision", type=int, required=True)
@@ -4971,6 +4976,7 @@ def main() -> int:
     item.add_argument("--owner", required=True)
     item.add_argument("--timeout-seconds", type=float, default=COMMAND_TIMEOUT_SECONDS)
     item.add_argument("--retry-window", type=int, default=retry_circuit.DEFAULT_WINDOW)
+    al.add_run_arguments(item)
     item.add_argument("--command-class", choices=sorted(execution_envelope.COMMAND_CLASSES))
     item.add_argument("--scope-path", action="append", default=[])
     item.add_argument("command", nargs=argparse.REMAINDER)

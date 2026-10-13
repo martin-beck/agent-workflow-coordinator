@@ -8,7 +8,7 @@ import argparse
 from typing import Any
 
 
-def cmd_run(runtime: Any, args: argparse.Namespace) -> int:
+def cmd_run(runtime: Any, args: argparse.Namespace) -> int:  # noqa: C901
     """Execute one fenced command, then durably record its result and retry state."""
     if not args.command:
         raise RuntimeError("missing command")
@@ -45,6 +45,14 @@ def cmd_run(runtime: Any, args: argparse.Namespace) -> int:
             else None
         )
         runtime.mutate(args, "retry-circuit-resolve", policy)
+        _, current, _ = runtime.locate(args.task)
+        execution_revision = int(current["task_revision"])
+    if hasattr(args, "autonomy_limits_policy"):
+        _, current, _ = runtime.locate(args.task)
+        args.expected_revision = int(current["task_revision"])
+        args.autonomy_returncode = returncode
+        args.autonomy_diff_bytes = runtime.al.diff_bytes(runtime.ROOT)
+        runtime.mutate(args, "autonomy-limits-record", policy)
         _, current, _ = runtime.locate(args.task)
         execution_revision = int(current["task_revision"])
     try:

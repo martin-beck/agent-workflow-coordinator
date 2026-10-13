@@ -155,6 +155,16 @@ authentication, signature, or external-service gates. A checkpoint/change-drift/
 also changes the progress fingerprint and permits a fresh bounded attempt series without erasing
 the prior hold.
 
+### Autonomy limits
+
+Projects can commit `autonomy-limits-policy.json` to opt into elapsed-time, retry,
+command, diff-size, cost, or declared external-side-effect budgets. `handoffctl run`
+records only bounded counters and a policy digest. When a budget is reached or
+overrun it creates a diagnostic hold; no further wrapped command starts until the
+active owner records `handoffctl autonomy-limits dispose TASK --owner ...
+--expected-revision ... --reason ...`. This is a revision-fenced local disposition,
+not an authentication, signature, account, or reviewer workflow.
+
 Only unbound runs use retry launch slots. A slot is revision-fenced, carries a bounded expiry
 derived from the command timeout, and is resolved after the child exits. If a child is interrupted
 or result recording fails, a later unbound launch retires only elapsed slots and retains a concise

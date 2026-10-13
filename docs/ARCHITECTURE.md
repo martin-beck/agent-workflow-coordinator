@@ -35,6 +35,13 @@ bytes.  It is not an additional authorization switch: an open, incomplete, or re
 gate blocks lifecycle work; the deprecated `authorized` field is ignored on read and removed by
 the next gate mutation.
 
+An optional tracked `autonomy-limits-policy.json` bounds autonomous elapsed time,
+retries, command count, diff size, cost units, and declared external effects. Its
+task ledger contains only counters, timestamps, policy digests, bounded reasons,
+and revision-fenced diagnostics; it never records command arguments, source, or
+output. A hold rejects further runs before their external effect. It is resolved by
+the current owner with an explicit local disposition, not a human-account gate.
+
 The opt-in Git backend retains the original model: task JSON front matter and Markdown bodies are
 authority, and the repository-common lock serializes linked worktrees through one inode. A tracked
 `coordinator.backend.json` permanently selects the backend. Its absence has one compatibility
