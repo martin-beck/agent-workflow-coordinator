@@ -275,7 +275,7 @@ LIFECYCLE_MUTATION_COMMANDS = (
 
 
 class IdempotentMutationError(RuntimeError):
-    """Signal an admitted replay that must not create another state revision."""
+    """Signal an admitted no-op replay."""
 
 
 # CURRENT.md is the compact actionable queue; terminal history remains in the
@@ -340,7 +340,7 @@ def task_label(meta: Meta) -> str:
 
 
 def short_title_errors(path: Path, task_id: str, value: object) -> list[str]:
-    """Validate optional concise navigational metadata independently of task state."""
+    """Validate optional concise task metadata."""
     if value is None:
         return []
     if (
@@ -412,7 +412,7 @@ def repository_slug(value: object) -> str:
 
 
 def backend_selection() -> Meta:
-    """Load the project-bound backend; missing legacy selection means Git."""
+    """Load the selected backend."""
     if not BACKEND_CONFIG.exists():
         return {"schema_version": 1, "backend": "git", "legacy": True}
     try:
@@ -524,7 +524,7 @@ def mutating_sqlite_backend() -> SQLiteBackend:
 
 
 def provision_sqlite_barrier() -> None:
-    """Provision the authority fence and one released baseline session."""
+    """Provision the authority fence and baseline session."""
     from tools.mutation_fence import provision, provision_control_binding
     from tools.rollback_control_store import SQLiteBarrierSessionStore, SQLiteRollbackControlStore
     from tools.upgrade_identity import BarrierSessionIdentity, canonical_barrier_session_digest
@@ -841,7 +841,7 @@ def run_github_observation(args: list[str]) -> subprocess.CompletedProcess[str]:
 
 
 def coordinator_lock_path() -> Path:
-    """Resolve one lock shared by every worktree of the same local Git repository."""
+    """Resolve the lock shared by local Git worktrees."""
     configured = RUNTIME / "state.lock"
     if configured != LOCK or not (ROOT / ".git").exists():
         return LOCK
@@ -942,7 +942,7 @@ def locked(
 
 
 def trace_lock_metric(phase: str, mode: str, wait: float, hold: float | None) -> None:
-    """Emit optional private, bounded lock timing without command or path data."""
+    """Emit bounded private lock timing."""
     destination = os.environ.get("HANDOFFCTL_LOCK_TRACE")
     if not destination:
         return
@@ -963,12 +963,12 @@ def trace_lock_metric(phase: str, mode: str, wait: float, hold: float | None) ->
 
 
 def observation_marker(name: str) -> Path:
-    """Order scans for one checkout's independent task and projection files."""
+    """Order per-checkout task and projection scans."""
     return RUNTIME / name
 
 
 def reserve_observation_ticket() -> int:
-    """Order slow scans without occupying the authority lock while they run."""
+    """Order slow scans outside the authority lock."""
     path = observation_marker("observation-sequence")
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     descriptor = os.open(path.with_suffix(".lock"), os.O_CREAT | os.O_RDWR, 0o600)
@@ -1093,7 +1093,7 @@ def render_current(tasks: list[Task]) -> str:
 
 
 def parse_worktree_listing(raw: str) -> list[tuple[Path, str, str]]:
-    """Reuse Git's exact listed head/branch, falling back only for incomplete records."""
+    """Reuse Git's listed head and branch when available."""
     records: list[tuple[Path, str, str]] = []
     for block in raw.split("\n\n"):
         lines = block.splitlines()
@@ -1111,7 +1111,7 @@ def parse_worktree_listing(raw: str) -> list[tuple[Path, str, str]]:
 
 
 def scan_worktree(item: tuple[Path, str, str]) -> dict[str, Any]:
-    """Observe one independent product checkout without changing its Git state."""
+    """Observe one product checkout without Git mutation."""
     path, listed_head, listed_branch = item
     head = listed_head or run(["git", "-C", str(path), "rev-parse", "HEAD"]).stdout.strip()
     branch = listed_branch or (
@@ -1308,7 +1308,7 @@ def possible_uuid_pattern(text: str) -> bool:
 
 
 def possible_privacy_pattern(text: str, lowered: str, label: str) -> bool:
-    """Use only necessary literals before the authoritative privacy regex."""
+    """Use literals before the privacy regex."""
     if not text.isascii():
         return True
     if label == "absolute Linux home path":
@@ -1332,7 +1332,7 @@ def possible_privacy_pattern(text: str, lowered: str, label: str) -> bool:
 
 
 def private_text_errors(relative: Path, text: str) -> list[str]:
-    """Keep the original regex and label ordering after cheap prefilters."""
+    """Keep the original privacy ordering after prefilters."""
     lowered = text.lower()
     return [
         f"{relative}: {label}"
@@ -4073,44 +4073,56 @@ def execution_preflight(args: argparse.Namespace) -> tuple[bool, str, str, float
         if not meta.get("worktree_key"):
             return False, "WORKTREE_BINDING_REQUIRED", "bound execution requires a worktree", None
         try:
-            worktree = change_drift.bound_worktree(
+            worktree_context = change_drift.bound_worktree(
                 meta,
                 Path(str(config()["projects_root"])),
                 str(config().get("product_worktree", "")),
             )
+            worktree = worktree_context.__enter__()
         except RuntimeError as error:
             return False, "WORKTREE_BINDING_INVALID", str(error), None
-        result = execution_envelope.preflight(
-            meta,
-            args.owner,
-            args.command_class,
-            list(args.scope_path),
-            worktree,
-        )
-        if not result.allowed:
-            return False, result.code, result.detail, None
-        envelope = meta.get("execution_envelope")
-        if not isinstance(envelope, dict):
-            return False, "ENVELOPE_INVALID", "durable execution envelope is missing", None
-        if execution_envelope.canonical_digest(envelope) != meta.get("execution_envelope_digest"):
-            return False, "ENVELOPE_INVALID", "durable execution envelope digest mismatches", None
-        mount_scope = list(envelope["path_scope"]["read"])
-        if args.command_class in {"source-write", "git-publication"}:
-            mount_scope.extend(args.scope_path)
         try:
+            result = execution_envelope.preflight(
+                meta,
+                args.owner,
+                args.command_class,
+                list(args.scope_path),
+                worktree,
+            )
+            if not result.allowed:
+                return False, result.code, result.detail, None
+            envelope = meta.get("execution_envelope")
+            if not isinstance(envelope, dict):
+                return False, "ENVELOPE_INVALID", "durable execution envelope is missing", None
+            if execution_envelope.canonical_digest(envelope) != meta.get(
+                "execution_envelope_digest"
+            ):
+                return (
+                    False,
+                    "ENVELOPE_INVALID",
+                    "durable execution envelope digest mismatches",
+                    None,
+                )
+            mount_scope = list(envelope["path_scope"]["read"])
+            if args.command_class in {"source-write", "git-publication"}:
+                mount_scope.extend(args.scope_path)
             for relative in mount_scope:
                 envelope_scope_path(worktree, str(relative))
+            rule = envelope["command_classes"][args.command_class]
+            args._envelope_worktree = str(
+                Path(str(config()["projects_root"])).resolve() / str(meta["worktree_key"])
+            )
+            args._envelope_write_scope = (
+                list(args.scope_path)
+                if args.command_class in {"source-write", "git-publication"}
+                else []
+            )
+            args._envelope_read_scope = list(envelope["path_scope"]["read"])
+            return True, result.code, result.detail, rule.get("timeout_seconds")
         except RuntimeError as error:
             return False, "PATH_SCOPE_UNAVAILABLE", str(error), None
-        rule = envelope["command_classes"][args.command_class]
-        args._envelope_worktree = str(worktree)
-        args._envelope_write_scope = (
-            list(args.scope_path)
-            if args.command_class in {"source-write", "git-publication"}
-            else []
-        )
-        args._envelope_read_scope = list(envelope["path_scope"]["read"])
-        return True, result.code, result.detail, rule.get("timeout_seconds")
+        finally:
+            worktree_context.__exit__(None, None, None)
 
 
 def print_execution_preflight(args: argparse.Namespace) -> int:

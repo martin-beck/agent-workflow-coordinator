@@ -5,10 +5,13 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import hashlib
 import json
+import os
 import re
 import subprocess
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any, cast
 
@@ -122,7 +125,7 @@ def _status_entries(raw: bytes, worktree: Path | None = None) -> list[Meta]:
 
 def observe(worktree: Path) -> Meta:
     """Take a stable, path-safe worktree observation without changing it."""
-    root = worktree.resolve()
+    root = worktree
     head = subprocess.run(  # noqa: S603
         ["git", "-C", str(root), "rev-parse", "--verify", "HEAD"],  # noqa: S607
         check=False,
@@ -634,20 +637,31 @@ def next_record(
     raise ValueError("unknown change-drift action")
 
 
-def bound_worktree(meta: Meta, projects_root: Path, product_worktree: str | None = None) -> Path:
-    """Resolve the task's declared worktree without accepting arbitrary paths."""
+@contextlib.contextmanager
+def bound_worktree(
+    meta: Meta, projects_root: Path, product_worktree: str | None = None
+) -> Iterator[Path]:
+    """Yield a no-follow descriptor path for the task's declared worktree."""
     key = meta.get("worktree_key")
     if not valid_worktree_key(key) or key == product_worktree:
         raise RuntimeError("change-drift requires a bound worktree")
     key = cast(str, key)
     root = projects_root.resolve()
-    candidate = root / key
-    if candidate.is_symlink():
-        raise RuntimeError("change-drift bound worktree must not be a symlink")
-    worktree = candidate.resolve()
-    if not worktree.is_relative_to(root) or worktree.parent != root:
-        raise RuntimeError("change-drift bound worktree escapes projects root")
-    return worktree
+    try:
+        root_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            worktree_fd = os.open(key, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=root_fd)
+        except BaseException:
+            os.close(root_fd)
+            raise
+    except OSError as error:
+        raise RuntimeError("change-drift bound worktree must be a direct directory") from error
+    try:
+        # Child Git processes dereference this coordinator-owned descriptor, not their own.
+        yield Path(f"/proc/{os.getpid()}/fd/{worktree_fd}")
+    finally:
+        os.close(worktree_fd)
+        os.close(root_fd)
 
 
 def apply(
@@ -666,18 +680,19 @@ def apply(
         )
     history = records(meta)
     revision = int(meta["task_revision"]) + 1
-    record, history = next_record(
-        args.task,
-        revision,
-        timestamp,
-        bound_worktree(meta, projects_root, product_worktree),
-        history,
-        args.change_drift_action,
-        scope_paths=getattr(args, "scope_path", None),
-        paths=getattr(args, "path", None),
-        reason=getattr(args, "reason", None),
-        generated=getattr(args, "generated", False),
-    )
+    with bound_worktree(meta, projects_root, product_worktree) as worktree:
+        record, history = next_record(
+            args.task,
+            revision,
+            timestamp,
+            worktree,
+            history,
+            args.change_drift_action,
+            scope_paths=getattr(args, "scope_path", None),
+            paths=getattr(args, "path", None),
+            reason=getattr(args, "reason", None),
+            generated=getattr(args, "generated", False),
+        )
     if len(history) >= MAX_RECORDS:
         raise RuntimeError("change-drift active cycle reached its bounded record limit")
     meta["change_drift"] = [*history, record]
