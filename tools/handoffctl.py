@@ -1731,7 +1731,7 @@ def mutation_errors(
     *,
     rendered_snapshot: tuple[list[Task], dict[Path, str], Meta] | None = None,
 ) -> list[str]:
-    """Validate a Git mutation without gating on unrelated repository findings."""
+    """Validate a Git mutation."""
     tasks = all_tasks()
     selected = [meta for candidate, meta, _ in tasks if candidate == path]
     if len(selected) != 1:
@@ -2364,14 +2364,7 @@ def locate(task_id: str) -> Task:
 
 
 def dependency_satisfied(dependency_id: str, tasks: list[Task]) -> bool:
-    """Return whether one dependency is complete or explicitly superseded.
-
-    A superseded task is not completion by itself. It satisfies a dependency
-    only when its ``superseded_by`` field names an existing task that is done,
-    or a finite chain of explicitly superseding tasks ending in one that is
-    done. Malformed, missing, self-referential, cyclic, or unfinished
-    successors therefore remain fail-closed and block the transition.
-    """
+    """Return whether a dependency is terminal."""
     by_id = {meta.get("id"): meta for _, meta, _ in tasks}
     seen: set[str] = set()
     current = dependency_id
@@ -4276,6 +4269,20 @@ def cmd_run(args: argparse.Namespace) -> int:
     return run_command.cmd_run(_RUN_RUNTIME, args)
 
 
+def _run_envelope_subprocess(
+    command: list[str], timeout: float, args: argparse.Namespace
+) -> subprocess.CompletedProcess[bytes]:
+    if hasattr(args, "_envelope_worktree_fd"):
+        return subprocess.run(
+            command,
+            check=False,
+            stdin=subprocess.DEVNULL,
+            timeout=timeout,
+            pass_fds=(int(args._envelope_worktree_fd),),
+        )
+    return subprocess.run(command, check=False, stdin=subprocess.DEVNULL, timeout=timeout)
+
+
 def _cmd_run_fenced(
     args: argparse.Namespace,
 ) -> tuple[EvidencePolicy, str, float, bool, int, str | None, int | None]:
@@ -4343,16 +4350,7 @@ def _cmd_run_fenced(
             args.retry_circuit_resolution_revision = int(args.expected_revision) + 1
     timed_out = False
     try:
-        pass_fds = (
-            (int(args._envelope_worktree_fd),) if hasattr(args, "_envelope_worktree_fd") else ()
-        )
-        proc = subprocess.run(
-            command,
-            check=False,
-            stdin=subprocess.DEVNULL,
-            timeout=timeout,
-            pass_fds=pass_fds,
-        )
+        proc = _run_envelope_subprocess(command, timeout, args)
     except subprocess.TimeoutExpired:
         timed_out = True
         returncode = 124
