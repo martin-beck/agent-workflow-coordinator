@@ -31,7 +31,7 @@ from collections import Counter
 from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 if not __package__:
     _SCRIPT_ROOT = str(Path(__file__).resolve().parent.parent)
@@ -45,6 +45,8 @@ if __package__:
         command_results,
         execution_envelope,
         execution_receipt,
+        resume_card,
+        resume_card_runtime,
         retry_circuit,
         run_command,
     )
@@ -135,6 +137,8 @@ else:  # pragma: no cover - direct script execution
 
     import execution_envelope  # type: ignore[import-not-found,no-redef]
     import execution_receipt  # type: ignore[import-not-found,no-redef]
+    import resume_card  # type: ignore[import-not-found,no-redef]
+    import resume_card_runtime  # type: ignore[import-not-found,no-redef]
     import retry_circuit  # type: ignore[import-not-found,no-redef]
     import run_command  # type: ignore[import-not-found,no-redef]
     from checkpoint_records import (  # type: ignore[import-not-found,no-redef]
@@ -204,6 +208,13 @@ else:  # pragma: no cover - direct script execution
         require_policy_unchanged,
         task_spec_errors,
         task_spec_policy_errors,
+    )
+
+if TYPE_CHECKING:
+    __all__ = (
+        "DEFAULT_EVIDENCE_POLICY",
+        "graph_errors",
+        "hierarchy_errors",
     )
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -3689,20 +3700,20 @@ def print_snapshot_under_lock(task_id: str | None, sqlite: bool) -> None:
         print("SESSION_SNAPSHOT=" + json.dumps(record, sort_keys=True, separators=(",", ":")))
 
 
-def cmd_board() -> None:
-    """Print the privacy-safe company board from the SQLite authority."""
+def _cmd_analytics(label: str) -> None:
+    """Print one SQLite-only deterministic analytics projection."""
     if backend_selection()["backend"] != "sqlite":
-        raise RuntimeError("board requires the SQLite authority")
+        raise RuntimeError(f"{label} requires the SQLite authority")
     with locked(exclusive=False):
         print(encode_metrics(build_metrics(all_tasks())), end="")
+
+
+def cmd_board() -> None:
+    _cmd_analytics("board")
 
 
 def cmd_metrics() -> None:
-    """Print the deterministic metrics projection from the SQLite authority."""
-    if backend_selection()["backend"] != "sqlite":
-        raise RuntimeError("metrics requires the SQLite authority")
-    with locked(exclusive=False):
-        print(encode_metrics(build_metrics(all_tasks())), end="")
+    _cmd_analytics("metrics")
 
 
 def cmd_checkpoint(args: argparse.Namespace) -> None:
@@ -4582,9 +4593,10 @@ def dispatch_roles_command(args: argparse.Namespace) -> int:
 
 
 def dispatch_read_only_command(args: argparse.Namespace) -> int:
-    """Dispatch read-only projections without inflating the mutation dispatcher."""
     if args.cmd == "snapshot":
         cmd_snapshot(args.task)
+    elif args.cmd == "resume-card":
+        return resume_card_runtime.dispatch(args, sys.modules[__name__])
     elif args.cmd == "board":
         cmd_board()
     elif args.cmd == "metrics":
@@ -4653,10 +4665,9 @@ def dispatch_side_effect_command(args: argparse.Namespace) -> bool:
 
 
 def dispatch_returning_command(args: argparse.Namespace) -> int | None:
-    """Dispatch standard commands with meaningful non-uniform result values."""
     if args.cmd == "roles":
         return dispatch_roles_command(args)
-    if args.cmd in ("snapshot", "board", "metrics", "preflight"):
+    if args.cmd in ("snapshot", "resume-card", "board", "metrics", "preflight"):
         return dispatch_read_only_command(args)
     if args.cmd == "retry-circuit":
         return dispatch_retry_circuit(args)
@@ -4668,7 +4679,6 @@ def dispatch_returning_command(args: argparse.Namespace) -> int | None:
 
 
 def dispatch_bound_standard_command(args: argparse.Namespace) -> int:
-    """Dispatch every non-fast command after permanent project binding."""
     result = dispatch_returning_command(args)
     if result is not None:
         return result
@@ -4696,7 +4706,6 @@ globals().update(issue_series_service.install(globals()))
 
 
 def dispatch_bound_command(args: argparse.Namespace) -> int:
-    """Dispatch a bound command while retaining the opt-in receipt route."""
     if args.cmd == "fast":
         return dispatch_fast_command(args)
     return dispatch_bound_standard_command(args)
@@ -4756,6 +4765,7 @@ def main() -> int:
     role.add_argument("--assignment-id", required=True)
     item = commands.add_parser("snapshot")
     item.add_argument("--task")
+    resume_card.add_command_parser(commands)
     issue_series_service.add_cli_parser(commands)
     commands.add_parser("board")
     commands.add_parser("metrics")

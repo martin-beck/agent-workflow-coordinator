@@ -112,6 +112,9 @@ repository.
 
 ```sh
 tools/handoffctl snapshot
+tools/handoffctl resume-card AR-0001
+# Pin the observation instant when a reproducible resume card is needed.
+tools/handoffctl resume-card AR-0001 --observed-at 2026-10-13T00:00:00Z --json
 tools/handoffctl claim AR-0001 --owner worker-unique --lease-minutes 120
 tools/handoffctl run --owner worker-unique --command-class source-write --scope-path tools \
   AR-0001 -- command arg
