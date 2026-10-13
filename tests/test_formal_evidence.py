@@ -947,7 +947,7 @@ class FormalEvidenceTests(unittest.TestCase):
         module_name = slices["module_name"]
         base = (FORMAL_ROOT / "Handoffctl.cfg").read_text(encoding="utf-8")
         source = (FORMAL_ROOT / "Handoffctl.tla").read_text(encoding="utf-8")
-        self.assertEqual(17, len(operations))
+        self.assertEqual(18, len(operations))
         self.assertEqual(len(operations), len(set(operations)))
         for operation in operations:
             rendered = render_source(source, operation)

@@ -219,6 +219,12 @@ class VendorTest(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "formal lifecycle operation drift"):
             VENDOR.verify(self.target)
 
+    def test_clean_vendored_snapshot_has_aligned_lifecycle_inventory(self) -> None:
+        """A newly vendored snapshot preserves every runtime lifecycle operation."""
+        with patch("builtins.print"):
+            VENDOR.sync(ROOT, self.target, CURRENT_VERSION, "1" * 40)
+        VENDOR.verify_formal_lifecycle_alignment(self.target)
+
     def test_formal_lifecycle_alignment_rejects_malformed_and_missing_inventories(self) -> None:
         tools = self.target / "tools"
         formal = self.target / "formal/handoffctl"
