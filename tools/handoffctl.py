@@ -1446,7 +1446,7 @@ def value_errors(path: Path, meta: Meta) -> list[str]:
     )
     errors.extend(short_title_errors(path, task_id, meta.get("short_title")))
     worktree_key = meta.get("worktree_key")
-    if worktree_key not in (None, "") and not change_drift.valid_worktree_key(worktree_key):
+    if worktree_key not in (None, "") and not valid_binding_worktree(worktree_key):
         errors.append(f"{task_id}: invalid worktree_key")
     errors.extend(f"{task_id}: {error}" for error in gate_errors(meta.get("oracle_gate")))
     errors.extend(execution_metadata_errors(task_id, meta))
@@ -2766,10 +2766,9 @@ def valid_binding_worktree(value: object) -> bool:
     if value in {".", "..", str(config().get("product_worktree", ""))}:
         return False
     try:
-        return inside(
-            Path(str(config()["projects_root"])).resolve() / value,
-            Path(str(config()["projects_root"])).resolve(),
-        )
+        root = Path(str(config()["projects_root"])).resolve()
+        candidate = root / value
+        return not candidate.is_symlink() and inside(candidate, root)
     except (KeyError, RuntimeError):
         return False
 
@@ -3178,7 +3177,11 @@ def lifecycle_transition_handler(
         "recover-execution": lambda: apply_recover_execution(args, meta),
         "gate": lambda: apply_gate(args, meta),
         "change-drift": lambda: change_drift.apply(
-            args, meta, Path(str(config()["projects_root"])), now()
+            args,
+            meta,
+            Path(str(config()["projects_root"])),
+            now(),
+            str(config().get("product_worktree", "")),
         ),
         "assumption": lambda: assumption_revalidation.apply(
             ROOT, Path(str(config()["projects_root"])), args, meta, [item for _, item, _ in tasks]
@@ -4064,10 +4067,14 @@ def execution_preflight(args: argparse.Namespace) -> tuple[bool, str, str, float
     """Evaluate a bound envelope and return its admission result plus timeout cap."""
     with locked(exclusive=False, phase="execution_envelope_preflight"):
         _, meta, _ = locate(args.task)
-        worktree_key = meta.get("worktree_key")
-        if not isinstance(worktree_key, str) or not worktree_key:
-            return False, "WORKTREE_BINDING_REQUIRED", "bound execution requires a worktree", None
-        worktree = Path(str(config()["projects_root"])).resolve() / worktree_key
+        try:
+            worktree = change_drift.bound_worktree(
+                meta,
+                Path(str(config()["projects_root"])),
+                str(config().get("product_worktree", "")),
+            )
+        except RuntimeError as error:
+            return False, "WORKTREE_BINDING_INVALID", str(error), None
         result = execution_envelope.preflight(
             meta,
             args.owner,

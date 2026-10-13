@@ -634,20 +634,29 @@ def next_record(
     raise ValueError("unknown change-drift action")
 
 
-def bound_worktree(meta: Meta, projects_root: Path) -> Path:
+def bound_worktree(meta: Meta, projects_root: Path, product_worktree: str | None = None) -> Path:
     """Resolve the task's declared worktree without accepting arbitrary paths."""
     key = meta.get("worktree_key")
-    if not valid_worktree_key(key):
+    if not valid_worktree_key(key) or key == product_worktree:
         raise RuntimeError("change-drift requires a bound worktree")
     key = cast(str, key)
     root = projects_root.resolve()
-    worktree = (root / key).resolve()
+    candidate = root / key
+    if candidate.is_symlink():
+        raise RuntimeError("change-drift bound worktree must not be a symlink")
+    worktree = candidate.resolve()
     if not worktree.is_relative_to(root) or worktree.parent != root:
         raise RuntimeError("change-drift bound worktree escapes projects root")
     return worktree
 
 
-def apply(args: argparse.Namespace, meta: Meta, projects_root: Path, timestamp: str) -> str:
+def apply(
+    args: argparse.Namespace,
+    meta: Meta,
+    projects_root: Path,
+    timestamp: str,
+    product_worktree: str | None = None,
+) -> str:
     """Apply the command boundary's owner/revision-fenced drift mutation."""
     if meta.get("owner") != args.owner or meta.get("status") != "in_progress":
         raise RuntimeError("change-drift requires the active task owner")
@@ -661,7 +670,7 @@ def apply(args: argparse.Namespace, meta: Meta, projects_root: Path, timestamp: 
         args.task,
         revision,
         timestamp,
-        bound_worktree(meta, projects_root),
+        bound_worktree(meta, projects_root, product_worktree),
         history,
         args.change_drift_action,
         scope_paths=getattr(args, "scope_path", None),

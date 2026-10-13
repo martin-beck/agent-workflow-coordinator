@@ -348,6 +348,11 @@ class BindSpecTests(unittest.TestCase):
             "AR-0001: invalid worktree_key",
             core.value_errors(core.TASKS / "AR-0001-test.md", invalid_metadata),
         )
+        reserved_metadata = {**meta, "worktree_key": "product"}
+        self.assertIn(
+            "AR-0001: invalid worktree_key",
+            core.value_errors(core.TASKS / "AR-0001-test.md", reserved_metadata),
+        )
         conflict = {
             **meta,
             "id": "AR-0002",

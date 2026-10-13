@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import subprocess
 import unittest
 from pathlib import Path
@@ -668,13 +669,36 @@ class ChangeDriftTests(unittest.TestCase):
         outside = self.root / "outside"
         outside.mkdir()
         (projects_root / "link").symlink_to(outside, target_is_directory=True)
+        (projects_root / "alias").symlink_to("safe", target_is_directory=True)
         self.assertEqual(
             projects_root / "safe",
             change_drift.bound_worktree({"worktree_key": "safe"}, projects_root),
         )
-        for key in ("../escape", "/outside/escape", "nested/worktree", "link", ""):
+        for key in ("../escape", "/outside/escape", "nested/worktree", "link", "alias", ""):
             with self.subTest(key=key), self.assertRaisesRegex(RuntimeError, "bound worktree"):
                 change_drift.bound_worktree({"worktree_key": key}, projects_root)
+        with self.assertRaisesRegex(RuntimeError, "requires a bound worktree"):
+            change_drift.bound_worktree(
+                {"worktree_key": "safe"}, projects_root, product_worktree="safe"
+            )
+
+    def test_execution_preflight_rejects_persisted_unsafe_worktree_key(self) -> None:
+        args = argparse.Namespace(
+            task="AR-0001", owner="worker", command_class="source-write", scope_path=[]
+        )
+        meta = {"id": "AR-0001", "worktree_key": "../outside"}
+        with (
+            patch.object(handoffctl, "locked", return_value=contextlib.nullcontext()),
+            patch.object(handoffctl, "locate", return_value=(Path("task"), meta, "")),
+            patch.object(
+                handoffctl,
+                "config",
+                return_value={"projects_root": str(self.root), "product_worktree": "product"},
+            ),
+        ):
+            allowed, code, detail, timeout = handoffctl.execution_preflight(args)
+        self.assertEqual((False, "WORKTREE_BINDING_INVALID", None), (allowed, code, timeout))
+        self.assertIn("requires a bound worktree", detail)
 
     def _rehash(self, record: change_drift.Meta) -> None:
         record["digest"] = change_drift.digest(
