@@ -136,6 +136,17 @@ tools/handoffctl reconcile --commit --push
 tools/handoffctl doctor --live
 ```
 
+For a retained partial legacy claim whose branch is empty, an operator may clear only the exact
+retained worktree key after verifying the task is open and unowned:
+
+```sh
+tools/handoffctl repair-legacy-binding AR-1826 --expected-revision REVISION \
+  --worktree-key RETAINED_KEY --note "Verified stale partial legacy metadata"
+```
+
+The command is fail-closed: it requires an exact revision and key, rejects active claims, non-empty
+branches, invalid keys, and mismatches, and clears no other task metadata.
+
 For snapshotless expired-claim recovery, a worker supplies its live Linux PID and
 start-time (`--worker-pid`, `--worker-start-time`) when claiming; Coordinator verifies and
 persists that identity, then only recovers after the same identity is absent.

@@ -335,12 +335,10 @@ type State = dict[str, Any]
 
 
 def task_label(meta: Meta) -> str:
-    """Return the compatibility-safe human label for one task."""
     return f"{meta['id']} — {meta.get('short_title') or meta['title']}"
 
 
 def short_title_errors(path: Path, task_id: str, value: object) -> list[str]:
-    """Validate optional concise task metadata."""
     if value is None:
         return []
     if (
@@ -371,7 +369,6 @@ PROJECT_SETTING_KEYS = frozenset(DEFAULT_PROJECT_SETTINGS)
 
 
 def project_settings() -> Meta:
-    """Load and strictly validate the tracked, non-secret project profile."""
     if not PROJECT_CONFIG.exists():
         return dict(DEFAULT_PROJECT_SETTINGS)
     value = json.loads(PROJECT_CONFIG.read_text())
@@ -399,7 +396,6 @@ def project_settings() -> Meta:
 
 
 def repository_slug(value: object) -> str:
-    """Normalize a GitHub repository URL or OWNER/REPOSITORY value."""
     text = str(value or "").strip().removesuffix(".git")
     if "://" in text:
         text = text.split("://", 1)[1].split("/", 1)[-1]
@@ -412,7 +408,6 @@ def repository_slug(value: object) -> str:
 
 
 def backend_selection() -> Meta:
-    """Load the selected backend."""
     if not BACKEND_CONFIG.exists():
         return {"schema_version": 1, "backend": "git", "legacy": True}
     try:
@@ -428,8 +423,6 @@ def backend_selection() -> Meta:
 
 
 class GitBackend:
-    """Adapter preserving the existing file/Git authority contract."""
-
     name = "git"
 
     def load_tasks(self) -> list[Task]:
@@ -2777,7 +2770,6 @@ def valid_binding_worktree(value: object) -> bool:
 
 
 def binding_identity_conflicts(args: argparse.Namespace, meta: Meta, tasks: list[Task]) -> bool:
-    """Report whether another active task already owns either requested identity."""
     return any(
         other.get("id") != meta.get("id")
         and other.get("status") == "in_progress"
@@ -2787,7 +2779,6 @@ def binding_identity_conflicts(args: argparse.Namespace, meta: Meta, tasks: list
 
 
 def require_active_binding_owner(args: argparse.Namespace, meta: Meta) -> None:
-    """Require the exact live owner and revision before binding an identity."""
     if meta.get("owner") != args.owner:
         raise RuntimeError(f"{args.task} is owned by {meta.get('owner') or 'nobody'}")
     require_role_admission(str(args.owner))
@@ -2830,11 +2821,19 @@ def require_bind_worktree_admission(
 
 
 def apply_bind_worktree(args: argparse.Namespace, meta: Meta, tasks: list[Task]) -> str:
-    """Bind one legacy task, or report an exact retry without mutating it."""
     require_bind_worktree_admission(args, meta, tasks)
     require_no_execution_reservation(meta)
     meta.update(branch=args.branch, worktree_key=args.worktree_key)
     return f"Bound worktree {args.worktree_key} on branch {args.branch}."
+
+
+def apply_repair_legacy_binding(args: argparse.Namespace, meta: Meta, _tasks: list[Task]) -> str:
+    if __package__:
+        from .legacy_binding_repair import repair
+    else:
+        from legacy_binding_repair import repair  # type: ignore[import-not-found,no-redef]
+
+    return repair(args, meta, valid_binding_worktree)
 
 
 def bind_envelope_candidate(args: argparse.Namespace, meta: Meta) -> tuple[Meta, str]:
@@ -3197,6 +3196,7 @@ def lifecycle_transition_handler(
         "accept": lambda: apply_accept(args, meta, policy),
         "bind-spec": lambda: apply_bind_spec(args, meta, policy),
         "bind-worktree": lambda: apply_bind_worktree(args, meta, tasks),
+        "repair-legacy-binding": lambda: apply_repair_legacy_binding(args, meta, tasks),
         "bind-envelope": lambda: apply_bind_envelope(args, meta),
         "execution-start": lambda: apply_execution_start(args, meta),
         "execution-result": lambda: apply_execution_result(args, meta),
@@ -3221,7 +3221,6 @@ def apply_transition(
 
 
 def rendered_task_views(tasks: list[Task]) -> dict[Path, str]:
-    """Return every enabled task-derived projection for one consistent task snapshot."""
     views = {ROOT / "CURRENT.md": render_current(tasks)}
     if project_settings()["status_view"]:
         views.update(
@@ -4745,6 +4744,9 @@ def dispatch_bound_standard_command(args: argparse.Namespace) -> int:
     result = dispatch_returning_command(args)
     if result is not None:
         return result
+    if args.cmd == "repair-legacy-binding":
+        dispatch_lifecycle_mutation(args)
+        return 0
     if args.cmd in (
         *LIFECYCLE_MUTATION_COMMANDS,
         "gate",
@@ -4949,6 +4951,11 @@ def main() -> int:
     item.add_argument("--expected-revision", type=int, required=True)
     item.add_argument("--branch", required=True)
     item.add_argument("--worktree-key", required=True)
+    item = commands.add_parser("repair-legacy-binding")
+    item.add_argument("task")
+    item.add_argument("--expected-revision", type=int, required=True)
+    item.add_argument("--worktree-key", required=True)
+    item.add_argument("--note", required=True)
     item = commands.add_parser("bind-envelope")
     item.add_argument("task")
     item.add_argument("--owner", required=True)
