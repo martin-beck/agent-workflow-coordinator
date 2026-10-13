@@ -28,7 +28,7 @@ import threading
 import time
 import uuid
 from collections import Counter
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, cast
@@ -4628,39 +4628,62 @@ def dispatch_lifecycle_mutation(args: argparse.Namespace) -> None:
         print(note)
 
 
-def dispatch_bound_standard_command(args: argparse.Namespace) -> int:  # noqa: C901
-    """Dispatch every non-fast command after permanent project binding."""
-    if args.cmd == "reconcile":
-        reconcile(do_commit=args.commit, push=args.push)
-    elif args.cmd == "roles":
+def dispatch_retry_circuit(args: argparse.Namespace) -> int:
+    """Dispatch retry inspection or its owner- and revision-fenced recovery."""
+    if args.retry_circuit_action == "status":
+        return cmd_retry_circuit_status(args.task)
+    dispatch_lifecycle_mutation(args)
+    return 0
+
+
+def dispatch_side_effect_command(args: argparse.Namespace) -> bool:
+    """Run standard commands whose successful result is the conventional zero."""
+    handlers: dict[str, Callable[[], object]] = {
+        "reconcile": lambda: reconcile(do_commit=args.commit, push=args.push),
+        "checkpoint": lambda: cmd_checkpoint(args),
+        "rollback": lambda: cmd_rollback(args),
+        "render-status": lambda: cmd_render_status(check=args.check),
+        "migrate": lambda: cmd_migrate(args),
+    }
+    handler = handlers.get(args.cmd)
+    if handler is None:
+        return False
+    handler()
+    return True
+
+
+def dispatch_returning_command(args: argparse.Namespace) -> int | None:
+    """Dispatch standard commands with meaningful non-uniform result values."""
+    if args.cmd == "roles":
         return dispatch_roles_command(args)
-    elif args.cmd in ("snapshot", "board", "metrics", "preflight"):
+    if args.cmd in ("snapshot", "board", "metrics", "preflight"):
         return dispatch_read_only_command(args)
-    elif args.cmd == "retry-circuit":
-        if args.retry_circuit_action == "status":
-            return cmd_retry_circuit_status(args.task)
-        dispatch_lifecycle_mutation(args)
-    elif args.cmd == "checkpoint":
-        cmd_checkpoint(args)
-    elif args.cmd == "rollback":
-        cmd_rollback(args)
-    elif args.cmd == "doctor":
+    if args.cmd == "retry-circuit":
+        return dispatch_retry_circuit(args)
+    if args.cmd == "doctor":
         return cmd_doctor(live=args.live)
-    elif args.cmd == "render-status":
-        cmd_render_status(check=args.check)
-    elif args.cmd in (
+    if args.cmd == "upgrade":
+        return cmd_upgrade(args)
+    return None
+
+
+def dispatch_bound_standard_command(args: argparse.Namespace) -> int:
+    """Dispatch every non-fast command after permanent project binding."""
+    result = dispatch_returning_command(args)
+    if result is not None:
+        return result
+    if args.cmd in (
         *LIFECYCLE_MUTATION_COMMANDS,
         "gate",
     ):
         dispatch_lifecycle_mutation(args)
-    elif args.cmd == "run":
+        return 0
+    if args.cmd == "run":
         if args.command and args.command[0] == "--":
             args.command = args.command[1:]
         return cmd_run(args)
-    elif args.cmd == "migrate":
-        cmd_migrate(args)
-    elif args.cmd == "upgrade":
-        return cmd_upgrade(args)
+    if dispatch_side_effect_command(args):
+        return 0
     return 0
 
 
