@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import subprocess
 import unittest
 from pathlib import Path
@@ -660,6 +661,64 @@ class ChangeDriftTests(unittest.TestCase):
                     self.root.parent,
                     "now",
                 )
+
+    def test_bound_worktree_rejects_traversal_absolute_and_symlink_escape(self) -> None:
+        projects_root = self.root / "projects"
+        projects_root.mkdir()
+        (projects_root / "safe").mkdir()
+        outside = self.root / "outside"
+        outside.mkdir()
+        (projects_root / "link").symlink_to(outside, target_is_directory=True)
+        (projects_root / "alias").symlink_to("safe", target_is_directory=True)
+        with change_drift.bound_worktree({"worktree_key": "safe"}, projects_root) as worktree:
+            self.assertEqual("safe", worktree.resolve().name)
+        for key in ("../escape", "/outside/escape", "nested/worktree", "link", "alias", ""):
+            with (
+                self.subTest(key=key),
+                self.assertRaisesRegex(RuntimeError, "bound worktree"),
+                change_drift.bound_worktree({"worktree_key": key}, projects_root),
+            ):
+                pass
+        with (
+            self.assertRaisesRegex(RuntimeError, "requires a bound worktree"),
+            change_drift.bound_worktree(
+                {"worktree_key": "safe"}, projects_root, product_worktree="safe"
+            ),
+        ):
+            pass
+
+    def test_bound_worktree_descriptor_survives_path_replacement(self) -> None:
+        projects_root = self.root / "projects"
+        projects_root.mkdir()
+        worktree = projects_root / "safe"
+        worktree.mkdir()
+        (worktree / "inside").write_text("original", encoding="utf-8")
+        outside = self.root / "outside"
+        outside.mkdir()
+        (outside / "inside").write_text("attacker", encoding="utf-8")
+        parked = projects_root / "parked"
+        with change_drift.bound_worktree({"worktree_key": "safe"}, projects_root) as bound:
+            worktree.rename(parked)
+            worktree.symlink_to(outside, target_is_directory=True)
+            self.assertEqual("original", (bound / "inside").read_text(encoding="utf-8"))
+
+    def test_execution_preflight_rejects_persisted_unsafe_worktree_key(self) -> None:
+        args = argparse.Namespace(
+            task="AR-0001", owner="worker", command_class="source-write", scope_path=[]
+        )
+        meta = {"id": "AR-0001", "worktree_key": "../outside"}
+        with (
+            patch.object(handoffctl, "locked", return_value=contextlib.nullcontext()),
+            patch.object(handoffctl, "locate", return_value=(Path("task"), meta, "")),
+            patch.object(
+                handoffctl,
+                "config",
+                return_value={"projects_root": str(self.root), "product_worktree": "product"},
+            ),
+        ):
+            allowed, code, detail, timeout = handoffctl.execution_preflight(args)
+        self.assertEqual((False, "WORKTREE_BINDING_INVALID", None), (allowed, code, timeout))
+        self.assertIn("requires a bound worktree", detail)
 
     def _rehash(self, record: change_drift.Meta) -> None:
         record["digest"] = change_drift.digest(

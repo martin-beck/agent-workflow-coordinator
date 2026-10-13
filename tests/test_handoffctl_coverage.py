@@ -332,6 +332,13 @@ class HandoffctlCoverageTests(unittest.TestCase):
 
         with patch.object(handoffctl, "config", return_value={}):
             self.assertFalse(handoffctl.valid_binding_worktree("tree"))
+        malformed: object
+        for malformed in (None, "", 7, []):
+            with (
+                self.subTest(projects_root=malformed),
+                patch.object(handoffctl, "config", return_value={"projects_root": malformed}),
+            ):
+                self.assertFalse(handoffctl.valid_binding_worktree("tree"))
 
         checkpoint = argparse.Namespace(task="AR-0001", owner="worker", expected_revision=4)
         with self.assertRaisesRegex(RuntimeError, "owned by nobody"):
