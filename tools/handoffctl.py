@@ -2387,8 +2387,19 @@ def dependency_satisfied(dependency_id: str, tasks: list[Task]) -> bool:
 
 
 def require_role_admission(owner_id: str, required_role: str = "implementer") -> None:
-    """Retain advisory role compatibility."""
-    del owner_id, required_role
+    """Require a durable role assignment when the role store is present."""
+    if __package__:
+        from .roles import role_admission_error
+    else:  # pragma: no cover - direct script execution
+        from roles import role_admission_error  # type: ignore[no-redef]
+    error = role_admission_error(
+        RUNTIME / "roles.json",
+        ROOT / "examples/roles/role-registry.json",
+        owner_id=owner_id,
+        required_role=required_role,
+    )
+    if error:
+        raise RuntimeError(error)
 
 
 def require_update_role_admission(kind: str, owner_id: str) -> None:
@@ -3595,8 +3606,19 @@ def cmd_render_status(*, check: bool) -> None:
 
 
 def role_doctor_errors() -> list[str]:
-    """Roles belong to the external role registry and do not gate coordinator health."""
-    return []
+    """Reject active owners absent from the durable role store."""
+    if __package__:
+        from .roles import role_admission_errors
+    else:  # pragma: no cover - direct script execution
+        from roles import role_admission_errors  # type: ignore[no-redef]
+    owners = [
+        (str(meta["owner"]), "implementer")
+        for _path, meta, _body in all_tasks()
+        if meta.get("status") == "in_progress" and meta.get("owner")
+    ]
+    return role_admission_errors(
+        RUNTIME / "roles.json", ROOT / "examples/roles/role-registry.json", owners
+    )
 
 
 def doctor_checks(*, live: bool, sqlite: bool, live_state: State | None) -> list[str]:
