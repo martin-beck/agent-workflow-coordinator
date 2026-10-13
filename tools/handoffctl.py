@@ -50,9 +50,7 @@ if __package__:
         retry_circuit,
         run_command,
     )
-    from . import (
-        autonomy_limits as al,
-    )
+    from . import autonomy_limits as al
     from .board_metrics import build_metrics
     from .board_metrics import encode as encode_metrics
     from .checkpoint_records import (
