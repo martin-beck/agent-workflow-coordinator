@@ -78,6 +78,8 @@ jobs:
     timeout-minutes: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && 30 || 30 }}
     env:
       TLC_TIER: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository) && 'portable-smoke' || 'pr-fast' }}
+      TLC_ADMISSION_QUEUE: ${{ github.workspace }}/.agent-workflow-coordinator-tlc-${{ github.run_id }}-queue
+      TLC_ADMISSION_LOCK: ${{ github.workspace }}/.agent-workflow-coordinator-tlc-${{ github.run_id }}-lock
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -137,6 +139,8 @@ jobs:
     timeout-minutes: 30
     env:
       TLC_TIER: portable-smoke
+      TLC_ADMISSION_QUEUE: ${{ github.workspace }}/.agent-workflow-coordinator-tlc-${{ github.run_id }}-queue
+      TLC_ADMISSION_LOCK: ${{ github.workspace }}/.agent-workflow-coordinator-tlc-${{ github.run_id }}-lock
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -168,6 +172,9 @@ jobs:
     if: ${{ github.event_name == 'pull_request' && needs.scope.outputs.formal_changed == 'false' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    env:
+      TLC_ADMISSION_QUEUE: ${{ github.workspace }}/.agent-workflow-coordinator-tlc-${{ github.run_id }}-queue
+      TLC_ADMISSION_LOCK: ${{ github.workspace }}/.agent-workflow-coordinator-tlc-${{ github.run_id }}-lock
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
