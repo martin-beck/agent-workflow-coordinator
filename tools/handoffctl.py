@@ -3140,7 +3140,6 @@ def apply_gate(args: argparse.Namespace, meta: Meta) -> str:
 def apply_recover_expired_transition(
     args: argparse.Namespace, meta: Meta, tasks: list[Task]
 ) -> str:
-    """Recover an expired claim only when it has no execution reservation."""
     require_no_execution_reservation(meta)
     return apply_recover_expired(args, meta, tasks)
 
@@ -3152,7 +3151,6 @@ def lifecycle_transition_handler(
     tasks: list[Task],
     policy: EvidencePolicy | None,
 ) -> Callable[[], str] | None:
-    """Return the typed lifecycle handler for a known transition, if any."""
     handlers: dict[str, Callable[[], str]] = {
         "claim": lambda: apply_claim(args, meta, tasks),
         "promote": lambda: apply_promote(args, meta, tasks),
@@ -4211,8 +4209,6 @@ def append_command_result(
 
 
 class _RunRuntime:
-    """Expose patched module globals to the extracted wrapped-command helper."""
-
     def __getattr__(self, name: str) -> Any:
         return globals()[name]
 

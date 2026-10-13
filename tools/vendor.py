@@ -25,6 +25,7 @@ SOURCE_FILES: tuple[tuple[str, str], ...] = (
     ("tools/assumption_revalidation.py", "tools/assumption_revalidation.py"),
     ("tools/command_results.py", "tools/command_results.py"),
     ("tools/retry_circuit.py", "tools/retry_circuit.py"),
+    ("tools/run_command.py", "tools/run_command.py"),
     ("tools/issue_series_service.py", "tools/issue_series_service.py"),
     ("tools/issue_series.py", "tools/issue_series.py"),
     ("tools/issue_series_plan.py", "tools/issue_series_plan.py"),
@@ -212,6 +213,8 @@ SOURCE_FILES: tuple[tuple[str, str], ...] = (
     (
         "formal/handoffctl/HandoffctlAssumptions.tla",
         "formal/handoffctl/HandoffctlAssumptions.tla",
+    ),
+    (
         "formal/handoffctl/HandoffctlRetryCircuit.cfg",
         "formal/handoffctl/HandoffctlRetryCircuit.cfg",
     ),
