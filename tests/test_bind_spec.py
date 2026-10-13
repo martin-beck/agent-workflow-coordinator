@@ -342,6 +342,11 @@ class BindSpecTests(unittest.TestCase):
         self.assertFalse(core.valid_binding_worktree("../escape"))
         self.assertFalse(core.valid_binding_worktree("/outside/escape"))
         self.assertFalse(core.valid_binding_worktree("nested/worker"))
+        # A standalone coordinator without a configured projects root still
+        # accepts a confined relative key; traversal and aliases remain
+        # rejected above.
+        with patch.object(core, "config", return_value={"product_worktree": "product"}):
+            self.assertTrue(core.valid_binding_worktree("receipt-worker"))
         meta = core.locate("AR-0001")[1]
         invalid_metadata = {**meta, "worktree_key": "../escape"}
         self.assertIn(
