@@ -1483,6 +1483,17 @@ def require_no_execution_reservation(meta: Meta) -> None:
         raise RuntimeError("EXECUTION_RECOVERY_REQUIRED: task has a bound execution reservation")
 
 
+def require_no_live_retry_reservation(meta: Meta) -> None:
+    """Retire elapsed unbound slots and fence recovery from live child commands."""
+    try:
+        retry_circuit.cleanup_expired(meta, now())
+    except ValueError as error:
+        raise RuntimeError(f"retry circuit recovery state is invalid: {error}") from error
+    retry_state = meta.get("retry_circuit")
+    if isinstance(retry_state, dict) and retry_state["reservations"]:
+        raise RuntimeError("RETRY_CIRCUIT_IN_PROGRESS: task has a live unbound retry reservation")
+
+
 def reference_errors(path: Path, meta: Meta) -> list[str]:
     errors: list[str] = []
     task_id = str(meta.get("id", ""))
@@ -2651,6 +2662,9 @@ def apply_recover_expired(args: argparse.Namespace, meta: Meta, _tasks: list[Tas
         raise RuntimeError(f"{args.task} claim has not expired")
     if not args.note.strip():
         raise RuntimeError("expired-claim recovery note must not be empty")
+    # An unbound child has no execution envelope record, but its durable retry
+    # slot is still an in-flight command and must fence expired-claim recovery.
+    require_no_live_retry_reservation(meta)
     records = storage_backend().load_session_records(args.task)
     previous_owner = str(meta["owner"])
     recovery_note = str(args.note)
@@ -4285,6 +4299,10 @@ def _cmd_run_fenced(
                 .isoformat()
             )
             mutate(args, "retry-circuit-reserve", policy)
+            # A result may resolve only the revision created by this reservation.
+            # Never refresh this fence after the child starts: another mutation
+            # must make its stale result fail closed.
+            args.retry_circuit_resolution_revision = int(args.expected_revision) + 1
     timed_out = False
     try:
         proc = subprocess.run(

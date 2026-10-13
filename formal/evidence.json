@@ -16,7 +16,7 @@
     "max_actors": 2,
     "max_processes": 3,
     "max_projects": 2,
-    "max_revision": 2,
+    "max_revision": 8,
     "max_tasks": 2,
     "max_worktrees": 2,
     "model_count": 11,

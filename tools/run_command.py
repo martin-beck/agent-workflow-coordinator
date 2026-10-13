@@ -35,8 +35,10 @@ def cmd_run(runtime: Any, args: argparse.Namespace) -> int:
         _, recorded, _ = runtime.locate(args.task)
         execution_revision = int(recorded["task_revision"])
     if hasattr(args, "retry_circuit_reservation"):
-        _, current, _ = runtime.locate(args.task)
-        args.expected_revision = int(current["task_revision"])
+        resolution_revision = getattr(args, "retry_circuit_resolution_revision", None)
+        if type(resolution_revision) is not int:
+            raise RuntimeError("retry circuit reservation is missing its resolution revision")
+        args.expected_revision = resolution_revision
         args.retry_circuit_failure = (
             ("SUBPROCESS_TIMEOUT" if timed_out else "RETRYABLE" if returncode == 75 else "EXIT")
             if returncode

@@ -154,6 +154,7 @@ def _validate_attempt(attempt: object, previous_revision: int) -> int:
 def _validate_recovery(recovery: object, previous_revision: int) -> int:
     if not isinstance(recovery, dict) or set(recovery) != {
         "identity",
+        "progress_digest",
         "kind",
         "reason",
         "task_revision",
@@ -163,6 +164,7 @@ def _validate_recovery(recovery: object, previous_revision: int) -> int:
         raise ValueError("retry circuit recovery fields are invalid")
     if (
         not DIGEST.fullmatch(str(recovery.get("identity", "")))
+        or not DIGEST.fullmatch(str(recovery.get("progress_digest", "")))
         or recovery.get("kind") not in RECOVERIES
         or type(recovery.get("task_revision")) is not int
         or int(recovery["task_revision"]) <= previous_revision
@@ -202,23 +204,36 @@ def _hold_values(hold: Meta) -> None:
         raise ValueError("retry circuit hold threshold is invalid")
 
 
-def _matching_hold_attempts(hold: Meta, attempts: list[object]) -> int:
-    matching = [
-        item
-        for item in attempts
+def _active_attempts(state: Meta, identity: str, progress: str) -> list[Meta]:
+    """Return the current series after its latest explicit recovery boundary."""
+    recovered_revision = max(
+        (
+            int(item["task_revision"])
+            for item in state["recoveries"]
+            if item["identity"] == identity and item["progress_digest"] == progress
+        ),
+        default=0,
+    )
+    return [
+        cast(Meta, item)
+        for item in state["attempts"]
         if isinstance(item, dict)
-        and item["identity"] == hold["identity"]
-        and item["progress_digest"] == hold["progress_digest"]
+        and item["identity"] == identity
+        and item["progress_digest"] == progress
+        and int(item["task_revision"]) > recovered_revision
     ]
-    return len(matching)
 
 
-def _validate_hold(hold: object, attempts: list[object]) -> None:
+def _matching_hold_attempts(hold: Meta, state: Meta) -> int:
+    return len(_active_attempts(state, str(hold["identity"]), str(hold["progress_digest"])))
+
+
+def _validate_hold(hold: object, state: Meta) -> None:
     if hold is None:
         return
     checked = _hold_fields(hold)
     _hold_values(checked)
-    if _matching_hold_attempts(checked, attempts) < int(checked["attempts"]):
+    if _matching_hold_attempts(checked, state) < int(checked["attempts"]):
         raise ValueError("retry circuit hold has insufficient attempts")
 
 
@@ -320,7 +335,7 @@ def validate(value: object) -> Meta:
     last_recovery_revision = 0
     for recovery in recoveries:
         last_recovery_revision = _validate_recovery(recovery, last_recovery_revision)
-    _validate_hold(hold, attempts)
+    _validate_hold(hold, value)
     for reservation in reservations:
         _validate_reservation(reservation)
     identifiers = [cast(Meta, item)["id"] for item in reservations]
@@ -407,11 +422,7 @@ def record_failure(
     threshold = _window(window)
     state = _state(meta)
     progress = progress_digest(meta)
-    previous = [
-        item
-        for item in state["attempts"]
-        if item["identity"] == identity and item["progress_digest"] == progress
-    ]
+    previous = _active_attempts(state, identity, progress)
     if previous and int(previous[-1]["window"]) != threshold:
         raise RuntimeError("retry circuit window changed within an active attempt series")
     state["attempts"] = [
@@ -466,9 +477,9 @@ def reserve(
     state = _state(meta)
     progress = progress_digest(meta)
     admit(meta, identity)
-    used = sum(
+    used = len(_active_attempts(state, identity, progress)) + sum(
         item["identity"] == identity and item["progress_digest"] == progress
-        for item in state["attempts"] + state["reservations"]
+        for item in state["reservations"]
     )
     if used >= threshold:
         raise RuntimeError("RETRY_CIRCUIT_OPEN: retry window is fully reserved")
@@ -508,6 +519,15 @@ def resolve(
     return record_failure(meta, identity, failure, int(selected["window"]), recorded_at)
 
 
+def resolution_revision(meta: Meta, identity: str, reservation_id: str) -> int:
+    """Return the sole revision that can resolve this unbound launch slot."""
+    state = _state(meta)
+    selected = next((item for item in state["reservations"] if item["id"] == reservation_id), None)
+    if selected is None or selected["identity"] != identity:
+        raise RuntimeError("retry circuit reservation is not current")
+    return int(selected["task_revision"]) + 1
+
+
 def recover(meta: Meta, identity: str, kind: str, reason: str, recorded_at: str) -> str:
     """Record a deliberate recovery and reopen only the held command identity."""
     if kind not in RECOVERIES or not DIGEST.fullmatch(identity) or not recorded_at:
@@ -523,6 +543,7 @@ def recover(meta: Meta, identity: str, kind: str, reason: str, recorded_at: str)
         *state["recoveries"],
         {
             "identity": identity,
+            "progress_digest": progress_digest(meta),
             "kind": kind,
             "reason": _reason(reason),
             "task_revision": int(meta["task_revision"]),
@@ -578,8 +599,16 @@ def apply_reserve(args: argparse.Namespace, meta: Meta, recorded_at: str) -> str
 def apply_resolve(args: argparse.Namespace, meta: Meta, recorded_at: str) -> str:
     if meta.get("owner") != args.owner or meta.get("status") != "in_progress":
         raise RuntimeError("retry circuit resolution requires the active task owner")
-    if args.expected_revision != meta.get("task_revision"):
-        raise RuntimeError("retry circuit resolution requires the current task revision")
+    required_revision = resolution_revision(
+        meta, args.retry_circuit_identity, args.retry_circuit_reservation
+    )
+    if (
+        args.expected_revision != required_revision
+        or meta.get("task_revision") != required_revision
+    ):
+        raise RuntimeError(
+            "retry circuit resolution requires the revision immediately after its reservation"
+        )
     return resolve(
         meta,
         args.retry_circuit_identity,

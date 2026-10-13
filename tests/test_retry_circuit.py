@@ -13,6 +13,8 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+import jsonschema
+
 from tools import retry_circuit, run_command
 
 NOW = "2026-10-13T12:00:00+00:00"
@@ -98,6 +100,8 @@ class FailingRunRuntime:
             NOW,
             "2026-10-13T12:01:01+00:00",
         )
+        self.meta["task_revision"] += 1
+        args.retry_circuit_resolution_revision = self.meta["task_revision"]
         return object(), "a" * 64, 1.0, False, 1, None, None
 
     def append_command_result(self, *_args: object) -> None:
@@ -109,13 +113,7 @@ class FailingRunRuntime:
     def mutate(self, args: argparse.Namespace, kind: str, _policy: object) -> None:
         self.calls.append(kind)
         if kind == "retry-circuit-resolve":
-            retry_circuit.resolve(
-                self.meta,
-                args.retry_circuit_identity,
-                args.retry_circuit_reservation,
-                args.retry_circuit_failure,
-                "now",
-            )
+            retry_circuit.apply_resolve(args, self.meta, "now")
         self.meta["task_revision"] += 1
 
     def backend_selection(self) -> dict[str, str]:
@@ -145,6 +143,17 @@ class BoundRunRuntime(FailingRunRuntime):
     def mutate(self, _args: argparse.Namespace, kind: str, _policy: object) -> None:
         self.calls.append(kind)
         self.meta["task_revision"] += 1
+
+
+class InterveningMutationRuntime(FailingRunRuntime):
+    """Simulate an owner mutation while an unbound child is running."""
+
+    def _cmd_run_fenced(
+        self, args: argparse.Namespace
+    ) -> tuple[object, str, float, bool, int, str | None, int | None]:
+        result = super()._cmd_run_fenced(args)
+        self.meta["task_revision"] += 1
+        return result
 
 
 class RetryCircuitTests(unittest.TestCase):
@@ -193,6 +202,19 @@ class RetryCircuitTests(unittest.TestCase):
         )
         retry_circuit.admit(self.meta, self.identity)
         self.assertEqual("changed-approach", self.meta["retry_circuit"]["recoveries"][-1]["kind"])
+        self.meta["task_revision"] = 6
+        self.assertIn(
+            "Reserved retry circuit launch slot",
+            retry_circuit.reserve(
+                self.meta,
+                self.identity,
+                3,
+                "c" * 32,
+                "2026-10-13T12:00:00+00:00",
+                "2026-10-13T12:01:01+00:00",
+            ),
+        )
+        self.assertEqual(3, len(self.meta["retry_circuit"]["attempts"]))
 
     def test_malicious_tampering_and_window_changes_fail_closed(self) -> None:
         self._failure(2, "one")
@@ -268,6 +290,23 @@ class RetryCircuitTests(unittest.TestCase):
             ["retry-circuit-resolve", "journal", "update", "policy", "reconcile"], runtime.calls
         )
         self.assertEqual(1, len(runtime.meta["retry_circuit"]["attempts"]))
+
+    def test_unbound_resolution_rejects_an_intervening_revision(self) -> None:
+        runtime = InterveningMutationRuntime()
+        with self.assertRaisesRegex(RuntimeError, "immediately after its reservation"):
+            run_command.cmd_run(
+                runtime,
+                argparse.Namespace(
+                    task="AR-0001",
+                    owner="worker",
+                    command=["false"],
+                    command_class=None,
+                    scope_path=[],
+                    retry_window=3,
+                ),
+            )
+        self.assertEqual(4, runtime.meta["task_revision"])
+        self.assertEqual(1, len(runtime.meta["retry_circuit"]["reservations"]))
 
     def test_bound_run_keeps_execution_envelope_result_journal_finish_sequence(self) -> None:
         runtime = BoundRunRuntime()
@@ -369,3 +408,23 @@ class RetryCircuitTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "not current"):
             retry_circuit.resolve(self.meta, self.identity, "b" * 32, "EXIT", LATER)
         retry_circuit.validate(self.meta["retry_circuit"])
+
+    def test_schema_matches_strict_reservation_and_abandoned_state(self) -> None:
+        retry_circuit.reserve(
+            self.meta,
+            self.identity,
+            3,
+            "b" * 32,
+            NOW,
+            "2026-10-13T12:00:01+00:00",
+        )
+        retry_circuit.cleanup_expired(self.meta, LATER)
+        schema = json.loads(
+            (Path(__file__).resolve().parents[1] / "schema/task-record.schema.json").read_text()
+        )
+        validator = jsonschema.Draft202012Validator(schema["properties"]["retry_circuit"])
+        validator.validate(self.meta["retry_circuit"])
+        invalid = dict(self.meta["retry_circuit"])
+        invalid.pop("reservations")
+        with self.assertRaises(jsonschema.ValidationError):
+            validator.validate(invalid)

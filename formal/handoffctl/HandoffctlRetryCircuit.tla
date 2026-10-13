@@ -4,100 +4,158 @@
 EXTENDS Naturals, FiniteSets, TLC
 
 (*
-Bounded no-progress retry admission for unbound commands. A worker receives a
-durable slot before launch. It either resolves that slot, crashes after launch,
-or its abandoned slot expires. Expiry prevents an interrupted worker or result
-recording fault from exhausting capacity forever. Bound execution envelopes are
-absent: their execution fence owns reservation/result/finish sequencing.
+Bounded unbound retry admission with the task owner and durable revision fence.
+A reservation records its creating owner and pre-mutation revision. Its result
+can resolve only while that owner still owns the task at the immediately
+following revision. An intervening mutation therefore leaves the slot durable
+but makes the result stale. Expired slots may be cleaned; expired-claim recovery
+cannot clear ownership while any live unbound slot remains. Explicit circuit
+recovery starts a fresh bounded series while preserving a bounded audit count.
 *)
 
-CONSTANTS MaxAttempts, Workers
+CONSTANTS MaxAttempts, Launchers, Owners, NoOwner, MaxRevision, MaxRecoveries
 
 ASSUME /\ MaxAttempts >= 3
-       /\ Cardinality(Workers) >= MaxAttempts
+       /\ Cardinality(Launchers) >= MaxAttempts
+       /\ NoOwner \notin Owners
+       /\ MaxRevision >= (2 * MaxAttempts) + 2
+       /\ MaxRecoveries >= 1
 
-SlotValues == {"idle", "reserved", "abandoned"}
+SlotValues == {"idle", "reserved"}
 
-VARIABLES attempts, held, recovered, slots, cleaned
+VARIABLES owner, claimExpired, revision, attempts, held, recoveries,
+          slots, reservationOwner, reservationRevision, cleaned
 
-vars == <<attempts, held, recovered, slots, cleaned>>
+vars == <<owner, claimExpired, revision, attempts, held, recoveries,
+          slots, reservationOwner, reservationRevision, cleaned>>
 
-ReservedCount == Cardinality({worker \in Workers: slots[worker] = "reserved"})
+ReservedCount == Cardinality({launcher \in Launchers: slots[launcher] = "reserved"})
+LiveReservation == ReservedCount > 0
 
 Init ==
+    /\ owner \in Owners
+    /\ claimExpired = FALSE
+    /\ revision = 0
     /\ attempts = 0
     /\ held = FALSE
-    /\ recovered = FALSE
-    /\ slots = [worker \in Workers |-> "idle"]
+    /\ recoveries = 0
+    /\ slots = [launcher \in Launchers |-> "idle"]
+    /\ reservationOwner = [launcher \in Launchers |-> NoOwner]
+    /\ reservationRevision = [launcher \in Launchers |-> 0]
     /\ cleaned = FALSE
 
-Reserve(worker) ==
-    /\ worker \in Workers
-    /\ slots[worker] = "idle"
+Reserve(launcher) ==
+    /\ launcher \in Launchers
+    /\ owner \in Owners
+    /\ slots[launcher] = "idle"
     /\ ~held
     /\ attempts + ReservedCount < MaxAttempts
-    /\ slots' = [slots EXCEPT ![worker] = "reserved"]
-    /\ UNCHANGED <<attempts, held, recovered, cleaned>>
+    /\ revision < MaxRevision
+    /\ slots' = [slots EXCEPT ![launcher] = "reserved"]
+    /\ reservationOwner' = [reservationOwner EXCEPT ![launcher] = owner]
+    /\ reservationRevision' = [reservationRevision EXCEPT ![launcher] = revision]
+    /\ revision' = revision + 1
+    /\ UNCHANGED <<owner, claimExpired, attempts, held, recoveries, cleaned>>
 
-ResolveFailure(worker) ==
-    /\ worker \in Workers
-    /\ slots[worker] = "reserved"
-    /\ slots' = [slots EXCEPT ![worker] = "idle"]
+ResolveFailure(launcher) ==
+    /\ launcher \in Launchers
+    /\ slots[launcher] = "reserved"
+    /\ owner = reservationOwner[launcher]
+    /\ revision = reservationRevision[launcher] + 1
+    /\ revision < MaxRevision
+    /\ slots' = [slots EXCEPT ![launcher] = "idle"]
     /\ attempts' = attempts + 1
     /\ held' = (attempts + 1 = MaxAttempts)
-    /\ UNCHANGED <<recovered, cleaned>>
+    /\ revision' = revision + 1
+    /\ UNCHANGED <<owner, claimExpired, recoveries, reservationOwner,
+                reservationRevision, cleaned>>
 
-ResolveSuccess(worker) ==
-    /\ worker \in Workers
-    /\ slots[worker] = "reserved"
-    /\ slots' = [slots EXCEPT ![worker] = "idle"]
-    /\ UNCHANGED <<attempts, held, recovered, cleaned>>
+ResolveSuccess(launcher) ==
+    /\ launcher \in Launchers
+    /\ slots[launcher] = "reserved"
+    /\ owner = reservationOwner[launcher]
+    /\ revision = reservationRevision[launcher] + 1
+    /\ revision < MaxRevision
+    /\ slots' = [slots EXCEPT ![launcher] = "idle"]
+    /\ revision' = revision + 1
+    /\ UNCHANGED <<owner, claimExpired, attempts, held, recoveries,
+                reservationOwner, reservationRevision, cleaned>>
 
-Crash(worker) ==
-    /\ worker \in Workers
-    /\ slots[worker] = "reserved"
-    /\ slots' = [slots EXCEPT ![worker] = "abandoned"]
-    /\ UNCHANGED <<attempts, held, recovered, cleaned>>
+InterveningMutation ==
+    /\ owner \in Owners
+    /\ revision < MaxRevision
+    /\ revision' = revision + 1
+    /\ UNCHANGED <<owner, claimExpired, attempts, held, recoveries, slots,
+                reservationOwner, reservationRevision, cleaned>>
 
-Expire(worker) ==
-    /\ worker \in Workers
-    /\ slots[worker] = "abandoned"
-    /\ slots' = [slots EXCEPT ![worker] = "idle"]
+Expire(launcher) ==
+    /\ launcher \in Launchers
+    /\ slots[launcher] = "reserved"
+    /\ slots' = [slots EXCEPT ![launcher] = "idle"]
+    /\ reservationOwner' = [reservationOwner EXCEPT ![launcher] = NoOwner]
     /\ cleaned' = TRUE
-    /\ UNCHANGED <<attempts, held, recovered>>
+    /\ UNCHANGED <<owner, claimExpired, revision, attempts, held, recoveries,
+                reservationRevision>>
 
-Recover ==
+MarkClaimExpired ==
+    /\ owner \in Owners
+    /\ claimExpired' = TRUE
+    /\ UNCHANGED <<owner, revision, attempts, held, recoveries, slots,
+                reservationOwner, reservationRevision, cleaned>>
+
+RecoverExpired ==
+    /\ owner \in Owners
+    /\ claimExpired
+    /\ ~LiveReservation
+    /\ revision < MaxRevision
+    /\ owner' = NoOwner
+    /\ revision' = revision + 1
+    /\ UNCHANGED <<claimExpired, attempts, held, recoveries, slots,
+                reservationOwner, reservationRevision, cleaned>>
+
+RecoverCircuit ==
+    /\ owner \in Owners
     /\ held
-    /\ ~recovered
+    /\ ~LiveReservation
+    /\ recoveries < MaxRecoveries
+    /\ revision < MaxRevision
     /\ attempts' = 0
     /\ held' = FALSE
-    /\ recovered' = TRUE
-    /\ UNCHANGED <<slots, cleaned>>
+    /\ recoveries' = recoveries + 1
+    /\ revision' = revision + 1
+    /\ UNCHANGED <<owner, claimExpired, slots, reservationOwner,
+                reservationRevision, cleaned>>
 
 Next ==
-    \/ \E worker \in Workers: Reserve(worker)
-    \/ \E worker \in Workers: ResolveFailure(worker)
-    \/ \E worker \in Workers: ResolveSuccess(worker)
-    \/ \E worker \in Workers: Crash(worker)
-    \/ \E worker \in Workers: Expire(worker)
-    \/ Recover
+    \/ \E launcher \in Launchers: Reserve(launcher)
+    \/ \E launcher \in Launchers: ResolveFailure(launcher)
+    \/ \E launcher \in Launchers: ResolveSuccess(launcher)
+    \/ \E launcher \in Launchers: Expire(launcher)
+    \/ InterveningMutation
+    \/ MarkClaimExpired
+    \/ RecoverExpired
+    \/ RecoverCircuit
     \/ UNCHANGED vars
 
-Spec ==
-    /\ Init
-    /\ [][Next]_vars
-    /\ \A worker \in Workers: WF_vars(Expire(worker))
+Spec == /\ Init /\ [][Next]_vars
 
 TypeOK ==
+    /\ owner \in Owners \cup {NoOwner}
+    /\ claimExpired \in BOOLEAN
+    /\ revision \in 0..MaxRevision
     /\ attempts \in 0..MaxAttempts
     /\ held \in BOOLEAN
-    /\ recovered \in BOOLEAN
-    /\ slots \in [Workers -> SlotValues]
+    /\ recoveries \in 0..MaxRecoveries
+    /\ slots \in [Launchers -> SlotValues]
+    /\ reservationOwner \in [Launchers -> (Owners \cup {NoOwner})]
+    /\ reservationRevision \in [Launchers -> 0..MaxRevision]
     /\ cleaned \in BOOLEAN
 
 CapacityBound == attempts + ReservedCount <= MaxAttempts
 HeldAtExactBound == held <=> attempts = MaxAttempts
-HeldHasNoLiveSlot == held => ReservedCount = 0
-AbandonedSlotsEventuallyClean ==
-    \A worker \in Workers: [] (slots[worker] = "abandoned" => <> (slots[worker] = "idle"))
+HeldHasNoLiveSlot == held => ~LiveReservation
+ReservationOwnerBound == \A launcher \in Launchers:
+    slots[launcher] = "reserved" => reservationOwner[launcher] \in Owners
+ExpiredClaimRecoveryFenced == owner = NoOwner => ~LiveReservation
+FreshRecoverySeries == recoveries > 0 /\ ~held => attempts < MaxAttempts
 =============================================================================
