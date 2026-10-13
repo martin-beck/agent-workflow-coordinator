@@ -202,6 +202,35 @@ class AssumptionRevalidationTests(unittest.TestCase):
             )
         self.assertEqual(args, apply.call_args.args[2])
 
+    def test_top_level_cli_dispatches_assumption_as_lifecycle_mutation(self) -> None:
+        with (
+            patch.object(handoffctl, "assert_project_binding"),
+            patch.object(handoffctl, "mutate", return_value=None) as mutate,
+            patch(
+                "sys.argv",
+                [
+                    "handoffctl",
+                    "assumption",
+                    "declare",
+                    "AR-0001",
+                    "--owner",
+                    "worker",
+                    "--expected-revision",
+                    "2",
+                    "--assumption-id",
+                    "base",
+                    "--kind",
+                    "base",
+                    "--material",
+                ],
+            ),
+        ):
+            self.assertEqual(0, handoffctl.main())
+        parsed, command = mutate.call_args.args
+        self.assertEqual("assumption", command)
+        self.assertEqual("assumption", parsed.cmd)
+        self.assertEqual("declare", parsed.assumption_action)
+
     def test_done_admission_rejects_stale_material_assumption_after_spec_checks(self) -> None:
         self.apply(self.args("declare", "base", kind="base", material=True))
         git(self.worktree, "commit", "--allow-empty", "-m", "changed")
@@ -212,6 +241,26 @@ class AssumptionRevalidationTests(unittest.TestCase):
             self.assertRaisesRegex(RuntimeError, "ASSUMPTION_REVALIDATION_REQUIRED"),
         ):
             handoffctl.require_done_admission(self.meta, [(Path("task"), self.meta, "")])
+
+    def test_empty_assumption_history_does_not_require_runtime_config(self) -> None:
+        with (
+            patch.object(handoffctl, "done_admission_error", return_value=None),
+            patch.object(change_drift, "done_admission_error", return_value=None),
+            patch.object(handoffctl, "config", side_effect=AssertionError("not needed")),
+        ):
+            handoffctl.require_done_admission(self.meta, [(Path("task"), self.meta, "")])
+
+    def test_accept_without_assumptions_does_not_require_runtime_config(self) -> None:
+        args = argparse.Namespace(owner="worker")
+        with (
+            patch.object(handoffctl, "require_role_admission"),
+            patch.object(handoffctl, "config", side_effect=AssertionError("not needed")),
+            patch.object(
+                handoffctl, "apply_acceptance", side_effect=lambda *_args: _args[-1]()
+            ) as accept,
+        ):
+            self.assertIsNone(handoffctl.apply_accept(args, self.meta, None, []))
+        self.assertIsNone(accept.call_args.args[-1]())
 
 
 if __name__ == "__main__":  # pragma: no cover

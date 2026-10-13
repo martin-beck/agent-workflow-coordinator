@@ -246,6 +246,7 @@ LIFECYCLE_MUTATION_COMMANDS = (
     "recover-execution",
     "update",
     "change-drift",
+    "assumption",
 )
 
 
@@ -2390,8 +2391,12 @@ def require_done_admission(
     if error := change_drift.done_admission_error(meta):
         raise RuntimeError(error)
     task_metadata = [item for _, item, _ in tasks] if tasks is not None else []
-    if error := assumption_revalidation.admission_error(
-        ROOT, Path(str(config()["projects_root"])), meta, task_metadata
+    if error := (
+        assumption_revalidation.admission_error(
+            ROOT, Path(str(config()["projects_root"])), meta, task_metadata
+        )
+        if assumption_revalidation.needs_admission(meta)
+        else None
     ):
         raise RuntimeError(error)
 
@@ -2673,11 +2678,15 @@ def apply_accept(
         args,
         meta,
         policy,
-        lambda: assumption_revalidation.admission_error(
-            ROOT,
-            Path(str(config()["projects_root"])),
-            meta,
-            [item for _, item, _ in tasks] if tasks is not None else [],
+        lambda: (
+            assumption_revalidation.admission_error(
+                ROOT,
+                Path(str(config()["projects_root"])),
+                meta,
+                [item for _, item, _ in tasks] if tasks is not None else [],
+            )
+            if assumption_revalidation.needs_admission(meta)
+            else None
         ),
     )
 

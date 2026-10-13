@@ -266,6 +266,14 @@ def metadata_error(meta: Meta) -> str | None:
     return None
 
 
+def needs_admission(meta: Meta) -> bool:
+    """Return whether an active material record needs a freshness lookup."""
+    return any(
+        record["material"] and record["action"] != "dispose"
+        for record in active(records(meta)).values()
+    )
+
+
 def admission_error(root: Path, projects_root: Path, meta: Meta, tasks: list[Meta]) -> str | None:
     """Return the explicit revalidation requirement for stale material inputs."""
     try:

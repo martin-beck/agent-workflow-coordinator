@@ -13,17 +13,23 @@ FORMAL = ROOT / "formal/handoffctl"
 
 
 class AssumptionRevalidationFormalModelTests(unittest.TestCase):
-    def test_model_covers_materiality_moved_bindings_and_explicit_disposition(self) -> None:
+    def test_model_covers_advertised_material_bindings_and_acceptance(self) -> None:
         model = (FORMAL / "HandoffctlAssumptions.tla").read_text(encoding="utf-8")
         for fragment in (
             "currentBase",
             "currentDependency",
+            "currentObservation",
             "baseMaterial",
             "dependencyMaterial",
+            "observationMaterial",
             "RevalidateBase",
             "RevalidateDependency",
             "DisposeBase",
             "DisposeDependency",
+            "RevalidateObservation",
+            "DisposeObservation",
+            "Accept",
+            "AcceptanceRequiresFreshMaterialAssumptions",
             "DoneRequiresFreshMaterialAssumptions",
             "NonmaterialDoesNotUniversallyBlock",
         ):
@@ -33,8 +39,9 @@ class AssumptionRevalidationFormalModelTests(unittest.TestCase):
         config = (FORMAL / "HandoffctlAssumptions.cfg").read_text(encoding="utf-8")
         verifier = (FORMAL / "verify.sh").read_text(encoding="utf-8")
         tiers = json.loads((ROOT / "formal/tier-evidence.json").read_text(encoding="utf-8"))
-        self.assertIn('Processes = {"p1", "p2"}', config)
+        self.assertIn('Processes = {"p1"}', config)
         self.assertIn("DoneRequiresFreshMaterialAssumptions", config)
+        self.assertIn("AcceptanceRequiresFreshMaterialAssumptions", config)
         self.assertIn("run_model HandoffctlAssumptions", verifier)
         self.assertIn("HandoffctlAssumptions", tiers["profiles"]["pr-publication"]["models"])
         self.assertIn("HandoffctlAssumptions", tiers["profiles"]["full-exhaustive"]["models"])

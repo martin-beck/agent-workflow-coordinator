@@ -179,9 +179,10 @@ it is a bounded abstraction, not
 implementation-refinement evidence.
 
 HandoffctlAssumptions.tla checks opt-in material freshness bindings for a
-base and dependency. It explores moved base/dependency races, stale and current
-revisions, explicit revalidation/disposition, and non-material assumptions. It
-requires a task released `done` to have every material declared input fresh or
+base, dependency, and local observation. It explores moved binding races, stale
+and current revisions, explicit revalidation/disposition, non-material
+assumptions, and owner-and-revision-fenced `accept`. It requires both acceptance
+and a task released `done` to have every material declared input fresh or
 explicitly disposed; it is bounded best-effort design guidance, not an
 implementation-refinement proof.
 
