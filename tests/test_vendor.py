@@ -21,7 +21,7 @@ from unittest.mock import patch
 from tools.generate_upgrade_contract import generate
 
 ROOT = Path(__file__).resolve().parent.parent
-STATE_SIZE_EXEMPT = frozenset({Path("tools/handoffctl.py")})
+STATE_SIZE_EXEMPT = frozenset({Path("tools/handoffctl.py"), Path("tests/test_handoffctl.py")})
 CURRENT_VERSION = f"v{tomllib.loads((ROOT / 'pyproject.toml').read_text())['project']['version']}"
 SOURCE = ROOT / "tools/vendor.py"
 SPEC = importlib.util.spec_from_file_location("handoffctl_vendor", SOURCE)

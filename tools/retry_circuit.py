@@ -409,6 +409,14 @@ def cleanup_expired(meta: Meta, recorded_at: str) -> int:
     return len(expired)
 
 
+def require_no_live_reservation(meta: Meta, recorded_at: str) -> None:
+    """Retire elapsed slots and reject recovery while an unbound child is live."""
+    cleanup_expired(meta, recorded_at)
+    state = meta.get("retry_circuit")
+    if isinstance(state, dict) and state["reservations"]:
+        raise RuntimeError("RETRY_CIRCUIT_IN_PROGRESS: task has a live unbound retry reservation")
+
+
 def record_failure(
     meta: Meta,
     identity: str,
