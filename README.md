@@ -112,6 +112,7 @@ repository.
 
 ```sh
 tools/handoffctl snapshot
+tools/handoffctl resume-card AR-0001
 tools/handoffctl claim AR-0001 --owner worker-unique --lease-minutes 120
 tools/handoffctl run --owner worker-unique --command-class source-write --scope-path tools \
   AR-0001 -- command arg

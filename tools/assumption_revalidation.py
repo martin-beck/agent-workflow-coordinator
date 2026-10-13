@@ -292,6 +292,19 @@ def needs_admission(meta: Meta) -> bool:
     )
 
 
+def current_binding(
+    root: Path, projects_root: Path, meta: Meta, tasks: list[Meta], record: Meta
+) -> Meta:
+    """Observe the binding for one validated active assumption record."""
+    _validate(record)
+    reference = ""
+    if record["kind"] == "dependency":
+        reference = str(record["binding"]["task"])
+    elif record["kind"] == "observation":
+        reference = str(record["binding"]["ref"])
+    return _binding(root, projects_root, meta, tasks, str(record["kind"]), reference)
+
+
 def admission_error(root: Path, projects_root: Path, meta: Meta, tasks: list[Meta]) -> str | None:
     """Return the explicit revalidation requirement for stale material inputs."""
     try:
@@ -299,15 +312,7 @@ def admission_error(root: Path, projects_root: Path, meta: Meta, tasks: list[Met
         for assumption_id, record in current.items():
             if not record["material"] or record["action"] == "dispose":
                 continue
-            reference = ""
-            if record["kind"] == "dependency":
-                reference = str(record["binding"]["task"])
-            elif record["kind"] == "observation":
-                reference = str(record["binding"]["ref"])
-            if (
-                _binding(root, projects_root, meta, tasks, record["kind"], reference)
-                != record["binding"]
-            ):
+            if current_binding(root, projects_root, meta, tasks, record) != record["binding"]:
                 return f"ASSUMPTION_REVALIDATION_REQUIRED: {assumption_id} ({record['kind']})"
     except (RuntimeError, ValueError) as error:
         return f"ASSUMPTION_REVALIDATION_REQUIRED: {error}"
