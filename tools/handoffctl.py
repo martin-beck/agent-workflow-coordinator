@@ -2763,10 +2763,11 @@ def valid_binding_worktree(value: object) -> bool:
     if not change_drift.valid_worktree_key(value):
         return False
     value = cast(str, value)
-    if value in {".", "..", str(config().get("product_worktree", ""))}:
-        return False
     try:
-        root = Path(str(config()["projects_root"])).resolve()
+        settings = config()
+        if value in {".", "..", str(settings.get("product_worktree", ""))}:
+            return False
+        root = Path(str(settings["projects_root"])).resolve()
         candidate = root / value
         return not candidate.is_symlink() and inside(candidate, root)
     except KeyError:
