@@ -2,17 +2,13 @@
 # SPDX-License-Identifier: MIT
 
 import argparse
-import sys
 import unittest
 
-sys.path.insert(
-    0, "/srv/data/projects/agent-workflow-coordinator-ar0034-legacy-binding-repair-v075/tools"
-)
-import handoffctl as h
+from tools import handoffctl as h
 
 
 class LegacyBindingRepairTests(unittest.TestCase):
-    def setUp(self):
+    def setUp(self) -> None:
         self.args = argparse.Namespace(
             expected_revision=4, worktree_key="legacy-key", note="verified stale"
         )
@@ -25,12 +21,12 @@ class LegacyBindingRepairTests(unittest.TestCase):
             "worktree_key": "legacy-key",
         }
 
-    def test_exact_match_clears_only_key(self):
+    def test_exact_match_clears_only_key(self) -> None:
         h.apply_repair_legacy_binding(self.args, self.meta, [])
         self.assertEqual("", self.meta["worktree_key"])
         self.assertEqual("open", self.meta["status"])
 
-    def test_hostile_inputs_rejected(self):
+    def test_hostile_inputs_rejected(self) -> None:
         for replacement, message in (
             ({"expected_revision": 3}, "stale revision"),
             ({"worktree_key": "other"}, "does not match"),
@@ -43,7 +39,7 @@ class LegacyBindingRepairTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, message):
                 h.apply_repair_legacy_binding(args, value, [])
 
-    def test_state_preconditions_rejected(self):
+    def test_state_preconditions_rejected(self) -> None:
         for replacement, message in (
             ({"branch": "repair/old"}, "empty legacy branch"),
             (
