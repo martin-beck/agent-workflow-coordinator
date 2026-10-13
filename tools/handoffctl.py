@@ -210,10 +210,6 @@ else:  # pragma: no cover - direct script execution
         task_spec_policy_errors,
     )
 
-# These imports are conditionally resolved for package and script execution.
-# Keep their public types visible to static consumers without defining a runtime
-# ``__all__``: this module historically exposed its complete non-private
-# namespace to wildcard importers.
 if TYPE_CHECKING:
     __all__ = (
         "DEFAULT_EVIDENCE_POLICY",
