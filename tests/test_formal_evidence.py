@@ -1033,6 +1033,8 @@ class FormalEvidenceTests(unittest.TestCase):
         self.assertIn("TIER_BUDGET_SECONDS=900", verify)
         self.assertIn("aggregate verifier budget exhausted (including admission)", verify)
         self.assertIn("TLC_WORK_ROOT", verify)
+        self.assertIn("TLC_RUNTIME_ROOT", verify)
+        self.assertIn('WORK_ROOT="${TLC_RUNTIME_ROOT}/agent-workflow-coordinator-tlc"', verify)
         self.assertIn('--workspace "${TEMP_DIR}"', verify)
         self.assertIn('--storage-max "${TLC_STORAGE_MAX:-2G}"', verify)
         self.assertIn("--started-epoch", verify)
