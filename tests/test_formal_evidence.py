@@ -57,6 +57,21 @@ def configured_bounds(configs: list[Path]) -> dict[str, int]:
 
 
 class FormalEvidenceTests(unittest.TestCase):
+    def test_verifier_rejects_relative_workspace_root_before_filesystem_mutation(self) -> None:
+        """A hostile workspace root must fail with a stable argument error."""
+        script = FORMAL_ROOT / "verify.sh"
+        for work_root in ("relative-tlc", "../hostile-tlc", "relative/with space"):
+            with self.subTest(work_root=work_root):
+                result = subprocess.run(  # noqa: S603 - exact tracked formal verifier
+                    [str(script), "--tier", "portable-smoke"],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    env={**os.environ, "TLC_WORK_ROOT": work_root},
+                )
+                self.assertEqual(64, result.returncode)
+                self.assertIn("TLC_WORK_ROOT must be an absolute path", result.stderr)
+
     def test_verifier_workspace_root_precedence_is_executable(self) -> None:
         """The verifier must select the documented root before downloading TLC."""
         script = FORMAL_ROOT / "verify.sh"
