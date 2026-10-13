@@ -31,7 +31,7 @@ ReleaseOperations ==
     {"release_planned", "release_open", "release_blocked", "release_done"}
 
 Operations ==
-    {"promote", "resume", "unblock", "pause", "claim", "heartbeat", "update", "accept", "bind-spec", "bind-worktree", "bind-envelope", "recover_expired", "recover_execution", "change-drift", "assumption"}
+    {"promote", "resume", "unblock", "pause", "claim", "heartbeat", "update", "accept", "bind-spec", "bind-worktree", "bind-envelope", "recover_expired", "recover-execution", "change-drift", "assumption"}
         \cup ReleaseOperations
 
 Phases == {"waiting", "holding", "releasing", "done"}
@@ -208,7 +208,7 @@ EnabledOperation(p) ==
             /\ owner[t] # NoActor
             /\ leaseExpired[t]
             /\ expected[p] = revision[t]
-      [] operation[p] = "recover_execution" ->
+      [] operation[p] = "recover-execution" ->
             /\ status[t] = "in_progress"
             /\ expected[p] = revision[t]
       [] operation[p] \in ReleaseOperations ->
@@ -221,7 +221,7 @@ StatusAfter(p) ==
       [] operation[p] = "pause" -> "blocked"
       [] operation[p] = "claim" -> "in_progress"
       [] operation[p] = "recover_expired" -> "open"
-      [] operation[p] \in {"heartbeat", "update", "accept", "bind-spec", "bind-worktree", "bind-envelope", "recover_execution", "change-drift", "assumption"} -> status[target[p]]
+      [] operation[p] \in {"heartbeat", "update", "accept", "bind-spec", "bind-worktree", "bind-envelope", "recover-execution", "change-drift", "assumption"} -> status[target[p]]
       [] operation[p] = "release_planned" -> "planned"
       [] operation[p] = "release_open" -> "open"
       [] operation[p] = "release_blocked" -> "blocked"
