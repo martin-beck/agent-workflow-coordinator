@@ -52,6 +52,16 @@ requires either `assumption revalidate` (which records the new binding) or
 never block these transitions. This is a local developer workflow control, not
 an authentication, signature, or reviewer gate.
 
+An installation may also opt into `autonomy-limits-policy.json` at the bound
+state root. Its version-1 schema declares one or more bounded maxima for elapsed
+time, retries, commands, local diff size, self-reported cost units, and declared
+external side effects. The file is a tracked, clean, regular Git blob; a missing,
+replaced, dirty, oversized, or malformed policy rejects command admission.
+Limits are workflow controls, not authentication or approval controls. A breach
+records a privacy-safe diagnostic hold on the current task revision. The active
+owner can clear that exact hold with `autonomy-limits dispose` and a concise local
+reason; no signature, account, external service, or reviewer is involved.
+
 Change upstream when behavior affects:
 
 - lifecycle transitions, ownership, revisions or dependencies;

@@ -27,6 +27,7 @@
         "HandoffctlPredicateLedger",
         "HandoffctlAssumptions",
         "HandoffctlRetryCircuit",
+        "HandoffctlAutonomyLimits",
         "HandoffctlLiveness",
         "HandoffctlRecovery"
       ],
@@ -46,6 +47,7 @@
         "HandoffctlPredicateLedger",
         "HandoffctlAssumptions",
         "HandoffctlRetryCircuit",
+        "HandoffctlAutonomyLimits",
         "HandoffctlSlice-promote",
         "HandoffctlSlice-resume",
         "HandoffctlSlice-unblock",

@@ -25,6 +25,7 @@ SOURCE_FILES: tuple[tuple[str, str], ...] = (
     ("tools/assumption_revalidation.py", "tools/assumption_revalidation.py"),
     ("tools/resume_card.py", "tools/resume_card.py"),
     ("tools/resume_card_runtime.py", "tools/resume_card_runtime.py"),
+    ("tools/autonomy_limits.py", "tools/autonomy_limits.py"),
     ("tools/command_results.py", "tools/command_results.py"),
     ("tools/retry_circuit.py", "tools/retry_circuit.py"),
     ("tools/run_command.py", "tools/run_command.py"),
@@ -102,6 +103,7 @@ SOURCE_FILES: tuple[tuple[str, str], ...] = (
     ("tests/test_handoffctl_retry_recovery.py", "tests/test_handoffctl_retry_recovery.py"),
     ("tests/test_assumption_revalidation.py", "tests/test_assumption_revalidation.py"),
     ("tests/test_resume_card.py", "tests/test_resume_card.py"),
+    ("tests/test_autonomy_limits.py", "tests/test_autonomy_limits.py"),
     ("tests/test_retry_circuit.py", "tests/test_retry_circuit.py"),
     ("tests/test_predicate_evidence_ledger.py", "tests/test_predicate_evidence_ledger.py"),
     (
@@ -131,6 +133,7 @@ SOURCE_FILES: tuple[tuple[str, str], ...] = (
         "schema/project-config.schema.json",
         "schema/handoffctl-project-config.schema.json",
     ),
+    ("schema/autonomy-limits-policy.schema.json", "schema/autonomy-limits-policy.schema.json"),
     (
         "schema/project-binding.schema.json",
         "schema/handoffctl-project-binding.schema.json",
@@ -225,6 +228,14 @@ SOURCE_FILES: tuple[tuple[str, str], ...] = (
     (
         "formal/handoffctl/HandoffctlRetryCircuit.tla",
         "formal/handoffctl/HandoffctlRetryCircuit.tla",
+    ),
+    (
+        "formal/handoffctl/HandoffctlAutonomyLimits.cfg",
+        "formal/handoffctl/HandoffctlAutonomyLimits.cfg",
+    ),
+    (
+        "formal/handoffctl/HandoffctlAutonomyLimits.tla",
+        "formal/handoffctl/HandoffctlAutonomyLimits.tla",
     ),
     (
         "formal/handoffctl/OBSERVATION_CORRESPONDENCE.md",

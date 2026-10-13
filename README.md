@@ -151,6 +151,12 @@ competing clones cannot both begin the same bound command; expired execution fen
 worker-exit recovery. These boundaries must still be paired with ordinary worktree and platform
 isolation.
 
+Projects may commit an optional `autonomy-limits-policy.json` to bound autonomous
+elapsed time, retries, commands, diff size, cost units, and declared external side
+effects. A reached limit produces a privacy-safe, revision-fenced diagnostic hold.
+The active owner resolves that hold with an explicit `autonomy-limits dispose`
+reason; it never requires an external signature, account, or reviewer.
+
 ## Develop
 
 Quality policy and gate ownership are documented in
