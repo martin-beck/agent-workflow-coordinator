@@ -238,10 +238,8 @@ def require_admission(state_path: Path, registry_path: Path, owner_id: str, role
         raise RuntimeError(error)
 
 
-def doctor_errors(
-    state_path: Path, registry_path: Path, owners: list[tuple[str, str]]
-) -> list[str]:
-    return role_admission_errors(state_path, registry_path, owners)
+def doctor_errors(state_path: Path, owners: list[tuple[str, str]]) -> list[str]:
+    return role_admission_errors(state_path, ROOT / "examples/roles/role-registry.json", owners)
 
 
 def main(argv: list[str] | None = None) -> int:

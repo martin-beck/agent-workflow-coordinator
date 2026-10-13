@@ -3603,12 +3603,7 @@ def role_doctor_errors() -> list[str]:
         for _, m, _ in all_tasks()
         if m.get("status") == "in_progress" and m.get("owner")
     ]
-    return cast(
-        list[str],
-        roles.doctor_errors(
-            RUNTIME / "roles.json", ROOT / "examples/roles/role-registry.json", owners
-        ),
-    )
+    return cast(list[str], roles.doctor_errors(RUNTIME / "roles.json", owners))
 
 
 def doctor_checks(*, live: bool, sqlite: bool, live_state: State | None) -> list[str]:
