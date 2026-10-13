@@ -31,7 +31,7 @@ from collections import Counter
 from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 if not __package__:
     _SCRIPT_ROOT = str(Path(__file__).resolve().parent.parent)
@@ -210,11 +210,16 @@ else:  # pragma: no cover - direct script execution
         task_spec_policy_errors,
     )
 
-__all__ = (
-    "DEFAULT_EVIDENCE_POLICY",
-    "graph_errors",
-    "hierarchy_errors",
-)
+# These imports are conditionally resolved for package and script execution.
+# Keep their public types visible to static consumers without defining a runtime
+# ``__all__``: this module historically exposed its complete non-private
+# namespace to wildcard importers.
+if TYPE_CHECKING:
+    __all__ = (
+        "DEFAULT_EVIDENCE_POLICY",
+        "graph_errors",
+        "hierarchy_errors",
+    )
 
 ROOT = Path(__file__).resolve().parent.parent
 TASKS = ROOT / "tasks"
