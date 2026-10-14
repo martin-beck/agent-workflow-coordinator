@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.7.14 - 2026-10-15
+
+- Preserve invalid historical predicate-ledger rows during audited correction while
+  strictly validating the completed target, fresh candidate, predicate, evidence
+  class, references, and digests.
+
 - Add an audited, bounded post-acceptance predicate-ledger repair transition
   that preserves historical rows and rejects active, stale, malformed, or
   unsafe requests.
