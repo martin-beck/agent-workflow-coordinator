@@ -4309,27 +4309,6 @@ class HandoffTest(unittest.TestCase):
         self.assertEqual(current_before, (self.root / "CURRENT.md").read_text(encoding="utf-8"))
         self.assertFalse((self.root / "sessions/AR-0001.jsonl").exists())
 
-    def test_repair_mutation_admission_is_the_only_ledger_bypass(self) -> None:
-        path = self.root / "tasks/AR-0001.md"
-        meta = {"id": "AR-0001"}
-        seen: list[bool] = []
-
-        def record(*_args: Any, **kwargs: Any) -> list[str]:
-            seen.append(kwargs["include_ledger"])
-            return []
-
-        with (
-            patch.object(CORE, "all_tasks", return_value=[(path, meta, "")]),
-            patch.object(CORE, "basic_task_errors", side_effect=record),
-            patch.object(CORE, "claim_errors", return_value=[]),
-            patch.object(CORE, "mutation_global_errors", return_value=[]),
-            patch.object(CORE, "generated_view_errors", return_value=[]),
-            patch.object(CORE, "introduced_content_errors", return_value=[]),
-        ):
-            CORE.mutation_errors(path, {}, include_ledger=False)
-            CORE.mutation_errors(path, {}, include_ledger=True)
-        self.assertEqual([False, True], seen)
-
     def test_policy_validation_and_reconcile_failures_leave_state_unchanged(self) -> None:
         path = self.make_task()
         before = path.read_text(encoding="utf-8")

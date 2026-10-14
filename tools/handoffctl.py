@@ -47,6 +47,7 @@ if __package__:
         execution_envelope,
         execution_lifecycle,
         execution_receipt,
+        mutation_admission,
         resume_card,
         resume_card_runtime,
         retry_circuit,
@@ -145,6 +146,7 @@ else:
     import execution_envelope  # type: ignore[import-not-found,no-redef]
     import execution_lifecycle  # type: ignore[import-not-found,no-redef]
     import execution_receipt  # type: ignore[import-not-found,no-redef]
+    import mutation_admission  # type: ignore[import-not-found,no-redef]
     import predicate_ledger_repair as plr  # type: ignore[import-not-found,no-redef]
     import resume_card  # type: ignore[import-not-found,no-redef]
     import resume_card_runtime  # type: ignore[import-not-found,no-redef]
@@ -1480,7 +1482,6 @@ def execution_metadata_errors(task_id: str, meta: Meta) -> list[str]:  # noqa: C
 
 
 def execution_abandonment_errors(task_id: str, meta: Meta) -> list[str]:
-    """Reject malformed bounded abandonment history before it reaches projections."""
     if execution_abandonment.valid_records(meta.get("execution_abandonments")):
         return []
     return [f"{task_id}: invalid execution_abandonments"]
@@ -1535,7 +1536,6 @@ def reference_errors(path: Path, meta: Meta) -> list[str]:
 
 
 def supersession_errors(tasks: list[Task]) -> list[str]:
-    """Validate explicitly recorded supersession pointers without weakening old data."""
     by_id = {meta.get("id"): meta for _, meta, _ in tasks}
     errors: list[str] = []
     for _, meta, _ in tasks:
@@ -1571,12 +1571,11 @@ def basic_task_errors(
         *field_errors(path, meta),
         *value_errors(path, meta),
         *reference_errors(path, meta),
-        *task_spec_errors(ROOT, meta, policy, include_ledger=include_ledger),
+        *mutation_admission.task_errors(ROOT, meta, policy, include_ledger=include_ledger),
     ]
 
 
 def parse_claim_expiry(expiry: object) -> dt.datetime:
-    """Parse one timezone-aware lease deadline."""
     if not isinstance(expiry, str) or not expiry:
         raise ValueError("missing or non-string claim expiry")
     parsed = dt.datetime.fromisoformat(expiry.replace("Z", "+00:00"))
@@ -1586,7 +1585,6 @@ def parse_claim_expiry(expiry: object) -> dt.datetime:
 
 
 def process_start_time(pid: int) -> int | None:
-    """Return a Linux process start time, or ``None`` after it has exited."""
     proc = Path("/proc") / str(pid)
     try:
         stat_fields = (proc / "stat").read_text(encoding="utf-8").rsplit(")", 1)[1].split()
@@ -1598,7 +1596,6 @@ def process_start_time(pid: int) -> int | None:
 
 
 def worker_execution_scope() -> tuple[str, str]:
-    """Return the local boot and PID-namespace identities for recovery fencing."""
     try:
         boot_id = (Path("/proc/sys/kernel/random/boot_id").read_text(encoding="utf-8")).strip()
         namespace = Path("/proc/self/ns/pid").stat()
@@ -1615,7 +1612,6 @@ def worker_execution_scope() -> tuple[str, str]:
 
 
 def claimed_process_identity(args: argparse.Namespace) -> Meta | None:
-    """Validate an optional live worker identity at the exact claim transition."""
     pid = getattr(args, "worker_pid", None)
     start_time = getattr(args, "worker_start_time", None)
     if pid is None and start_time is None:
@@ -1636,7 +1632,6 @@ def claimed_process_identity(args: argparse.Namespace) -> Meta | None:
 
 
 def require_claimed_worker_absent(meta: Meta) -> None:
-    """Require a claim-time identity and independently confirm it no longer runs."""
     identity = meta.get("claim_process")
     if not scoped_claim_process(identity):
         raise RuntimeError(
