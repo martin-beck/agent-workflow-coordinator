@@ -13,7 +13,7 @@ def repair(args: Any, meta: dict[str, Any]) -> str:
         )
     if meta.get("status") not in {"open", "done"} or meta.get("owner") or meta.get("claim_expires"):
         raise RuntimeError("repair-legacy-binding requires an inactive, unowned task")
-    if meta.get("branch"):
+    if meta.get("status") == "open" and meta.get("branch"):
         raise RuntimeError("repair-legacy-binding requires an empty legacy branch")
     if meta.get("worktree_key") != args.worktree_key:
         raise RuntimeError("repair-legacy-binding worktree key does not match retained metadata")
