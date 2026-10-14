@@ -145,6 +145,7 @@ else:
     import execution_envelope  # type: ignore[import-not-found,no-redef]
     import execution_lifecycle  # type: ignore[import-not-found,no-redef]
     import execution_receipt  # type: ignore[import-not-found,no-redef]
+    import predicate_ledger_repair as plr  # type: ignore[import-not-found,no-redef]
     import resume_card  # type: ignore[import-not-found,no-redef]
     import resume_card_runtime  # type: ignore[import-not-found,no-redef]
     import retry_circuit  # type: ignore[import-not-found,no-redef]
@@ -179,7 +180,6 @@ else:
         gate_errors,
         transition_allowed,
     )
-    import predicate_ledger_repair as plr  # type: ignore[import-not-found,no-redef]
     from predicate_ledger import apply_acceptance  # type: ignore[import-not-found,no-redef]
     from rollback_records import (  # type: ignore[import-not-found,no-redef]
         append_record,
