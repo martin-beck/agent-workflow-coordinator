@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.7.10 - 2026-10-14
+
+- Repair legacy worktree metadata on inactive historical tasks through the
+  existing exact-revision, exact-value mutation route. This unblocks state
+  validation without reopening completed task history.
+
 ## 0.7.9 - 2026-10-14
 
 - Add `handoffctl abandon-execution` for the narrow state-root recovery case where an expired,
