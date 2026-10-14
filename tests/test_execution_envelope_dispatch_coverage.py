@@ -62,6 +62,11 @@ class ExecutionEnvelopeCommandBoundaryTest(unittest.TestCase):
                 self.assertEqual(0, CORE.dispatch_bound_standard_command(lifecycle))
             self.assertEqual(23, CORE.dispatch_bound_standard_command(run))
         mutate.assert_called_once_with(lifecycle, "recover-execution")
+
+        lifecycle = argparse.Namespace(cmd="abandon-execution")
+        with patch.object(CORE, "mutate") as mutate:
+            CORE.dispatch_bound_command(lifecycle)
+        mutate.assert_called_once_with(lifecycle, "abandon-execution")
         cmd_run.assert_called_once_with(run)
         self.assertEqual(["echo", "ok"], run.command)
         self.assertIn("reservation released", output.getvalue())

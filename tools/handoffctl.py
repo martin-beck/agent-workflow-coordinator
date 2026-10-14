@@ -43,7 +43,9 @@ if __package__:
         assumption_revalidation,
         change_drift,
         command_results,
+        execution_abandonment,
         execution_envelope,
+        execution_lifecycle,
         execution_receipt,
         resume_card,
         resume_card_runtime,
@@ -138,7 +140,9 @@ else:
             del metrics
             raise RuntimeError("board metrics module is unavailable in this vendored bootstrap")
 
+    import execution_abandonment  # type: ignore[import-not-found,no-redef]
     import execution_envelope  # type: ignore[import-not-found,no-redef]
+    import execution_lifecycle  # type: ignore[import-not-found,no-redef]
     import execution_receipt  # type: ignore[import-not-found,no-redef]
     import resume_card  # type: ignore[import-not-found,no-redef]
     import resume_card_runtime  # type: ignore[import-not-found,no-redef]
@@ -270,6 +274,7 @@ LIFECYCLE_MUTATION_COMMANDS = (
     "unblock",
     "recover-expired",
     "recover-execution",
+    "abandon-execution",
     "update",
     "change-drift",
     "assumption",
@@ -323,6 +328,7 @@ FIELDS = set(REQ) | {
     "execution_envelope",
     "execution_reservation",
     "execution_result",
+    "execution_abandonments",
     "parent_task_ref",
     "children",
     "issue_series",
@@ -358,7 +364,7 @@ def short_title_errors(path: Path, task_id: str, value: object) -> list[str]:
     return []
 
 
-COORDINATOR_VERSION = "0.7.8"
+COORDINATOR_VERSION = "0.7.9"
 DEFAULT_PROJECT_SETTINGS: Meta = {
     "schema_version": 1,
     "project_id": "00000000-0000-4000-8000-000000000000",
@@ -1456,6 +1462,7 @@ def execution_metadata_errors(task_id: str, meta: Meta) -> list[str]:
     result = meta.get("execution_result")
     if result is not None and not valid_execution_result(result):
         errors.append(f"{task_id}: invalid execution_result")
+    errors.extend(execution_abandonment_errors(task_id, meta))
     if not valid_execution_envelope_binding(meta):
         errors.append(f"{task_id}: invalid execution envelope binding")
     if error := change_drift.metadata_error(meta):
@@ -1467,6 +1474,13 @@ def execution_metadata_errors(task_id: str, meta: Meta) -> list[str]:
     if error := al.metadata_error(meta):
         errors.append(f"{task_id}: {error}")
     return errors
+
+
+def execution_abandonment_errors(task_id: str, meta: Meta) -> list[str]:
+    """Reject malformed bounded abandonment history before it reaches projections."""
+    if execution_abandonment.valid_records(meta.get("execution_abandonments")):
+        return []
+    return [f"{task_id}: invalid execution_abandonments"]
 
 
 valid_execution_reservation = execution_envelope.valid_reservation
@@ -2893,82 +2907,23 @@ def apply_bind_envelope(args: argparse.Namespace, meta: Meta) -> str:
 
 
 def apply_execution_start(args: argparse.Namespace, meta: Meta) -> str:
-    require_active_binding_owner(args, meta)
-    if not isinstance(meta.get("execution_envelope"), dict):
-        raise RuntimeError("execution reservation requires a bound execution envelope")
-    if live_execution_reservation(meta) is not None:
-        raise RuntimeError("EXECUTION_IN_PROGRESS: bound task already has a live execution")
-    if meta.get("execution_reservation") is not None:
-        raise RuntimeError("EXECUTION_RECOVERY_REQUIRED: expired execution reservation remains")
-    execution_id = getattr(args, "execution_id", "")
-    expires_at = getattr(args, "execution_expires_at", "")
-    if not re.fullmatch(r"[0-9a-f]{32}", str(execution_id)):
-        raise RuntimeError("invalid execution reservation identifier")
-    try:
-        expires = dt.datetime.fromisoformat(str(expires_at).replace("Z", "+00:00"))
-    except ValueError as error:
-        raise RuntimeError("invalid execution reservation expiry") from error
-    if expires <= dt.datetime.now(dt.UTC):
-        raise RuntimeError("execution reservation expiry must be in the future")
-    meta["execution_reservation"] = {
-        "execution_id": execution_id,
-        "owner": args.owner,
-        "task_revision": meta["task_revision"],
-        "envelope_digest": meta["execution_envelope_digest"],
-        "command_class": args.command_class,
-        "scope_digest": args.scope_digest,
-        "argv_digest": args.argv_digest,
-        "expires_at": expires.replace(microsecond=0).isoformat(),
-    }
-    claim_expiry = parse_claim_expiry(meta.get("claim_expires"))
-    if claim_expiry < expires:
-        meta["claim_expires"] = expires.replace(microsecond=0).isoformat()
-    return f"Reserved bound execution {execution_id}."
+    return execution_lifecycle.start(_EXECUTION_RUNTIME, args, meta)
 
 
 def apply_execution_finish(args: argparse.Namespace, meta: Meta) -> str:
-    reservation = meta.get("execution_reservation")
-    if not isinstance(reservation, dict) or reservation.get("execution_id") != args.execution_id:
-        raise RuntimeError("execution reservation no longer matches this command")
-    if reservation.get("owner") != args.owner:
-        raise RuntimeError("execution reservation owner does not match")
-    require_optional_revision(args, meta)
-    if not execution_result_matches(cast(Meta, reservation), meta.get("execution_result")):
-        raise RuntimeError("execution finish requires an exact durable result")
-    meta.pop("execution_reservation", None)
-    return str(args.note)
+    return execution_lifecycle.finish(_EXECUTION_RUNTIME, args, meta)
 
 
 def apply_execution_result(args: argparse.Namespace, meta: Meta) -> str:
-    reservation = meta.get("execution_reservation")
-    if not isinstance(reservation, dict) or reservation.get("execution_id") != args.execution_id:
-        raise RuntimeError("execution reservation no longer matches this command")
-    require_optional_revision(args, meta)
-    try:
-        result = execution_receipt.build(reservation, args)
-    except ValueError as error:
-        raise RuntimeError(str(error)) from error
-    if meta.get("execution_result") == result:
-        raise IdempotentMutationError(f"Execution result {args.execution_id} is already recorded.")
-    meta["execution_result"] = result
-    return f"Recorded execution result {args.execution_id}."
+    return execution_lifecycle.result(_EXECUTION_RUNTIME, args, meta)
 
 
 def apply_recover_execution(args: argparse.Namespace, meta: Meta) -> str:
-    require_optional_revision(args, meta)
-    reservation = meta.get("execution_reservation")
-    if not valid_execution_reservation(reservation):
-        raise RuntimeError("execution recovery requires a valid reservation")
-    valid_reservation = cast(Meta, reservation)
-    if live_execution_reservation(meta) is not None:
-        raise RuntimeError("EXECUTION_IN_PROGRESS: execution reservation has not expired")
-    require_claimed_worker_absent(meta)
-    if not execution_result_matches(valid_reservation, meta.get("execution_result")):
-        raise RuntimeError(
-            "EXECUTION_RESULT_UNKNOWN: reservation-specific completion evidence is unavailable"
-        )
-    meta.pop("execution_reservation", None)
-    return f"Recovered completed execution {valid_reservation['execution_id']}."
+    return execution_lifecycle.recover(_EXECUTION_RUNTIME, args, meta)
+
+
+def apply_abandon_execution(args: argparse.Namespace, meta: Meta) -> str:
+    return execution_lifecycle.abandon(_EXECUTION_RUNTIME, args, meta)
 
 
 def require_owned_change_admission(
@@ -3178,6 +3133,7 @@ def lifecycle_transition_handler(
         "unblock": lambda: apply_unblock(args, meta, tasks),
         "recover-expired": lambda: apply_recover_expired_transition(args, meta, tasks),
         "recover-execution": lambda: apply_recover_execution(args, meta),
+        "abandon-execution": lambda: apply_abandon_execution(args, meta),
         "gate": lambda: apply_gate(args, meta),
         "change-drift": lambda: change_drift.apply(
             args,
@@ -3411,7 +3367,13 @@ def commit_persisted_mutation(
 
 
 def mutate(args: argparse.Namespace, kind: str, policy: EvidencePolicy | None = None) -> str | None:
-    if kind not in {"release", "pause", "recover-expired", "recover-execution"}:
+    if kind not in {
+        "release",
+        "pause",
+        "recover-expired",
+        "recover-execution",
+        "abandon-execution",
+    }:
         return _mutate_fenced(args, kind, policy)
     with task_execution_locked(args.task, exclusive=True, phase="task_lifecycle_mutation"):
         return _mutate_fenced(args, kind, policy)
@@ -4297,6 +4259,16 @@ class _RunRuntime:
 _RUN_RUNTIME = _RunRuntime()
 
 
+class _ExecutionRuntime:
+    """Expose execution lifecycle dependencies without circular imports."""
+
+    def __getattr__(self, name: str) -> Any:
+        return globals()[name]
+
+
+_EXECUTION_RUNTIME = _ExecutionRuntime()
+
+
 def cmd_run(args: argparse.Namespace) -> int:
     return run_command.cmd_run(_RUN_RUNTIME, args)
 
@@ -5010,6 +4982,13 @@ def main() -> int:
     item = commands.add_parser("recover-execution")
     item.add_argument("task")
     item.add_argument("--expected-revision", type=int, required=True)
+    item.add_argument("--note", required=True)
+    item = commands.add_parser("abandon-execution")
+    item.add_argument("task")
+    item.add_argument("--expected-revision", type=int, required=True)
+    item.add_argument("--execution-id", required=True)
+    item.add_argument("--evidence-ref", required=True)
+    item.add_argument("--evidence-digest", required=True)
     item.add_argument("--note", required=True)
     item = commands.add_parser("update")
     item.add_argument("task")
