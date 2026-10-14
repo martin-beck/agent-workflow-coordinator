@@ -4289,6 +4289,7 @@ def _run_envelope_subprocess(
     if hasattr(args, "_envelope_worktree_fd"):
         return subprocess.run(
             command,
+            cwd=str(args._envelope_worktree),
             check=False,
             stdin=subprocess.DEVNULL,
             timeout=timeout,
