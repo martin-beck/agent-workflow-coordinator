@@ -1140,11 +1140,7 @@ def project_scan() -> State:
         raw = run(["git", "-C", str(checkout), "worktree", "list", "--porcelain"]).stdout
         return parse_worktree_listing(raw)
 
-    # The coordinator repository may have many linked worker checkouts. Their
-    # relationship to the coordinator's origin/main changes whenever state is
-    # committed, so including them makes the generated live projections stale
-    # after every coordinator update. Keep all product-repository worktrees,
-    # but exclude every checkout owned by the coordinator repository.
+    # Exclude coordinator-owned checkouts from product worktree projections.
     coordinator_paths = {path.resolve() for path, _, _ in listed_worktrees(ROOT)}
     paths: list[tuple[Path, str, str]] = []
     seen_paths: set[Path] = set()
@@ -2080,9 +2076,7 @@ def reconcile(
     if push and not do_commit:
         raise RuntimeError("PUSH_REQUIRES_COMMIT: reconcile --push also requires --commit")
 
-    # External product/GitHub observations are advisory and inherently
-    # non-atomic. Keep their potentially long latency outside the authority
-    # lock; only task/projection mutation and publication need serialization.
+    # Keep external observations outside the authority lock.
     for _ in range(32):
         scan_config = config() if CONFIG.exists() else None
         scan_binding = project_binding()
@@ -3262,8 +3256,7 @@ def unchanged_generated_view(path: Path, content: str) -> bool:
         with os.fdopen(descriptor, "rb", closefd=False) as stream:
             if stream.read(len(expected) + 1) != expected:
                 return False
-        # A non-cooperating writer can replace the pathname while this inode is
-        # open. Do not mistake the old inode's bytes for the current view.
+        # Replaced pathnames must be re-read from the current inode.
         try:
             current_parent = path.parent.lstat()
             current = path.lstat()
@@ -3649,9 +3642,7 @@ def git_doctor_checks(*, live: bool) -> list[str]:
             if project_binding() != scan_binding:
                 raise RuntimeError("OBSERVATION_INPUT_CHANGED: retry doctor")
             errors = doctor_checks(live=live, sqlite=False, live_state=live_state)
-            # An intervening publication is harmless when its rendered live
-            # view agrees with this scan. Retry only a stale live comparison;
-            # never hide unrelated structural errors.
+            # Retry only stale live comparisons.
             if (
                 ticket != published_observation_ticket()
                 and errors
