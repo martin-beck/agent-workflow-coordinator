@@ -3,7 +3,7 @@
 `tools/handoffctl.py` is the canonical CLI façade and `tools/handoffctl` is its portable launcher.
 The façade owns parsing, validation, locking, atomic replacement, bounded subprocess calls,
 commit/replication, project binding and CLI dispatch. Cohesive command families live in bounded,
-import-stable libraries: `execution_lifecycle.py` owns execution reservation start/result/finish and
+import-stable libraries: `execution_lifecycle.py` owns execution-fence start/result/finish and
 both recovery routes, `execution_abandonment.py` owns the closed audit-record format,
 `run_command.py` owns subprocess orchestration, and `issue_series_service.py` owns issue-series
 commands. Those libraries receive explicit runtime capabilities from the façade rather than importing

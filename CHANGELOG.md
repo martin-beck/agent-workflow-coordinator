@@ -3,10 +3,10 @@
 ## 0.7.9 - 2026-10-14
 
 - Add `handoffctl abandon-execution` for the narrow state-root recovery case where an expired,
-  workerless execution reservation has no matching durable result. The command requires exact
-  reservation identity and local evidence, preserves matching-result recovery, and records a
+  workerless execution fence has no matching durable result. The command requires exact
+  execution identity and local evidence, preserves matching-result recovery, and records a
   bounded structured abandonment audit instead of permitting task-file edits.
-- Split execution reservation lifecycle code from the `handoffctl` façade into stable,
+- Split execution-fence lifecycle code from the `handoffctl` façade into stable,
   independently testable libraries while retaining the public CLI and helper contracts.
 
 ## 0.7.2 - 2026-10-13

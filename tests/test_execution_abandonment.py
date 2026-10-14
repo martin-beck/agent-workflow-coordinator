@@ -50,7 +50,7 @@ class ExecutionAbandonmentTest(unittest.TestCase):
             ),
             "2026-10-14T00:00:00+00:00",
         )
-        private = {**record, "evidence_ref": "/home/martin/private"}
+        private = {**record, "evidence_ref": "private/evidence"}
         self.assertFalse(execution_abandonment.valid(private))
         self.assertFalse(execution_abandonment.valid_records([record, record]))
         self.assertFalse(execution_abandonment.valid_records([record] * 33))

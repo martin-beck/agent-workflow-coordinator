@@ -179,7 +179,7 @@ cannot bypass either live or expired execution fences. An expired execution fenc
 `recover-execution` path, which independently verifies the claim worker has exited and the exact durable
 command-result evidence exists before clearing it. If no matching result can be recovered, a state-root
 operator may use `abandon-execution` only with the exact current revision and execution ID, an expired
-reservation, an absent claim worker, and a local evidence reference plus digest. It rejects a matching
+execution fence, an absent claim worker, and a local evidence reference plus digest. It rejects a matching
 result, retains a bounded structured abandonment audit record, and appends the normal immutable state
 history; it does not edit task files directly or authorize a live worker. This is a safety fence, not a remote kill switch: a worker that loses authority must terminate
 its subprocess, and strict cross-host fencing still requires a target-side gateway.
