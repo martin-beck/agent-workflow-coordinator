@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.7.13 - 2026-10-14
+
+- Publish the predicate-ledger repair already merged on Coordinator main.
+
 - Add an audited, bounded post-acceptance predicate-ledger repair transition
   that preserves historical rows and rejects active, stale, malformed, or
   unsafe requests.
