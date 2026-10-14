@@ -45,7 +45,7 @@ def valid(record: object) -> bool:
         or not record["owner"]
         or not _DIGEST.fullmatch(str(record.get("reservation_digest", "")))
         or not isinstance(record.get("evidence_ref"), str)
-        or not _REF.fullmatch(record["evidence_ref"])
+        or not _public_evidence_ref(record["evidence_ref"])
         or not _DIGEST.fullmatch(str(record.get("evidence_digest", "")))
     ):
         return False
@@ -56,6 +56,14 @@ def valid(record: object) -> bool:
     except ValueError:
         return False
     return recorded_at.tzinfo is not None and recorded_at.utcoffset() is not None
+
+
+def _public_evidence_ref(value: str) -> bool:
+    """Allow a portable reference, never a private or traversing location."""
+    if _REF.fullmatch(value) is None:
+        return False
+    components = value.split("/")
+    return all(component not in {".", "..", "private"} for component in components)
 
 
 def valid_records(value: object) -> bool:
