@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.7.11 - 2026-10-14
+
+- Permit the legacy-key repair route to clear invalid historical key metadata
+  while retaining the branch recorded by a completed task.
+
 ## 0.7.10 - 2026-10-14
 
 - Repair legacy worktree metadata on inactive historical tasks through the

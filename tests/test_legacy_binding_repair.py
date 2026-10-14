@@ -53,9 +53,10 @@ class LegacyBindingRepairTests(unittest.TestCase):
                 h.apply_repair_legacy_binding(self.args, value, [])
 
     def test_completed_history_can_clear_its_exact_stale_key(self) -> None:
-        value = {**self.meta, "status": "done"}
+        value = {**self.meta, "status": "done", "branch": "legacy/completed"}
         h.apply_repair_legacy_binding(self.args, value, [])
         self.assertEqual("", value["worktree_key"])
+        self.assertEqual("legacy/completed", value["branch"])
 
 
 if __name__ == "__main__":
