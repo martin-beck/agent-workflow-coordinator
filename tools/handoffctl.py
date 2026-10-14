@@ -3196,9 +3196,7 @@ def lifecycle_transition_handler(
         "bind-spec": lambda: apply_bind_spec(args, meta, policy),
         "bind-worktree": lambda: apply_bind_worktree(args, meta, tasks),
         "repair-legacy-binding": lambda: apply_repair_legacy_binding(args, meta, tasks),
-        "repair-predicate-ledger": lambda: apply_repair_predicate_ledger(
-            args, meta, tasks, policy
-        ),
+        "repair-predicate-ledger": lambda: apply_repair_predicate_ledger(args, meta, tasks, policy),
         "bind-envelope": lambda: apply_bind_envelope(args, meta),
         "replace-envelope": lambda: apply_replace_envelope(args, meta),
         "execution-start": lambda: apply_execution_start(args, meta),
