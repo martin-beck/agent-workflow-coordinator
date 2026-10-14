@@ -93,6 +93,28 @@ class PredicateLedgerRepairTests(unittest.TestCase):
         steps = meta["evidence_ledger"]["steps"]  # type: ignore[index]
         self.assertEqual(["stale", "pass"], [step["status"] for step in steps])
 
+    def test_appends_when_retained_history_is_invalid(self) -> None:
+        meta = self.meta()
+        malformed = {"historical": "retained exactly"}
+        meta["evidence_ledger"]["steps"].append(malformed)  # type: ignore[index]
+        repair(self.root, self.args(), meta, None)
+        steps = meta["evidence_ledger"]["steps"]  # type: ignore[index]
+        self.assertEqual(malformed, steps[1])
+        self.assertEqual("pass", steps[2]["status"])
+
+    def test_rejects_same_candidate_even_with_fresh_evidence(self) -> None:
+        meta = self.meta()
+        with self.assertRaisesRegex(RuntimeError, "not new"):
+            repair(
+                self.root,
+                self.args(
+                    candidate_ref="candidate.txt",
+                    candidate_digest=self.digest("candidate.txt"),
+                ),
+                meta,
+                None,
+            )
+
     def test_rejects_active_owned_stale_and_traversal_inputs(self) -> None:
         for field, value, message in (
             ("status", "in_progress", "inactive"),
