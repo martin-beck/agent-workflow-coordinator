@@ -1560,12 +1560,18 @@ def supersession_errors(tasks: list[Task]) -> list[str]:
     return errors
 
 
-def basic_task_errors(path: Path, meta: Meta, policy: EvidencePolicy | None = None) -> list[str]:
+def basic_task_errors(
+    path: Path,
+    meta: Meta,
+    policy: EvidencePolicy | None = None,
+    *,
+    include_ledger: bool = True,
+) -> list[str]:
     return [
         *field_errors(path, meta),
         *value_errors(path, meta),
         *reference_errors(path, meta),
-        *task_spec_errors(ROOT, meta, policy),
+        *task_spec_errors(ROOT, meta, policy, include_ledger=include_ledger),
     ]
 
 
@@ -1738,6 +1744,7 @@ def mutation_errors(
     policy: EvidencePolicy | None = None,
     *,
     rendered_snapshot: tuple[list[Task], dict[Path, str], Meta] | None = None,
+    include_ledger: bool = True,
 ) -> list[str]:
     """Validate a Git mutation."""
     tasks = all_tasks()
@@ -1745,7 +1752,7 @@ def mutation_errors(
     if len(selected) != 1:
         return [f"{path.name}: mutation target is not unique"]
     errors = [] if policy is not None else task_spec_policy_errors(ROOT)
-    errors.extend(basic_task_errors(path, selected[0], policy))
+    errors.extend(basic_task_errors(path, selected[0], policy, include_ledger=include_ledger))
     errors.extend(claim_errors(selected[0], {}, {}, {}))
     errors.extend(mutation_global_errors(tasks))
     errors.extend(generated_view_errors(tasks, rendered_snapshot=rendered_snapshot))
@@ -3363,6 +3370,7 @@ def persist_git_mutation(
             before,
             selected_policy,
             rendered_snapshot=(view_tasks, views, view_settings),
+            include_ledger=kind != "repair-predicate-ledger",
         )
         if errors:
             raise RuntimeError("\n".join(errors))
@@ -3531,7 +3539,12 @@ def mutate_sqlite(
             for path, item, text in tasks
         ]
         errors = (
-            basic_task_errors(selected[0], validated, selected_policy)
+            basic_task_errors(
+                selected[0],
+                validated,
+                selected_policy,
+                include_ledger=kind != "repair-predicate-ledger",
+            )
             + graph_errors(candidate)
             + hierarchy_errors(candidate)
             + supersession_errors(candidate)

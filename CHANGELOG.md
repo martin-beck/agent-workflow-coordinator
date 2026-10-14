@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.7.15 - 2026-10-15
+
+- Admit only the exact `repair-predicate-ledger` transition past stale historical
+  ledger validation long enough for its strict append-only repair checks; all
+  ordinary lifecycle admission remains fail-closed.
+
 ## 0.7.14 - 2026-10-15
 
 - Preserve invalid historical predicate-ledger rows during audited correction while
