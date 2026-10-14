@@ -99,3 +99,13 @@ Propose the smallest deterministic setting, define its type and default, update 
 runtime validation, add enabled/disabled tests, document its effect, and verify it cannot weaken the
 binding or concurrency contract. Avoid executable plugin paths in tracked configuration: importing
 arbitrary project code into the mutation process would enlarge the trusted computing base.
+# Audited predicate-ledger repair
+
+`repair-predicate-ledger` is a narrow recovery transition for an inactive,
+unowned task whose predicate evidence must be refreshed after acceptance. It
+requires the exact task revision, an explicitly named predicate, a fresh
+candidate and evidence digest, and a bounded reason. The transition appends a
+new passing row and marks the prior row stale; it never rewrites or removes
+ledger history. Active, owned, stale-revision, malformed, symlink, traversal,
+or digest-mismatched requests fail closed. Ordinary `accept` remains owner- and
+active-task-bound.
