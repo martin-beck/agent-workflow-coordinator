@@ -4,16 +4,20 @@
 
 from __future__ import annotations
 
+import argparse
 import hashlib
 import re
-import argparse
 from pathlib import Path
 from typing import Any
 
 try:
     from .task_spec import EVIDENCE_REF, EvidencePolicy, evidence_ledger_errors
 except ImportError:  # pragma: no cover - direct handoffctl execution
-    from task_spec import EVIDENCE_REF, EvidencePolicy, evidence_ledger_errors  # type: ignore[no-redef]
+    from task_spec import (  # type: ignore[no-redef]
+        EVIDENCE_REF,
+        EvidencePolicy,
+        evidence_ledger_errors,
+    )
 
 _DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
 _MAX_REASON = 512

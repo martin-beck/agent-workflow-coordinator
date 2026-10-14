@@ -179,8 +179,8 @@ else:
         gate_errors,
         transition_allowed,
     )
-    from predicate_ledger import apply_acceptance  # type: ignore[import-not-found,no-redef]
     import predicate_ledger_repair as plr  # type: ignore[import-not-found,no-redef]
+    from predicate_ledger import apply_acceptance  # type: ignore[import-not-found,no-redef]
     from rollback_records import (  # type: ignore[import-not-found,no-redef]
         append_record,
         build_record,
