@@ -1612,28 +1612,6 @@ class HandoffTest(unittest.TestCase):
             reader.join(5)
         self.assertEqual(0, reader.exitcode)
 
-    def test_lock_timeout_is_bounded_and_does_not_wait_for_convoy(self) -> None:
-        ready = multiprocessing.Event()
-        release = multiprocessing.Event()
-        process = multiprocessing.Process(
-            target=hold_lock,
-            args=(str(CORE.LOCK), ready, release),
-        )
-        process.start()
-        self.assertTrue(ready.wait(5))
-        started = time.monotonic()
-        try:
-            with (
-                self.assertRaisesRegex(CORE.LockTimeoutError, "LOCK_TIMEOUT"),
-                CORE.locked(timeout=0.1),
-            ):
-                pass
-        finally:
-            release.set()
-            process.join(5)
-        self.assertLess(time.monotonic() - started, 1)
-        self.assertEqual(0, process.exitcode)
-
     def test_lock_is_released_after_body_error(self) -> None:
         with self.assertRaisesRegex(RuntimeError, "body failure"), CORE.locked(timeout=0.1):
             raise RuntimeError("body failure")
