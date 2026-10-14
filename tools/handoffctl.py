@@ -83,6 +83,7 @@ if __package__:
         transition_allowed,
     )
     from .predicate_ledger import apply_acceptance
+    from . import predicate_ledger_repair as plr
     from .rollback_records import (
         append_record,
         build_record,
@@ -179,6 +180,7 @@ else:
         transition_allowed,
     )
     from predicate_ledger import apply_acceptance  # type: ignore[import-not-found,no-redef]
+    import predicate_ledger_repair as plr  # type: ignore[import-not-found,no-redef]
     from rollback_records import (  # type: ignore[import-not-found,no-redef]
         append_record,
         build_record,
@@ -286,8 +288,6 @@ class IdempotentMutationError(RuntimeError):
     """Signal an admitted no-op replay."""
 
 
-# CURRENT.md is the compact actionable queue; terminal history remains in the
-# full STATUS.md projection and authoritative task records.
 CURRENT_STATUSES = ("in_progress", "open", "blocked", "planned", "future")
 PRIORITIES = ("P0", "P1", "P2", "P3", "P4")
 REQ = (
@@ -1180,8 +1180,6 @@ def project_scan() -> State:
         "--json",
         "databaseId,headSha,status,conclusion,workflowName,event",
     ]
-    # Checkouts own separate Git indexes. Observe all fields freshly, but overlap
-    # the independent GitHub and remote reads with the bounded checkout scan.
     with ThreadPoolExecutor(max_workers=min(32, max(1, len(paths))) + 3) as workers:
         prs_result = workers.submit(run_github_observation, pr_args)
         runs_result = workers.submit(run_github_observation, run_args)
@@ -2875,18 +2873,6 @@ def apply_repair_legacy_binding(args: argparse.Namespace, meta: Meta, _tasks: li
     return repair(args, meta)
 
 
-def apply_repair_predicate_ledger(
-    args: argparse.Namespace, meta: Meta, _tasks: list[Task], policy: EvidencePolicy | None
-) -> str:
-    """Apply an audited post-acceptance predicate-ledger repair."""
-    if __package__:
-        from .predicate_ledger_repair import repair
-    else:  # pragma: no cover - direct handoffctl execution
-        from predicate_ledger_repair import repair  # type: ignore[import-not-found,no-redef]
-
-    return repair(ROOT, args, meta, policy)
-
-
 def bind_envelope_candidate(args: argparse.Namespace, meta: Meta) -> tuple[Meta, str]:
     """Load an envelope and verify its identity against the exact task revision."""
     if not isinstance(meta.get("spec_ref"), str) or not isinstance(meta.get("spec_revision"), int):
@@ -3196,7 +3182,7 @@ def lifecycle_transition_handler(
         "bind-spec": lambda: apply_bind_spec(args, meta, policy),
         "bind-worktree": lambda: apply_bind_worktree(args, meta, tasks),
         "repair-legacy-binding": lambda: apply_repair_legacy_binding(args, meta, tasks),
-        "repair-predicate-ledger": lambda: apply_repair_predicate_ledger(args, meta, tasks, policy),
+        "repair-predicate-ledger": lambda: plr.repair(ROOT, args, meta, policy),
         "bind-envelope": lambda: apply_bind_envelope(args, meta),
         "replace-envelope": lambda: apply_replace_envelope(args, meta),
         "execution-start": lambda: apply_execution_start(args, meta),
@@ -5000,16 +4986,7 @@ def main() -> int:
     item.add_argument("--expected-revision", type=int, required=True)
     item.add_argument("--worktree-key", required=True)
     item.add_argument("--note", required=True)
-    item = commands.add_parser("repair-predicate-ledger")
-    item.add_argument("task")
-    item.add_argument("--expected-revision", type=int, required=True)
-    item.add_argument("--predicate", required=True)
-    item.add_argument("--candidate-ref")
-    item.add_argument("--candidate-digest")
-    item.add_argument("--evidence-class", required=True)
-    item.add_argument("--evidence-ref", required=True)
-    item.add_argument("--evidence-digest", required=True)
-    item.add_argument("--reason", required=True)
+    plr.add_parser(commands)
     item = commands.add_parser("bind-envelope")
     item.add_argument("task")
     item.add_argument("--owner", required=True)

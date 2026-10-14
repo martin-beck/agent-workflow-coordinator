@@ -6,13 +6,27 @@ from __future__ import annotations
 
 import hashlib
 import re
+import argparse
 from pathlib import Path
 from typing import Any
 
-from .task_spec import EVIDENCE_REF, EvidencePolicy, evidence_ledger_errors
+try:
+    from .task_spec import EVIDENCE_REF, EvidencePolicy, evidence_ledger_errors
+except ImportError:  # pragma: no cover - direct handoffctl execution
+    from task_spec import EVIDENCE_REF, EvidencePolicy, evidence_ledger_errors  # type: ignore[no-redef]
 
 _DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
 _MAX_REASON = 512
+
+
+def add_parser(commands: argparse._SubParsersAction) -> None:
+    item = commands.add_parser("repair-predicate-ledger")
+    item.add_argument("task")
+    item.add_argument("--expected-revision", type=int, required=True)
+    for option in ("predicate", "evidence-class", "evidence-ref", "evidence-digest", "reason"):
+        item.add_argument("--" + option, required=True)
+    item.add_argument("--candidate-ref")
+    item.add_argument("--candidate-digest")
 
 
 def _digest(root: Path, reference: str) -> str | None:
