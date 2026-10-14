@@ -1351,6 +1351,8 @@ def privacy_errors() -> list[str]:
             or ".venv" in path.parts
             or ".mypy_cache" in path.parts
             or ".ruff_cache" in path.parts
+            or "__pycache__" in path.parts
+            or path.suffix in {".pyc", ".pyo"}
             or "private-archive" in path.parts
         ):
             continue
