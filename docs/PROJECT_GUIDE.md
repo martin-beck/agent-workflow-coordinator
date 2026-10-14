@@ -175,9 +175,13 @@ without a mutating class receive no writable project path. Before a bound comman
 command class, scope digest, argv digest, and deadline. With replicated Git authority, workers
 begin only after that mutation has been pushed; competing clones therefore fail before launching a
 subprocess. Lifecycle changes
-cannot bypass either live or expired execution fences. An expired execution fence requires the explicit
+cannot bypass either live or expired execution fences. An expired execution fence normally requires the explicit
 `recover-execution` path, which independently verifies the claim worker has exited and the exact durable
-command-result evidence exists before clearing it. This is a safety fence, not a remote kill switch: a worker that loses authority must terminate
+command-result evidence exists before clearing it. If no matching result can be recovered, a state-root
+operator may use `abandon-execution` only with the exact current revision and execution ID, an expired
+reservation, an absent claim worker, and a local evidence reference plus digest. It rejects a matching
+result, retains a bounded structured abandonment audit record, and appends the normal immutable state
+history; it does not edit task files directly or authorize a live worker. This is a safety fence, not a remote kill switch: a worker that loses authority must terminate
 its subprocess, and strict cross-host fencing still requires a target-side gateway.
 
 Execution envelopes are offline by default. A version-2 envelope may explicitly grant the

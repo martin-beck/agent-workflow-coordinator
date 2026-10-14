@@ -15,6 +15,7 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
+from unittest.mock import patch
 
 from fixture_ids import project_uuid
 
@@ -258,6 +259,64 @@ class GitExecutionReservationTest(unittest.TestCase):
         self.assertEqual(admitted[0][1], reservation["execution_id"])
         self.assertEqual("worker-a", reservation["owner"])
         self.assertEqual(2, meta["task_revision"])
+
+    def test_expired_unknown_reservation_is_abandoned_through_git_authority(self) -> None:
+        """The state-root route commits an auditable reopening without direct user edits."""
+        core = load_core(self.clone_a)
+        core.RUNTIME.mkdir(mode=0o700, exist_ok=True)
+        core.CONFIG.write_text(json.dumps({"push_enabled": True}), encoding="utf-8")
+        for name, value in (
+            ("user.name", "Reservation Fixture"),
+            ("user.email", "reservation@example.invalid"),
+        ):
+            git("config", name, value, cwd=self.clone_a)
+        start = argparse.Namespace(
+            task="AR-0001",
+            owner="worker-a",
+            expected_revision=1,
+            execution_id="a" * 32,
+            execution_expires_at="2099-01-01T00:00:00+00:00",
+            command_class="test",
+            scope_digest="sha256:" + "b" * 64,
+            argv_digest="c" * 64,
+        )
+        core.mutate(start, "execution-start")
+        path, meta, body = core.locate("AR-0001")
+        meta["claim_expires"] = "2000-01-01T00:00:00+00:00"
+        meta["execution_reservation"]["expires_at"] = "2000-01-01T00:00:00+00:00"
+        core.write_task(path, meta, body)
+        git("add", path.relative_to(self.clone_a).as_posix(), cwd=self.clone_a)
+        git(
+            "-c",
+            "user.name=Fixture",
+            "-c",
+            "user.email=fixture@example.invalid",
+            "commit",
+            "-qm",
+            "fixture expired execution",
+            cwd=self.clone_a,
+        )
+        git("push", "-q", "origin", "HEAD:refs/heads/main", cwd=self.clone_a)
+        abandon = argparse.Namespace(
+            task="AR-0001",
+            expected_revision=2,
+            execution_id="a" * 32,
+            evidence_ref="evidence/AR-0113-orphan.json",
+            evidence_digest="sha256:" + "e" * 64,
+            note="Verified former worker absence and unavailable terminal receipt.",
+        )
+        with patch.object(core, "require_claimed_worker_absent"):
+            core.mutate(abandon, "abandon-execution")
+
+        observer = self.root / "abandonment-observer"
+        git("clone", "-q", str(self.remote), str(observer))
+        observed = load_core(observer)
+        _path, result, body = observed.locate("AR-0001")
+        self.assertEqual("open", result["status"])
+        self.assertEqual("", result["owner"])
+        self.assertNotIn("execution_reservation", result)
+        self.assertEqual("a" * 32, result["execution_abandonments"][0]["execution_id"])
+        self.assertIn("Abandoned expired execution", body)
 
 
 if __name__ == "__main__":

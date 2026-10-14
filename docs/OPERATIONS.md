@@ -18,6 +18,10 @@
   deadline has passed. It requires a verified claim-time worker identity to be absent when
   no exact-current session exists, preserves the authoritative `next_action` in that case,
   restores it only from an exact-current validated snapshot, and rejects a future snapshot.
+- `abandon-execution`: state-root, exact-revision retirement of one expired bound execution with
+  an exact execution ID, an absent former worker, and a local evidence reference/digest. It rejects
+  live reservations and reservations with an exact durable result, then records a bounded audit entry
+  and atomically reopens the expired claim.
 - `run`: execute a bounded command outside the lock, then record its classified result.
 - `gate`: record a revision-bound gate event. Generic task gates use the ordered `role`, `spec`,
   and `decision` stages; legacy interaction gates remain compatible.

@@ -22,6 +22,7 @@ OPERATIONS = (
     "bind-envelope",
     "recover_expired",
     "recover-execution",
+    "abandon-execution",
     "change-drift",
     "assumption",
     "release_planned",

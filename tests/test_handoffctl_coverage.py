@@ -667,6 +667,15 @@ class HandoffctlCoverageTests(unittest.TestCase):
             )
         command.assert_called_once_with(recover, {})
 
+        abandon = argparse.Namespace()
+        with patch.object(
+            handoffctl, "apply_abandon_execution", return_value="abandoned"
+        ) as command:
+            self.assertEqual(
+                "abandoned", handoffctl.apply_transition(abandon, "abandon-execution", {}, [])
+            )
+        command.assert_called_once_with(abandon, {})
+
         with (
             patch.object(handoffctl, "published_observation_ticket", return_value=1),
             patch.object(handoffctl, "project_binding", return_value={"project": "one"}),

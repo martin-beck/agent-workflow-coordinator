@@ -975,6 +975,7 @@ class FormalEvidenceTests(unittest.TestCase):
             "bind-envelope",
             "recover_expired",
             "recover-execution",
+            "abandon-execution",
             "change-drift",
             "assumption",
             "release_planned",
@@ -994,7 +995,7 @@ class FormalEvidenceTests(unittest.TestCase):
             if name != "model_count":
                 self.assertEqual(value, bounds[name])
         self.assertEqual(12, model_bounds["model_count"])
-        self.assertEqual(19, len(slices))
+        self.assertEqual(20, len(slices))
         for name in (
             "tlc_workers",
             "jvm_heap_mb",
@@ -1018,7 +1019,7 @@ class FormalEvidenceTests(unittest.TestCase):
         module_name = slices["module_name"]
         base = (FORMAL_ROOT / "Handoffctl.cfg").read_text(encoding="utf-8")
         source = (FORMAL_ROOT / "Handoffctl.tla").read_text(encoding="utf-8")
-        self.assertEqual(19, len(operations))
+        self.assertEqual(20, len(operations))
         self.assertEqual(len(operations), len(set(operations)))
         for operation in operations:
             rendered = render_source(source, operation)
@@ -1032,6 +1033,7 @@ class FormalEvidenceTests(unittest.TestCase):
     def test_recover_execution_inventory_uses_runtime_spelling(self) -> None:
         slices = runpy.run_path(str(FORMAL_ROOT / "slices.py"))
         self.assertIn("recover-execution", slices["OPERATIONS"])
+        self.assertIn("abandon-execution", slices["OPERATIONS"])
         self.assertNotIn("recover_execution", slices["OPERATIONS"])
         self.assertEqual(
             "HandoffctlSliceRecoverExecution",
@@ -1041,9 +1043,11 @@ class FormalEvidenceTests(unittest.TestCase):
             slices["module_name"]("recover_execution")
         source = (FORMAL_ROOT / "Handoffctl.tla").read_text(encoding="utf-8")
         self.assertIn('operation[p] = "recover-execution"', source)
+        self.assertIn('operation[p] = "abandon-execution"', source)
         manifest = json.loads((ROOT / "formal" / "tier-evidence.json").read_text())
         models = manifest["profiles"]["full-exhaustive"]["models"]
         self.assertIn("HandoffctlSlice-recover-execution", models)
+        self.assertIn("HandoffctlSlice-abandon-execution", models)
         self.assertNotIn("HandoffctlSlice-recover_execution", models)
 
     def test_formal_tiers_require_explicit_non_ambiguous_selection(self) -> None:
@@ -1084,7 +1088,7 @@ class FormalEvidenceTests(unittest.TestCase):
             manifest["profiles"]["portable-smoke"]["models"],
             manifest["profiles"]["full-exhaustive"]["models"],
         )
-        self.assertEqual(31, len(manifest["profiles"]["full-exhaustive"]["models"]))
+        self.assertEqual(32, len(manifest["profiles"]["full-exhaustive"]["models"]))
         self.assertEqual(13, len(manifest["profiles"]["pr-publication"]["models"]))
         self.assertEqual(300, manifest["profiles"]["pr-fast"]["aggregate_budget_seconds"])
         self.assertEqual(900, manifest["profiles"]["pr-publication"]["aggregate_budget_seconds"])
