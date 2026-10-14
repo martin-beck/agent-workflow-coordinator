@@ -13,7 +13,7 @@ from typing import Any
 try:
     from .task_spec import EVIDENCE_REF, EvidencePolicy, evidence_ledger_errors
 except ImportError:  # pragma: no cover - direct handoffctl execution
-    from task_spec import (  # type: ignore[no-redef]
+    from task_spec import (  # type: ignore[import-not-found,no-redef]
         EVIDENCE_REF,
         EvidencePolicy,
         evidence_ledger_errors,
@@ -23,7 +23,7 @@ _DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
 _MAX_REASON = 512
 
 
-def add_parser(commands: argparse._SubParsersAction) -> None:
+def add_parser(commands: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     item = commands.add_parser("repair-predicate-ledger")
     item.add_argument("task")
     item.add_argument("--expected-revision", type=int, required=True)
