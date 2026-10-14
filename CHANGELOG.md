@@ -1,5 +1,9 @@
 # Changelog
 
+- Add an audited, bounded post-acceptance predicate-ledger repair transition
+  that preserves historical rows and rejects active, stale, malformed, or
+  unsafe requests.
+
 ## 0.7.11 - 2026-10-14
 
 - Permit the legacy-key repair route to clear invalid historical key metadata

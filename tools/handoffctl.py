@@ -2875,6 +2875,18 @@ def apply_repair_legacy_binding(args: argparse.Namespace, meta: Meta, _tasks: li
     return repair(args, meta)
 
 
+def apply_repair_predicate_ledger(
+    args: argparse.Namespace, meta: Meta, _tasks: list[Task], policy: EvidencePolicy | None
+) -> str:
+    """Apply an audited post-acceptance predicate-ledger repair."""
+    if __package__:
+        from .predicate_ledger_repair import repair
+    else:  # pragma: no cover - direct handoffctl execution
+        from predicate_ledger_repair import repair  # type: ignore[import-not-found,no-redef]
+
+    return repair(ROOT, args, meta, policy)
+
+
 def bind_envelope_candidate(args: argparse.Namespace, meta: Meta) -> tuple[Meta, str]:
     """Load an envelope and verify its identity against the exact task revision."""
     if not isinstance(meta.get("spec_ref"), str) or not isinstance(meta.get("spec_revision"), int):
@@ -3184,6 +3196,9 @@ def lifecycle_transition_handler(
         "bind-spec": lambda: apply_bind_spec(args, meta, policy),
         "bind-worktree": lambda: apply_bind_worktree(args, meta, tasks),
         "repair-legacy-binding": lambda: apply_repair_legacy_binding(args, meta, tasks),
+        "repair-predicate-ledger": lambda: apply_repair_predicate_ledger(
+            args, meta, tasks, policy
+        ),
         "bind-envelope": lambda: apply_bind_envelope(args, meta),
         "replace-envelope": lambda: apply_replace_envelope(args, meta),
         "execution-start": lambda: apply_execution_start(args, meta),
@@ -4775,7 +4790,7 @@ def dispatch_bound_standard_command(args: argparse.Namespace) -> int:
     result = dispatch_returning_command(args)
     if result is not None:
         return result
-    if args.cmd == "repair-legacy-binding":
+    if args.cmd in {"repair-legacy-binding", "repair-predicate-ledger"}:
         dispatch_lifecycle_mutation(args)
         return 0
     if args.cmd in (
@@ -4987,6 +5002,16 @@ def main() -> int:
     item.add_argument("--expected-revision", type=int, required=True)
     item.add_argument("--worktree-key", required=True)
     item.add_argument("--note", required=True)
+    item = commands.add_parser("repair-predicate-ledger")
+    item.add_argument("task")
+    item.add_argument("--expected-revision", type=int, required=True)
+    item.add_argument("--predicate", required=True)
+    item.add_argument("--candidate-ref")
+    item.add_argument("--candidate-digest")
+    item.add_argument("--evidence-class", required=True)
+    item.add_argument("--evidence-ref", required=True)
+    item.add_argument("--evidence-digest", required=True)
+    item.add_argument("--reason", required=True)
     item = commands.add_parser("bind-envelope")
     item.add_argument("task")
     item.add_argument("--owner", required=True)
