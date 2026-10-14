@@ -184,7 +184,7 @@ result, retains a bounded structured abandonment audit record, and appends the n
 history; it does not edit task files directly or authorize a live worker. This is a safety fence, not a remote kill switch: a worker that loses authority must terminate
 its subprocess, and strict cross-host fencing still requires a target-side gateway.
 
-For reservations created before claim-time worker identity was available, the operator may additionally
+For reservations created before worker identity was captured when claiming, the operator may additionally
 pass `--allow-legacy-without-identity`. This explicit operator opt-in is accepted only for an
 identity-less, already-expired claim; exact reservation identity, structural validation, expiry, result
 mismatch, and bounded evidence checks remain fail-closed.
