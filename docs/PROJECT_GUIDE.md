@@ -180,6 +180,13 @@ cannot bypass either live or expired execution fences. An expired execution fenc
 command-result evidence exists before clearing it. This is a safety fence, not a remote kill switch: a worker that loses authority must terminate
 its subprocess, and strict cross-host fencing still requires a target-side gateway.
 
+Execution envelopes are offline by default. A version-2 envelope may explicitly grant the
+`git_metadata` and `network` capabilities, but only `git-publication` may use them. The network
+capability also requires the invocation flag `--authorize-external-side-effects`; the sandbox then
+mounts only the admitted worktree metadata (`.git`) read-only and shares the caller's network.
+Version-1 envelopes and all read, test, and source-write commands retain the isolated network-denied
+behavior. Missing, partial, or ambiguous capability declarations fail closed.
+
 Restore a verified checkpoint only from a clean descendant product checkout:
 
 ```sh
