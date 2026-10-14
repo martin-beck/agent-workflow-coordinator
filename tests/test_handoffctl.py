@@ -1931,6 +1931,12 @@ class HandoffTest(unittest.TestCase):
         self.assertNotIn("coordinator.binding.json: session-like UUID", errors)
         self.assertIn("coordinator.binding.json: possible credential", errors)
 
+    def test_privacy_scan_ignores_generated_python_bytecode(self) -> None:
+        cache = self.root / "tools" / "__pycache__" / "compiled.pyc"
+        cache.parent.mkdir(parents=True)
+        cache.write_text("x" * 200001 + "\n", encoding="utf-8")
+        self.assertEqual([], CORE.privacy_errors())
+
     def test_validation_reports_all_basic_reference_and_claim_errors(self) -> None:
         path = self.make_task("AR-0001")
         meta, body = CORE.read_task(path)
