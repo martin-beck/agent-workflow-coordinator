@@ -1140,11 +1140,7 @@ def project_scan() -> State:
         raw = run(["git", "-C", str(checkout), "worktree", "list", "--porcelain"]).stdout
         return parse_worktree_listing(raw)
 
-    # The coordinator repository may have many linked worker checkouts. Their
-    # relationship to the coordinator's origin/main changes whenever state is
-    # committed, so including them makes the generated live projections stale
-    # after every coordinator update. Keep all product-repository worktrees,
-    # but exclude every checkout owned by the coordinator repository.
+    # Exclude coordinator-owned checkouts from product worktree projections.
     coordinator_paths = {path.resolve() for path, _, _ in listed_worktrees(ROOT)}
     paths: list[tuple[Path, str, str]] = []
     seen_paths: set[Path] = set()
@@ -2080,9 +2076,7 @@ def reconcile(
     if push and not do_commit:
         raise RuntimeError("PUSH_REQUIRES_COMMIT: reconcile --push also requires --commit")
 
-    # External product/GitHub observations are advisory and inherently
-    # non-atomic. Keep their potentially long latency outside the authority
-    # lock; only task/projection mutation and publication need serialization.
+    # Keep external observations outside the authority lock.
     for _ in range(32):
         scan_config = config() if CONFIG.exists() else None
         scan_binding = project_binding()
@@ -3262,8 +3256,7 @@ def unchanged_generated_view(path: Path, content: str) -> bool:
         with os.fdopen(descriptor, "rb", closefd=False) as stream:
             if stream.read(len(expected) + 1) != expected:
                 return False
-        # A non-cooperating writer can replace the pathname while this inode is
-        # open. Do not mistake the old inode's bytes for the current view.
+        # Replaced pathnames must be re-read from the current inode.
         try:
             current_parent = path.parent.lstat()
             current = path.lstat()
@@ -3649,9 +3642,7 @@ def git_doctor_checks(*, live: bool) -> list[str]:
             if project_binding() != scan_binding:
                 raise RuntimeError("OBSERVATION_INPUT_CHANGED: retry doctor")
             errors = doctor_checks(live=live, sqlite=False, live_state=live_state)
-            # An intervening publication is harmless when its rendered live
-            # view agrees with this scan. Retry only a stale live comparison;
-            # never hide unrelated structural errors.
+            # Retry only stale live comparisons.
             if (
                 ticket != published_observation_ticket()
                 and errors
@@ -4104,6 +4095,7 @@ def execution_preflight(args: argparse.Namespace) -> tuple[bool, str, str, float
                 args.command_class,
                 list(args.scope_path),
                 worktree,
+                bool(getattr(args, "authorize_external_side_effects", False)),
             )
             if not result.allowed:
                 release_envelope_worktree(args)
@@ -4122,25 +4114,39 @@ def execution_preflight(args: argparse.Namespace) -> tuple[bool, str, str, float
                     "durable execution envelope digest mismatches",
                     None,
                 )
-            mount_scope = list(envelope["path_scope"]["read"])
-            if args.command_class in {"source-write", "git-publication"}:
-                mount_scope.extend(args.scope_path)
-            for relative in mount_scope:
-                envelope_scope_path(worktree, str(relative))
-            rule = envelope["command_classes"][args.command_class]
-            args._envelope_worktree = str(worktree)
-            args._envelope_worktree_fd = int(worktree.name)
-            args._envelope_worktree_context = worktree_context
-            args._envelope_write_scope = (
-                list(args.scope_path)
-                if args.command_class in {"source-write", "git-publication"}
-                else []
-            )
-            args._envelope_read_scope = list(envelope["path_scope"]["read"])
+            rule = prepare_envelope_mounts(args, envelope, worktree, worktree_context)
             return True, result.code, result.detail, rule.get("timeout_seconds")
         except RuntimeError as error:
             release_envelope_worktree(args)
             return False, "PATH_SCOPE_UNAVAILABLE", str(error), None
+
+
+def prepare_envelope_mounts(
+    args: argparse.Namespace, envelope: dict[str, Any], worktree: Path, worktree_context: Any
+) -> dict[str, Any]:
+    """Validate and retain the exact publication metadata/network mounts."""
+    mount_scope = list(envelope["path_scope"]["read"])
+    git_metadata = (
+        args.command_class == "git-publication"
+        and execution_envelope.publication_metadata_allowed(envelope)
+    )
+    if args.command_class in {"source-write", "git-publication"}:
+        mount_scope.extend(args.scope_path)
+    if git_metadata:
+        envelope_scope_path(worktree, ".git")
+    for relative in mount_scope:
+        envelope_scope_path(worktree, str(relative))
+    rule = envelope["command_classes"][args.command_class]
+    args._envelope_worktree = str(worktree)
+    args._envelope_worktree_fd = int(worktree.name)
+    args._envelope_worktree_context = worktree_context
+    args._envelope_write_scope = (
+        list(args.scope_path) if args.command_class in {"source-write", "git-publication"} else []
+    )
+    args._envelope_read_scope = list(envelope["path_scope"]["read"])
+    args._envelope_git_metadata = git_metadata
+    args._envelope_network = bool(getattr(args, "authorize_external_side_effects", False))
+    return cast(dict[str, Any], rule)
 
 
 def release_envelope_worktree(args: argparse.Namespace) -> None:
@@ -4149,7 +4155,12 @@ def release_envelope_worktree(args: argparse.Namespace) -> None:
     if context is not None:
         delattr(args, "_envelope_worktree_context")
         context.__exit__(None, None, None)
-    for name in ("_envelope_worktree", "_envelope_worktree_fd"):
+    for name in (
+        "_envelope_worktree",
+        "_envelope_worktree_fd",
+        "_envelope_git_metadata",
+        "_envelope_network",
+    ):
         if hasattr(args, name):
             delattr(args, name)
 
@@ -5049,6 +5060,7 @@ def main() -> int:
     al.add_run_arguments(item)
     item.add_argument("--command-class", choices=sorted(execution_envelope.COMMAND_CLASSES))
     item.add_argument("--scope-path", action="append", default=[])
+    item.add_argument("--authorize-external-side-effects", action="store_true")
     item.add_argument("command", nargs=argparse.REMAINDER)
     args = parser.parse_args()
     if args.cmd == "init":
