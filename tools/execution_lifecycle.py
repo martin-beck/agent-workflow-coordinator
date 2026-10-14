@@ -94,15 +94,7 @@ def recover(runtime: Any, args: Any, meta: Meta) -> str:
     valid_reservation = cast(Meta, reservation)
     if runtime.live_execution_reservation(meta) is not None:
         raise RuntimeError("EXECUTION_IN_PROGRESS: execution reservation has not expired")
-    # Pre-identity reservations can be recovered only with explicit operator
-    # acknowledgement; all exact reservation, expiry, result, and evidence
-    # checks below remain mandatory.
-    if not (
-        getattr(args, "allow_legacy_without_identity", False)
-        and "claim_process" not in meta
-        and _expired_claim(meta)
-    ):
-        runtime.require_claimed_worker_absent(meta)
+    runtime.require_claimed_worker_absent(meta)
     if not runtime.execution_result_matches(valid_reservation, meta.get("execution_result")):
         raise RuntimeError(
             "EXECUTION_RESULT_UNKNOWN: reservation-specific completion evidence is unavailable"
@@ -122,7 +114,15 @@ def abandon(runtime: Any, args: Any, meta: Meta) -> str:
         raise RuntimeError("execution abandonment reservation identity does not match")
     if runtime.live_execution_reservation(meta) is not None:
         raise RuntimeError("EXECUTION_IN_PROGRESS: execution reservation has not expired")
-    runtime.require_claimed_worker_absent(meta)
+    # Pre-identity reservations can be recovered only with explicit operator
+    # acknowledgement; all exact reservation, expiry, result, and evidence
+    # checks below remain mandatory.
+    if not (
+        getattr(args, "allow_legacy_without_identity", False)
+        and "claim_process" not in meta
+        and _expired_claim(meta)
+    ):
+        runtime.require_claimed_worker_absent(meta)
     if runtime.execution_result_matches(valid_reservation, meta.get("execution_result")):
         raise RuntimeError("execution abandonment rejects a reservation with a durable result")
     try:
