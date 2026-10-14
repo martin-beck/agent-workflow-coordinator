@@ -4146,7 +4146,7 @@ def prepare_envelope_mounts(
     args._envelope_read_scope = list(envelope["path_scope"]["read"])
     args._envelope_git_metadata = git_metadata
     args._envelope_network = bool(getattr(args, "authorize_external_side_effects", False))
-    return rule
+    return cast(dict[str, Any], rule)
 
 
 def release_envelope_worktree(args: argparse.Namespace) -> None:
