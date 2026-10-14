@@ -47,6 +47,7 @@ if __package__:
         execution_envelope,
         execution_lifecycle,
         execution_receipt,
+        mutation_admission,
         resume_card,
         resume_card_runtime,
         retry_circuit,
@@ -145,6 +146,7 @@ else:
     import execution_envelope  # type: ignore[import-not-found,no-redef]
     import execution_lifecycle  # type: ignore[import-not-found,no-redef]
     import execution_receipt  # type: ignore[import-not-found,no-redef]
+    import mutation_admission  # type: ignore[import-not-found,no-redef]
     import predicate_ledger_repair as plr  # type: ignore[import-not-found,no-redef]
     import resume_card  # type: ignore[import-not-found,no-redef]
     import resume_card_runtime  # type: ignore[import-not-found,no-redef]
@@ -1480,7 +1482,6 @@ def execution_metadata_errors(task_id: str, meta: Meta) -> list[str]:  # noqa: C
 
 
 def execution_abandonment_errors(task_id: str, meta: Meta) -> list[str]:
-    """Reject malformed bounded abandonment history before it reaches projections."""
     if execution_abandonment.valid_records(meta.get("execution_abandonments")):
         return []
     return [f"{task_id}: invalid execution_abandonments"]
@@ -1535,7 +1536,6 @@ def reference_errors(path: Path, meta: Meta) -> list[str]:
 
 
 def supersession_errors(tasks: list[Task]) -> list[str]:
-    """Validate explicitly recorded supersession pointers without weakening old data."""
     by_id = {meta.get("id"): meta for _, meta, _ in tasks}
     errors: list[str] = []
     for _, meta, _ in tasks:
@@ -1560,17 +1560,22 @@ def supersession_errors(tasks: list[Task]) -> list[str]:
     return errors
 
 
-def basic_task_errors(path: Path, meta: Meta, policy: EvidencePolicy | None = None) -> list[str]:
+def basic_task_errors(
+    path: Path,
+    meta: Meta,
+    policy: EvidencePolicy | None = None,
+    *,
+    include_ledger: bool = True,
+) -> list[str]:
     return [
         *field_errors(path, meta),
         *value_errors(path, meta),
         *reference_errors(path, meta),
-        *task_spec_errors(ROOT, meta, policy),
+        *mutation_admission.task_errors(ROOT, meta, policy, include_ledger=include_ledger),
     ]
 
 
 def parse_claim_expiry(expiry: object) -> dt.datetime:
-    """Parse one timezone-aware lease deadline."""
     if not isinstance(expiry, str) or not expiry:
         raise ValueError("missing or non-string claim expiry")
     parsed = dt.datetime.fromisoformat(expiry.replace("Z", "+00:00"))
@@ -1580,7 +1585,6 @@ def parse_claim_expiry(expiry: object) -> dt.datetime:
 
 
 def process_start_time(pid: int) -> int | None:
-    """Return a Linux process start time, or ``None`` after it has exited."""
     proc = Path("/proc") / str(pid)
     try:
         stat_fields = (proc / "stat").read_text(encoding="utf-8").rsplit(")", 1)[1].split()
@@ -1592,7 +1596,6 @@ def process_start_time(pid: int) -> int | None:
 
 
 def worker_execution_scope() -> tuple[str, str]:
-    """Return the local boot and PID-namespace identities for recovery fencing."""
     try:
         boot_id = (Path("/proc/sys/kernel/random/boot_id").read_text(encoding="utf-8")).strip()
         namespace = Path("/proc/self/ns/pid").stat()
@@ -1609,7 +1612,6 @@ def worker_execution_scope() -> tuple[str, str]:
 
 
 def claimed_process_identity(args: argparse.Namespace) -> Meta | None:
-    """Validate an optional live worker identity at the exact claim transition."""
     pid = getattr(args, "worker_pid", None)
     start_time = getattr(args, "worker_start_time", None)
     if pid is None and start_time is None:
@@ -1630,7 +1632,6 @@ def claimed_process_identity(args: argparse.Namespace) -> Meta | None:
 
 
 def require_claimed_worker_absent(meta: Meta) -> None:
-    """Require a claim-time identity and independently confirm it no longer runs."""
     identity = meta.get("claim_process")
     if not scoped_claim_process(identity):
         raise RuntimeError(
@@ -1738,6 +1739,7 @@ def mutation_errors(
     policy: EvidencePolicy | None = None,
     *,
     rendered_snapshot: tuple[list[Task], dict[Path, str], Meta] | None = None,
+    include_ledger: bool = True,
 ) -> list[str]:
     """Validate a Git mutation."""
     tasks = all_tasks()
@@ -1745,7 +1747,7 @@ def mutation_errors(
     if len(selected) != 1:
         return [f"{path.name}: mutation target is not unique"]
     errors = [] if policy is not None else task_spec_policy_errors(ROOT)
-    errors.extend(basic_task_errors(path, selected[0], policy))
+    errors.extend(basic_task_errors(path, selected[0], policy, include_ledger=include_ledger))
     errors.extend(claim_errors(selected[0], {}, {}, {}))
     errors.extend(mutation_global_errors(tasks))
     errors.extend(generated_view_errors(tasks, rendered_snapshot=rendered_snapshot))
@@ -3363,6 +3365,7 @@ def persist_git_mutation(
             before,
             selected_policy,
             rendered_snapshot=(view_tasks, views, view_settings),
+            include_ledger=kind != "repair-predicate-ledger",
         )
         if errors:
             raise RuntimeError("\n".join(errors))
@@ -3531,7 +3534,12 @@ def mutate_sqlite(
             for path, item, text in tasks
         ]
         errors = (
-            basic_task_errors(selected[0], validated, selected_policy)
+            basic_task_errors(
+                selected[0],
+                validated,
+                selected_policy,
+                include_ledger=kind != "repair-predicate-ledger",
+            )
             + graph_errors(candidate)
             + hierarchy_errors(candidate)
             + supersession_errors(candidate)

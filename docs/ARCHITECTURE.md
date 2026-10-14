@@ -80,6 +80,9 @@ Dependency admission is fail-closed: `done` satisfies a dependency directly. A `
 requires an explicit `superseded_by` successor chain ending at an existing `done` task; malformed,
 missing, cyclic, or unfinished chains never satisfy admission.
 
+The predicate-ledger repair exception is isolated in `mutation_admission.py`: only that audited
+route may omit historical ledger replay; ordinary lifecycle mutations retain complete validation.
+
 Project identity has three layers: a tracked profile, the permanent UUID/repository binding, and
 the backend selector. SQLite repeats the identity inside the database. Runtime paths and database
 identity must match that binding before normal command execution.
