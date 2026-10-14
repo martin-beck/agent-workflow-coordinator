@@ -53,6 +53,7 @@ if __package__:
         run_command,
     )
     from . import autonomy_limits as al
+    from . import predicate_ledger_repair as plr
     from . import roles as role_module
     from .board_metrics import build_metrics
     from .board_metrics import encode as encode_metrics
@@ -83,7 +84,6 @@ if __package__:
         transition_allowed,
     )
     from .predicate_ledger import apply_acceptance
-    from . import predicate_ledger_repair as plr
     from .rollback_records import (
         append_record,
         build_record,
