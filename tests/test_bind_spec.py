@@ -137,6 +137,20 @@ class BindSpecTests(unittest.TestCase):
             encoding="utf-8",
         )
         subprocess.run(["/usr/bin/git", "init", "-q", str(self.root)], check=True)  # noqa: S603
+        subprocess.run(  # noqa: S603 - fixed Git executable and arguments
+            ["/usr/bin/git", "-C", str(self.root), "config", "user.name", "Bind Test"], check=True
+        )
+        subprocess.run(  # noqa: S603 - fixed Git executable and arguments
+            [
+                "/usr/bin/git",
+                "-C",
+                str(self.root),
+                "config",
+                "user.email",
+                "bind@example.invalid",
+            ],
+            check=True,
+        )
         subprocess.run(  # noqa: S603
             ["/usr/bin/git", "-C", str(self.root), "add", "task-spec-policy.json"], check=True
         )
@@ -200,6 +214,104 @@ class BindSpecTests(unittest.TestCase):
                 bound,
                 self.runtime.DEFAULT_EVIDENCE_POLICY,
             )
+
+    def test_bind_spec_retains_untracked_spec_in_the_binding_commit(self) -> None:
+        self.write_policy_and_spec()
+        self.make_task()
+        args = argparse.Namespace(
+            task="AR-0001",
+            owner="worker-a",
+            expected_revision=1,
+            spec_ref="spec.json",
+            spec_revision=1,
+        )
+        with (
+            patch.object(core, "sync_replica_before_write"),
+            patch.object(core, "push_replica"),
+        ):
+            core.mutate(args, "bind-spec")
+        tracked = subprocess.run(  # noqa: S603 - fixed Git executable and arguments
+            ["/usr/bin/git", "-C", str(self.root), "ls-files", "--error-unmatch", "spec.json"],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(0, tracked.returncode)
+        self.assertEqual("spec.json", tracked.stdout.strip())
+
+    def test_bind_spec_does_not_retain_unsafe_reference(self) -> None:
+        self.write_policy_and_spec()
+        self.make_task()
+        args = argparse.Namespace(
+            task="AR-0001",
+            owner="worker-a",
+            expected_revision=1,
+            spec_ref="../spec.json",
+            spec_revision=1,
+        )
+        with (
+            patch.object(core, "sync_replica_before_write"),
+            patch.object(core, "commit", return_value=True),
+            patch.object(core, "push_replica"),
+            self.assertRaisesRegex(RuntimeError, "task spec is invalid"),
+        ):
+            core.mutate(args, "bind-spec")
+
+    def test_bind_envelope_retains_untracked_envelope_in_the_binding_commit(self) -> None:
+        self.write_policy_and_spec()
+        self.make_task()
+        spec_args = argparse.Namespace(
+            task="AR-0001",
+            owner="worker-a",
+            expected_revision=1,
+            spec_ref="spec.json",
+            spec_revision=1,
+        )
+        envelope = {
+            "schema_version": 1,
+            "envelope_id": "AR-0001-e1",
+            "envelope_revision": 1,
+            "task": "AR-0001",
+            "task_revision": 2,
+            "spec_ref": "spec.json",
+            "spec_revision": 1,
+            "outputs": [{"id": "output", "description": "bounded output"}],
+            "non_goals": ["no expansion"],
+            "path_scope": {"read": ["src"], "write": ["src"]},
+            "command_classes": {"test": {"allowed": True}},
+            "evidence": [{"id": "tests", "class": "contract-test", "required": True}],
+            "stop_conditions": [{"id": "stop", "kind": "deny"}],
+        }
+        envelope_path = self.root / "envelopes" / "AR-0001-e1.json"
+        envelope_path.parent.mkdir()
+        envelope_path.write_text(json.dumps(envelope) + "\n", encoding="utf-8")
+        bind_args = argparse.Namespace(
+            task="AR-0001",
+            owner="worker-a",
+            expected_revision=2,
+            envelope_ref="envelopes/AR-0001-e1.json",
+            envelope_revision=1,
+        )
+        with (
+            patch.object(core, "sync_replica_before_write"),
+            patch.object(core, "push_replica"),
+        ):
+            core.mutate(spec_args, "bind-spec")
+            core.mutate(bind_args, "bind-envelope")
+        tracked = subprocess.run(  # noqa: S603 - fixed Git executable and arguments
+            [
+                "/usr/bin/git",
+                "-C",
+                str(self.root),
+                "ls-files",
+                "--error-unmatch",
+                "envelopes/AR-0001-e1.json",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(0, tracked.returncode)
 
     def test_bind_worktree_fences_legacy_active_identity(self) -> None:
         self.make_task()
