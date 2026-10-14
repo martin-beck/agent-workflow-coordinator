@@ -364,7 +364,7 @@ def short_title_errors(path: Path, task_id: str, value: object) -> list[str]:
     return []
 
 
-COORDINATOR_VERSION = "0.7.9"
+COORDINATOR_VERSION = "0.7.10"
 DEFAULT_PROJECT_SETTINGS: Meta = {
     "schema_version": 1,
     "project_id": "00000000-0000-4000-8000-000000000000",
@@ -2848,7 +2848,7 @@ def apply_repair_legacy_binding(args: argparse.Namespace, meta: Meta, _tasks: li
     else:
         from legacy_binding_repair import repair  # type: ignore[import-not-found,no-redef]
 
-    return repair(args, meta, valid_binding_worktree)
+    return repair(args, meta)
 
 
 def bind_envelope_candidate(args: argparse.Namespace, meta: Meta) -> tuple[Meta, str]:

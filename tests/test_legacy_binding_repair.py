@@ -30,7 +30,7 @@ class LegacyBindingRepairTests(unittest.TestCase):
         for replacement, message in (
             ({"expected_revision": 3}, "stale revision"),
             ({"worktree_key": "other"}, "does not match"),
-            ({"worktree_key": "../escape"}, "invalid"),
+            ({"worktree_key": "../escape"}, "does not match"),
             ({"note": ""}, "note"),
         ):
             value = dict(self.meta)
@@ -44,13 +44,18 @@ class LegacyBindingRepairTests(unittest.TestCase):
             ({"branch": "repair/old"}, "empty legacy branch"),
             (
                 {"status": "in_progress", "owner": "worker", "claim_expires": "future"},
-                "open, unowned",
+                "inactive, unowned",
             ),
         ):
             value = dict(self.meta)
             value.update(replacement)
             with self.assertRaisesRegex(RuntimeError, message):
                 h.apply_repair_legacy_binding(self.args, value, [])
+
+    def test_completed_history_can_clear_its_exact_stale_key(self) -> None:
+        value = {**self.meta, "status": "done"}
+        h.apply_repair_legacy_binding(self.args, value, [])
+        self.assertEqual("", value["worktree_key"])
 
 
 if __name__ == "__main__":
