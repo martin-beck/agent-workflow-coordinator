@@ -38,6 +38,7 @@ SOURCE_FILES: tuple[tuple[str, str], ...] = (
     ("tools/issue_series.py", "tools/issue_series.py"),
     ("tools/issue_series_plan.py", "tools/issue_series_plan.py"),
     ("tools/issue_series_publish.py", "tools/issue_series_publish.py"),
+    ("tools/credential_handoff.py", "tools/credential_handoff.py"),
     ("tools/execution_envelope.py", "tools/execution_envelope.py"),
     ("tools/execution_receipt.py", "tools/execution_receipt.py"),
     ("tools/fast_receipts.py", "tools/fast_receipts.py"),
