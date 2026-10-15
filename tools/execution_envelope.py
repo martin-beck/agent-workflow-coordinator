@@ -493,6 +493,12 @@ def _scope_error(  # noqa: C901 - each branch is a fail-closed admission check
             try:
                 candidate = root if relative == "." else envelope_scope_path(root, relative)
             except RuntimeError as error:
+                if "unavailable" in str(error):
+                    return Preflight(
+                        False,
+                        "PATH_SCOPE_UNAVAILABLE",
+                        "declared path is unavailable",
+                    )
                 # A source-write may name a new leaf beneath an existing, safe
                 # directory; the mount itself still targets the declared parent.
                 parts = Path(relative).parts
