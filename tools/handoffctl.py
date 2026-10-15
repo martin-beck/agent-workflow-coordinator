@@ -1149,7 +1149,6 @@ def project_scan() -> State:
         raw = run(["git", "-C", str(checkout), "worktree", "list", "--porcelain"]).stdout
         return parse_worktree_listing(raw)
 
-    # Exclude coordinator-owned checkouts from product worktree projections.
     coordinator_paths = {path.resolve() for path, _, _ in listed_worktrees(ROOT)}
     paths: list[tuple[Path, str, str]] = []
     seen_paths: set[Path] = set()
@@ -1902,8 +1901,6 @@ def validate(
     errors.extend(directive_validation_errors())
     errors.extend(privacy_errors())
     if live:
-        # Hosted run/worktree observations can change after reconciliation.
-        # They are advisory, not immutable local integrity evidence.
         del live_state
     return errors
 
@@ -2095,7 +2092,6 @@ def reconcile(
     if push and not do_commit:
         raise RuntimeError("PUSH_REQUIRES_COMMIT: reconcile --push also requires --commit")
 
-    # Keep external observations outside the authority lock.
     for _ in range(32):
         scan_config = config() if CONFIG.exists() else None
         scan_binding = project_binding()
@@ -3244,7 +3240,6 @@ def unchanged_generated_view(path: Path, content: str) -> bool:
         with os.fdopen(descriptor, "rb", closefd=False) as stream:
             if stream.read(len(expected) + 1) != expected:
                 return False
-        # Replaced pathnames must be re-read from the current inode.
         try:
             current_parent = path.parent.lstat()
             current = path.lstat()
@@ -3655,7 +3650,6 @@ def git_doctor_checks(*, live: bool) -> list[str]:
             if project_binding() != scan_binding:
                 raise RuntimeError("OBSERVATION_INPUT_CHANGED: retry doctor")
             errors = doctor_checks(live=live, sqlite=False, live_state=live_state)
-            # Retry only stale live comparisons.
             if (
                 ticket != published_observation_ticket()
                 and errors
@@ -4085,7 +4079,6 @@ def require_active_owner(task_id: str, owner: str) -> EvidencePolicy:
 
 
 def execution_preflight(args: argparse.Namespace) -> tuple[bool, str, str, float | None]:
-    """Evaluate envelope admission."""
     with locked(exclusive=False, phase="execution_envelope_preflight"):
         release_envelope_worktree(args)
         _, meta, _ = locate(args.task)
@@ -4102,6 +4095,7 @@ def execution_preflight(args: argparse.Namespace) -> tuple[bool, str, str, float
         except RuntimeError as error:
             return False, "WORKTREE_BINDING_INVALID", str(error), None
         try:
+            source_root = getattr(args, "source_root", None)
             result = execution_envelope.preflight(
                 meta,
                 args.owner,
@@ -4110,8 +4104,8 @@ def execution_preflight(args: argparse.Namespace) -> tuple[bool, str, str, float
                 worktree,
                 bool(getattr(args, "authorize_external_side_effects", False)),
                 ROOT,
-                execution_envelope.validate_external_root(Path(args.source_root), "source")
-                if getattr(args, "source_root", None)
+                execution_envelope.validate_external_root(Path(source_root), "source")
+                if source_root
                 else None,
             )
             if not result.allowed:
@@ -4141,7 +4135,6 @@ def execution_preflight(args: argparse.Namespace) -> tuple[bool, str, str, float
 def prepare_envelope_mounts(
     args: argparse.Namespace, envelope: dict[str, Any], worktree: Path, worktree_context: Any
 ) -> dict[str, Any]:
-    """Validate and retain the exact publication metadata/network mounts."""
     mount_scope = list(envelope["path_scope"]["read"])
     git_metadata = (
         args.command_class == "git-publication"
@@ -4151,18 +4144,16 @@ def prepare_envelope_mounts(
         mount_scope.extend(args.scope_path)
     if git_metadata:
         envelope_scope_path(worktree, ".git")
-    # Validate both independently rooted scopes before any subprocess starts.
+    source_root = getattr(args, "source_root", None)
     execution_envelope.envelope_sandbox_mounts(
         worktree,
         mount_scope,
         [],
         git_metadata=git_metadata,
         state_root=ROOT,
-        source_root=(
-            execution_envelope.validate_external_root(Path(args.source_root), "source")
-            if getattr(args, "source_root", None)
-            else None
-        ),
+        source_root=execution_envelope.validate_external_root(Path(source_root), "source")
+        if source_root
+        else None,
     )
     rule = envelope["command_classes"][args.command_class]
     args._envelope_worktree = str(worktree)
@@ -4173,16 +4164,13 @@ def prepare_envelope_mounts(
     )
     args._envelope_read_scope = list(envelope["path_scope"]["read"])
     args._envelope_state_root = str(ROOT)
-    args._envelope_source_root = (
-        str(args.source_root) if getattr(args, "source_root", None) else None
-    )
+    args._envelope_source_root = str(source_root) if source_root else None
     args._envelope_git_metadata = git_metadata
     args._envelope_network = bool(getattr(args, "authorize_external_side_effects", False))
     return cast(dict[str, Any], rule)
 
 
 def release_envelope_worktree(args: argparse.Namespace) -> None:
-    """Close a descriptor retained from bound execution admission."""
     context = getattr(args, "_envelope_worktree_context", None)
     if context is not None:
         delattr(args, "_envelope_worktree_context")
