@@ -47,12 +47,14 @@ if __package__:
         execution_envelope,
         execution_lifecycle,
         execution_receipt,
+        mutation_admission,
         resume_card,
         resume_card_runtime,
         retry_circuit,
         run_command,
     )
     from . import autonomy_limits as al
+    from . import predicate_ledger_repair as plr
     from . import roles as role_module
     from .board_metrics import build_metrics
     from .board_metrics import encode as encode_metrics
@@ -144,6 +146,8 @@ else:
     import execution_envelope  # type: ignore[import-not-found,no-redef]
     import execution_lifecycle  # type: ignore[import-not-found,no-redef]
     import execution_receipt  # type: ignore[import-not-found,no-redef]
+    import mutation_admission  # type: ignore[import-not-found,no-redef]
+    import predicate_ledger_repair as plr  # type: ignore[import-not-found,no-redef]
     import resume_card  # type: ignore[import-not-found,no-redef]
     import resume_card_runtime  # type: ignore[import-not-found,no-redef]
     import retry_circuit  # type: ignore[import-not-found,no-redef]
@@ -286,8 +290,6 @@ class IdempotentMutationError(RuntimeError):
     """Signal an admitted no-op replay."""
 
 
-# CURRENT.md is the compact actionable queue; terminal history remains in the
-# full STATUS.md projection and authoritative task records.
 CURRENT_STATUSES = ("in_progress", "open", "blocked", "planned", "future")
 PRIORITIES = ("P0", "P1", "P2", "P3", "P4")
 REQ = (
@@ -365,7 +367,7 @@ def short_title_errors(path: Path, task_id: str, value: object) -> list[str]:
     return []
 
 
-COORDINATOR_VERSION = "0.7.12"
+COORDINATOR_VERSION = "0.7.15"
 DEFAULT_PROJECT_SETTINGS: Meta = {
     "schema_version": 1,
     "project_id": "00000000-0000-4000-8000-000000000000",
@@ -1180,8 +1182,6 @@ def project_scan() -> State:
         "--json",
         "databaseId,headSha,status,conclusion,workflowName,event",
     ]
-    # Checkouts own separate Git indexes. Observe all fields freshly, but overlap
-    # the independent GitHub and remote reads with the bounded checkout scan.
     with ThreadPoolExecutor(max_workers=min(32, max(1, len(paths))) + 3) as workers:
         prs_result = workers.submit(run_github_observation, pr_args)
         runs_result = workers.submit(run_github_observation, run_args)
@@ -1351,6 +1351,8 @@ def privacy_errors() -> list[str]:
             or ".venv" in path.parts
             or ".mypy_cache" in path.parts
             or ".ruff_cache" in path.parts
+            or "__pycache__" in path.parts
+            or path.suffix in {".pyc", ".pyo"}
             or "private-archive" in path.parts
         ):
             continue
@@ -1480,7 +1482,6 @@ def execution_metadata_errors(task_id: str, meta: Meta) -> list[str]:  # noqa: C
 
 
 def execution_abandonment_errors(task_id: str, meta: Meta) -> list[str]:
-    """Reject malformed bounded abandonment history before it reaches projections."""
     if execution_abandonment.valid_records(meta.get("execution_abandonments")):
         return []
     return [f"{task_id}: invalid execution_abandonments"]
@@ -1535,7 +1536,6 @@ def reference_errors(path: Path, meta: Meta) -> list[str]:
 
 
 def supersession_errors(tasks: list[Task]) -> list[str]:
-    """Validate explicitly recorded supersession pointers without weakening old data."""
     by_id = {meta.get("id"): meta for _, meta, _ in tasks}
     errors: list[str] = []
     for _, meta, _ in tasks:
@@ -1560,17 +1560,22 @@ def supersession_errors(tasks: list[Task]) -> list[str]:
     return errors
 
 
-def basic_task_errors(path: Path, meta: Meta, policy: EvidencePolicy | None = None) -> list[str]:
+def basic_task_errors(
+    path: Path,
+    meta: Meta,
+    policy: EvidencePolicy | None = None,
+    *,
+    include_ledger: bool = True,
+) -> list[str]:
     return [
         *field_errors(path, meta),
         *value_errors(path, meta),
         *reference_errors(path, meta),
-        *task_spec_errors(ROOT, meta, policy),
+        *mutation_admission.task_errors(ROOT, meta, policy, include_ledger=include_ledger),
     ]
 
 
 def parse_claim_expiry(expiry: object) -> dt.datetime:
-    """Parse one timezone-aware lease deadline."""
     if not isinstance(expiry, str) or not expiry:
         raise ValueError("missing or non-string claim expiry")
     parsed = dt.datetime.fromisoformat(expiry.replace("Z", "+00:00"))
@@ -1580,7 +1585,6 @@ def parse_claim_expiry(expiry: object) -> dt.datetime:
 
 
 def process_start_time(pid: int) -> int | None:
-    """Return a Linux process start time, or ``None`` after it has exited."""
     proc = Path("/proc") / str(pid)
     try:
         stat_fields = (proc / "stat").read_text(encoding="utf-8").rsplit(")", 1)[1].split()
@@ -1592,7 +1596,6 @@ def process_start_time(pid: int) -> int | None:
 
 
 def worker_execution_scope() -> tuple[str, str]:
-    """Return the local boot and PID-namespace identities for recovery fencing."""
     try:
         boot_id = (Path("/proc/sys/kernel/random/boot_id").read_text(encoding="utf-8")).strip()
         namespace = Path("/proc/self/ns/pid").stat()
@@ -1609,7 +1612,6 @@ def worker_execution_scope() -> tuple[str, str]:
 
 
 def claimed_process_identity(args: argparse.Namespace) -> Meta | None:
-    """Validate an optional live worker identity at the exact claim transition."""
     pid = getattr(args, "worker_pid", None)
     start_time = getattr(args, "worker_start_time", None)
     if pid is None and start_time is None:
@@ -1630,7 +1632,6 @@ def claimed_process_identity(args: argparse.Namespace) -> Meta | None:
 
 
 def require_claimed_worker_absent(meta: Meta) -> None:
-    """Require a claim-time identity and independently confirm it no longer runs."""
     identity = meta.get("claim_process")
     if not scoped_claim_process(identity):
         raise RuntimeError(
@@ -1738,6 +1739,7 @@ def mutation_errors(
     policy: EvidencePolicy | None = None,
     *,
     rendered_snapshot: tuple[list[Task], dict[Path, str], Meta] | None = None,
+    include_ledger: bool = True,
 ) -> list[str]:
     """Validate a Git mutation."""
     tasks = all_tasks()
@@ -1745,7 +1747,7 @@ def mutation_errors(
     if len(selected) != 1:
         return [f"{path.name}: mutation target is not unique"]
     errors = [] if policy is not None else task_spec_policy_errors(ROOT)
-    errors.extend(basic_task_errors(path, selected[0], policy))
+    errors.extend(basic_task_errors(path, selected[0], policy, include_ledger=include_ledger))
     errors.extend(claim_errors(selected[0], {}, {}, {}))
     errors.extend(mutation_global_errors(tasks))
     errors.extend(generated_view_errors(tasks, rendered_snapshot=rendered_snapshot))
@@ -2787,6 +2789,25 @@ def valid_binding_worktree(value: object) -> bool:
         return not CONFIG.exists()
 
 
+def binding_artifact_path(args: argparse.Namespace, kind: str) -> Path | None:
+    name = "spec_ref" if kind == "bind-spec" else "envelope_ref"
+    reference = getattr(args, name, None)
+    if not isinstance(reference, str) or not reference or Path(reference).is_absolute():
+        return None
+    candidate = ROOT / reference
+    if ".." in Path(reference).parts:
+        return None
+    try:
+        info = candidate.lstat()
+    except OSError:
+        return None
+    if candidate.is_symlink() or not stat.S_ISREG(info.st_mode):
+        return None
+    if info.st_size > 4194304:
+        return None
+    return candidate
+
+
 def binding_identity_conflicts(args: argparse.Namespace, meta: Meta, tasks: list[Task]) -> bool:
     return any(
         other.get("id") != meta.get("id")
@@ -3163,6 +3184,7 @@ def lifecycle_transition_handler(
         "bind-spec": lambda: apply_bind_spec(args, meta, policy),
         "bind-worktree": lambda: apply_bind_worktree(args, meta, tasks),
         "repair-legacy-binding": lambda: apply_repair_legacy_binding(args, meta, tasks),
+        "repair-predicate-ledger": lambda: plr.repair(ROOT, args, meta, policy),
         "bind-envelope": lambda: apply_bind_envelope(args, meta),
         "replace-envelope": lambda: apply_replace_envelope(args, meta),
         "execution-start": lambda: apply_execution_start(args, meta),
@@ -3322,6 +3344,7 @@ def persist_git_mutation(
     selected_policy: EvidencePolicy,
     session_record: Meta | None,
     checkpoint_record: Meta | None,
+    retained_paths: tuple[Path, ...] = (),
 ) -> None:
     """Write, validate, commit, and retain one locked Git mutation transaction."""
     committed = False
@@ -3342,12 +3365,15 @@ def persist_git_mutation(
             before,
             selected_policy,
             rendered_snapshot=(view_tasks, views, view_settings),
+            include_ledger=kind != "repair-predicate-ledger",
         )
         if errors:
             raise RuntimeError("\n".join(errors))
         for target in generated_paths():
             before.setdefault(target, None)
-        committed = commit_persisted_mutation(args, kind, receipt_id, before, meta)
+        committed = commit_persisted_mutation(
+            args, kind, receipt_id, before, meta, retained_paths=retained_paths
+        )
         if receipt_id is None:
             push_replica()
     except Exception:
@@ -3362,12 +3388,18 @@ def commit_persisted_mutation(
     receipt_id: str | None,
     before: dict[Path, str | None],
     meta: Meta,
+    *,
+    retained_paths: tuple[Path, ...] = (),
 ) -> bool:
     """Commit a validated mutation and expose receipt-only local evidence."""
     message = f"chore(state): {kind} {args.task}"
     if receipt_id is not None:
         message += f"\n\nHandoffctl-Receipt: {receipt_id}"
-    committed = commit(message, changed_paths(before, include_deleted=True))
+    paths = changed_paths(before, include_deleted=True)
+    for path in retained_paths:
+        if path.exists() and path not in paths:
+            paths.append(path)
+    committed = commit(message, paths)
     if receipt_id is not None and not committed:
         raise RuntimeError("fast receipt mutation produced no signed commit")
     if receipt_id is not None:
@@ -3414,6 +3446,9 @@ def _mutate_fenced(
                 for target in generated_paths()
             }
         )
+        retained_paths = tuple(
+            path for path in (binding_artifact_path(args, kind),) if path is not None
+        )
         try:
             note = apply_transition(args, kind, meta, all_tasks(), selected_policy)
         except IdempotentMutationError as replay:
@@ -3452,6 +3487,7 @@ def _mutate_fenced(
             selected_policy,
             session_record,
             checkpoint_record,
+            retained_paths,
         )
     return None
 
@@ -3498,7 +3534,12 @@ def mutate_sqlite(
             for path, item, text in tasks
         ]
         errors = (
-            basic_task_errors(selected[0], validated, selected_policy)
+            basic_task_errors(
+                selected[0],
+                validated,
+                selected_policy,
+                include_ledger=kind != "repair-predicate-ledger",
+            )
             + graph_errors(candidate)
             + hierarchy_errors(candidate)
             + supersession_errors(candidate)
@@ -4298,6 +4339,7 @@ def _run_envelope_subprocess(
     if hasattr(args, "_envelope_worktree_fd"):
         return subprocess.run(
             command,
+            cwd=str(args._envelope_worktree),
             check=False,
             stdin=subprocess.DEVNULL,
             timeout=timeout,
@@ -4749,7 +4791,7 @@ def dispatch_bound_standard_command(args: argparse.Namespace) -> int:
     result = dispatch_returning_command(args)
     if result is not None:
         return result
-    if args.cmd == "repair-legacy-binding":
+    if args.cmd in {"repair-legacy-binding", "repair-predicate-ledger"}:
         dispatch_lifecycle_mutation(args)
         return 0
     if args.cmd in (
@@ -4961,6 +5003,7 @@ def main() -> int:
     item.add_argument("--expected-revision", type=int, required=True)
     item.add_argument("--worktree-key", required=True)
     item.add_argument("--note", required=True)
+    plr.add_parser(commands)
     item = commands.add_parser("bind-envelope")
     item.add_argument("task")
     item.add_argument("--owner", required=True)
