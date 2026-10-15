@@ -4402,9 +4402,7 @@ def _cmd_run_fenced(  # noqa: C901
         if not _credential_handoff_runtime:
             if getattr(args, "credential_fd", None) is not None:
                 raise RuntimeError("credential helper unavailable")
-            proc = subprocess.run(
-                command, stdin=subprocess.DEVNULL, timeout=timeout
-            )
+            proc = subprocess.run(command, stdin=subprocess.DEVNULL, timeout=timeout)
         else:
             proc = _credential_handoff_runtime.run_envelope_subprocess(command, timeout, args)
     except subprocess.TimeoutExpired:
