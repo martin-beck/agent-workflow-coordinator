@@ -487,28 +487,6 @@ def _scope_error(  # noqa: C901 - each branch is a fail-closed admission check
                     False, "PATH_OUTSIDE_SCOPE", "declared path has an unavailable or invalid root"
                 )
         root = roots[root_name]
-        try:
-            # Validate every component before resolving.  Resolving first would turn a
-            # symlink into an apparently in-root path and silently authorize an alias.
-            try:
-                candidate = root if relative == "." else envelope_scope_path(root, relative)
-            except RuntimeError as error:
-                if "unavailable" in str(error):
-                    return Preflight(
-                        False,
-                        "PATH_SCOPE_UNAVAILABLE",
-                        "declared path is unavailable",
-                    )
-                # A source-write may name a new leaf beneath an existing, safe
-                # directory; the mount itself still targets the declared parent.
-                parts = Path(relative).parts
-                if command_class not in {"source-write", "git-publication"} or len(parts) < 2:
-                    raise error
-                envelope_scope_path(root, str(Path(*parts[:-1])))
-                candidate = root / relative
-            candidate.relative_to(root)
-        except (RuntimeError, ValueError):
-            return Preflight(False, "PATH_OUTSIDE_SCOPE", "declared path is unavailable or unsafe")
         scope_name = f"{root_name}:{relative}" if separator else declared
         if not any(
             (scope in ROOT_SELECTORS and ROOT_SELECTORS[scope] == root_name)
@@ -519,6 +497,30 @@ def _scope_error(  # noqa: C901 - each branch is a fail-closed admission check
             return Preflight(
                 False, "PATH_OUTSIDE_SCOPE", "declared path is outside the command-class scope"
             )
+        try:
+            # Validate every component before resolving.  Resolving first would turn a
+            # symlink into an apparently in-root path and silently authorize an alias.
+            try:
+                candidate = root if relative == "." else envelope_scope_path(root, relative)
+            except RuntimeError as error:
+                if "unavailable" in str(error):
+                    parts = Path(relative).parts
+                    if command_class not in {"source-write", "git-publication"} or len(parts) < 2:
+                        return Preflight(
+                            False, "PATH_SCOPE_UNAVAILABLE", "declared path is unavailable"
+                        )
+                    envelope_scope_path(root, str(Path(*parts[:-1])))
+                    candidate = root / relative
+                # A source-write may name a new leaf beneath an existing, safe
+                # directory; the mount itself still targets the declared parent.
+                parts = Path(relative).parts
+                if command_class not in {"source-write", "git-publication"} or len(parts) < 2:
+                    raise error
+                envelope_scope_path(root, str(Path(*parts[:-1])))
+                candidate = root / relative
+            candidate.relative_to(root)
+        except (RuntimeError, ValueError):
+            return Preflight(False, "PATH_OUTSIDE_SCOPE", "declared path is unavailable or unsafe")
     return None
 
 
