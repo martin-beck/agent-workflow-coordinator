@@ -4110,6 +4110,9 @@ def execution_preflight(args: argparse.Namespace) -> tuple[bool, str, str, float
                 worktree,
                 bool(getattr(args, "authorize_external_side_effects", False)),
                 ROOT,
+                execution_envelope.validate_external_root(Path(args.source_root), "source")
+                if getattr(args, "source_root", None)
+                else None,
             )
             if not result.allowed:
                 release_envelope_worktree(args)
@@ -4155,6 +4158,11 @@ def prepare_envelope_mounts(
         [],
         git_metadata=git_metadata,
         state_root=ROOT,
+        source_root=(
+            execution_envelope.validate_external_root(Path(args.source_root), "source")
+            if getattr(args, "source_root", None)
+            else None
+        ),
     )
     rule = envelope["command_classes"][args.command_class]
     args._envelope_worktree = str(worktree)
@@ -4165,6 +4173,9 @@ def prepare_envelope_mounts(
     )
     args._envelope_read_scope = list(envelope["path_scope"]["read"])
     args._envelope_state_root = str(ROOT)
+    args._envelope_source_root = (
+        str(args.source_root) if getattr(args, "source_root", None) else None
+    )
     args._envelope_git_metadata = git_metadata
     args._envelope_network = bool(getattr(args, "authorize_external_side_effects", False))
     return cast(dict[str, Any], rule)
@@ -5023,6 +5034,7 @@ def main() -> int:
         "--command-class", choices=sorted(execution_envelope.COMMAND_CLASSES), required=True
     )
     item.add_argument("--scope-path", action="append", default=[])
+    item.add_argument("--source-root")
     item.add_argument("--json", action="store_true")
     item = commands.add_parser("promote")
     item.add_argument("task")
@@ -5108,6 +5120,7 @@ def main() -> int:
     al.add_run_arguments(item)
     item.add_argument("--command-class", choices=sorted(execution_envelope.COMMAND_CLASSES))
     item.add_argument("--scope-path", action="append", default=[])
+    item.add_argument("--source-root")
     item.add_argument("--authorize-external-side-effects", action="store_true")
     item.add_argument("command", nargs=argparse.REMAINDER)
     args = parser.parse_args()
