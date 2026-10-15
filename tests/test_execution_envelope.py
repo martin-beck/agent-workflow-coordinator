@@ -140,6 +140,38 @@ class ExecutionEnvelopeTests(unittest.TestCase):
             ).code,
         )
 
+    def test_source_root_is_independently_bound_and_rejects_aliases(self) -> None:
+        source = self.root / "source"
+        (source / "tools").mkdir(parents=True)
+        value = envelope()
+        value["schema_version"] = 2
+        value["capabilities"] = {"git_metadata": {"allowed": False}, "network": {"allowed": False}}
+        value["path_scope"] = {"read": ["source-root"], "write": ["source:tools"]}
+        meta = self.meta()
+        meta["execution_envelope"] = value
+        meta["execution_envelope_digest"] = canonical_digest(value)
+        self.assertTrue(
+            preflight(
+                meta, "worker", "source-write", ["source:tools"], self.worktree, source_root=source
+            ).allowed
+        )
+        self.assertEqual(
+            "PATH_SCOPE_UNAVAILABLE",
+            preflight(meta, "worker", "test", ["source-root"], self.worktree).code,
+        )
+        self.assertEqual(
+            "PATH_SCOPE_UNAVAILABLE",
+            preflight(meta, "worker", "test", ["source:tools"], self.worktree).code,
+        )
+        alias = self.root / "source-alias"
+        alias.symlink_to(source)
+        self.assertEqual(
+            "PATH_SCOPE_UNAVAILABLE",
+            preflight(
+                meta, "worker", "test", ["source-root"], self.worktree, source_root=alias
+            ).code,
+        )
+
     def test_rejects_mutated_bytes_and_hostile_shape(self) -> None:
         bound_meta = self.meta()
         mutated = envelope()

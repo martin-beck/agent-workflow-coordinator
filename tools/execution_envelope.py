@@ -23,8 +23,8 @@ ENVELOPE_ID = re.compile(r"^AR-[0-9]{4}-e[1-9][0-9]*$")
 DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
 COMMAND_CLASSES = frozenset({"read", "test", "source-write", "git-publication"})
 CAPABILITY_KEYS = frozenset({"git_metadata", "network"})
-ROOT_NAMES = frozenset({"product", "state"})
-ROOT_SELECTORS = {"product-root": "product", "state-root": "state"}
+ROOT_NAMES = frozenset({"product", "state", "source"})
+ROOT_SELECTORS = {"product-root": "product", "state-root": "state", "source-root": "source"}
 
 
 @dataclass(frozen=True)
@@ -459,6 +459,7 @@ def _scope_error(  # noqa: C901 - each branch is a fail-closed admission check
     paths: list[str],
     worktree: Path,
     state_root: Path | None = None,
+    source_root: Path | None = None,
 ) -> Preflight | None:
     """Return a denial if declared paths leave their class-specific scope."""
     if command_class in {"source-write", "git-publication"} and not paths:
@@ -471,6 +472,8 @@ def _scope_error(  # noqa: C901 - each branch is a fail-closed admission check
     roots = {"product": worktree}
     if state_root is not None:
         roots["state"] = state_root
+    if source_root is not None:
+        roots["source"] = source_root
     for declared in paths:
         selector_root = ROOT_SELECTORS.get(declared)
         prefix, separator, relative = declared.partition(":")
@@ -479,7 +482,13 @@ def _scope_error(  # noqa: C901 - each branch is a fail-closed admission check
         root_name = selector_root or (prefix if separator else "product")
         if selector_root:
             relative = ""
-        if root_name not in roots or not relative or relative.startswith("/"):
+        if root_name not in roots:
+            if root_name == "source" and (selector_root or separator):
+                return Preflight(False, "PATH_SCOPE_UNAVAILABLE", "declared root is unavailable")
+            return Preflight(
+                False, "PATH_OUTSIDE_SCOPE", "declared path has an unavailable or invalid root"
+            )
+        if not relative or relative.startswith("/"):
             if selector_root and root_name in roots:
                 relative = "."
             else:
@@ -570,7 +579,7 @@ def publication_metadata_allowed(envelope: dict[str, Any]) -> bool:
     )
 
 
-def preflight(
+def preflight(  # noqa: C901 - root validation and capability gates are fail-closed branches
     meta: dict[str, Any],
     owner: str,
     command_class: str,
@@ -578,8 +587,14 @@ def preflight(
     worktree: Path,
     authorize_external_side_effects: bool = False,
     state_root: Path | None = None,
+    source_root: Path | None = None,
 ) -> Preflight:
     """Evaluate only durable task/envelope facts; this function has no side effects."""
+    if source_root is not None:
+        try:
+            validate_external_root(source_root, "source")
+        except RuntimeError as error:
+            return Preflight(False, "PATH_SCOPE_UNAVAILABLE", str(error))
     envelope, denial = _bound_envelope(meta)
     if denial is not None or envelope is None:
         return denial or Preflight(False, "ENVELOPE_INVALID", "envelope could not be loaded")
@@ -606,7 +621,7 @@ def preflight(
     capability_denial = _capability_denial(envelope, command_class, authorize_external_side_effects)
     if capability_denial is not None:
         return capability_denial
-    scope_denial = _scope_error(envelope, command_class, paths, worktree, state_root)
+    scope_denial = _scope_error(envelope, command_class, paths, worktree, state_root, source_root)
     if scope_denial is not None:
         return scope_denial
     return Preflight(
@@ -625,6 +640,7 @@ def sandboxed_envelope_command(args: Any) -> list[str]:
     read_scope = getattr(args, "_envelope_read_scope", None)
     git_metadata = bool(getattr(args, "_envelope_git_metadata", False))
     state_root = getattr(args, "_envelope_state_root", None)
+    source_root = getattr(args, "_envelope_source_root", None)
     if (
         not isinstance(worktree, str)
         or not isinstance(write_scope, list)
@@ -647,6 +663,7 @@ def sandboxed_envelope_command(args: Any) -> list[str]:
             write_scope,
             git_metadata=git_metadata,
             state_root=Path(state_root) if isinstance(state_root, str) else None,
+            source_root=Path(source_root) if isinstance(source_root, str) else None,
         )
     targets = {Path("/worktree")}
     for relative, _candidate, _flag in mounts:
@@ -686,11 +703,14 @@ def envelope_sandbox_mounts(
     *,
     git_metadata: bool = False,
     state_root: Path | None = None,
+    source_root: Path | None = None,
 ) -> list[tuple[str, Path, str]]:
     """Return read-only and writable project mounts for one envelope execution."""
     roots = {"product": root}
     if state_root is not None:
         roots["state"] = state_root
+    if source_root is not None:
+        roots["source"] = source_root
 
     def mount(item: object, mode: str) -> tuple[str, Path, str]:
         declared = str(item)
@@ -927,3 +947,16 @@ def envelope_scope_path(root: Path, relative: str) -> Path:
         if stat.S_ISLNK(mode):
             raise RuntimeError("execution envelope path scope contains a symlink")
     return candidate
+
+
+def validate_external_root(root: Path, name: str) -> Path:
+    """Validate an explicitly supplied root without following an alias."""
+    if not root.is_absolute():
+        raise RuntimeError(f"{name} root must be absolute")
+    try:
+        mode = root.lstat().st_mode
+    except OSError as error:
+        raise RuntimeError(f"{name} root is unavailable") from error
+    if stat.S_ISLNK(mode) or not stat.S_ISDIR(mode):
+        raise RuntimeError(f"{name} root is not a real directory")
+    return root
