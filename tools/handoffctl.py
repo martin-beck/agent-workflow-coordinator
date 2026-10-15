@@ -43,6 +43,7 @@ if __package__:
         assumption_revalidation,
         change_drift,
         command_results,
+        credential_handoff,
         execution_abandonment,
         execution_envelope,
         execution_lifecycle,
@@ -128,6 +129,7 @@ else:
     import autonomy_limits as al  # type: ignore[import-not-found,no-redef]
     import change_drift  # type: ignore[import-not-found,no-redef]
     import command_results  # type: ignore[import-not-found,no-redef]
+    import credential_handoff  # type: ignore[import-not-found,no-redef]
 
     try:
         from board_metrics import build_metrics  # type: ignore[import-not-found,no-redef]  # noqa: I001
@@ -4324,25 +4326,6 @@ def cmd_run(args: argparse.Namespace) -> int:
     return run_command.cmd_run(_RUN_RUNTIME, args)
 
 
-def _run_envelope_subprocess(
-    command: list[str], timeout: float, args: argparse.Namespace
-) -> subprocess.CompletedProcess[bytes]:
-    if hasattr(args, "_envelope_worktree_fd"):
-        pass_fds = [int(args._envelope_worktree_fd)]
-        credential_fd = getattr(args, "credential_fd", None)
-        if credential_fd is not None:
-            pass_fds.append(int(credential_fd))
-        return subprocess.run(
-            command,
-            cwd=str(args._envelope_worktree),
-            check=False,
-            stdin=subprocess.DEVNULL,
-            timeout=timeout,
-            pass_fds=tuple(pass_fds),
-        )
-    return subprocess.run(command, check=False, stdin=subprocess.DEVNULL, timeout=timeout)
-
-
 def _cmd_run_fenced(
     args: argparse.Namespace,
 ) -> tuple[EvidencePolicy, str, float, bool, int, str | None, int | None]:
@@ -4410,7 +4393,7 @@ def _cmd_run_fenced(
             args.retry_circuit_resolution_revision = int(args.expected_revision) + 1
     timed_out = False
     try:
-        proc = _run_envelope_subprocess(command, timeout, args)
+        proc = credential_handoff.run_envelope_subprocess(command, timeout, args)
     except subprocess.TimeoutExpired:
         timed_out = True
         returncode = 124

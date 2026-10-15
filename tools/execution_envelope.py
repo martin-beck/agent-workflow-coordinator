@@ -571,8 +571,6 @@ def sandboxed_envelope_command(args: Any) -> list[str]:  # noqa: C901
         or not isinstance(read_scope, list)
     ):
         return list(args.command)
-    if shutil.which("bwrap") is None:
-        raise RuntimeError("execution envelope sandbox requires bubblewrap (bwrap)")
     credential_fd = getattr(args, "credential_fd", None)
     if credential_fd is not None:
         if args.command_class != "git-publication" or not getattr(args, "_envelope_network", False):
@@ -583,6 +581,8 @@ def sandboxed_envelope_command(args: Any) -> list[str]:  # noqa: C901
             raise RuntimeError(
                 "credential handoff requires credential_exec.py as command entrypoint"
             )
+    if shutil.which("bwrap") is None:
+        raise RuntimeError("execution envelope sandbox requires bubblewrap (bwrap)")
     root = Path(worktree).absolute()
     root_fd = getattr(args, "_envelope_worktree_fd", None)
     if type(root_fd) is int and root_fd >= 0:
