@@ -159,6 +159,12 @@ class ExecutionEnvelopeTests(unittest.TestCase):
             "PATH_SCOPE_UNAVAILABLE",
             preflight(meta, "worker", "test", ["source-root"], self.worktree).code,
         )
+        self.assertEqual(
+            "PATH_SCOPE_UNAVAILABLE",
+            preflight(
+                meta, "worker", "test", ["source:tools"], self.worktree
+            ).code,
+        )
         alias = self.root / "source-alias"
         alias.symlink_to(source)
         self.assertEqual(
