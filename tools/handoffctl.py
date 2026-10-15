@@ -4068,6 +4068,7 @@ def execution_preflight(args: argparse.Namespace) -> tuple[bool, str, str, float
                 list(args.scope_path),
                 worktree,
                 bool(getattr(args, "authorize_external_side_effects", False)),
+                ROOT,
             )
             if not result.allowed:
                 release_envelope_worktree(args)
@@ -4106,8 +4107,14 @@ def prepare_envelope_mounts(
         mount_scope.extend(args.scope_path)
     if git_metadata:
         envelope_scope_path(worktree, ".git")
-    for relative in mount_scope:
-        envelope_scope_path(worktree, str(relative))
+    # Validate both independently rooted scopes before any subprocess starts.
+    execution_envelope.envelope_sandbox_mounts(
+        worktree,
+        mount_scope,
+        [],
+        git_metadata=git_metadata,
+        state_root=ROOT,
+    )
     rule = envelope["command_classes"][args.command_class]
     args._envelope_worktree = str(worktree)
     args._envelope_worktree_fd = int(worktree.name)
@@ -4116,6 +4123,7 @@ def prepare_envelope_mounts(
         list(args.scope_path) if args.command_class in {"source-write", "git-publication"} else []
     )
     args._envelope_read_scope = list(envelope["path_scope"]["read"])
+    args._envelope_state_root = str(ROOT)
     args._envelope_git_metadata = git_metadata
     args._envelope_network = bool(getattr(args, "authorize_external_side_effects", False))
     return cast(dict[str, Any], rule)
@@ -4132,6 +4140,7 @@ def release_envelope_worktree(args: argparse.Namespace) -> None:
         "_envelope_worktree_fd",
         "_envelope_git_metadata",
         "_envelope_network",
+        "_envelope_state_root",
     ):
         if hasattr(args, name):
             delattr(args, name)
