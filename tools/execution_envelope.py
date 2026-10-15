@@ -508,8 +508,7 @@ def _scope_error(  # noqa: C901 - each branch is a fail-closed admission check
         scope_name = f"{root_name}:{relative}" if separator else declared
         if not any(
             (scope in ROOT_SELECTORS and ROOT_SELECTORS[scope] == root_name)
-            or
-            scope_name == scope.rstrip("/")
+            or scope_name == scope.rstrip("/")
             or scope_name.startswith(scope.rstrip("/") + "/")
             for scope in allowed
         ):
@@ -700,20 +699,12 @@ def envelope_sandbox_mounts(
             raise RuntimeError("execution envelope path scope has an unavailable root")
         destination = f"{root_name}/{relative}" if separator or selector_root else relative
         source = (
-            roots[root_name]
-            if relative == "."
-            else envelope_scope_path(roots[root_name], relative)
+            roots[root_name] if relative == "." else envelope_scope_path(roots[root_name], relative)
         )
         return destination, source, mode
 
-    read_mounts = [
-        mount(relative, "--ro-bind")
-        for relative in read_scope
-    ]
-    write_mounts = [
-        mount(relative, "--bind")
-        for relative in write_scope
-    ]
+    read_mounts = [mount(relative, "--ro-bind") for relative in read_scope]
+    write_mounts = [mount(relative, "--bind") for relative in write_scope]
     metadata_mounts = (
         [
             (
