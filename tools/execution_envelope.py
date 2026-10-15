@@ -559,7 +559,7 @@ def preflight(
     )
 
 
-def sandboxed_envelope_command(args: Any) -> list[str]:
+def sandboxed_envelope_command(args: Any) -> list[str]:  # noqa: C901
     """Confine a bound command to its declared writable worktree paths."""
     worktree = getattr(args, "_envelope_worktree", None)
     write_scope = getattr(args, "_envelope_write_scope", None)
@@ -573,6 +573,16 @@ def sandboxed_envelope_command(args: Any) -> list[str]:
         return list(args.command)
     if shutil.which("bwrap") is None:
         raise RuntimeError("execution envelope sandbox requires bubblewrap (bwrap)")
+    credential_fd = getattr(args, "credential_fd", None)
+    if credential_fd is not None:
+        if args.command_class != "git-publication" or not getattr(args, "_envelope_network", False):
+            raise RuntimeError("credential handoff requires authorized git-publication network")
+        if type(credential_fd) is not int or credential_fd < 3:
+            raise RuntimeError("credential handoff fd must be an inherited descriptor >= 3")
+        if not args.command or not str(args.command[0]).endswith("credential_exec.py"):
+            raise RuntimeError(
+                "credential handoff requires credential_exec.py as command entrypoint"
+            )
     root = Path(worktree).absolute()
     root_fd = getattr(args, "_envelope_worktree_fd", None)
     if type(root_fd) is int and root_fd >= 0:
@@ -585,7 +595,10 @@ def sandboxed_envelope_command(args: Any) -> list[str]:
     targets = {Path("/worktree")}
     for relative, _candidate, _flag in mounts:
         targets.update((Path("/worktree") / relative).parents)
-    command = sandbox_base_command(network=getattr(args, "_envelope_network", False))
+    command = sandbox_base_command(
+        network=getattr(args, "_envelope_network", False),
+        preserve_fds=([credential_fd] if credential_fd is not None else []),
+    )
     for directory in sorted(
         (path for path in targets if path != Path("/")), key=lambda path: len(path.parts)
     ):
@@ -668,9 +681,11 @@ def valid_reservation(value: object) -> bool:  # noqa: C901
     return expires_at.tzinfo is not None and expires_at.utcoffset() is not None
 
 
-def sandbox_base_command(*, network: bool = False) -> list[str]:
+def sandbox_base_command(
+    *, network: bool = False, preserve_fds: list[int] | None = None
+) -> list[str]:
     """Build a private Bubblewrap root with no inherited host state."""
-    return [
+    command = [
         "bwrap",
         "--die-with-parent",
         "--unshare-user",
@@ -701,6 +716,9 @@ def sandbox_base_command(*, network: bool = False) -> list[str]:
         "--tmpfs",
         "/tmp",  # noqa: S108
     ]
+    for descriptor in preserve_fds or []:
+        command.extend(["--preserve-fd", str(descriptor)])
+    return command
 
 
 def _open_path(path: Path, *, directory: bool = False) -> int:

@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import shutil
 import subprocess
@@ -60,6 +61,43 @@ class ExecutionSandboxFailureTests(unittest.TestCase):
             (root / ".git").write_text("gitdir: metadata", encoding="utf-8")
             mounts = envelope_sandbox_mounts(root, [], [], git_metadata=True)
             self.assertEqual((".git", root / ".git", "--ro-bind"), mounts[0])
+
+    def test_credential_fd_is_preserved_only_for_publication_helper(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "tools").mkdir()
+            (root / "tools" / "credential_exec.py").write_text("", encoding="utf-8")
+            (root / "tasks").mkdir()
+            (root / ".git").mkdir()
+            args = argparse.Namespace(
+                command=["tools/credential_exec.py", "--credential-fd", "9", "gh", "pr", "merge"],
+                command_class="git-publication",
+                credential_fd=9,
+                _envelope_worktree=str(root),
+                _envelope_write_scope=["tasks"],
+                _envelope_read_scope=["tools/credential_exec.py"],
+                _envelope_git_metadata=True,
+                _envelope_network=True,
+            )
+            with patch("tools.execution_envelope.shutil.which", return_value="bwrap"):
+                command = sandboxed_envelope_command(args)
+            payload = json.loads(command[4])
+            self.assertIn("--preserve-fd", payload["command"])
+            self.assertIn("9", payload["command"])
+
+    def test_credential_fd_rejects_non_publication_commands(self) -> None:
+        args = argparse.Namespace(
+            command=["tools/credential_exec.py", "--credential-fd", "9", "true"],
+            command_class="test",
+            credential_fd=9,
+            _envelope_worktree="/worktree",
+            _envelope_write_scope=[],
+            _envelope_read_scope=["tools/credential_exec.py"],
+            _envelope_git_metadata=False,
+            _envelope_network=False,
+        )
+        with self.assertRaisesRegex(RuntimeError, "authorized git-publication"):
+            sandboxed_envelope_command(args)
 
     def test_descriptor_mount_builder_keeps_git_metadata_capability(self) -> None:
         with TemporaryDirectory() as temporary:

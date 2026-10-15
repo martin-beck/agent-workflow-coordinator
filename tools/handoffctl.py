@@ -4328,13 +4328,17 @@ def _run_envelope_subprocess(
     command: list[str], timeout: float, args: argparse.Namespace
 ) -> subprocess.CompletedProcess[bytes]:
     if hasattr(args, "_envelope_worktree_fd"):
+        pass_fds = [int(args._envelope_worktree_fd)]
+        credential_fd = getattr(args, "credential_fd", None)
+        if credential_fd is not None:
+            pass_fds.append(int(credential_fd))
         return subprocess.run(
             command,
             cwd=str(args._envelope_worktree),
             check=False,
             stdin=subprocess.DEVNULL,
             timeout=timeout,
-            pass_fds=(int(args._envelope_worktree_fd),),
+            pass_fds=tuple(pass_fds),
         )
     return subprocess.run(command, check=False, stdin=subprocess.DEVNULL, timeout=timeout)
 
@@ -5100,6 +5104,7 @@ def main() -> int:
     item.add_argument("--command-class", choices=sorted(execution_envelope.COMMAND_CLASSES))
     item.add_argument("--scope-path", action="append", default=[])
     item.add_argument("--authorize-external-side-effects", action="store_true")
+    item.add_argument("--credential-fd", type=int)
     item.add_argument("command", nargs=argparse.REMAINDER)
     args = parser.parse_args()
     if args.cmd == "init":

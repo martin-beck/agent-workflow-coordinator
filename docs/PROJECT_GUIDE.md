@@ -192,6 +192,14 @@ mounts only the admitted worktree metadata (`.git`) read-only and shares the cal
 Version-1 envelopes and all read, test, and source-write commands retain the isolated network-denied
 behavior. Missing, partial, or ambiguous capability declarations fail closed.
 
+For hosted publication that needs GitHub authentication, `handoffctl run` may preserve one inherited
+credential descriptor with `--credential-fd N`. The command must enter through
+`tools/credential_exec.py`; that helper feeds the descriptor directly to `gh auth login --with-token`
+inside the ephemeral sandbox and then execs the requested publication command. The descriptor number
+and command argv are recorded, but credential bytes never enter argv, environment, task records,
+evidence, or subprocess output. The option is rejected for every command class except authorized
+`git-publication`, and the helper fails closed on missing or unsuccessful login.
+
 Restore a verified checkpoint only from a clean descendant product checkout:
 
 ```sh
