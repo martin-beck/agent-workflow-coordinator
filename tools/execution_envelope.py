@@ -472,8 +472,6 @@ def _scope_error(  # noqa: C901 - each branch is a fail-closed admission check
     if state_root is not None:
         roots["state"] = state_root
     for declared in paths:
-        if not isinstance(declared, str):
-            return Preflight(False, "PATH_OUTSIDE_SCOPE", "declared path is not a string")
         selector_root = ROOT_SELECTORS.get(declared)
         prefix, separator, relative = declared.partition(":")
         if not separator:
